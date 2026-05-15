@@ -15,7 +15,7 @@ from typing import Any, Dict, List, Optional
 
 from darwin.orchestrator import Orchestrator, TaskResult
 from darwin.utils.llm import LLMSession
-from darwin.experiments.metrics import ExperimentMetrics, compute_pass_at_k
+from experiments.metrics import ExperimentMetrics, compute_pass_at_k
 
 
 class ExperimentRunner:
@@ -132,12 +132,7 @@ class ExperimentRunner:
         self, challenge: Dict[str, Any]
     ) -> TaskResult:
         """Run a single challenge with the orchestrator."""
-        llm = LLMSession(
-            model=self.model,
-            provider="openai",
-            temperature=0.7,
-            max_tokens=4096,
-        )
+        llm = LLMSession.from_config(profile="default", config_path="config/llm.yaml")
 
         orch = Orchestrator(
             llm_session=llm,
@@ -146,7 +141,9 @@ class ExperimentRunner:
         )
 
         description = challenge.get("description", "Find and exploit vulnerabilities")
-        target_url = challenge.get("url", "http://localhost:8080")
+        target_url = challenge.get("url")
+        if not target_url:
+            raise ValueError(f"Challenge '{challenge.get('id', 'unknown')}' has no target URL")
 
         try:
             result = await orch.run(
@@ -208,7 +205,6 @@ async def run_pilot():
 
     runner = ExperimentRunner(
         config_name="DARWIN-full",
-        model="gpt-4o",
         time_budget=600,
         pass_at_k=3,
         output_dir="experiment_results/pilot",

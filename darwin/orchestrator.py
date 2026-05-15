@@ -10,12 +10,18 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
+import os
 import re
+import shutil
 import time
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
+log = logging.getLogger(__name__)
+
+from darwin.cteg import CTEG, TaskRecord
 from darwin.dkg import DKG
 from darwin.dpm import (
     DefenseCategory,
@@ -24,6 +30,8 @@ from darwin.dpm import (
     SanitizationStrategy,
 )
 from darwin.dave import DAVE, ExploitAttempt, VerificationResult
+from darwin.dynamic_scaling import DynamicScalingEngine, ScalingLevel
+from darwin.tools.mcp_client import MCPClientPool, load_mcp_config
 from darwin.tools.mcp_gateway import MCPGateway, ToolResult
 from darwin.tools.recon_server import create_recon_gateway
 from darwin.tools.attack_server import create_attack_gateway
@@ -124,6 +132,11 @@ class Orchestrator:
     Reference: Cochise planner.py — Planner + temporary Executor
     """
 
+    REQUIRED_TOOLS = [
+        "nmap", "dirb", "whatweb", "curl",
+        "sqlmap", "ffuf", "python3", "ssh", "sshpass",
+    ]
+
     def __init__(
         self,
         llm_session: LLMSession | None = None,
@@ -140,10 +153,13 @@ class Orchestrator:
         self.dkg = DKG()
         self.dpm = DefensePerceptionModule(llm_session=self.llm)
         self.dave = DAVE(browser_enabled=browser_enabled)
+        self.cteg = CTEG(storage_path="cteg_state.json")
+        self.scaling_engine = DynamicScalingEngine(hysteresis=2)
 
         # Tool infrastructure
         self.recon_gateway = create_recon_gateway()
         self.attack_gateway = create_attack_gateway()
+        self.mcp_pool = MCPClientPool()
         self.client = HTTPClient()
         self.probe_client = ProbeClient()
 
@@ -167,37 +183,80 @@ class Orchestrator:
         """
         self.start_time = time.time()
         self.target_url = target_url
+        self._check_tool_dependencies()
+
+        # Connect to configured MCP servers
+        mcp_configs = load_mcp_config("config/mcp_servers.yaml")
+        try:
+            await asyncio.wait_for(self.mcp_pool.connect_all(mcp_configs), timeout=15)
+        except (asyncio.TimeoutError, Exception) as e:
+            log.warning("MCP server connection failed: %s", e)
+
         self.dkg.add_node("Host", "target", {
             "ip": target_url, "is_reachable": True, "is_internal": False,
         })
         self.phase = OrchestratorPhase.RECON
 
+        result: TaskResult | None = None
         try:
             # Phase 1: Reconnaissance
             await self._recon_phase(target_url)
+            self.dkg.save(self._checkpoint_path("recon"))
 
-            # Phase 2: Analyze
-            await self._analyze_phase()
+            # Determine scaling mode based on recon results
+            level = self.scaling_engine.decide(self.dkg, self.defense_state)
 
-            # Phase 3: Exploit (with defense bypass if needed)
-            result = await self._exploit_phase(target_url)
-
-            return result
+            if level == ScalingLevel.SOLO:
+                # Solo Mode: direct analyze + exploit
+                await self._analyze_phase()
+                self.dkg.save(self._checkpoint_path("analyze"))
+                result = await self._exploit_phase(target_url)
+            elif level == ScalingLevel.COORDINATED:
+                # Coordinated Mode: spawn 1-2 sub-agents
+                log.info("Entering Coordinated Mode (B >= 0.3)")
+                result = await self._run_coordinated_cycle()
+                if result is None:
+                    result = await self._exploit_phase(target_url)
+            else:  # DISTRIBUTED
+                # Distributed Mode: spawn 3+ sub-agents
+                log.info("Entering Distributed Mode (B >= 0.6)")
+                result = await self._run_distributed_cycle()
+                if result is None:
+                    result = await self._exploit_phase(target_url)
 
         except asyncio.TimeoutError:
-            return TaskResult(
+            result = TaskResult(
                 success=False, steps=self.step_count,
                 time_elapsed=time.time() - self.start_time,
                 phase_at_end=self.phase, error="Time budget exceeded",
             )
         except Exception as e:
-            return TaskResult(
+            result = TaskResult(
                 success=False, steps=self.step_count,
                 time_elapsed=time.time() - self.start_time,
                 phase_at_end=self.phase, error=str(e),
             )
         finally:
             await self.client.close()
+            if self.mcp_pool.is_connected:
+                await self.mcp_pool.disconnect_all()
+
+        # Commit task to CTEG for cross-task learning
+        if result and self.step_count > 0:
+            vuln_types = [v.vuln_type for v in self.vulnerabilities]
+            task_record = TaskRecord(
+                task_id=f"task-{int(self.start_time)}",
+                benchmark="unknown",
+                vulnerability_types=vuln_types,
+                outcome="success" if result.success else "failure",
+                defense_encountered=self.defense_state.to_dict(),
+                timestamp=time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(self.start_time)),
+            )
+            new_patterns = self.cteg.commit_task(task_record)
+            if new_patterns > 0:
+                log.info("CTEG: extracted %d new patterns from task", new_patterns)
+
+        return result
 
     # ── Phase 1: Reconnaissance ─────────────────────────────────────
 
@@ -227,10 +286,11 @@ class Orchestrator:
             })
 
         # Record discovered services
-        self.dkg.add_node("Service", f"service-http", {
+        technologies = whatweb_result.parsed_output.get("technologies") or ["unknown"]
+        self.dkg.add_node("Service", "service-http", {
             "port": 443 if target_url.startswith("https") else 80,
             "protocol": "HTTP",
-            "version": whatweb_result.parsed_output.get("technologies", ["unknown"])[0],
+            "version": technologies[0],
             "banner": "",
         })
 
@@ -245,8 +305,17 @@ class Orchestrator:
         dkg_summary = self.dkg.summary()
         self.llm.reset()
 
+        # Query CTEG for patterns from prior tasks
+        prompt = f"Target information:\n{dkg_summary}\n\nIdentify potential vulnerabilities."
+        cteg_suggestions = self.cteg.get_suggestions(
+            defense_type=self.defense_state.waf_type or "",
+            vuln_type="",
+        )
+        if cteg_suggestions.get("bypass_strategies") or cteg_suggestions.get("exploit_strategies"):
+            prompt += f"\n\nPrior cross-task experience suggests:\n{json.dumps(cteg_suggestions, indent=2)}"
+
         content, _ = self.llm.generate(
-            prompt=f"Target information:\n{dkg_summary}\n\nIdentify potential vulnerabilities.",
+            prompt=prompt,
             system_prompt=SYSTEM_PROMPT_ANALYZE,
         )
 
@@ -270,9 +339,8 @@ class Orchestrator:
                     "parameter": hypothesis.param,
                     "severity": "unknown",
                 })
-        except Exception:
-            # If parsing fails, try a generic approach
-            pass
+        except Exception as e:
+            log.warning("_analyze_phase: failed to parse LLM vulnerability output: %s", e)
 
         self.step_count += 1
 
@@ -490,11 +558,24 @@ class Orchestrator:
                     steps=self.step_count,
                     time_elapsed=time.time() - self.start_time,
                 )
-        except Exception:
-            pass
+        except Exception as e:
+            log.warning("_check_response_for_flag: HTTP request failed: %s", e)
         return None
 
     # ── Helpers ──────────────────────────────────────────────────────
+
+    def _checkpoint_path(self, phase: str) -> str:
+        """Generate a checkpoint path for a given phase."""
+        sanitized = re.sub(r"[^a-zA-Z0-9_.-]", "_", self.target_url)
+        return os.path.join("checkpoints", f"checkpoint_{sanitized}_{phase}.json")
+
+    def _check_tool_dependencies(self) -> None:
+        """Verify external CLI tools exist on PATH. Warn for missing ones."""
+        self._missing_tools: set = set()
+        for tool in self.REQUIRED_TOOLS:
+            if not shutil.which(tool):
+                self._missing_tools.add(tool)
+                log.warning("Tool not found on PATH: %s — related commands will fail", tool)
 
     def _time_exceeded(self) -> bool:
         return (time.time() - self.start_time) > self.time_budget
@@ -533,7 +614,7 @@ class Orchestrator:
         from darwin.sub_agents.exploit_agent import ExploitAgent
 
         pool = SubAgentPool()
-        target = getattr(self, "target_url", "http://localhost")
+        target = self.target_url
 
         # Spawn ReconAgent
         recon_scope = TaskScope(target_hosts=[target])
@@ -600,7 +681,9 @@ class Orchestrator:
 
         # Spawn recon agents for each undiscovered host
         for i, host in enumerate(hosts):
-            host_url = host.get("ip", host.get("id", "http://localhost"))
+            host_url = host.get("ip") or host.get("id")
+            if not host_url:
+                raise ValueError(f"Host node missing both ip and id: {host}")
             scope = TaskScope(target_hosts=[host_url])
             recon = ReconAgent(
                 agent_id=f"recon-dist-{i}",

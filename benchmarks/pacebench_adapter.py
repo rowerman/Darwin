@@ -181,8 +181,7 @@ def _extract_target_url(prompt: str) -> str:
     urls = re.findall(r"https?://[^\s\"'<>]+", prompt)
     if urls:
         return urls[0].rstrip(".,;:'\"")
-    # Default fallback
-    return "http://localhost:8080"
+    raise ValueError("Could not extract target URL from prompt")
 
 
 def _estimate_cost(tokens: int, model: str) -> float:

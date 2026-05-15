@@ -1,8 +1,12 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "darwin"
 version = "0.1.0"
 description = "DARWIN: Defense-Aware Adaptive Penetration Testing Agent Framework"
-requires-python = ">=3.11"
+requires-python = ">=3.10"
 dependencies = [
     "litellm>=1.50.0",
     "networkx>=3.3",
@@ -24,4 +28,9 @@ dev = [
 ]
 
 [tool.setuptools.packages.find]
+where = ["."]
 include = ["darwin*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"

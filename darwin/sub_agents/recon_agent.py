@@ -67,7 +67,9 @@ class ReconAgent(BaseSubAgent):
 
     async def _generate_plan(self) -> List[Dict[str, Any]]:
         """Generate recon plan: technology fingerprint → directory enum → endpoint probe."""
-        target = self.task_scope.target_hosts[0] if self.task_scope.target_hosts else "http://localhost"
+        if not self.task_scope.target_hosts:
+            raise ValueError("ReconAgent requires at least one target host")
+        target = self.task_scope.target_hosts[0]
 
         plan = [
             {
@@ -115,7 +117,9 @@ class ReconAgent(BaseSubAgent):
             else:
                 # fallback: use whatweb as default recon tool
                 tool_name = "whatweb_scan"
-                target = self.task_scope.target_hosts[0] if self.task_scope.target_hosts else "http://localhost"
+                if not self.task_scope.target_hosts:
+                    raise ValueError("ReconAgent requires at least one target host")
+                target = self.task_scope.target_hosts[0]
                 params = {"target_url": target}
 
         result = await self.tools.call(tool_name, params)

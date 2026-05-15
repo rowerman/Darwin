@@ -1,0 +1,24 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git config *)",
+      "Bash(git push *)",
+      "Bash(ssh -T git@github.com)",
+      "Bash(echo \"exit: $?\")",
+      "Bash(chmod 600 /home/kianabin/.ssh/id_ed25519)",
+      "Bash(chmod 644 /home/kianabin/.ssh/id_ed25519.pub)",
+      "Read(//home/kianabin/.ssh/**)",
+      "Bash(git remote *)",
+      "Bash(sudo chown *)",
+      "Bash(g *)",
+      "Bash(python *)",
+      "Bash(python3 -c \"from darwin.orchestrator import Orchestrator; print\\('Import OK'\\)\")",
+      "Bash(pip install *)",
+      "Bash(pip3 install *)",
+      "Bash(python3 -m pip install -e \"/home/kianabin/Darwin[dev]\")",
+      "Bash(apt list *)",
+      "Bash(sudo apt-get install -y python3-pip)",
+      "Bash(python3 *)"
+    ]
+  }
+}

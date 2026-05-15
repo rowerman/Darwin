@@ -230,8 +230,11 @@ class DAVE:
                     result = await page.evaluate("() => typeof window._xss_triggered !== 'undefined'")
                     if result:
                         js_executed = True
-                except Exception:
-                    pass
+                except Exception as e:
+                    import logging
+                    logging.getLogger(__name__).warning(
+                        "DAVE._verify_browser: JavaScript evaluation failed: %s", e
+                    )
 
                 if dialog_triggered or js_executed:
                     return LayerResult(

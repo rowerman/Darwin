@@ -35,10 +35,54 @@ class LLMSession:
 
         if api_key:
             import os
-            os.environ["OPENAI_API_KEY"] = api_key
+            _provider_key_map = {
+                "openai": "OPENAI_API_KEY",
+                "anthropic": "ANTHROPIC_API_KEY",
+                "deepseek": "DEEPSEEK_API_KEY",
+                "gemini": "GEMINI_API_KEY",
+                "ollama": "",
+            }
+            env_var = _provider_key_map.get(self.provider, "OPENAI_API_KEY")
+            if env_var:
+                os.environ[env_var] = api_key
         if base_url:
             self.model = f"openai/{model}"
             litellm.api_base = base_url
+
+    @classmethod
+    def from_config(cls, profile: str = "default", config_path: str = "config/llm.yaml") -> "LLMSession":
+        """Create LLMSession from config/llm.yaml profile.
+
+        Args:
+            profile: Profile name (default, reasoning, classifier)
+            config_path: Path to llm.yaml config file
+        """
+        import os
+
+        try:
+            import yaml
+        except ImportError:
+            import logging
+            logging.getLogger(__name__).warning("PyYAML not installed, cannot load %s", config_path)
+            return cls()
+
+        if not os.path.exists(config_path):
+            import logging
+            logging.getLogger(__name__).warning("LLM config not found at %s", config_path)
+            return cls()
+
+        with open(config_path) as f:
+            cfg = yaml.safe_load(f)
+
+        profile_cfg = cfg.get(profile, cfg.get("default", {}))
+        return cls(
+            provider=profile_cfg.get("provider", "openai"),
+            model=profile_cfg.get("model", "gpt-4o"),
+            api_key=profile_cfg.get("api_key"),
+            base_url=profile_cfg.get("base_url") or None,
+            temperature=float(profile_cfg.get("temperature", 0.7)),
+            max_tokens=int(str(profile_cfg.get("max_tokens", 4096)).replace(",", "")),
+        )
 
     def generate(
         self,

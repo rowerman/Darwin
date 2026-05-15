@@ -173,27 +173,6 @@ class DKG:
             "flags_captured": [f for f in flags if f.get("verified")],
         }
 
-    def compute_task_breadth(self) -> float:
-        """Compute B (Task Breadth) dimension from current DKG state.
-
-        B = 0.4 * N_norm + 0.3 * M_domain + 0.3 * L_move
-        """
-        hosts = self.query_nodes("Host")
-        domains = self.query_nodes("Domain")
-        credentials = self.query_nodes("Credential")
-
-        n_targets = len(hosts)
-        is_multi_domain = len(domains) > 1
-
-        internal_hosts = [h for h in hosts if h.get("is_internal", False)]
-        needs_lateral = len(internal_hosts) > 0 and len(credentials) > 0
-
-        N_norm = min(n_targets / 5.0, 1.0)
-        M_domain = 1.0 if is_multi_domain else 0.0
-        L_move = 1.0 if needs_lateral else 0.0
-
-        return 0.4 * N_norm + 0.3 * M_domain + 0.3 * L_move
-
     def summary(self) -> str:
         """Human-readable summary of current DKG state."""
         lines = []
@@ -248,6 +227,8 @@ class DKG:
 
     def save(self, path: str) -> None:
         """Save to a specific path."""
+        import os
+        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
         with open(path, "w", encoding="utf-8") as f:
             json.dump(self.to_dict(), f, indent=2, default=str)
 

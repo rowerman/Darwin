@@ -1,0 +1,34 @@
+# MCP Server configurations
+# Each server is a named entry with a command, args, and optional env vars.
+# The DARWIN orchestrator will connect to all enabled servers at startup.
+#
+# Example servers below. Enable the ones you need.
+
+servers:
+
+  # Filesystem — read/write files on the host (great for pentest report generation)
+  filesystem:
+    command: "npx"
+    args:
+      - "-y"
+      - "@anthropic/mcp-server-filesystem"
+      - "/tmp/darwin"
+    env: {}
+    enabled: false
+
+  # Web search — search the web for vulnerability info, CVE details
+  brave-search:
+    command: "npx"
+    args:
+      - "-y"
+      - "@anthropic/mcp-server-brave-search"
+    env:
+      BRAVE_API_KEY: "${BRAVE_API_KEY}"
+    enabled: false
+
+  # Custom DARWIN tools via Python MCP server
+  # darwin-tools:
+  #   command: "python3"
+  #   args: ["-m", "darwin.mcp_servers.custom_tools"]
+  #   env: {}
+  #   enabled: true

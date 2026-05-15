@@ -172,7 +172,10 @@ class DefensePerceptionModule:
                     data = yaml.safe_load(f)
                 self._waf_signatures = data.get("wafs", [])
             except ImportError:
-                pass
+                import logging
+                logging.getLogger(__name__).warning(
+                    "DPM: PyYAML not installed, cannot load WAF fingerprint database from %s", path
+                )
         elif path.endswith(".json"):
             with open(path) as f:
                 data = json.load(f)
