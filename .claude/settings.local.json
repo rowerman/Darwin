@@ -18,7 +18,26 @@
       "Bash(python3 -m pip install -e \"/home/kianabin/Darwin[dev]\")",
       "Bash(apt list *)",
       "Bash(sudo apt-get install -y python3-pip)",
-      "Bash(python3 *)"
+      "Bash(python3 *)",
+      "Bash(git reset *)",
+      "Bash(git rm *)",
+      "Bash(xargs -r git rm --cached)",
+      "Bash(git add *)",
+      "Bash(git commit *)",
+      "Bash(apt-cache search *)",
+      "Bash(dpkg -l)",
+      "Bash(pip3 index *)",
+      "Bash(git -C /home/kianabin/Darwin log --all --oneline --diff-filter=A --name-only)",
+      "Bash(git -C /home/kianabin/Darwin submodule status)",
+      "Bash(git -C /home/kianabin/Darwin submodule foreach)",
+      "Bash(git -C /home/kianabin/Darwin log --all --oneline --name-only -- \"*paper_analysis*\")",
+      "Bash(git -C /home/kianabin/Darwin log --all --oneline --name-only -- \"*cheat*\")",
+      "Bash(git -C /home/kianabin/Darwin log --all --oneline --name-only -- \"*RedTeam*\")",
+      "Bash(./venv/bin/python -m pytest tests/ -v)",
+      "Bash(grep -v \"^--$\")",
+      "Bash(sed -i 's/expose:/expose:/g; /expose:/{n;s/ - [0-9]\\\\+:[0-9]\\\\+/ - 3306/;}' __TRACKED_VAR__/docker-compose.yml)",
+      "Bash(sed -i '/expose:/{n;s/ - 3306:3306/ - 3306/;}' XBEN-084-24/docker-compose.yml)",
+      "Bash(sed -i '/expose:/{n;s/ - 8333:8333/ - 8333/;}' XBEN-084-24/docker-compose.yml)"
     ]
   }
 }

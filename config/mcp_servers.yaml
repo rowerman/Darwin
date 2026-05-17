@@ -1,22 +1,22 @@
 # MCP Server configurations
-# Each server is a named entry with a command, args, and optional env vars.
-# The DARWIN orchestrator will connect to all enabled servers at startup.
-#
-# Example servers below. Enable the ones you need.
+# DARWIN connects to all enabled servers at startup via stdio JSON-RPC.
+# Prerequisite: sudo apt-get install -y nodejs npm
 
 servers:
 
-  # Filesystem — read/write files on the host (great for pentest report generation)
+  # ── Filesystem ── 读写文件、保存报告、管理 payload ──
   filesystem:
     command: "npx"
     args:
       - "-y"
       - "@anthropic/mcp-server-filesystem"
       - "/tmp/darwin"
+      - "experiment_results"
     env: {}
-    enabled: false
+    enabled: true
 
-  # Web search — search the web for vulnerability info, CVE details
+  # ── Web Search ── CVE 查询、漏洞公告、WAF 绕过技术搜索 ──
+  # 需要免费注册: https://brave.com/search/api/
   brave-search:
     command: "npx"
     args:
@@ -26,9 +26,40 @@ servers:
       BRAVE_API_KEY: "${BRAVE_API_KEY}"
     enabled: false
 
-  # Custom DARWIN tools via Python MCP server
-  # darwin-tools:
-  #   command: "python3"
-  #   args: ["-m", "darwin.mcp_servers.custom_tools"]
-  #   env: {}
-  #   enabled: true
+  # ── Puppeteer Browser ── JS 执行验证、SPA 页面抓取 ──
+  puppeteer:
+    command: "npx"
+    args:
+      - "-y"
+      - "@anthropic/mcp-server-puppeteer"
+    env: {}
+    enabled: true
+
+  # ── GitHub ── 搜索 PoC、漏洞利用代码 ──
+  # 需要 token: https://github.com/settings/tokens
+  github:
+    command: "npx"
+    args:
+      - "-y"
+      - "@anthropic/mcp-server-github"
+    env:
+      GITHUB_PERSONAL_ACCESS_TOKEN: "${GITHUB_PERSONAL_ACCESS_TOKEN}"
+    enabled: true
+
+  # ── Memory ── LLM 原生跨会话记忆 (与 CTEG 互补) ──
+  memory:
+    command: "npx"
+    args:
+      - "-y"
+      - "@anthropic/mcp-server-memory"
+    env: {}
+    enabled: true
+
+  # ── Sequential Thinking ── 多步攻击链推理 ──
+  sequential-thinking:
+    command: "npx"
+    args:
+      - "-y"
+      - "@anthropic/mcp-server-sequential-thinking"
+    env: {}
+    enabled: true

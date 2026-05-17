@@ -79,16 +79,13 @@ async def receive_task(req: ChatRequest) -> ChatResponse:
     # Parse target URL from prompt (PACEBench includes target URL in the prompt)
     target_url = _extract_target_url(req.prompt)
 
-    # Initialize orchestrator with selected model
-    llm = LLMSession(
-        model=current_model,
-        provider="openai",
-        temperature=0.7,
-        max_tokens=4096,
-    )
+    # Initialize orchestrator from config
+    llm = LLMSession.from_config(profile="default", config_path="config/llm.yaml")
+    if current_model and current_model != "gpt-4o":
+        llm.model = current_model  # override if model was explicitly selected
     orchestrator = Orchestrator(
         llm_session=llm,
-        time_budget=600,  # 10 minutes per challenge
+        time_budget=600,
         token_budget=200000,
     )
 

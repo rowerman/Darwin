@@ -26,6 +26,16 @@ def _parse_nmap_output(stdout: str) -> Dict[str, Any]:
     return {"open_ports": ports, "count": len(ports)}
 
 
+def _parse_masscan_output(stdout: str) -> Dict[str, Any]:
+    """Parse masscan output for open ports."""
+    ports = []
+    for line in stdout.split("\n"):
+        match = re.search(r"Discovered open port (\d+)/tcp", line)
+        if match:
+            ports.append({"port": int(match.group(1)), "protocol": "tcp"})
+    return {"open_ports": ports, "count": len(ports)}
+
+
 def _parse_dirb_output(stdout: str) -> Dict[str, Any]:
     """Parse dirb output for discovered paths."""
     paths = []
@@ -39,13 +49,44 @@ def _parse_dirb_output(stdout: str) -> Dict[str, Any]:
     return {"discovered_paths": paths, "count": len(paths)}
 
 
+def _parse_gobuster_output(stdout: str) -> Dict[str, Any]:
+    """Parse gobuster dir output for discovered paths."""
+    paths = []
+    for line in stdout.split("\n"):
+        line = line.strip()
+        if not line or line.startswith("[") or line.startswith("=") or "Error" in line:
+            continue
+        match = re.match(r"(/\S+)", line)
+        if match:
+            code_match = re.search(r"\(Status:\s*(\d+)", line)
+            code = code_match.group(1) if code_match else "200"
+            paths.append({"path": match.group(1), "code": code})
+    return {"discovered_paths": paths, "count": len(paths)}
+
+
+def _parse_nikto_output(stdout: str) -> Dict[str, Any]:
+    """Parse nikto output for vulnerabilities and findings."""
+    findings = []
+    for line in stdout.split("\n"):
+        line = line.strip()
+        if line.startswith("+ "):
+            finding = line[2:].strip()
+            parts = finding.split(":")
+            finding_type = "info"
+            if "vulnerab" in finding.lower() or "critical" in finding.lower():
+                finding_type = "vulnerability"
+            elif "warn" in finding.lower():
+                finding_type = "warning"
+            findings.append({"type": finding_type, "detail": finding})
+    return {"findings": findings, "count": len(findings)}
+
+
 def _parse_whatweb_output(stdout: str) -> Dict[str, Any]:
     """Parse whatweb output for technology stack."""
     techs = []
     for line in stdout.split("\n"):
         line = line.strip()
         if line and "http" in line:
-            # Extract technologies in brackets
             tech_matches = re.findall(r"\[(.*?)\]", line)
             techs.extend(tech_matches)
     return {"technologies": techs}
@@ -77,6 +118,18 @@ def register_recon_tools(gateway: MCPGateway) -> MCPGateway:
         parser=_parse_nmap_output,
     )
 
+    # ── masscan: Fast port scanning ─────────────────────────────
+    gateway.register_shell_tool(
+        name="masscan_scan",
+        command_template="masscan {target} --top-ports 1000 --rate=10000 2>&1",
+        description="Fast port scan of top 1000 ports using masscan (much faster than nmap)",
+        parameters={
+            "target": {"type": "string", "description": "Target IP or CIDR range (e.g. 192.168.1.0/24)"},
+        },
+        parser=_parse_masscan_output,
+        timeout=120,
+    )
+
     # ── dirb: Directory enumeration ─────────────────────────────
     gateway.register_shell_tool(
         name="dirb_scan",
@@ -86,6 +139,30 @@ def register_recon_tools(gateway: MCPGateway) -> MCPGateway:
             "target_url": {"type": "string", "description": "Target URL to scan"},
         },
         parser=_parse_dirb_output,
+    )
+
+    # ── gobuster: Fast directory enumeration ─────────────────────
+    gateway.register_shell_tool(
+        name="gobuster_dir",
+        command_template="gobuster dir -u {target_url} -w /usr/share/wordlists/dirb/common.txt -q 2>&1",
+        description="Fast directory brute-force using gobuster (Go-based, faster than dirb)",
+        parameters={
+            "target_url": {"type": "string", "description": "Target URL to scan"},
+        },
+        parser=_parse_gobuster_output,
+        timeout=90,
+    )
+
+    # ── nikto: Web server scanner ───────────────────────────────
+    gateway.register_shell_tool(
+        name="nikto_scan",
+        command_template="nikto -h {target_url} -Tuning 12345 -nointeractive 2>&1 | head -200",
+        description="Scan web server for known vulnerabilities, misconfigurations, and info leaks using nikto",
+        parameters={
+            "target_url": {"type": "string", "description": "Target URL with optional port (e.g. http://host:8080)"},
+        },
+        parser=_parse_nikto_output,
+        timeout=180,
     )
 
     # ── curl: HTTP probing ──────────────────────────────────────

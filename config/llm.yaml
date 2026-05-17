@@ -4,21 +4,21 @@
 default:
   provider: "deepseek"  # openai | anthropic | deepseek | ollama
   model: "deepseek-v4-pro[1m]"
-  api_key: "sk-9f0fd169d1d14e5bb443c2e2687958d9"
+  api_key: ""
   base_url: ""  # empty = use provider default
   temperature: 0.2
-  max_tokens: 1,048,576
+  max_tokens: 393216
 
 reasoning:
   provider: "deepseek"
   model: "deepseek-v4-pro[1m]"
-  api_key: "sk-9f0fd169d1d14e5bb443c2e2687958d9"
+  api_key: ""
   temperature: 0.2
-  max_tokens: 1,048,576
+  max_tokens: 393216
 
 classifier:
   provider: "deepseek"
   model: "deepseek-v4-flash"
-  api_key: "sk-9f0fd169d1d14e5bb443c2e2687958d9"
+  api_key: ""
   temperature: 0.1
-  max_tokens: 1,048,576
+  max_tokens: 393216

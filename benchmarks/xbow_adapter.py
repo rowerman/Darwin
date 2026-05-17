@@ -13,9 +13,13 @@ import subprocess
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+import logging
+
 from darwin.orchestrator import Orchestrator, TaskResult
 from darwin.utils.llm import LLMSession
-from darwin.experiments.metrics import ExperimentMetrics
+from experiments.metrics import ExperimentMetrics
+
+log = logging.getLogger(__name__)
 
 
 class XBOWAdapter:
@@ -76,13 +80,10 @@ class XBOWAdapter:
         try:
             target_url = f"http://localhost:{port}"
 
-            # Create orchestrator
-            llm = LLMSession(
-                model=model,
-                provider="openai",
-                temperature=0.7,
-                max_tokens=4096,
-            )
+            # Create orchestrator from config
+            llm = LLMSession.from_config(profile="default", config_path="config/llm.yaml")
+            if model != "gpt-4o":
+                llm.model = model
             orch = Orchestrator(
                 llm_session=llm,
                 time_budget=self.time_budget,
@@ -117,37 +118,58 @@ class XBOWAdapter:
             await self._stop_challenge(challenge_path)
 
     async def _start_challenge(self, challenge_path: Path) -> Optional[int]:
-        """Start Docker Compose and return the exposed port."""
+        """Start Docker Compose and return the exposed host port."""
+        import re
+
         try:
             proc = await asyncio.create_subprocess_shell(
-                f"cd {challenge_path} && docker compose up -d --wait 2>&1",
+                f"cd {challenge_path} && docker compose up -d 2>&1",
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
-            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=60)
-            output = stdout.decode(errors="replace") + stderr.decode(errors="replace")
+            await asyncio.wait_for(proc.communicate(), timeout=60)
 
-            # Try to find the exposed port from docker compose ps
+            # Get port mappings: docker compose ps --format json
             ps_proc = await asyncio.create_subprocess_shell(
-                f"cd {challenge_path} && docker compose port app 80 2>/dev/null || docker compose ps --format json 2>/dev/null",
+                f"cd {challenge_path} && docker compose ps --format json 2>/dev/null",
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
             ps_stdout, _ = await asyncio.wait_for(ps_proc.communicate(), timeout=15)
             ps_output = ps_stdout.decode(errors="replace").strip()
 
-            # Parse port from docker compose output
-            import re
-            ports = re.findall(r":(\d+)", ps_output)
-            if ports:
-                return int(ports[0])
+            # Parse JSON output for published ports
+            for line in ps_output.split("\n"):
+                try:
+                    info = json.loads(line)
+                    ports_str = info.get("Publishers") or info.get("ports", "")
+                    if ports_str:
+                        port_match = re.findall(r":(\d+)", str(ports_str))
+                        if port_match:
+                            return int(port_match[0])
+                except json.JSONDecodeError:
+                    continue
 
-            # Default port
+            # Fallback: scan compose file for port mappings
+            compose_file = challenge_path / "docker-compose.yml"
+            if compose_file.exists():
+                import yaml
+                with open(compose_file) as f:
+                    data = yaml.safe_load(f)
+                for svc_name, svc_cfg in data.get("services", {}).items():
+                    svc_ports = svc_cfg.get("ports", [])
+                    for port_entry in svc_ports:
+                        host_port = re.match(r"(\d+):", str(port_entry))
+                        if host_port:
+                            return int(host_port.group(1))
+
+            log.warning("XBOW: could not detect port for %s, using 8080", challenge_path.name)
             return 8080
         except asyncio.TimeoutError:
+            log.warning("XBOW: timeout starting %s", challenge_path.name)
             return None
         except Exception as e:
-            print(f"  [XBOW] Error starting {challenge_path.name}: {e}")
+            log.warning("XBOW: error starting %s: %s", challenge_path.name, e)
             return None
 
     async def _stop_challenge(self, challenge_path: Path) -> None:
@@ -159,8 +181,8 @@ class XBOWAdapter:
                 stderr=asyncio.subprocess.PIPE,
             )
             await asyncio.wait_for(proc.communicate(), timeout=30)
-        except Exception:
-            pass
+        except Exception as e:
+            log.warning("XBOW: failed to stop %s: %s", challenge_path.name, e)
 
     def _get_description(self, challenge_path: Path) -> str:
         """Get challenge description from README or challenge.json."""

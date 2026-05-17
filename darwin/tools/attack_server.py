@@ -7,10 +7,56 @@ Reference: AWE xss_agent, sqli_agent — exploitation patterns
 from __future__ import annotations
 
 import asyncio
+import re
 import time
 from typing import Any, Dict
 
 from darwin.tools.mcp_gateway import MCPGateway, ToolResult
+
+
+def _parse_hydra_output(stdout: str) -> Dict[str, Any]:
+    """Parse hydra output for discovered credentials."""
+    credentials = []
+    for line in stdout.split("\n"):
+        match = re.search(r"login:\s*(\S+)\s+password:\s*(\S+)", line)
+        if match:
+            credentials.append({"username": match.group(1), "password": match.group(2)})
+        # Alternative format: host: ... login: ... password: ...
+        match2 = re.search(r"\[(\d+)\]\[(\w+)\]\s+host:\s*\S+\s+login:\s*(\S+)\s+password:\s*(\S+)", line)
+        if match2:
+            credentials.append({"service": match2.group(2), "username": match2.group(3), "password": match2.group(4)})
+    return {"credentials": credentials, "count": len(credentials)}
+
+
+def _parse_searchsploit_output(stdout: str) -> Dict[str, Any]:
+    """Parse searchsploit results for exploits."""
+    exploits = []
+    for line in stdout.split("\n"):
+        # Format: Title | Path
+        parts = line.split(" | ")
+        if len(parts) >= 2:
+            exploits.append({
+                "title": parts[0].strip(),
+                "path": parts[1].strip(),
+            })
+    return {"exploits": exploits, "count": len(exploits)}
+
+
+def _parse_smbmap_output(stdout: str) -> Dict[str, Any]:
+    """Parse smbmap output for SMB shares and permissions."""
+    shares = []
+    for line in stdout.split("\n"):
+        line = line.strip()
+        if not line or "IP：" in line or "SMBMap" in line:
+            continue
+        match = re.match(r"\s*(\S+)\s+(\S+)\s+(\S+)", line)
+        if match:
+            shares.append({
+                "share": match.group(1),
+                "permissions": match.group(2),
+                "comment": match.group(3) if match.group(3) != "NO" else "",
+            })
+    return {"shares": shares, "count": len(shares)}
 
 
 async def _run_shell(cmd: str, timeout: int = 60) -> ToolResult:
@@ -249,6 +295,70 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
             "url": {"type": "string", "description": "Target URL"},
             "param": {"type": "string", "description": "Parameter to test for XSS"},
         },
+    )
+
+    # ── Hydra: Brute force ───────────────────────────────────────
+    async def hydra_http_brute(
+        url: str, userlist: str = "/usr/share/wordlists/dirb/common.txt",
+        passlist: str = "/usr/share/wordlists/dirb/common.txt",
+    ) -> ToolResult:
+        """Brute force HTTP POST login form."""
+        import urllib.parse
+        parsed = urllib.parse.urlparse(url)
+        cmd = (
+            f"hydra -l admin -P {passlist} "
+            f"{parsed.hostname} "
+            f"http-post-form '{parsed.path or '/'}:"
+            f"user=^USER^&pass=^PASS^:"
+            f"F=incorrect|F=invalid|F=failed' "
+            f"-t 4 -f 2>&1 | head -50"
+        )
+        return await _run_shell(cmd, timeout=120)
+
+    gateway.register(
+        name="hydra_http_brute",
+        func=hydra_http_brute,
+        description="Brute force HTTP login form with common password using hydra",
+        parameters={
+            "url": {"type": "string", "description": "Target login URL"},
+            "userlist": {"type": "string", "description": "Path to username wordlist"},
+            "passlist": {"type": "string", "description": "Path to password wordlist"},
+        },
+    )
+
+    gateway.register_shell_tool(
+        name="hydra_ssh_brute",
+        command_template="hydra -l root -P /usr/share/wordlists/dirb/common.txt ssh://{target} -t 4 -f 2>&1 | head -50",
+        description="Brute force SSH login with common passwords using hydra",
+        parameters={
+            "target": {"type": "string", "description": "Target hostname or IP"},
+        },
+        parser=_parse_hydra_output,
+        timeout=120,
+    )
+
+    # ── SearchSploit: Exploit-DB search ───────────────────────────
+    gateway.register_shell_tool(
+        name="searchsploit_search",
+        command_template="searchsploit {query} 2>&1 | head -30",
+        description="Search Exploit-DB for public exploits matching query (CVE, software name, etc.)",
+        parameters={
+            "query": {"type": "string", "description": "Search term: CVE ID, software name, or vulnerability type"},
+        },
+        parser=_parse_searchsploit_output,
+        timeout=30,
+    )
+
+    # ── SMBMap: SMB enumeration ──────────────────────────────────
+    gateway.register_shell_tool(
+        name="smbmap_enum",
+        command_template="smbmap -H {target} 2>&1",
+        description="Enumerate SMB shares and their permissions on a target host",
+        parameters={
+            "target": {"type": "string", "description": "Target IP or hostname"},
+        },
+        parser=_parse_smbmap_output,
+        timeout=60,
     )
 
     return gateway

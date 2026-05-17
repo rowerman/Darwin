@@ -94,8 +94,9 @@ You operate within an authorized security testing engagement.
 - NEVER assume a request succeeded — verify through the Defense-Aware Verification Engine.
 
 ## Available Tools
-You have access to reconnaissance tools (nmap_scan, dirb_scan, curl_get, whatweb_scan)
-and attack tools (sqlmap_test, send_payload, command_injection_test, xss_reflection_test, ffuf_fuzz).
+Recon: nmap_scan, masscan_scan, dirb_scan, gobuster_dir, nikto_scan, curl_get, whatweb_scan
+Attack: sqlmap_test, ffuf_fuzz, send_payload, command_injection_test, xss_reflection_test,
+        hydra_http_brute, hydra_ssh_brute, searchsploit_search, smbmap_enum
 
 ## Rules
 - Report the exact flag string when found.
@@ -135,6 +136,7 @@ class Orchestrator:
     REQUIRED_TOOLS = [
         "nmap", "dirb", "whatweb", "curl",
         "sqlmap", "ffuf", "python3", "ssh", "sshpass",
+        "masscan", "gobuster", "nikto", "hydra", "searchsploit", "smbmap",
     ]
 
     def __init__(
@@ -142,11 +144,15 @@ class Orchestrator:
         llm_session: LLMSession | None = None,
         time_budget: int = 600,
         token_budget: int = 200000,
+        max_context_tokens: int = 180000,
+        compression_threshold: float = 0.4,
         browser_enabled: bool = False,
     ):
         self.llm = llm_session or LLMSession()
         self.time_budget = time_budget
         self.token_budget = token_budget
+        self.max_context_tokens = max_context_tokens
+        self.compression_threshold = compression_threshold
         self.browser_enabled = browser_enabled
 
         # Core modules
@@ -162,6 +168,10 @@ class Orchestrator:
         self.mcp_pool = MCPClientPool()
         self.client = HTTPClient()
         self.probe_client = ProbeClient()
+
+        # Task log — structured event log written to file
+        self._task_log: List[Dict[str, Any]] = []
+        self._task_log_path: str = ""
 
         # State tracking
         self.phase = OrchestratorPhase.INIT
@@ -183,42 +193,82 @@ class Orchestrator:
         """
         self.start_time = time.time()
         self.target_url = target_url
+
+        # Init task log
+        ts = time.strftime("%Y%m%d_%H%M%S", time.localtime())
+        self._task_log_path = f"checkpoints/task_{ts}.json"
+        self._task_log_event("info", "task_start", target=target_url, description=task_description)
+
         self._check_tool_dependencies()
+        if self._missing_tools:
+            self._task_log_event("warning", "missing_tools", tools=list(self._missing_tools))
 
         # Connect to configured MCP servers
         mcp_configs = load_mcp_config("config/mcp_servers.yaml")
-        try:
-            await asyncio.wait_for(self.mcp_pool.connect_all(mcp_configs), timeout=15)
-        except (asyncio.TimeoutError, Exception) as e:
-            log.warning("MCP server connection failed: %s", e)
+        enabled_mcp = [c for c in mcp_configs if c.enabled]
+        if enabled_mcp:
+            log.info("Connecting to %d MCP server(s): %s",
+                     len(enabled_mcp), ", ".join(c.name for c in enabled_mcp))
+            try:
+                await asyncio.wait_for(self.mcp_pool.connect_all(mcp_configs), timeout=15)
+            except asyncio.TimeoutError:
+                log.warning("MCP connection timed out after 15s — some servers may not be reachable")
+            except Exception as e:
+                log.warning("MCP pool setup error: %s", e)
+            connected = len(self.mcp_pool._clients)
+            if connected > 0:
+                tools = self.mcp_pool.get_tool_names()
+                log.info("MCP: %d server(s) connected, %d tools available: %s",
+                         connected, len(tools), ", ".join(sorted(tools)[:15]))
+            if connected < len(enabled_mcp):
+                log.warning("MCP: %d/%d servers connected (check individual server errors above)",
+                           connected, len(enabled_mcp))
+        else:
+            log.info("No MCP servers enabled in config/mcp_servers.yaml")
 
         self.dkg.add_node("Host", "target", {
             "ip": target_url, "is_reachable": True, "is_internal": False,
         })
         self.phase = OrchestratorPhase.RECON
+        self._task_log_event("info", "mcp_status",
+            enabled=len(enabled_mcp),
+            connected=len(self.mcp_pool._clients),
+            tools=self.mcp_pool.get_tool_names(),
+        )
 
         result: TaskResult | None = None
         try:
             # Phase 1: Reconnaissance
             await self._recon_phase(target_url)
+            self._task_log_event("info", "recon_done",
+                dkg_summary=self.dkg.summary(),
+                step=self.step_count,
+            )
             self.dkg.save(self._checkpoint_path("recon"))
 
             # Determine scaling mode based on recon results
             level = self.scaling_engine.decide(self.dkg, self.defense_state)
+            self._task_log_event("info", "scaling_decision",
+                level=level.value,
+                dkg_summary=self.dkg.get_defense_context(),
+            )
 
             if level == ScalingLevel.SOLO:
-                # Solo Mode: direct analyze + exploit
                 await self._analyze_phase()
+                self._task_log_event("info", "analyze_done",
+                    vuln_count=len(self.vulnerabilities),
+                    vulns=[{"type": v.vuln_type, "endpoint": v.endpoint, "confidence": v.confidence}
+                           for v in self.vulnerabilities],
+                    tokens_used=self.llm.token_count,
+                )
                 self.dkg.save(self._checkpoint_path("analyze"))
                 result = await self._exploit_phase(target_url)
             elif level == ScalingLevel.COORDINATED:
-                # Coordinated Mode: spawn 1-2 sub-agents
                 log.info("Entering Coordinated Mode (B >= 0.3)")
                 result = await self._run_coordinated_cycle()
                 if result is None:
                     result = await self._exploit_phase(target_url)
             else:  # DISTRIBUTED
-                # Distributed Mode: spawn 3+ sub-agents
                 log.info("Entering Distributed Mode (B >= 0.6)")
                 result = await self._run_distributed_cycle()
                 if result is None:
@@ -240,6 +290,17 @@ class Orchestrator:
             await self.client.close()
             if self.mcp_pool.is_connected:
                 await self.mcp_pool.disconnect_all()
+
+        # Write task log
+        self._task_log_event("info" if result.success else "error", "task_end",
+            success=result.success,
+            flag=result.flag,
+            steps=result.steps,
+            tokens_used=result.tokens_used,
+            time_elapsed=result.time_elapsed,
+            error=result.error,
+        )
+        self._task_log_write()
 
         # Commit task to CTEG for cross-task learning
         if result and self.step_count > 0:
@@ -294,6 +355,18 @@ class Orchestrator:
             "banner": "",
         })
 
+        # Extract links from baseline HTML for endpoint discovery
+        hrefs = re.findall(r'href=["\']([^"\']+)["\']', baseline.body)
+        for href in hrefs:
+            from urllib.parse import urljoin
+            full_url = urljoin(target_url, href)
+            self.dkg.add_node("Endpoint", f"endpoint-link-{href}", {
+                "url": full_url,
+                "method": "GET",
+                "params": "",
+                "auth_required": False,
+            })
+
         self.step_count += 1
 
     # ── Phase 2: Analyze ────────────────────────────────────────────
@@ -314,9 +387,17 @@ class Orchestrator:
         if cteg_suggestions.get("bypass_strategies") or cteg_suggestions.get("exploit_strategies"):
             prompt += f"\n\nPrior cross-task experience suggests:\n{json.dumps(cteg_suggestions, indent=2)}"
 
+        self._maybe_compress()
+        tokens_before = self.llm.token_count
         content, _ = self.llm.generate(
             prompt=prompt,
             system_prompt=SYSTEM_PROMPT_ANALYZE,
+        )
+        tokens_used = self.llm.token_count - tokens_before
+        self._task_log_event("info", "llm_analyze_call",
+            prompt=prompt, response=content[:2000],
+            tokens_used=tokens_used,
+            cteg_suggestions=cteg_suggestions,
         )
 
         # Parse LLM's vulnerability hypotheses
@@ -361,11 +442,23 @@ class Orchestrator:
 
             # Attempt exploitation based on vulnerability type
             exploit_attempt = await self._attempt_exploit(vuln, target_url)
+            self._task_log_event("info", "exploit_attempt",
+                vuln_type=vuln.vuln_type,
+                endpoint=vuln.endpoint,
+                param=vuln.param,
+                tool_stdout=exploit_attempt.tool_stdout[:500],
+            )
 
             # Verify
             verification = await self.dave.verify(exploit_attempt)
 
             if verification.passed and verification.flag_value and not verification.is_honeypot_flag:
+                self._task_log_event("info", "flag_found",
+                    vuln_type=vuln.vuln_type,
+                    flag=verification.flag_value,
+                    method="exploit_with_verification",
+                    verification_layer=verification.passed_level,
+                )
                 self.phase = OrchestratorPhase.DONE
                 return TaskResult(
                     success=True,
@@ -483,6 +576,7 @@ class Orchestrator:
         bypass_hints = self.defense_state.waf_match.bypass_hints if self.defense_state.waf_match else []
         if not bypass_hints:
             self.llm.reset()
+            self._maybe_compress()
             content, _ = self.llm.generate(
                 prompt=f"Defense detected: {self.defense_state.to_dict()}. Suggest bypass strategies.",
                 system_prompt=SYSTEM_PROMPT_BYPASS,
@@ -545,24 +639,65 @@ class Orchestrator:
 
     # ── Flag Search ──────────────────────────────────────────────────
 
+    # Common paths where flags might be exposed
+    _FLAG_PATHS = ["/flag", "/flag.txt", "/robots.txt", "/.git/HEAD", "/admin", "/secret"]
+
     async def _check_response_for_flag(self, target_url: str) -> TaskResult | None:
-        """Search response body for flag patterns."""
-        try:
-            response = await self.client.get(target_url)
-            flags = self.flag_pattern.findall(response.body)
-            if flags:
-                self.phase = OrchestratorPhase.DONE
-                return TaskResult(
-                    success=True,
-                    flag=flags[0],
-                    steps=self.step_count,
-                    time_elapsed=time.time() - self.start_time,
-                )
-        except Exception as e:
-            log.warning("_check_response_for_flag: HTTP request failed: %s", e)
+        """Search response body for flag patterns — base URL and common paths."""
+        import urllib.parse
+        parsed = urllib.parse.urlparse(target_url)
+        base = f"{parsed.scheme}://{parsed.netloc}"
+
+        urls_to_check = [target_url] + [base + p for p in self._FLAG_PATHS]
+
+        for url in urls_to_check:
+            try:
+                response = await self.client.get(url)
+                flags = self.flag_pattern.findall(response.body)
+                if flags:
+                    self._task_log_event("info", "flag_found",
+                        url=url, flag=flags[0],
+                        method="direct_path_probe",
+                    )
+                    self.phase = OrchestratorPhase.DONE
+                    return TaskResult(
+                        success=True,
+                        flag=flags[0],
+                        steps=self.step_count,
+                        time_elapsed=time.time() - self.start_time,
+                    )
+            except Exception:
+                continue
         return None
 
     # ── Helpers ──────────────────────────────────────────────────────
+
+    def _task_log_event(self, level: str, event: str, **data: Any) -> None:
+        """Record a structured event in the task log."""
+        self._task_log.append({
+            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime()),
+            "elapsed_s": round(time.time() - self.start_time, 3),
+            "phase": self.phase.value,
+            "level": level,
+            "event": event,
+            **data,
+        })
+
+    def _task_log_write(self) -> None:
+        """Persist the task log to JSON file."""
+        if self._task_log_path and self._task_log:
+            os.makedirs(os.path.dirname(self._task_log_path) or ".", exist_ok=True)
+            with open(self._task_log_path, "w", encoding="utf-8") as f:
+                json.dump({
+                    "target": self.target_url,
+                    "model": self.llm.model,
+                    "provider": self.llm.provider,
+                    "time_budget": self.time_budget,
+                    "events": self._task_log,
+                    "dkg_summary": self.dkg.summary(),
+                    "cteg_patterns_committed": getattr(self, '_cteg_committed', 0),
+                }, f, indent=2, default=str)
+            log.info("Task log written to %s (%d events)", self._task_log_path, len(self._task_log))
 
     def _checkpoint_path(self, phase: str) -> str:
         """Generate a checkpoint path for a given phase."""
@@ -581,7 +716,38 @@ class Orchestrator:
         return (time.time() - self.start_time) > self.time_budget
 
     def _tokens_exceeded(self) -> bool:
-        return self.llm.token_count > self.token_budget
+        """Check if token budget is exceeded. Attempts compression first."""
+        if self.llm.token_count <= self.token_budget:
+            return False
+        # Try compression before giving up
+        if self._maybe_compress():
+            return self.llm.token_count > self.token_budget
+        return True
+
+    def _maybe_compress(self) -> bool:
+        """Compress conversation history if context load exceeds threshold.
+
+        Returns True if compression was performed.
+        """
+        if self.llm.context_load < self.compression_threshold:
+            return False
+
+        saved = self.llm.compress(
+            max_context_tokens=self.max_context_tokens,
+            compression_threshold=self.compression_threshold,
+        )
+        if saved > 0:
+            self._task_log_event("info", "context_compressed",
+                tokens_saved=saved,
+                new_token_count=self.llm.token_count,
+                compression_count=self.llm._compressed_count,
+            )
+            log.info("Context compressed: saved ~%d tokens (total: %d, load: %.1f%%)",
+                     saved, self.llm.token_count, self.llm.context_load * 100)
+            return True
+        elif saved < 0:
+            log.warning("Context compression failed, continuing with high context load")
+        return False
 
     @staticmethod
     def _extract_json(text: str) -> Any:

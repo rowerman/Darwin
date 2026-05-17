@@ -142,6 +142,7 @@ class BaseSubAgent(ABC):
 
         try:
             # Phase 1: Generate plan
+            self._maybe_compress()
             self.plan = await self._generate_plan()
             if not self.plan:
                 # No plan generated — create a default exploration task
@@ -170,7 +171,8 @@ class BaseSubAgent(ABC):
                 # Write findings to DKG
                 self._write_findings_to_dkg(task, command_result, new_findings)
 
-                # Replan if needed
+                # Replan if needed — compress context before LLM calls
+                self._maybe_compress()
                 if not success:
                     self.plan = await self._replan_after_failure(task, command_result)
                 else:
@@ -325,15 +327,38 @@ class BaseSubAgent(ABC):
 
     def _should_continue(self) -> bool:
         """Check if the agent should continue running."""
-        if self.budget.tokens_exceeded():
-            return False
         if self.budget.time_exceeded():
             return False
         if self.iteration >= self.budget.max_iterations:
             return False
         if self.state in (SubAgentState.CANCELLED, SubAgentState.SAFETY_ABORT):
             return False
+        if self.budget.tokens_exceeded():
+            # Try compression before giving up
+            if self._maybe_compress():
+                return not self.budget.tokens_exceeded()
+            return False
         return True
+
+    def _maybe_compress(self) -> bool:
+        """Compress conversation history if context load exceeds threshold.
+
+        Sub-agents use a fixed 40% threshold relative to their budget's max_tokens.
+        Returns True if compression was performed.
+        """
+        ctx_load = self.llm.context_load
+        threshold = 0.4
+        if ctx_load < threshold:
+            return False
+
+        saved = self.llm.compress(
+            max_context_tokens=180000,
+            compression_threshold=threshold,
+        )
+        if saved > 0:
+            self.budget.tokens_used = self.llm.token_count
+            return True
+        return False
 
     def _build_result(self) -> SubAgentResult:
         return SubAgentResult(

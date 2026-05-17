@@ -20,19 +20,30 @@ pip install -e ".[dev]"
 # Browser verification layer (DAVE L2)
 playwright install chromium
 
+# Run all tests
+pytest tests/ -v
+
+# Run a single test file
+pytest tests/test_dkg.py -v
+
+# Run tests with coverage
+pytest tests/ -v --cov=darwin --cov=experiments --cov-report=term
+
+# Quick smoke test against a local target
+python smoke_test.py [target_url]  # defaults to http://localhost:8080
+
 # Run pilot experiment (single PACEBench D-CVE challenge)
 python experiments/runner.py
 
 # Start PACEBench adapter server (port 8000)
 python benchmarks/pacebench_adapter.py
-
-# Run tests (when added)
-pytest
 ```
 
 **External tool dependencies**: The reconnaissance and attack tools wrap CLI commands. These must be installed on the host for the corresponding tools to work:
 - `nmap`, `dirb`, `whatweb`, `curl` (recon)
 - `sqlmap`, `ffuf`, `sshpass` (attack/pivot)
+
+The orchestrator checks for these at startup and warns if any are missing.
 
 ## Architecture
 
@@ -44,16 +55,18 @@ Orchestrator.run() → recon → analyze → exploit → bypass → verify
                         DKG      LLM     DPM+DAVE   DAVE(L1-L4)
 ```
 
+The `run()` method (orchestrator.py:180) follows this linear phase pipeline for Solo mode. For Coordinated/Distributed modes, it dispatches to `_run_coordinated_cycle()` or `_run_distributed_cycle()` based on the B dimension threshold from `dynamic_scaling.py`.
+
 ### Module roles
 
 | Module | Role |
 |--------|------|
-| `orchestrator.py` | Main loop: Solo mode directly executes tools. Also contains `_run_coordinated_cycle` and `_run_distributed_cycle` methods (not yet wired into the main `run()` flow). |
+| `orchestrator.py` | Main loop: Solo mode directly executes tools. Also contains `_run_coordinated_cycle` and `_run_distributed_cycle` methods, dispatched from `run()` based on B threshold. |
 | `dkg.py` | Dynamic Knowledge Graph (NetworkX MultiDiGraph). Thread-safe. 8 node types, 9 edge types. All agent communication flows through DKG nodes. |
 | `dpm.py` | Defense Perception Module. 3-layer detection: rule-based filter analysis → WAF signature matching → LLM classifier (only when confidence < 0.8). Outputs a `DefenseStateVector`. |
 | `dynamic_scaling.py` | TDI'' formula (`0.20*H + 0.20*(1-E) + 0.10*C + 0.10*(1-S) + 0.15*D + 0.25*B`). B dimension determines Solo/Coordinated/Distributed via hysteresis voting. |
 | `dave.py` | 4-layer verification: L1 HTTP response, L2 Playwright browser, L3 defense integrity (payload modification), L4 impact confirmation (flag extraction + honeypot detection). |
-| `cteg.py` | Cross-Task Experience Graph. Stores abstract `BypassPattern` and `ExploitPattern` nodes with half-life decay. `commit_task()` extracts patterns from completed `TaskRecord`. |
+| `cteg.py` | Cross-Task Experience Graph. Stores abstract `BypassPattern` and `ExploitPattern` nodes with half-life decay. Called from orchestrator via `commit_task()` (after each task) and `get_suggestions()` (during analyze phase). |
 | `sub_agents/base.py` | `BaseSubAgent` with Plan→Act→Observe loop. `SubAgentPool` manages concurrent agents. 10 lifecycle states. |
 | `sub_agents/recon_agent.py` | Whatweb→dirb→curl workflow. Writes discovered Endpoints/Services to DKG. |
 | `sub_agents/exploit_agent.py` | SQLi/XSS/CMDi exploitation with integrated defense bypass. Uses DAVE for verification. |
@@ -61,7 +74,7 @@ Orchestrator.run() → recon → analyze → exploit → bypass → verify
 | `tools/mcp_gateway.py` | Tool registry with OpenAI function-calling format export. Supports both Python functions and shell command templates. |
 | `tools/recon_server.py` | nmap, dirb, curl, whatweb tool registrations with output parsers. |
 | `tools/attack_server.py` | sqlmap, ffuf, send_payload, xss_reflection_test, command_injection_test. |
-| `utils/llm.py` | LiteLLM wrapper with conversation history, token counting, and `LLMFunctionMapping` for auto-converting Python functions to tool definitions. |
+| `utils/llm.py` | LiteLLM wrapper with conversation history, token counting, context compression (`compress()` method), and `LLMFunctionMapping` for auto-converting Python functions to tool definitions. |
 | `utils/http_client.py` | Async HTTP client (aiohttp) with A-E WAF probe classes and baseline comparison. `ProbeClient` extends `HTTPClient`. |
 
 ### Three operating modes
@@ -88,35 +101,37 @@ Where N_norm = min(n_hosts/5, 1.0), M_domain = 1 if >1 domain, L_move = 1 if lat
 4. **Only generic baselines kept**: AWE/Cochise/VulnBot could only adapt to partial benchmarks — removed. Only Claude Code and PentestAgent remain as baselines.
 5. **Web benchmarks only**: CyberGym (binary) and GOADv3 (AD) removed — PentestAgent can't handle them, so unfair comparison.
 6. **ADAgent/PersistAgent removed**: No corresponding benchmark = no evaluation scenario.
+7. **Context compression, not hard reset**: When conversation history approaches the token limit (default: 40% of 180K), `LLMSession.compress()` summarizes older messages via a dedicated LLM call. This preserves key facts/actions/state while reducing token usage, enabling the agent to continue operating rather than silently failing. SubAgents compress independently (dedicated LLM sessions). The DKG carries structured state across phase boundaries; LLM conversation compression handles within-phase tool call chains.
 
 ## What is wired vs planned
 
 **Wired and functional:**
 - Solo Mode orchestrator loop (recon → analyze → exploit → bypass → verify)
-- DKG with all node/edge types and persistence
+- Coordinated and Distributed modes dispatched from `run()` based on dynamic scaling B threshold
+- CTEG commit_task() and get_suggestions() integrated into orchestrator
+- DKG with all node/edge types and persistence (checkpoints saved to `checkpoints/` directory)
 - DPM 3-layer detection pipeline
 - DAVE 4-layer verification
-- All 5 system prompt templates
+- All 5 system prompt templates (in `darwin/orchestrator.py` and `darwin/prompts/`)
 - All recon and attack tools registered
 - PACEBench adapter (FastAPI server)
 - Experiment runner with metrics computation
 - Statistical analysis (McNemar, paired t-test, Friedman, bootstrap, Cohen's κ)
-- CTEG pattern storage and retrieval
+- PentestAgent baseline adapter in `experiments/baselines/pentest_agent.py`
+- Context compression: `LLMSession.compress()` summarizes older conversation history via a dedicated LLM call when `context_load` exceeds `compression_threshold` (default 0.4). Orchestrator calls `_maybe_compress()` before each LLM interaction and in the exploit loop; SubAgents call it before plan generation and replanning. Falls back to keyword-based truncation if the compression LLM call fails.
 
 **Not yet integrated:**
-- Coordinated/Distributed modes exist as methods on Orchestrator but are not called from the main `run()` flow — currently always runs Solo
-- CTEG is not called from the Orchestrator during task execution (no `commit_task()` or `get_suggestions()` calls)
-- No actual test files exist (pytest is in dev dependencies but unused)
 - Custom Defense benchmark (20 Docker challenges) not yet built
-- No external baseline runner adapters (PentestAgent/ClaudeCode)
+- No external baseline runner adapters beyond PentestAgent (no ClaudeCode adapter)
 - `experiments/failure_analysis.py` not yet created
-- `experiments/baselines/` directory empty
+- `paper_analysis/` directory referenced by README doesn't exist yet
 
 ## Configuration
 
-- `config/darwin.yaml`: Time/token budgets, solo mode limits, defense probe settings, browser config
-- `config/llm.yaml`: Three LLM profiles — `default` (gpt-4o), `reasoning` (claude-sonnet-4), `classifier` (gpt-5-nano). API key via `${LLM_API_KEY}` env var.
+- `config/darwin.yaml`: Time/token budgets, solo mode limits, defense probe settings, browser config. Also defines `max_context_tokens` (180000) and `context_compression_threshold` (0.4) for the compression trigger.
+- `config/llm.yaml`: Three LLM profiles — `default`, `reasoning`, `classifier`. API key can be set in the file or via `${PROVIDER}_API_KEY` env var (e.g., `OPENAI_API_KEY`, `DEEPSEEK_API_KEY`). The current file contains a hardcoded key.
 - `config/waf_fingerprints.yaml`: ModSecurity, Cloudflare, Naxsi, Coraza signatures with detection rules and bypass hints
+- `config/mcp_servers.yaml`: MCP server configurations for optional external tool servers
 
 ## Flag format
 
