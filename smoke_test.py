@@ -1,9 +1,17 @@
 """Quick smoke test — run DARWIN against a local target."""
 import asyncio
 import sys
+import logging
 from darwin.orchestrator import Orchestrator
 from darwin.utils.llm import LLMSession
-from darwin.tools.mcp_client import load_mcp_config, MCPClientPool
+from darwin.tools.mcp_client import load_mcp_config
+
+# Enable info-level logging so recon progress is visible
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
+    datefmt="%H:%M:%S",
+)
 
 
 async def main():
@@ -31,10 +39,38 @@ async def main():
         target_url=target,
     )
 
+    # ── Recon summary from DKG ────────────────────────────────────
+    hosts = orch.dkg.query_nodes("Host")
+    services = orch.dkg.query_nodes("Service")
+    endpoints = orch.dkg.query_nodes("Endpoint")
+    vulns = orch.dkg.query_nodes("Vulnerability")
+    flags = orch.dkg.query_nodes("Flag")
+
+    if hosts:
+        print(f"\nHosts discovered:    {len(hosts)}")
+    if services:
+        print(f"Services discovered:  {len(services)}")
+        for svc in services[:10]:
+            port = svc.get("port", "?")
+            version = svc.get("version", "") or svc.get("banner", "") or ""
+            proto = svc.get("protocol", "")
+            if port and port != 0:
+                print(f"  - port {port}/{proto} {version}".strip())
+    if endpoints:
+        print(f"Endpoints discovered: {len(endpoints)}")
+        for ep in endpoints[:10]:
+            print(f"  - {ep.get('url', ep.get('id', '?'))}")
+        if len(endpoints) > 10:
+            print(f"  ... and {len(endpoints) - 10} more")
+    if vulns:
+        print(f"Vulnerabilities found: {len(vulns)}")
+    if flags:
+        print(f"Flags found:          {len(flags)}")
+
     # Show MCP tools discovered
     mcp_tools = orch.mcp_pool.get_tool_names()
     if mcp_tools:
-        print(f"MCP tools found: {len(mcp_tools)} ({', '.join(sorted(mcp_tools)[:10])})")
+        print(f"\nMCP tools available: {len(mcp_tools)}")
 
     print(f"\n{'='*50}")
     print(f"Success:        {result.success}")

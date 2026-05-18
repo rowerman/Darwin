@@ -180,12 +180,12 @@ class DKG:
             nodes = self.query_nodes(ntype)
             if nodes:
                 lines.append(f"{ntype}: {len(nodes)}")
-                for n in nodes[:3]:  # show first 3
+                for n in nodes[:8]:  # show up to 8 per type for LLM analysis
                     key_props = {k: v for k, v in n.items()
-                                 if k not in ("id", "type", "created_at", "updated_at")}
-                    lines.append(f"  - {n['id']}: {key_props}")
-                if len(nodes) > 3:
-                    lines.append(f"  ... and {len(nodes) - 3} more")
+                                 if k not in ("id", "type", "created_at", "updated_at", "discovered_by")}
+                    lines.append(f"  - id={n['id']}: {key_props}")
+                if len(nodes) > 8:
+                    lines.append(f"  ... and {len(nodes) - 8} more")
         return "\n".join(lines) if lines else "DKG is empty"
 
     # ── Persistence ─────────────────────────────────────────────────

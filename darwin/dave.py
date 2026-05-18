@@ -68,7 +68,7 @@ class DAVE:
     L4: Impact Confirmation (flag extraction and honeypot detection)
     """
 
-    FLAG_PATTERN = re.compile(r"flag\{[a-zA-Z0-9_\-!@#$%^&*()+=]+\}")
+    FLAG_PATTERN = re.compile(r"flag\{[a-zA-Z0-9_\-!@#$%^&*()+=]+\}", re.IGNORECASE)
 
     # Honey flag patterns
     HONEY_FLAG_PATTERNS = [

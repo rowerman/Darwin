@@ -95,9 +95,15 @@ async def _python_request(
     method: str, url: str, data: str = "", headers: str = "",
     timeout: int = 10,
 ) -> ToolResult:
-    """Execute a HTTP request via Python (for complex payloads)."""
+    """Execute a HTTP request via Python (for complex payloads).
+
+    Uses a temp file to avoid shell escaping issues with special characters
+    in URLs and payloads (e.g. single quotes in SQLi).
+    """
     import asyncio
     import json
+    import tempfile
+    import os as _os
 
     script = f"""
 import urllib.request, json
@@ -107,8 +113,10 @@ data = {json.dumps(data)}
 headers = {json.dumps(headers)}
 
 req = urllib.request.Request(url, method=method, data=data.encode() if data else None)
+if data and method in ('POST', 'PUT', 'PATCH'):
+    req.add_header('Content-Type', 'application/x-www-form-urlencoded')
 if headers:
-    for h in headers.strip().split('\\n'):
+    for h in headers.strip().split('\\\\n'):
         if ':' in h:
             k, v = h.split(':', 1)
             req.add_header(k.strip(), v.strip())
@@ -124,8 +132,19 @@ try:
 except Exception as e:
     print(f"ERROR:{{e}}")
 """
-    cmd = f"python3 -c '{script}'"
-    return await _run_shell(cmd, timeout=timeout + 5)
+    # Write to temp file to avoid shell escaping issues
+    fd, tmpath = tempfile.mkstemp(suffix=".py", prefix="darwin_req_")
+    try:
+        _os.write(fd, script.encode("utf-8"))
+        _os.close(fd)
+        cmd = f"python3 {tmpath}"
+        result = await _run_shell(cmd, timeout=timeout + 5)
+    finally:
+        try:
+            _os.unlink(tmpath)
+        except OSError:
+            pass
+    return result
 
 
 def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
@@ -135,11 +154,15 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
     """
 
     # ── SQL injection test ──────────────────────────────────────
-    async def sqlmap_test(url: str, param: str, technique: str = "BEUSTQ") -> ToolResult:
+    async def sqlmap_test(url: str, param: str, technique: str = "BEUSTQ",
+                         method: str = "GET") -> ToolResult:
         """Run sqlmap against a target parameter."""
-        # Note: sqlmap requires actual installation
-        cmd = f"sqlmap -u '{url}' -p {param} --technique={technique} --batch --level=3 --risk=2 --flush-session 2>&1 | head -200"
-        return await _run_shell(cmd, timeout=120)
+        # Level 2, risk 1 for speed; capture full output, grep for key results
+        if method.upper() == "POST":
+            cmd = f"sqlmap -u '{url}' --data='{param}=*' --technique={technique} --batch --level=2 --risk=1 --flush-session --smart --threads=4 --output-dir=/tmp/sqlmap 2>&1"
+        else:
+            cmd = f"sqlmap -u '{url}' -p {param} --technique={technique} --batch --level=2 --risk=1 --flush-session --smart --threads=4 --output-dir=/tmp/sqlmap 2>&1"
+        return await _run_shell(cmd, timeout=60)
 
     gateway.register(
         name="sqlmap_test",
@@ -149,6 +172,7 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
             "url": {"type": "string", "description": "Target URL with parameters"},
             "param": {"type": "string", "description": "Parameter to test for injection"},
             "technique": {"type": "string", "description": "SQLi techniques: B(E)oolean, E(rror), U(nion), S(tacked), T(ime), Q(uery)"},
+            "method": {"type": "string", "description": "HTTP method (GET/POST)"},
         },
     )
 

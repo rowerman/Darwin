@@ -13,15 +13,26 @@ from darwin.tools.mcp_gateway import MCPGateway, ToolResult
 
 
 def _parse_nmap_output(stdout: str) -> Dict[str, Any]:
-    """Parse nmap output for open ports and services."""
+    """Parse nmap -sV output for open ports, service names, and versions.
+
+    Example input line:
+      22/tcp    open     ssh          OpenSSH 8.9p1 Ubuntu ...
+      32768/tcp open     http         Apache httpd 2.4.67 ((Debian))
+    """
     ports = []
     for line in stdout.split("\n"):
         match = re.match(r"(\d+)/tcp\s+(\w+)\s+(.+)", line)
         if match:
+            # Split the remainder into service name and version
+            remainder = match.group(3).strip()
+            parts = remainder.split(None, 1)  # split on whitespace, max 2 parts
+            service_name = parts[0] if parts else remainder
+            version = parts[1] if len(parts) > 1 else ""
             ports.append({
                 "port": int(match.group(1)),
                 "state": match.group(2),
-                "service": match.group(3).strip(),
+                "service": service_name,
+                "version": version,
             })
     return {"open_ports": ports, "count": len(ports)}
 
@@ -37,13 +48,22 @@ def _parse_masscan_output(stdout: str) -> Dict[str, Any]:
 
 
 def _parse_dirb_output(stdout: str) -> Dict[str, Any]:
-    """Parse dirb output for discovered paths."""
+    """Parse dirb output for discovered paths.
+
+    Handles both short format: + /path (CODE:200)
+    and full-URL format:    + http://host/path (CODE:200|SIZE:1234)
+    """
     paths = []
     for line in stdout.split("\n"):
         if line.startswith("+ "):
             parts = line[2:].split()
             if parts:
                 path = parts[0]
+                # If path is a full URL, extract just the path component
+                if path.startswith("http://") or path.startswith("https://"):
+                    from urllib.parse import urlparse as _up
+                    parsed = _up(path)
+                    path = parsed.path or "/"
                 code = parts[1] if len(parts) > 1 else "???"
                 paths.append({"path": path, "code": code})
     return {"discovered_paths": paths, "count": len(paths)}
@@ -133,7 +153,7 @@ def register_recon_tools(gateway: MCPGateway) -> MCPGateway:
     # ── dirb: Directory enumeration ─────────────────────────────
     gateway.register_shell_tool(
         name="dirb_scan",
-        command_template="dirb {target_url} /usr/share/wordlists/dirb/common.txt -S -w",
+        command_template="dirb {target_url} /usr/share/dirb/wordlists/common.txt -S -w",
         description="Enumerate directories and files on a web server using dirb",
         parameters={
             "target_url": {"type": "string", "description": "Target URL to scan"},
@@ -144,7 +164,7 @@ def register_recon_tools(gateway: MCPGateway) -> MCPGateway:
     # ── gobuster: Fast directory enumeration ─────────────────────
     gateway.register_shell_tool(
         name="gobuster_dir",
-        command_template="gobuster dir -u {target_url} -w /usr/share/wordlists/dirb/common.txt -q 2>&1",
+        command_template="gobuster dir -u {target_url} -w /usr/share/dirb/wordlists/common.txt -q 2>&1",
         description="Fast directory brute-force using gobuster (Go-based, faster than dirb)",
         parameters={
             "target_url": {"type": "string", "description": "Target URL to scan"},

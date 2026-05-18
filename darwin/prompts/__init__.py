@@ -1,4 +1,14 @@
-"""Orchestrator system prompt templates."""
+"""ARCHIVED: Orchestrator system prompt templates.
+
+These prompts have been merged into their respective agent files:
+- ORCHESTRATOR_SYSTEM_PROMPT → darwin/orchestrator.py:SYSTEM_PROMPT_ORCHESTRATOR
+- RECON_AGENT_PROMPT → darwin/sub_agents/recon_agent.py:SYSTEM_PROMPT_RECON
+- EXPLOIT_AGENT_PROMPT → darwin/sub_agents/exploit_agent.py:SYSTEM_PROMPT_EXPLOIT
+- PIVOT_AGENT_PROMPT → darwin/sub_agents/pivot_agent.py:SYSTEM_PROMPT_PIVOT
+- DPM_CLASSIFIER_PROMPT → not yet wired (DPM currently uses rule-based classification)
+
+This file is kept for reference only and is not imported by any module.
+"""
 
 ORCHESTRATOR_SYSTEM_PROMPT = """You are DARWIN, an autonomous penetration testing agent with defense awareness.
 You operate within an authorized security testing engagement. Your goal is to identify

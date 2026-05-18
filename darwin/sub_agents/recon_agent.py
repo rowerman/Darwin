@@ -66,38 +66,48 @@ class ReconAgent(BaseSubAgent):
         )
 
     async def _generate_plan(self) -> List[Dict[str, Any]]:
-        """Generate recon plan: technology fingerprint → directory enum → endpoint probe."""
+        """Generate recon plan — LLM-driven using SYSTEM_PROMPT_RECON."""
         if not self.task_scope.target_hosts:
             raise ValueError("ReconAgent requires at least one target host")
         target = self.task_scope.target_hosts[0]
 
-        plan = [
-            {
-                "id": "recon-1",
-                "instruction": f"Identify web technologies on {target}",
-                "action": "whatweb",
-                "tool": "whatweb_scan",
-                "params": {"target_url": target},
-                "dependent_task_ids": [],
-            },
-            {
-                "id": "recon-2",
-                "instruction": f"Enumerate directories on {target}",
-                "action": "dirb",
-                "tool": "dirb_scan",
-                "params": {"target_url": target},
-                "dependent_task_ids": ["recon-1"],
-            },
-            {
-                "id": "recon-3",
-                "instruction": "Probe discovered endpoints for additional info",
-                "action": "curl",
-                "tool": "curl_get",
-                "params": {"url": target, "follow_redirects": True},
-                "dependent_task_ids": ["recon-2"],
-            },
+        tools = self.tools.get_tool_names() if self.tools else ["whatweb_scan", "dirb_scan", "curl_get"]
+        prompt = f"""Target: {target}
+
+Available recon tools: {', '.join(sorted(tools))}
+
+Create a reconnaissance plan with 3-5 steps. Each step should specify:
+- id: unique step ID
+- instruction: what to do
+- tool: which tool to use
+- params: tool parameters
+
+Output as JSON array:
+[{{"id": "recon-1", "instruction": "...", "tool": "tool_name", "params": {{...}}, "dependent_task_ids": []}}]"""
+
+        self._maybe_compress()
+        content, _ = self.llm.generate(
+            prompt=prompt,
+            system_prompt=SYSTEM_PROMPT_RECON,
+        )
+        try:
+            import json, re
+            json_match = re.search(r'\[.*\]', content, re.DOTALL)
+            plan = json.loads(json_match.group(0)) if json_match else []
+            if isinstance(plan, list) and len(plan) > 0:
+                return plan
+        except Exception:
+            pass
+
+        # Fallback: hardcoded plan if LLM fails
+        return [
+            {"id": "recon-1", "instruction": f"Identify web technologies on {target}",
+             "tool": "whatweb_scan", "params": {"target_url": target}, "dependent_task_ids": []},
+            {"id": "recon-2", "instruction": f"Enumerate directories on {target}",
+             "tool": "dirb_scan", "params": {"target_url": target}, "dependent_task_ids": ["recon-1"]},
+            {"id": "recon-3", "instruction": "Probe endpoints",
+             "tool": "curl_get", "params": {"url": target, "follow_redirects": True}, "dependent_task_ids": ["recon-2"]},
         ]
-        return plan
 
     async def _execute_task(self, task: Dict[str, Any]) -> Any:
         """Execute a recon task using registered tools."""

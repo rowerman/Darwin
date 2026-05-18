@@ -101,32 +101,63 @@ class PivotAgent(BaseSubAgent):
         )
 
     async def _generate_plan(self) -> List[Dict[str, Any]]:
-        """Generate lateral movement plan from DKG state."""
+        """Generate lateral movement plan — LLM-driven with SYSTEM_PROMPT_PIVOT."""
         credentials = self.dkg.query_nodes("Credential")
         sessions = self.dkg.query_nodes("Session")
         hosts = self.dkg.query_nodes("Host")
 
+        if not credentials:
+            return []
+
+        # Build context for LLM
+        cred_text = "\n".join(
+            f"- {c.get('user','?')}@{c.get('source_host','?')} "
+            f"(pass: {bool(c.get('password'))}, hash: {bool(c.get('hash'))}, key: {bool(c.get('ssh_key_path'))})"
+            for c in credentials[:5]
+        )
+        host_text = "\n".join(f"- {h.get('id','?')} (reachable: {h.get('is_reachable',True)})"
+                              for h in hosts[:10])
+        session_text = "\n".join(f"- {s.get('host','?')} as {s.get('user','?')}"
+                                 for s in sessions[:5])
+
+        prompt = f"""Credentials available:
+{cred_text}
+
+Hosts discovered:
+{host_text}
+
+Active sessions:
+{session_text or '(none)'}
+
+Create a lateral movement plan with 2-5 steps. Test credentials on unreached hosts.
+Output as JSON array:
+[{{"id": "pivot-1", "instruction": "...", "tool": "ssh_brute", "params": {{...}}}}]"""
+
+        self._maybe_compress()
+        content, _ = self.llm.generate(
+            prompt=prompt,
+            system_prompt=SYSTEM_PROMPT_PIVOT,
+        )
+        try:
+            import json as _json, re as _re
+            match = _re.search(r'\[.*\]', content, re.DOTALL)
+            if match:
+                llm_plan = _json.loads(match.group(0))
+                if isinstance(llm_plan, list) and len(llm_plan) > 0:
+                    return llm_plan
+        except Exception:
+            pass
+
+        # Fallback: hardcoded plan
         plan = []
-
-        # For each credential, try on each non-sessioned host
+        sessioned_hosts = {s.get("host", "") for s in sessions}
         for i, cred in enumerate(credentials):
-            cred_user = cred.get("user", "")
-            cred_pass = cred.get("password", "")
-            cred_hash = cred.get("hash", "")
-            cred_key = cred.get("ssh_key_path", "")
-            source_host = cred.get("source_host", "")
-
-            # Find hosts we haven't established a session on yet
-            sessioned_hosts = {s.get("host", "") for s in sessions}
-            target_hosts = [
-                h["id"] for h in hosts
-                if h["id"] not in sessioned_hosts and h["id"] != source_host
-            ]
-
-            for target in target_hosts[:3]:  # limit scope
+            target_hosts = [h["id"] for h in hosts
+                           if h["id"] not in sessioned_hosts and h["id"] != cred.get("source_host","")]
+            for target in target_hosts[:3]:
                 plan.append({
                     "id": f"pivot-{i}-{target}",
-                    "instruction": f"Test credential {cred_user} on {target}",
+                    "instruction": f"Test credential {cred.get('user','')} on {target}",
                     "action": "credential_test",
                     "tool": "test_credential" if cred_pass else "ssh_exec",
                     "params": {

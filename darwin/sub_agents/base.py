@@ -234,7 +234,7 @@ class BaseSubAgent(ABC):
         findings = []
         # Try to extract flags
         import re
-        flags = re.findall(r"flag\{[a-zA-Z0-9_\-!@#$%^&*()+=]+\}", result.stdout)
+        flags = re.findall(r"flag\{[a-zA-Z0-9_\-!@#$%^&*()+=]+\}", result.stdout, re.IGNORECASE)
         for flag in flags:
             findings.append({"type": "flag", "value": flag, "source": result.tool_name})
         # Include parsed output

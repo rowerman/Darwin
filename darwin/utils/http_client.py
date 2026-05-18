@@ -50,16 +50,23 @@ class BaselineResult:
 
 
 class HTTPClient:
-    """Async HTTP client for penetration testing interactions."""
+    """Async HTTP client for penetration testing interactions.
+
+    Maintains cookies across requests via a shared CookieJar, enabling
+    authenticated session-based scanning.
+    """
 
     def __init__(self, timeout: int = 10):
         self.timeout = aiohttp.ClientTimeout(total=timeout)
         self._session: Optional[aiohttp.ClientSession] = None
+        self._cookie_jar = aiohttp.CookieJar()
         self._baselines: Dict[str, BaselineResult] = {}
 
     async def _ensure_session(self):
         if self._session is None:
-            self._session = aiohttp.ClientSession(timeout=self.timeout)
+            self._session = aiohttp.ClientSession(
+                timeout=self.timeout, cookie_jar=self._cookie_jar,
+            )
 
     async def close(self):
         if self._session:
@@ -83,18 +90,20 @@ class HTTPClient:
 
     async def post(
         self, url: str, data: Dict[str, str] | None = None,
-        json_data: Dict | None = None, headers: Dict[str, str] | None = None
+        json_data: Dict | None = None, headers: Dict[str, str] | None = None,
+        allow_redirects: bool = True,
     ) -> HTTPResponse:
         """Send POST request."""
         await self._ensure_session()
         start = time.perf_counter()
         async with self._session.post(
-            url, data=data, json=json_data, headers=headers or {}
+            url, data=data, json=json_data, headers=headers or {},
+            allow_redirects=allow_redirects,
         ) as resp:
             body = await resp.text()
             elapsed = (time.perf_counter() - start) * 1000
             return HTTPResponse(
-                url=url,
+                url=str(resp.url),
                 status_code=resp.status,
                 headers=dict(resp.headers),
                 body=body,
@@ -106,6 +115,154 @@ class HTTPClient:
         response = await self.get(url)
         self._baselines[url] = BaselineResult(url=url, response=response, timestamp=time.time())
         return response
+
+    async def auto_login(
+        self, url: str, username: str, password: str,
+    ) -> bool:
+        """Attempt automatic login to a web application.
+
+        Detects login forms by looking for password inputs, then tries
+        common username/password field names. Supports both direct POST
+        and multi-step (username → password) login flows.
+
+        Returns True if login appeared successful (redirect, session cookie).
+        """
+        import logging as _logging
+        _log = _logging.getLogger(__name__)
+
+        base = url.rstrip("/")
+        login_urls = [base, f"{base}/login", f"{base}/signin"]
+
+        for login_url in login_urls:
+            try:
+                resp = await self.get(login_url)
+            except Exception:
+                continue
+
+            body = resp.body
+            # Detect login form: must have username or password field
+            bl = body.lower()
+            if "password" not in bl and "username" not in bl:
+                continue
+            # Also accept forms with only username (multi-step login)
+
+            _log.info("Login form detected at %s", login_url)
+
+            # Extract form: find <form> action, method, and all <input> fields
+            import re as _re
+            form_match = _re.search(
+                r'<form[^>]*action=["\']([^"\']*)["\'][^>]*method=["\'](\w+)["\']', body, _re.I
+            )
+            action = form_match.group(1) if form_match else ""
+            method = (form_match.group(2) or "post").upper() if form_match else "POST"
+
+            # Build the submission URL
+            from urllib.parse import urljoin as _urljoin
+            submit_url = _urljoin(login_url, action) if action else login_url
+
+            # Find all input fields
+            inputs = _re.findall(
+                r'<input[^>]+name=["\'](\w+)["\']', body, _re.I
+            )
+            input_types = dict(_re.findall(
+                r'<input[^>]+name=["\'](\w+)["\'][^>]+type=["\'](\w+)["\']', body, _re.I
+            ))
+
+            # Detect field roles
+            user_field = "username"
+            pass_field = "password"
+            for name in inputs:
+                nl = name.lower()
+                if nl in ("username", "user", "email", "login", "uname"):
+                    user_field = name
+                elif nl in ("password", "pass", "passwd", "pwd"):
+                    pass_field = name
+
+            # Try direct login (username + password in one form)
+            form_data = {user_field: username, pass_field: password}
+            # Include hidden fields
+            hidden = _re.findall(
+                r'<input[^>]+type=["\']hidden["\'][^>]+name=["\'](\w+)["\'][^>]+value=["\']([^"\']*)["\']', body, _re.I
+            )
+            for h_name, h_value in hidden:
+                form_data[h_name] = h_value
+            # Include CSRF tokens
+            csrf = _re.search(
+                r'<input[^>]+name=["\']([^"\']*csrf[^"\']*)["\'][^>]+value=["\']([^"\']*)["\']', body, _re.I
+            )
+            if csrf:
+                form_data[csrf.group(1)] = csrf.group(2)
+
+            try:
+                if method == "POST":
+                    login_resp = await self.post(submit_url, data=form_data)
+                else:
+                    qs = "&".join(f"{k}={v}" for k, v in form_data.items())
+                    login_resp = await self.get(f"{submit_url}?{qs}")
+            except Exception:
+                continue
+
+            # Check if login succeeded: redirect + new cookies
+            if login_resp.status_code in (302, 301, 303, 307, 308):
+                _log.info("Login redirect to %s", login_resp.headers.get("location", "?"))
+                # Follow redirect
+                redirect_url = _urljoin(submit_url, login_resp.headers.get("location", ""))
+                try:
+                    await self.get(redirect_url)
+                except Exception:
+                    pass
+
+            # Check for multi-step login (username page → password page)
+            new_body = login_resp.body
+            nl_body = new_body.lower()
+            # Did the original form have a password field?
+            orig_has_pw = 'type="password"' in body.lower() or "type='password'" in body.lower()
+            # Does the response contain a password field?
+            resp_has_pw = 'type="password"' in nl_body or "type='password'" in nl_body
+            if resp_has_pw and not orig_has_pw:
+                # Multi-step: first form had no password, response asks for one
+                pw_inputs = _re.findall(r'<input[^>]+name=["\'](\w+)["\']', new_body, _re.I)
+                pw_data = {}
+                for name in pw_inputs:
+                    nl = name.lower()
+                    if nl in ("password", "pass", "passwd", "pwd"):
+                        pw_data[name] = password
+                if pw_data:
+                    # Include hidden fields from this page (type=hidden and HTML5 hidden attr)
+                    pw_hidden = _re.findall(
+                        r'<input[^>]+(?:type=["\']hidden["\']|hidden\b)[^>]+name=["\'](\w+)["\'][^>]+value=["\']([^"\']*)["\']', new_body, _re.I
+                    )
+                    for h_name, h_value in pw_hidden:
+                        if h_name not in pw_data:
+                            pw_data[h_name] = h_value
+                    # Also catch hidden attr before value: name="x" value="y" hidden
+                    pw_hidden2 = _re.findall(
+                        r'<input[^>]+name=["\'](\w+)["\'][^>]+value=["\']([^"\']*)["\'][^>]+hidden\b', new_body, _re.I
+                    )
+                    for h_name, h_value in pw_hidden2:
+                        if h_name not in pw_data:
+                            pw_data[h_name] = h_value
+                    # Submit to the actual password page URL (after redirect)
+                    pw_submit_url = str(login_resp.url) if hasattr(login_resp, 'url') and login_resp.url else submit_url
+                    try:
+                        pw_resp = await self.post(pw_submit_url, data=pw_data)
+                        if pw_resp.status_code in (302, 301, 303):
+                            redirect_url = _urljoin(submit_url, pw_resp.headers.get("location", ""))
+                            try:
+                                await self.get(redirect_url)
+                            except Exception:
+                                pass
+                    except Exception:
+                        pass
+
+        # After for loop: check if we succeeded
+        if self._session and self._session.cookie_jar:
+            jar_cookies = list(self._session.cookie_jar)
+            if jar_cookies:
+                _log.info("Login appears successful (%d cookies in jar)", len(jar_cookies))
+                return True
+
+        return False
 
 
 class ProbeClient(HTTPClient):

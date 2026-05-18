@@ -102,8 +102,15 @@ class LLMSession:
         prompt: str,
         system_prompt: str | None = None,
         tools: List[Dict[str, Any]] | None = None,
+        temperature: float | None = None,
     ) -> tuple[str, List[Dict[str, Any]] | None]:
         """Generate LLM response with optional tool calling.
+
+        Args:
+            prompt: User prompt.
+            system_prompt: Optional system prompt.
+            tools: Optional list of OpenAI tool definitions.
+            temperature: Override the default temperature for this call.
 
         Returns:
             (content, tool_calls) — tool_calls is None if no tools were called.
@@ -115,7 +122,7 @@ class LLMSession:
         kwargs = dict(
             model=self.model,
             messages=messages,
-            temperature=self.temperature,
+            temperature=temperature if temperature is not None else self.temperature,
             max_tokens=self.max_tokens,
         )
 

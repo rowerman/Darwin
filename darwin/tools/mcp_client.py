@@ -251,19 +251,60 @@ class MCPClientPool:
     def is_connected(self) -> bool:
         return len(self._clients) > 0
 
-    async def connect_all(self, configs: List[MCPServerConfig]) -> None:
-        """Connect to all enabled MCP servers."""
-        for cfg in configs:
-            if not cfg.enabled:
-                continue
+    async def connect_all(self, configs: List[MCPServerConfig],
+                          per_server_timeout: float = 15.0,
+                          total_timeout: float = 10.0) -> int:
+        """Connect to all enabled MCP servers in parallel.
+
+        Each server gets per_server_timeout to complete its handshake.
+        The overall call returns after total_timeout with whatever servers
+        connected so far. Unfinished connection attempts are cancelled.
+
+        Returns:
+            Number of servers successfully connected.
+        """
+        enabled = [c for c in configs if c.enabled]
+        if not enabled:
+            return 0
+
+        async def _connect_one(cfg: MCPServerConfig) -> str | None:
             try:
-                client = MCPClient(cfg)
-                await client.start()
+                client = MCPClient(cfg, connect_timeout=per_server_timeout)
+                await asyncio.wait_for(client.start(), timeout=per_server_timeout)
                 self._clients[cfg.name] = client
                 for tool in client.get_tools():
                     self._tool_to_server[tool.name] = cfg.name
+                log.info("MCP '%s': %d tools", cfg.name, len(client.get_tools()))
+                return cfg.name
+            except asyncio.TimeoutError:
+                log.info("MCP '%s': timed out after %.0fs", cfg.name, per_server_timeout)
+                return None
             except Exception as e:
-                log.warning("Failed to connect MCP server '%s': %s", cfg.name, e)
+                log.info("MCP '%s': %s", cfg.name, e)
+                return None
+
+        # Run all connections in parallel
+        tasks = [asyncio.create_task(_connect_one(cfg)) for cfg in enabled]
+        try:
+            done, pending = await asyncio.wait(tasks, timeout=total_timeout)
+            # Cancel still-pending tasks
+            for t in pending:
+                t.cancel()
+            # Let cancellations propagate
+            for t in pending:
+                try:
+                    await t
+                except (asyncio.CancelledError, Exception):
+                    pass
+        except Exception:
+            for t in tasks:
+                t.cancel()
+
+        connected = len(self._clients)
+        if connected > 0 and connected < len(enabled):
+            log.info("MCP: %d/%d servers connected (continuing without the rest)",
+                     connected, len(enabled))
+        return connected
 
     async def disconnect_all(self) -> None:
         """Stop all MCP server connections."""
@@ -271,7 +312,7 @@ class MCPClientPool:
             try:
                 await client.stop()
             except Exception as e:
-                log.warning("Error stopping MCP server '%s': %s", name, e)
+                log.debug("Error stopping MCP server '%s': %s", name, e)
         self._clients.clear()
         self._tool_to_server.clear()
 

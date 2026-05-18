@@ -37,7 +37,21 @@
       "Bash(grep -v \"^--$\")",
       "Bash(sed -i 's/expose:/expose:/g; /expose:/{n;s/ - [0-9]\\\\+:[0-9]\\\\+/ - 3306/;}' __TRACKED_VAR__/docker-compose.yml)",
       "Bash(sed -i '/expose:/{n;s/ - 3306:3306/ - 3306/;}' XBEN-084-24/docker-compose.yml)",
-      "Bash(sed -i '/expose:/{n;s/ - 8333:8333/ - 8333/;}' XBEN-084-24/docker-compose.yml)"
+      "Bash(sed -i '/expose:/{n;s/ - 8333:8333/ - 8333/;}' XBEN-084-24/docker-compose.yml)",
+      "Read(//usr/share/wordlists/dirb/**)",
+      "Bash(dirb http://localhost:32768 /usr/share/wordlists/dirb/common.txt -S -w)",
+      "Read(//usr/share/**)",
+      "Read(//usr/share/dirb/**)",
+      "Bash(docker exec *)",
+      "Bash(git checkout *)",
+      "Bash(./venv/bin/python -m pytest tests/ -q)",
+      "Bash(./venv/bin/python *)",
+      "Bash(./venv/bin/python3 *)",
+      "Read(//home/kianabin/benchmark/validation-benchmarks/benchmarks/**)",
+      "Bash(bash *)",
+      "Read(//home/kianabin/.local/bin/**)",
+      "Read(//tmp/**)",
+      "Bash(plannotator --help)"
     ]
   }
 }
