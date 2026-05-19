@@ -125,15 +125,55 @@ Attack: sqlmap_test, ffuf_fuzz, send_payload, command_injection_test, xss_reflec
 """
 
 SYSTEM_PROMPT_ANALYZE = """You are a vulnerability analyst. Examine the target information below
-and identify potential vulnerabilities. For each, specify:
-1. Vulnerability type (XSS, SQLi, CMDi, SSTI, LFI, etc.)
-2. Endpoint URL
-3. Parameter name
-4. Confidence (0.0-1.0) based on evidence
-5. Evidence that supports this hypothesis
+and identify potential vulnerabilities that could lead to capturing a flag or gaining access.
 
-Output as JSON array:
-[{"vuln_type": "...", "endpoint": "...", "param": "...", "confidence": 0.X, "evidence": "..."}]"""
+For each vulnerability, output a JSON object with these fields:
+- vuln_type: any descriptive type (e.g. SQLI, XSS, CMDi, IDOR, SSTI, LFI, SSRF, auth_bypass, etc.)
+- endpoint: full URL including port
+- param: HTTP parameter name, or "" if none
+- confidence: 0.0 to 1.0 based on evidence strength
+- evidence: what in the recon data supports this hypothesis
+- suggested_tool: (OPTIONAL) one of the available tools to test this vuln:
+    sqlmap_test, xss_reflection_test, command_injection_test,
+    send_payload, curl_get, ffuf_fuzz, knowledge_search
+- tool_args: (OPTIONAL) arguments dict for the suggested tool, e.g. {"url": "...", "param": "id"}
+
+CRITICAL: Be specific and actionable. Generic types like "misconfiguration" or
+"information disclosure" are acceptable ONLY if you also specify suggested_tool and tool_args.
+Otherwise, focus on exploitable vulnerability types.
+
+Output ONLY valid JSON array, no other text."""
+SYSTEM_PROMPT_ANALYZE_BAK = """DEPRECATED — kept for reference."""
+
+SYSTEM_PROMPT_LOGIN = """You are an authentication specialist. Given the HTML of a login page,
+determine how to authenticate and what to do after successful login.
+
+## Your Task
+1. Analyze the HTML to identify: login form fields, action URL, method, CSRF tokens,
+   hidden fields, whether it's single-step or multi-step
+2. Choose credentials to try from the available list
+3. Specify the exact HTTP request needed
+4. After login, identify authenticated endpoints to probe for a flag
+
+## Available Credentials
+Try these in order: admin:admin, test:test, admin:password, admin:admin123,
+user:user, guest:guest, root:root, demo:demo, admin:123456, administrator:administrator
+
+## Output Format (JSON)
+{
+  "login_type": "single" or "multi_step",
+  "step": 1,
+  "total_steps": 1 or 2,
+  "method": "POST",
+  "url": "http://host:port/path",
+  "data": {"username_field_name": "chosen_username", "password_field_name": "chosen_password", "csrf_token_name": "token_value"},
+  "success_indicators": ["redirect to /dashboard", "Set-Cookie header", "Welcome message"],
+  "post_login_endpoints": ["/dashboard", "/profile", "/admin", "/flag"]
+}
+
+If multi-step: step 1 submits username only, step 2 submits password + hidden fields.
+
+Output ONLY valid JSON, no other text."""
 
 SYSTEM_PROMPT_BYPASS = """You are a WAF bypass specialist. Given a detected defense configuration,
 suggest bypass strategies ordered by likelihood of success.
@@ -216,6 +256,7 @@ class Orchestrator:
         self.client = HTTPClient()
         self.probe_client = ProbeClient()
         self.sub_agents = SubAgentPool()
+        self._persistent_pool = None  # Created on first multi-agent cycle
 
         # Task log — structured event log written to file
         self._task_log: List[Dict[str, Any]] = []
@@ -274,6 +315,12 @@ class Orchestrator:
             # Phase 1.5: Auto-login
             await self._try_auto_login(target_url, username, password)
 
+            # ── Phase 2: Analyze (LLM identifies vulnerabilities from recon data) ──
+            await self._analyze_phase()
+            self._task_log_event("info", "analyze_done",
+                hypotheses=len(self.vulnerabilities),
+                dkg_summary=self.dkg.summary())
+
             # Query CTEG for cross-task experience + RAG knowledge
             tech_query = " ".join(
                 s.get("version", "") or s.get("banner", "")
@@ -286,6 +333,14 @@ class Orchestrator:
             if cteg_hints.get("bypass_strategies") or cteg_hints.get("exploit_strategies"):
                 self._task_log_event("info", "cteg_hints", hints=cteg_hints)
 
+            # ── Early flag check: scan discovered endpoints before main loop ──
+            early_flag = await self._check_response_for_flag(target_url)
+            if early_flag:
+                self._task_log_event("info", "early_flag_found",
+                    flag=early_flag.flag)
+                self.phase = OrchestratorPhase.DONE
+                return early_flag
+
             # ── Main Loop: B-driven mode switching ────────────────
             self._loop_count = 0
             MAX_LOOPS = 10
@@ -293,22 +348,36 @@ class Orchestrator:
 
             while not self._should_terminate(result, MAX_LOOPS):
                 self._loop_count += 1
+
+                # Check DKG for flags found by sub-agents in previous iterations
+                dkg_flags = [
+                    f.get("value", "") for f in self.dkg.query_nodes("Flag")
+                    if f.get("verified") or f.get("value", "").startswith("flag{")
+                ]
+                for fv in dkg_flags:
+                    if fv and fv not in self._known_flags:
+                        self._known_flags.add(fv)
+                        self.phase = OrchestratorPhase.DONE
+                        result = TaskResult(
+                            success=True, flag=fv, steps=self.step_count,
+                            tokens_used=self.llm.token_count,
+                            time_elapsed=time.time() - self.start_time,
+                        )
+                if result and result.success:
+                    break
+
                 # Re-compute B dimension each iteration (DKG may have changed)
-                B = compute_task_breadth(self.dkg)
+                B = compute_task_breadth(self.dkg, self.defense_state)
                 scaling_level = self.scaling_engine.decide(self.dkg, self.defense_state)
                 self._task_log_event("info", "loop_iteration",
                     loop=self._loop_count, b_value=B, mode=scaling_level.value)
 
                 if scaling_level == ScalingLevel.SOLO:
                     result = await self._run_solo_cycle(target_url, cteg_hints)
-                elif scaling_level == ScalingLevel.COORDINATED:
-                    log.info("Entering Coordinated Mode (B=%.2f)", B)
-                    result = await self._run_coordinated_cycle()
-                    if result is None:
-                        result = await self._run_solo_cycle(target_url, cteg_hints)
-                else:  # DISTRIBUTED
-                    log.info("Entering Distributed Mode (B=%.2f)", B)
-                    result = await self._run_distributed_cycle()
+                else:
+                    # Coordinated or Distributed — use persistent multi-agent system
+                    log.info("Entering %s Mode (B=%.2f)", scaling_level.value.title(), B)
+                    result = await self._run_multi_agent_cycle(target_url)
                     if result is None:
                         result = await self._run_solo_cycle(target_url, cteg_hints)
 
@@ -501,7 +570,7 @@ class Orchestrator:
         if nikto.success:
             for f in nikto.parsed_output.get("findings", [])[:10]:
                 self.dkg.add_node("Vulnerability", f"nikto-{url}-{f['detail'][:40]}", {
-                    "type": f.get("type", "info"), "endpoint": url, "parameter": "",
+                    "vuln_type": f.get("type", "info"), "endpoint": url, "parameter": "",
                     "severity": "low", "source": "nikto", "detail": f.get("detail", ""),
                 })
             log.info("nikto %s: %d findings", url, len(nikto.parsed_output.get("findings", [])))
@@ -525,45 +594,31 @@ class Orchestrator:
                 "url": url, "method": "POST", "params": name, "auth_required": False,
             })
 
-    # ── Auto-Login ─────────────────────────────────────────────────
-
-    DEFAULT_CREDENTIALS = [
-        ("test", "test"), ("admin", "admin"), ("admin", "password"),
-        ("user", "user"), ("guest", "guest"), ("root", "root"),
-        ("demo", "demo"), ("demo", "password"),
-    ]
+    # ── Login ─────────────────────────────────────────────────────
 
     async def _try_auto_login(
         self, target_url: str, username: str | None, password: str | None,
     ) -> None:
-        """Try default credentials + user-provided credentials on all HTTP ports."""
-        creds = list(self.DEFAULT_CREDENTIALS)
-        if username and password:
-            creds.insert(0, (username, password))
-
+        """Try default credentials via the battle-tested auto_login.
+        If this fails, the LLM in the solo cycle can use the try_login tool
+        for more sophisticated attempts.
+        """
         for port in getattr(self, '_discovered_http_ports', []):
             host = getattr(self, "target_host", None)
             if not host:
                 continue
             scheme = "https" if port == 443 else "http"
             base = f"{scheme}://{host}" if port in (80, 443) else f"{scheme}://{host}:{port}"
-            for u, p in creds:
+            for u, p in [("test", "test"), ("admin", "admin"), ("admin", "password"),
+                          ("demo", "demo"), ("user", "user"), ("guest", "guest")]:
+                if username and password:
+                    u, p = username, password
                 if self._time_exceeded():
                     return
                 try:
                     if await self.client.auto_login(base, u, p):
                         self._task_log_event("info", "auto_login_ok", url=base, username=u)
-                        # Seed DKG with common authenticated paths
-                        for auth_path in ["/dashboard", "/orders", "/profile",
-                                          "/account", "/admin", "/docs",
-                                          "/edit_profile/1", "/company/1/jobs",
-                                          "/user/1", "/users/1"]:
-                            self.dkg.add_node("Endpoint", f"auth-{auth_path}", {
-                                "url": base.rstrip("/") + auth_path,
-                                "method": "GET", "params": "",
-                                "auth_required": True,
-                            })
-                        return  # one login is enough
+                        return
                 except Exception:
                     pass
 
@@ -606,6 +661,18 @@ class Orchestrator:
         MAX_ITER = 10
         self.llm.reset()
         self._exploit_chain: list[dict] = []  # track steps for CTEG learning
+
+        # ── Re-attempt login before systematic exploit ──────────
+        # The initial auto-login may have failed; the LLM or previous
+        # loop iterations may have discovered new credentials/forms.
+        await self._try_auto_login(target_url, None, None)
+
+        # ── Systematic exploit pass (before LLM loop) ────────────
+        # Try all known Vulnerability nodes systematically before
+        # engaging the LLM. This catches straightforward vulns faster.
+        sys_result = await self._systematic_exploit_pass(target_url)
+        if sys_result:
+            return sys_result
 
         # Build tool definitions from recon + attack gateways
         tool_defs = self.attack_gateway.get_tool_definitions()
@@ -744,6 +811,9 @@ class Orchestrator:
 - The flag is behind auth + IDOR — you MUST do BOTH
 """
 
+        print(f"\n[solo] Starting LLM loop with {len(tool_defs)} tools, "
+              f"prompt size ~{len(initial_prompt)} chars, "
+              f"token_count={self.llm.token_count}")
         self._maybe_compress()
         content, tool_calls = self.llm.generate(
             prompt=initial_prompt,
@@ -775,6 +845,8 @@ class Orchestrator:
                     break  # LLM has truly nothing left
 
             # Execute ALL tool calls (API requires result for every tool_call)
+            print(f"\n[solo:{iteration}] LLM called {len(tool_calls)} tool(s): "
+                  f"{', '.join(tc.get('name','?') for tc in tool_calls)}")
             for tc in tool_calls:
                 tc_name = tc.get("name", "")
                 tc_args = tc.get("arguments", {})
@@ -797,6 +869,8 @@ class Orchestrator:
                         tool_stdout = f"Unknown tool: {tc_name}"
                 except Exception as e:
                     tool_stdout = f"ERROR: {e}"
+
+                print(f"  [{tc_name}] {str(tc_args)[:120]} → {tool_stdout[:150].strip().replace(chr(10), ' ')}")
 
                 self.llm.add_tool_result(tc_id, tool_stdout[:2000])
 
@@ -860,6 +934,268 @@ class Orchestrator:
 
         return None
 
+    async def _systematic_exploit_pass(self, target_url: str) -> TaskResult | None:
+        """Systematic exploit: iterate DKG Vulnerability nodes and run mapped tools.
+
+        Runs BEFORE the LLM-driven loop in Solo mode. This catches
+        straightforward vulnerabilities without any LLM cost — for each
+        known Vulnerability node, we run the appropriate tool automatically.
+
+        Returns TaskResult if a flag is found, None otherwise.
+        """
+        vulns = self.dkg.query_nodes("Vulnerability")
+        if not vulns:
+            print("[systematic] No Vulnerability nodes in DKG — skipping")
+            return None
+
+        # Vuln type → tool mapping (with fuzzy matching)
+        VULN_TOOL_MAP: dict[str, list[str]] = {
+            "sqli": ["sqlmap_test"],
+            "sql": ["sqlmap_test"],
+            "xss": ["xss_reflection_test"],
+            "cmdi": ["command_injection_test"],
+            "command injection": ["command_injection_test"],
+            "ssti": ["command_injection_test"],
+            "lfi": ["curl_get"],
+            "file upload": ["send_payload"],
+            "idor": ["curl_get"],
+            "idor-url-path": ["curl_get"],
+            "auth": ["curl_get"],
+            "csrf": ["curl_get"],
+        }
+        # Fuzzy match: if a vuln type CONTAINS one of these substrings, it maps
+        FUZZY_MAP: dict[str, list[str]] = {
+            "sqli": ["sqlmap_test"],
+            "xss": ["xss_reflection_test"],
+            "cmdi": ["command_injection_test"],
+            "idor": ["curl_get"],
+            "auth": ["curl_get"],
+        }
+
+        def _resolve_tools(vt: str) -> list[str]:
+            """Resolve tools for a vuln type — exact match first, then fuzzy."""
+            vt_lower = vt.lower().strip()
+            tools = VULN_TOOL_MAP.get(vt_lower, [])
+            if tools:
+                return tools
+            # Fuzzy: check if any keyword is contained in vt
+            for keyword, tlist in FUZZY_MAP.items():
+                if keyword in vt_lower:
+                    return tlist
+            return []
+
+        session_cookies = ""
+        if self.client._session and self.client._session.cookie_jar:
+            jar = list(self.client._session.cookie_jar)
+            if jar:
+                session_cookies = "; ".join(f"{c.key}={c.value}" for c in jar)
+
+        # Sort vulns: mapped first, then unmapped, so useful ones get processed
+        mapped_vulns = []
+        unmapped_vulns = []
+        for v in vulns:
+            vt = (v.get("vuln_type") or "").lower()
+            if _resolve_tools(vt):
+                mapped_vulns.append(v)
+            else:
+                unmapped_vulns.append(v)
+        vulns_sorted = mapped_vulns + unmapped_vulns
+
+        # Summarize
+        vuln_type_counts: dict[str, int] = {}
+        for v in vulns:
+            vt = (v.get("vuln_type") or "").lower()
+            if vt:
+                vuln_type_counts[vt] = vuln_type_counts.get(vt, 0) + 1
+        mapped_counts = {vt: c for vt, c in vuln_type_counts.items() if _resolve_tools(vt)}
+        unmapped_counts = {vt: c for vt, c in vuln_type_counts.items() if not _resolve_tools(vt)}
+        print(f"[systematic] {len(vulns)} vulns: {len(mapped_vulns)} mapped, {len(unmapped_vulns)} unmapped")
+        print(f"[systematic]   mapped types: {mapped_counts}")
+        print(f"[systematic]   unmapped types: {unmapped_counts}")
+        if session_cookies:
+            print(f"[systematic]   session cookies: {session_cookies[:80]}...")
+
+        tried: set[tuple[str, str, str]] = set()  # (tool, url, param) dedup
+        tested_count = 0
+        MAX_TESTS = 20
+        for v in vulns_sorted:
+            if tested_count >= MAX_TESTS:
+                break
+            vt = (v.get("vuln_type") or "").lower()
+            endpoint = v.get("endpoint", "") or v.get("url", "")
+            param = v.get("parameter", "") or v.get("param", "")
+            source = v.get("source", "")
+
+            if not vt or not endpoint:
+                continue
+
+            tools = _resolve_tools(vt)
+
+            # If no hardcoded mapping, try LLM-suggested tool from analysis
+            llm_tool = ""
+            llm_args: dict = {}
+            if not tools:
+                llm_tool = v.get("suggested_tool", "") or ""
+                llm_args = v.get("tool_args", {}) or {}
+                if not isinstance(llm_args, dict):
+                    llm_args = {}
+                if llm_tool:
+                    tools = [llm_tool]
+
+            # If still no tool, fall back to curl_get as generic probe
+            if not tools:
+                tools = ["curl_get"]
+
+            for tool_name in tools:
+                if tested_count >= MAX_TESTS:
+                    break
+                dedup_key = (tool_name, endpoint, param)
+                if dedup_key in tried:
+                    continue
+                tried.add(dedup_key)
+                tested_count += 1
+
+                # Build args: prefer LLM-suggested, fall back to hardcoded
+                args: dict = {}
+                if tool_name == llm_tool and llm_args:
+                    args = dict(llm_args)  # Use LLM's suggested args
+                elif tool_name == "sqlmap_test":
+                    args = {"url": endpoint, "param": param or "id"}
+                elif tool_name == "xss_reflection_test":
+                    args = {"url": endpoint, "param": param or "q"}
+                elif tool_name == "command_injection_test":
+                    args = {"url": endpoint, "param": param or "cmd"}
+                elif tool_name == "curl_get":
+                    u = endpoint or target_url
+                    if session_cookies:
+                        args = {"url": u, "headers": f"Cookie: {session_cookies}"}
+                    else:
+                        args = {"url": u}
+                elif tool_name == "send_payload":
+                    args = {"url": endpoint, "payload": "1", "param": param or "id"}
+                else:
+                    args = {"url": endpoint, "param": param} if param else {"url": endpoint}
+
+                # Always add session cookies if available
+                if session_cookies and "headers" not in args:
+                    args["headers"] = f"Cookie: {session_cookies}"
+
+                try:
+                    cookie_note = " [with auth]" if session_cookies else ""
+                    source_note = ""
+                    if tool_name == llm_tool and llm_args:
+                        source_note = " [LLM-suggested]"
+                    elif not _resolve_tools(vt) and tool_name == "curl_get":
+                        source_note = " [generic fallback]"
+                    print(f"[systematic] {tool_name} on {endpoint} param={param}{cookie_note}{source_note} (type={vt})")
+                    if tool_name in self.attack_gateway.get_tool_names():
+                        result = await self.attack_gateway.call(tool_name, args)
+                        stdout = result.stdout if hasattr(result, 'stdout') else str(result)
+                    elif tool_name in self.recon_gateway.get_tool_names():
+                        result = await self.recon_gateway.call(tool_name, args)
+                        stdout = result.stdout if hasattr(result, 'stdout') else str(result)
+                    else:
+                        continue
+
+                    # Show truncated result
+                    print(f"  → {stdout[:250].strip().replace(chr(10), ' ')}")
+
+                    self.step_count += 1
+                    self._task_log_event("info", "systematic_exploit",
+                        tool=tool_name, url=endpoint, vt=vt,
+                        result=stdout[:300])
+
+                    # DAVE L4: check for flag
+                    flags = self.flag_pattern.findall(stdout)
+                    for f in flags:
+                        is_valid, reason = DAVE.verify_basic(f, stdout)
+                        if is_valid:
+                            self._task_log_event("info", "flag_found_systematic",
+                                tool=tool_name, flag=f)
+                            self.phase = OrchestratorPhase.DONE
+                            return TaskResult(
+                                success=True, flag=f, steps=self.step_count,
+                                tokens_used=self.llm.token_count,
+                                time_elapsed=time.time() - self.start_time,
+                            )
+                        else:
+                            log.warning("DAVE rejected flag: %s", reason)
+
+                except Exception as e:
+                    print(f"[systematic] {tool_name} FAILED: {e}")
+                    continue
+
+        # ── IDOR Header Test (systematic, before auth crawl) ─────
+        # If we have session cookies, test for IDOR via custom headers
+        # immediately — this catches the most common CTF/benchmark pattern.
+        if session_cookies:
+            for port in getattr(self, '_discovered_http_ports', []):
+                host = getattr(self, "target_host", None) or "localhost"
+                scheme = "https" if port == 443 else "http"
+                base = f"{scheme}://{host}" if port in (80, 443) else f"{scheme}://{host}:{port}"
+                try:
+                    idor_result = await self.recon_gateway.call("idor_header_test", {
+                        "url": f"{base}/dashboard",
+                        "cookie": session_cookies,
+                    })
+                    if idor_result.success and idor_result.parsed_output:
+                        f = idor_result.parsed_output.get("flag")
+                        if f:
+                            print(f"[systematic] IDOR HEADER FLAG: {f}")
+                            self.phase = OrchestratorPhase.DONE
+                            return TaskResult(
+                                success=True, flag=f, steps=self.step_count,
+                                tokens_used=self.llm.token_count,
+                                time_elapsed=time.time() - self.start_time,
+                            )
+                except Exception:
+                    pass
+
+        # ── Authenticated endpoint crawl ──────────────────────────
+        # If we have session cookies, fetch ALL discovered endpoints with auth.
+        # This catches flags hidden behind authentication (most common pattern).
+        if session_cookies:
+            endpoints = self.dkg.query_nodes("Endpoint")
+            auth_tested = 0
+            for ep in endpoints:
+                ep_url = ep.get("url", "") or ep.get("id", "")
+                if not ep_url or "://" not in ep_url:
+                    continue
+                dedup_key = ("curl_get_auth", ep_url, "")
+                if dedup_key in tried:
+                    continue
+                tried.add(dedup_key)
+                auth_tested += 1
+                try:
+                    print(f"[systematic] curl_get AUTH on {ep_url} [with session]")
+                    result = await self.recon_gateway.call("curl_get", {
+                        "url": ep_url,
+                        "headers": f"Cookie: {session_cookies}",
+                    })
+                    stdout = result.stdout if hasattr(result, 'stdout') else str(result)
+                    print(f"  → {stdout[:200].strip().replace(chr(10), ' ')}")
+                    # Check for flag
+                    flags = self.flag_pattern.findall(stdout)
+                    for f in flags:
+                        is_valid, reason = DAVE.verify_basic(f, stdout)
+                        if is_valid:
+                            self._task_log_event("info", "flag_found_auth_crawl",
+                                url=ep_url, flag=f)
+                            self.phase = OrchestratorPhase.DONE
+                            return TaskResult(
+                                success=True, flag=f, steps=self.step_count,
+                                tokens_used=self.llm.token_count,
+                                time_elapsed=time.time() - self.start_time,
+                            )
+                except Exception as e:
+                    print(f"[systematic] auth curl {ep_url} FAILED: {e}")
+
+            if auth_tested > 0:
+                print(f"[systematic] Auth crawl: tested {auth_tested} endpoints with session")
+
+        print(f"[systematic] Done: tested {tested_count} tool+endpoint combinations, no flag found")
+        return None
+
     # ── Phase 2: Analyze ────────────────────────────────────────────
 
     async def _analyze_phase(self) -> None:
@@ -880,6 +1216,13 @@ class Orchestrator:
 
         self._maybe_compress()
         tokens_before = self.llm.token_count
+
+        print(f"\n{'='*50}")
+        print(f"[ANALYZE] Asking LLM to identify vulnerabilities...")
+        print(f"[ANALYZE] DKG summary: {len(dkg_summary.split(chr(10)))} lines, "
+              f"services={len(self.dkg.query_nodes('Service'))}, "
+              f"endpoints={len(self.dkg.query_nodes('Endpoint'))}")
+
         content, _ = self.llm.generate(
             prompt=prompt,
             system_prompt=SYSTEM_PROMPT_ANALYZE,
@@ -891,12 +1234,20 @@ class Orchestrator:
             cteg_suggestions=cteg_suggestions,
         )
 
+        print(f"[ANALYZE] LLM response ({tokens_used} tokens):")
+        print(f"{content[:1500]}")
+        if len(content) > 1500:
+            print(f"  ... ({len(content) - 1500} more chars)")
+        print(f"{'='*50}\n")
+
         # Parse LLM's vulnerability hypotheses
         try:
             vulns_json = self._extract_json(content)
+            print(f"[ANALYZE] Parsed {len(vulns_json)} vulnerability hypotheses from LLM")
             for v in vulns_json:
+                vt = v.get("vuln_type", "")
                 hypothesis = VulnerabilityHypothesis(
-                    vuln_type=v.get("vuln_type", ""),
+                    vuln_type=vt,
                     endpoint=v.get("endpoint", ""),
                     param=v.get("param", ""),
                     confidence=float(v.get("confidence", 0.5)),
@@ -904,13 +1255,21 @@ class Orchestrator:
                 )
                 self.vulnerabilities.append(hypothesis)
 
-                # Record in DKG
-                self.dkg.add_node("Vulnerability", f"vuln-{len(self.vulnerabilities)}", {
-                    "type": hypothesis.vuln_type,
+                # Record in DKG with LLM-suggested tool if provided
+                dkg_props: dict = {
+                    "vuln_type": vt,
                     "endpoint": hypothesis.endpoint,
                     "parameter": hypothesis.param,
                     "severity": "unknown",
-                })
+                    "source": "llm_analysis",
+                }
+                suggested_tool = v.get("suggested_tool", "")
+                if suggested_tool:
+                    dkg_props["suggested_tool"] = suggested_tool
+                    tool_args = v.get("tool_args", {})
+                    if isinstance(tool_args, dict):
+                        dkg_props["tool_args"] = tool_args
+                self.dkg.add_node("Vulnerability", f"vuln-{len(self.vulnerabilities)}", dkg_props)
         except Exception as e:
             log.warning("_analyze_phase: failed to parse LLM vulnerability output: %s", e)
 
@@ -928,8 +1287,72 @@ class Orchestrator:
         self.step_count += 1
 
     def _augment_from_dkg(self) -> None:
-        """Add vulnerability hypotheses derived from DKG endpoints and findings."""
-        # DKG nikto findings → vulnerability hypotheses
+        """Add vulnerability hypotheses derived from DKG endpoints and findings.
+
+        Uses LLM to classify nikto findings into actionable vuln types.
+        Writes derived hypotheses to BOTH self.vulnerabilities AND DKG.
+        """
+        # Collect nikto findings for LLM classification
+        nikto_findings = []
+        for v in self.dkg.query_nodes("Vulnerability"):
+            detail = v.get("detail", "")
+            endpoint = v.get("endpoint", "")
+            if detail and endpoint and v.get("source") == "nikto":
+                nikto_findings.append({"detail": detail, "endpoint": endpoint})
+
+        if nikto_findings:
+            # Ask LLM to classify all nikto findings in one batch
+            findings_text = "\n".join(
+                f"{i+1}. [{f['endpoint']}] {f['detail']}"
+                for i, f in enumerate(nikto_findings[:15])
+            )
+            try:
+                self._maybe_compress()
+                llm_content, _ = self.llm.generate(
+                    prompt=f"Classify each nikto finding into a vulnerability type. "
+                           f"Allowed types: SQLI, XSS, CMDI, SSTI, LFI, IDOR, CSRF, AUTH. "
+                           f"For each, also specify a suggested_tool (sqlmap_test, "
+                           f"xss_reflection_test, command_injection_test, or curl_get) "
+                           f"and confidence (0.0-1.0).\n\n"
+                           f"Nikto findings:\n{findings_text}\n\n"
+                           f"Output JSON array: [{{\"index\": 1, \"vuln_type\": \"...\", "
+                           f"\"suggested_tool\": \"...\", \"confidence\": 0.X}}]",
+                    system_prompt="You are a vulnerability classifier. Output only valid JSON.",
+                )
+                classifications = self._extract_json(llm_content)
+                if isinstance(classifications, list):
+                    class_map = {}
+                    for c in classifications:
+                        if isinstance(c, dict):
+                            idx = c.get("index", 0)
+                            class_map[idx - 1] = c  # 1-based → 0-based
+
+                    for i, nf in enumerate(nikto_findings):
+                        cls = class_map.get(i, {})
+                        vtype = cls.get("vuln_type", "") or "XSS"
+                        suggested_tool = cls.get("suggested_tool", "")
+                        confidence = float(cls.get("confidence", 0.3))
+                        endpoint = nf["endpoint"]
+                        if not any(vv.endpoint == endpoint and vv.vuln_type == vtype
+                                   for vv in self.vulnerabilities):
+                            self.vulnerabilities.append(VulnerabilityHypothesis(
+                                vuln_type=vtype, endpoint=endpoint, param="",
+                                confidence=confidence, evidence=nf["detail"],
+                            ))
+                            props: dict = {
+                                "vuln_type": vtype, "endpoint": endpoint,
+                                "parameter": "", "severity": "low",
+                                "source": "llm_classified", "detail": nf["detail"],
+                            }
+                            if suggested_tool:
+                                props["suggested_tool"] = suggested_tool
+                            self.dkg.add_node("Vulnerability",
+                                              f"vuln-{len(self.vulnerabilities)}", props)
+                    return  # LLM classified successfully, skip fallback
+            except Exception:
+                pass  # Fall through to keyword fallback
+
+        # Fallback: keyword-based classification (if LLM unavailable)
         for v in self.dkg.query_nodes("Vulnerability"):
             detail = v.get("detail", "")
             vtype = "XSS"
@@ -945,7 +1368,12 @@ class Orchestrator:
                     vuln_type=vtype, endpoint=endpoint, param="",
                     confidence=0.3, evidence=detail,
                 ))
-        # Every POST/GET endpoint with params → SQLi + XSS
+                self.dkg.add_node("Vulnerability", f"vuln-{len(self.vulnerabilities)}", {
+                    "vuln_type": vtype, "endpoint": endpoint,
+                    "parameter": "", "severity": "low",
+                    "source": "nikto_keyword", "detail": detail,
+                })
+        # Every POST/GET endpoint with params → SQLI + XSS
         for ep in self.dkg.query_nodes("Endpoint"):
             url, params = ep.get("url", ""), ep.get("params", "")
             method = ep.get("method", "GET")
@@ -959,6 +1387,10 @@ class Orchestrator:
                 vuln_type=vt, endpoint=url, param=params,
                 confidence=0.35, evidence=f"{method} parameter: {params}",
             ))
+            self.dkg.add_node("Vulnerability", f"vuln-{len(self.vulnerabilities)}", {
+                "vuln_type": vt, "endpoint": url, "parameter": params,
+                "severity": "medium", "source": "param_heuristic",
+            })
         # Endpoints with numeric path segments → IDOR + SQLI
         for ep in self.dkg.query_nodes("Endpoint"):
             url = ep.get("url", "")
@@ -967,12 +1399,20 @@ class Orchestrator:
             if re.search(r'/\d+', url):
                 self.vulnerabilities.append(VulnerabilityHypothesis(
                     vuln_type="IDOR", endpoint=url, param="id",
-                    confidence=0.3, evidence=f"Numeric ID in URL path",
+                    confidence=0.3, evidence="Numeric ID in URL path",
                 ))
                 self.vulnerabilities.append(VulnerabilityHypothesis(
                     vuln_type="SQLI", endpoint=url, param="id",
-                    confidence=0.25, evidence=f"Numeric ID in URL path",
+                    confidence=0.25, evidence="Numeric ID in URL path",
                 ))
+                self.dkg.add_node("Vulnerability", f"vuln-{len(self.vulnerabilities)-1}", {
+                    "vuln_type": "IDOR", "endpoint": url, "parameter": "id",
+                    "severity": "medium", "source": "path_heuristic",
+                })
+                self.dkg.add_node("Vulnerability", f"vuln-{len(self.vulnerabilities)}", {
+                    "vuln_type": "SQLI", "endpoint": url, "parameter": "id",
+                    "severity": "medium", "source": "path_heuristic",
+                })
 
     # ── Post-Auth Exploration ───────────────────────────────────────
 
@@ -1441,23 +1881,26 @@ class Orchestrator:
                 host = getattr(self, "target_host", None) or "localhost"
                 scheme = "https" if port == 443 else "http"
                 base = f"{scheme}://{host}" if port in (80, 443) else f"{scheme}://{host}:{port}"
-                for u, p in self.DEFAULT_CREDENTIALS:
+                for u, p in [("test", "test"), ("admin", "admin"), ("admin", "password"),
+                              ("demo", "demo"), ("user", "user"), ("guest", "guest")]:
                     if self._time_exceeded():
                         break
                     try:
                         if await self.client.auto_login(base, u, p):
                             self._task_log_event("info", "auto_login_ok", url=base, username=u)
-                            # Seed DKG with common authenticated paths
-                            for auth_path in ["/dashboard", "/orders", "/profile",
-                                              "/account", "/admin", "/docs",
-                                              "/edit_profile/1", "/company/1/jobs",
-                                              "/user/1", "/users/1"]:
-                                self.dkg.add_node("Endpoint", f"auth-{auth_path}", {
-                                    "url": base.rstrip("/") + auth_path,
-                                    "method": "GET", "params": "",
-                                    "auth_required": True,
-                                })
-                            # Try LLM-driven exploration first
+                            # Use form_extract to discover actual endpoints from the response
+                            from darwin.tools.recon_server import create_recon_gateway
+                            _rg = create_recon_gateway()
+                            _fr = await _rg.call("form_extract", {"url": base})
+                            if _fr.success and _fr.parsed_output:
+                                for link in _fr.parsed_output.get("links", [])[:15]:
+                                    if link and not link.startswith("#") and not link.startswith("javascript"):
+                                        full = link if "://" in link else base.rstrip("/") + ("/" + link if not link.startswith("/") else link)
+                                        self.dkg.add_node("Endpoint", f"explore-{link}", {
+                                            "url": full, "method": "GET", "params": "",
+                                            "auth_required": True,
+                                        })
+                            # Try LLM-driven exploration
                             result = await self._llm_explore(base)
                             if result:
                                 return result
@@ -1630,102 +2073,99 @@ Respond ONLY with a JSON array of next steps (max 5)."""
         return None
 
 
-    # ── Systematic Post-Check ────────────────────────────────────
+    # ── Systematic Post-Check (LLM-driven) ─────────────────────────
 
     async def _systematic_post_check(self, target_url: str) -> TaskResult | None:
-        """Systematic checks for common vulnerabilities the LLM might miss.
+        """LLM-driven systematic checks after the main loop.
 
-        Covers: header-based IDOR, POST body IDOR, credential stuffing.
-        Executed after each solo cycle when LLM hasn't found the flag.
+        Instead of hardcoded IDOR headers/IDs/paths, the LLM analyzes what
+        we've learned and generates targeted checks for this specific target.
         """
         log.info("_systematic_post_check starting")
-        # Re-authenticate in case session expired during LLM loop
+        # Reset LLM session to clear any stale tool_calls from solo cycle
+        self.llm.reset()
         await self._try_auto_login(target_url, None, None)
+
+        # Gather what we know
+        eps = [e.get("url", "") for e in self.dkg.query_nodes("Endpoint")[:30]]
+        vulns = [(v.get("vuln_type", ""), v.get("endpoint", ""))
+                 for v in self.dkg.query_nodes("Vulnerability")[:10]]
+        cookies = ""
+        if self.client._session and self.client._session.cookie_jar:
+            jar = list(self.client._session.cookie_jar)
+            if jar:
+                cookies = "; ".join(f"{c.key}={c.value}" for c in jar)
 
         for port in getattr(self, '_discovered_http_ports', []):
             host = getattr(self, "target_host", None) or "localhost"
             scheme = "https" if port == 443 else "http"
             base = f"{scheme}://{host}" if port in (80, 443) else f"{scheme}://{host}:{port}"
 
-            # 1. Header-based IDOR on /dashboard and similar endpoints
-            idor_headers = ["X-UserId", "X-User-Id", "X-Forwarded-User", "X-Auth-User"]
-            idor_ids = [0, 1, 2, 10032, 10033, 10052, 10053]
-            idor_paths = ["/dashboard", "/profile", "/account", "/user", "/admin",
-                          "/company/1/jobs", "/orders", "/api/user", "/api/me"]
+            # Ask LLM to generate targeted checks
+            self._maybe_compress()
+            check_content, _ = self.llm.generate(
+                prompt=f"Target: {base}\n"
+                       f"Endpoints: {eps}\n"
+                       f"Known vulns: {vulns}\n"
+                       f"Session: {'authenticated' if cookies else 'none'}\n\n"
+                       f"We haven't found the flag yet. Generate targeted checks. "
+                       f"Consider: IDOR with different user IDs, privilege escalation "
+                       f"(is_admin=1, role=admin), parameter tampering, hidden endpoints. "
+                       f"For each check, specify the HTTP request details.\n\n"
+                       f"Output JSON array: [{{\"method\": \"GET\", \"path\": \"...\", "
+                       f"\"headers\": {{}}, \"data\": {{}}, \"reason\": \"...\"}}]",
+                system_prompt="You are a penetration tester. Output only valid JSON array.",
+            )
+            checks = self._extract_json(check_content)
+            if not isinstance(checks, list):
+                continue
 
-            for hdr in idor_headers:
-                for uid in idor_ids:
-                    if self._time_exceeded():
-                        return None
-                    for path in idor_paths:
-                        try:
-                            resp = await self.client.get(
-                                base + path, headers={hdr: str(uid)},
-                            )
-                            flags = self.flag_pattern.findall(resp.body)
-                            if flags:
-                                is_valid, reason = DAVE.verify_basic(flags[0])
-                                if is_valid:
-                                    self._task_log_event("info", "flag_found_systematic",
-                                        method="header_idor", header=hdr, id=uid, path=path,
-                                        flag=flags[0])
-                                    self.phase = OrchestratorPhase.DONE
-                                    return TaskResult(
-                                        success=True, flag=flags[0], steps=self.step_count,
-                                        tokens_used=self.llm.token_count,
-                                        time_elapsed=time.time() - self.start_time,
-                                    )
-                        except Exception:
-                            pass
-
-            # 2. POST body IDOR — try is_admin=1 on edit_profile endpoints
-            for pid in [1, 2, 3]:
+            for check in checks[:10]:  # Cap at 10 LLM-suggested checks
                 if self._time_exceeded():
                     return None
-                for ep_path in [f"/edit_profile/{pid}", f"/profile/{pid}/edit",
-                               f"/user/{pid}/edit", f"/users/{pid}"]:
-                    try:
-                        resp = await self.client.post(
-                            base + ep_path, data={"is_admin": "1"},
-                        )
-                        flags = self.flag_pattern.findall(resp.body)
-                        if flags:
-                            is_valid, _ = DAVE.verify_basic(flags[0])
-                            if is_valid:
-                                self._task_log_event("info", "flag_found_systematic",
-                                    method="post_idor", path=ep_path, flag=flags[0])
-                                self.phase = OrchestratorPhase.DONE
-                                return TaskResult(
-                                    success=True, flag=flags[0], steps=self.step_count,
-                                    tokens_used=self.llm.token_count,
-                                    time_elapsed=time.time() - self.start_time,
-                                )
-                        # After POST, check data pages
-                        for dp in ["/dashboard", f"/company/{pid}/jobs",
-                                   "/orders", "/admin"]:
-                            resp2 = await self.client.get(base + dp)
-                            flags2 = self.flag_pattern.findall(resp2.body)
-                            if flags2:
-                                is_valid2, _ = DAVE.verify_basic(flags2[0])
-                                if is_valid2:
-                                    self.phase = OrchestratorPhase.DONE
-                                    return TaskResult(
-                                        success=True, flag=flags2[0], steps=self.step_count,
-                                        tokens_used=self.llm.token_count,
-                                        time_elapsed=time.time() - self.start_time,
-                                    )
-                    except Exception:
-                        pass
+                try:
+                    method = (check.get("method") or "GET").upper()
+                    path = check.get("path", "")
+                    if not path.startswith("/"):
+                        path = "/" + path
+                    url = base + path
+                    headers = check.get("headers") or {}
+                    data = check.get("data") or {}
+                    if cookies and "Cookie" not in headers:
+                        headers["Cookie"] = cookies
+
+                    if method == "POST":
+                        resp = await self.client.post(url, data=data, headers=headers)
+                    else:
+                        resp = await self.client.get(url, headers=headers)
+
+                    flags = self.flag_pattern.findall(resp.body)
+                    for f in flags:
+                        is_valid, _ = DAVE.verify_basic(f, resp.body)
+                        if is_valid:
+                            self._task_log_event("info", "flag_found_systematic",
+                                method="llm_check", path=path, flag=f)
+                            self.phase = OrchestratorPhase.DONE
+                            self.step_count += 1
+                            return TaskResult(
+                                success=True, flag=f, steps=self.step_count,
+                                tokens_used=self.llm.token_count,
+                                time_elapsed=time.time() - self.start_time,
+                            )
+                    self.step_count += 1
+                except Exception:
+                    pass
 
         return None
 
     # ── Flag Search ──────────────────────────────────────────────────
 
-    # Common paths where flags might be exposed
-    _FLAG_PATHS = ["/flag", "/flag.txt", "/robots.txt", "/.git/HEAD", "/admin", "/secret", "/api/flag", "/debug"]
-
     async def _check_response_for_flag(self, target_url: str) -> TaskResult | None:
-        """Search response body for flag patterns across all discovered HTTP services."""
+        """Search response body for flag patterns across all discovered HTTP services.
+
+        Uses LLM to suggest smart flag paths based on the technology stack
+        and discovered endpoints, then probes them all.
+        """
         import urllib.parse as _up3
         urls_to_check: list[str] = []
 
@@ -1744,14 +2184,35 @@ Respond ONLY with a JSON array of next steps (max 5)."""
         if base not in urls_to_check:
             urls_to_check.append(base)
 
-        # Also probe all discovered endpoints
+        # Probe all discovered endpoints
         for ep in self.dkg.query_nodes("Endpoint"):
             eu = ep.get("url", "")
             if eu and eu not in urls_to_check:
                 urls_to_check.append(eu)
 
+        # Ask LLM to suggest smart flag paths based on context
+        svc_list = [f"{s.get('port')}/{s.get('protocol','tcp')} {s.get('version','')}"
+                    for s in self.dkg.query_nodes("Service")]
+        ep_list = [e.get("url", "") for e in self.dkg.query_nodes("Endpoint")[:20]]
+        flag_paths = ["/flag", "/flag.txt", "/robots.txt", "/.git/HEAD"]  # sensible defaults
+        try:
+            self._maybe_compress()
+            llm_paths_content, _ = self.llm.generate(
+                prompt=f"Target services: {svc_list}\n"
+                       f"Discovered endpoints: {ep_list}\n\n"
+                       f"Suggest additional URL paths to probe for flags/credentials. "
+                       f"Consider: backup files, config leaks, admin panels, API docs, "
+                       f"debug endpoints. Output JSON array of path strings only.",
+                system_prompt="You are a penetration tester. Output only a JSON array of URL paths.",
+            )
+            llm_paths = self._extract_json(llm_paths_content)
+            if isinstance(llm_paths, list):
+                flag_paths = list(dict.fromkeys(flag_paths + llm_paths))  # dedup, defaults first
+        except Exception:
+            pass
+
         for bu in urls_to_check:
-            for path in self._FLAG_PATHS:
+            for path in flag_paths:
                 try:
                     response = await self.client.get(bu.rstrip("/") + path)
                     flags = self.flag_pattern.findall(response.body)
@@ -1867,7 +2328,257 @@ Respond ONLY with a JSON array of next steps (max 5)."""
             return json.loads(match.group(1))
         return {}
 
-    # ── Coordinated / Distributed Mode ─────────────────────────────
+    # ── Persistent Multi-Agent System ─────────────────────────────────
+
+    async def _run_multi_agent_cycle(self, target_url: str) -> TaskResult | None:
+        """Run persistent multi-agent exploitation with DKG monitoring.
+
+        Uses a persistent SubAgentPool (stored on self) that survives across
+        loop iterations. Agents are spawned incrementally based on DKG state,
+        and a background DKG monitor spawns follow-up agents when new
+        hosts/credentials appear.
+
+        Replaces the old per-cycle pool approach in _run_coordinated_cycle
+        and _run_distributed_cycle.
+        """
+        from darwin.sub_agents.base import SubAgentPool, TaskScope, TokenBudget
+        from darwin.sub_agents.recon_agent import ReconAgent
+        from darwin.sub_agents.exploit_agent import ExploitAgent
+        from darwin.sub_agents.pivot_agent import PivotAgent
+
+        # Create persistent pool if first call
+        if self._persistent_pool is None:
+            self._persistent_pool = SubAgentPool()
+
+        pool = self._persistent_pool
+
+        # Determine which agents to spawn based on DKG state
+        spawned_any = await self._spawn_agents_from_dkg(target_url, pool)
+
+        if not spawned_any and pool.active_count() == 0:
+            return None  # Nothing to do, let solo handle it
+
+        # Run existing + new agents with DKG monitoring
+        log.info("Multi-agent: %d active agents", pool.active_count())
+
+        # Create a flag-detected event for early termination
+        flag_found = asyncio.Event()
+
+        async def _flag_watcher():
+            """Background: watch DKG for flag nodes."""
+            try:
+                while not flag_found.is_set():
+                    flags = self.dkg.query_nodes("Flag")
+                    for f in flags:
+                        fv = f.get("value", "")
+                        if fv and fv.startswith("flag{") and fv not in self._known_flags:
+                            self._known_flags.add(fv)
+                            flag_found.set()
+                            return
+                    await asyncio.sleep(0.5)
+            except asyncio.CancelledError:
+                pass
+
+        flag_task = asyncio.create_task(_flag_watcher())
+
+        try:
+            # Run agents until flag found, all done, or timeout
+            agent_task = asyncio.create_task(pool.run_all())
+
+            done, _ = await asyncio.wait(
+                [agent_task, asyncio.ensure_future(flag_found.wait())],
+                timeout=30.0,  # 30s per monitoring window
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+
+            if flag_found.is_set():
+                pool.terminate()
+                await asyncio.wait_for(agent_task, timeout=5.0)
+                agent_task.cancel()
+
+            # Check results
+            results = getattr(pool, '_results', {})
+            self.step_count += len(results)
+
+            # Query DKG for flags
+            flags = self.dkg.query_nodes("Flag")
+            for flag in flags:
+                fv = flag.get("value", "")
+                if fv and fv.startswith("flag{") and fv not in self._known_flags:
+                    self._known_flags.add(fv)
+                    self.phase = OrchestratorPhase.DONE
+                    return TaskResult(
+                        success=True, flag=fv, steps=self.step_count,
+                        tokens_used=self.llm.token_count,
+                        time_elapsed=time.time() - self.start_time,
+                    )
+
+            # Spawn follow-up agents based on new DKG data
+            await self._spawn_followup_agents(target_url, pool)
+
+            # Clean up done agents
+            pool.cleanup()
+
+            return None
+
+        finally:
+            flag_task.cancel()
+            try:
+                await flag_task
+            except (asyncio.CancelledError, Exception):
+                pass
+
+    async def _spawn_agents_from_dkg(
+        self, target_url: str, pool,
+    ) -> bool:
+        """Spawn agents based on current DKG state. Returns True if any spawned."""
+        from darwin.sub_agents.base import TaskScope, TokenBudget
+        from darwin.sub_agents.recon_agent import ReconAgent
+        from darwin.sub_agents.exploit_agent import ExploitAgent
+        from darwin.sub_agents.pivot_agent import PivotAgent
+
+        spawned = False
+        hosts = self.dkg.query_nodes("Host")
+        vulns = self.dkg.query_nodes("Vulnerability")
+        creds = self.dkg.query_nodes("Credential")
+
+        # ReconAgent per host (if not already running)
+        for h in hosts:
+            agent_id = f"recon-{h.get('id', 'unknown')}"
+            if agent_id not in getattr(pool, '_agents', {}):
+                scope = TaskScope(target_hosts=[
+                    h.get("ip", "") or h.get("id", "")
+                ])
+                recon = ReconAgent(
+                    agent_id=agent_id, task_scope=scope,
+                    dkg=self.dkg,
+                    budget=TokenBudget(max_tokens=32000, max_iterations=15),
+                )
+                pool.spawn(recon)
+                spawned = True
+                log.info("Spawned ReconAgent: %s", agent_id)
+
+        # ExploitAgent per vuln type (dedup by type, max 3)
+        spawned_types: set[str] = set()
+        existing_agents = getattr(pool, '_agents', {})
+        exploit_count = sum(
+            1 for a in existing_agents.values()
+            if getattr(a, 'agent_type', None) and str(a.agent_type) == 'exploit'
+        )
+        for v in vulns[:6]:
+            vt = (v.get("vuln_type") or v.get("type") or "").lower()
+            if not vt or vt in spawned_types:
+                continue
+            if exploit_count >= 3:
+                break
+            spawned_types.add(vt)
+            agent_id = f"exploit-{vt}"
+            if agent_id not in existing_agents:
+                endpoint = v.get("endpoint", target_url)
+                scope = TaskScope(target_hosts=[endpoint])
+                exploit = ExploitAgent(
+                    agent_id=agent_id, task_scope=scope,
+                    dkg=self.dkg, dpm=self.dpm, dave=self.dave,
+                    cteg=self.cteg,
+                    budget=TokenBudget(max_tokens=48000, max_iterations=12),
+                )
+                pool.spawn(exploit)
+                spawned = True
+                exploit_count += 1
+                log.info("Spawned ExploitAgent: %s (type=%s)", agent_id, vt)
+
+        # PivotAgent if credentials + multi-host
+        if creds and len(hosts) > 1:
+            agent_id = "pivot-primary"
+            if agent_id not in existing_agents:
+                scope = TaskScope(
+                    target_hosts=[h.get("ip", h.get("id", "")) for h in hosts],
+                )
+                pivot = PivotAgent(
+                    agent_id=agent_id, task_scope=scope,
+                    dkg=self.dkg,
+                    budget=TokenBudget(max_tokens=32000, max_iterations=15),
+                )
+                pool.spawn(pivot)
+                spawned = True
+                log.info("Spawned PivotAgent: %s", agent_id)
+
+        return spawned
+
+    async def _spawn_followup_agents(
+        self, target_url: str, pool,
+    ) -> None:
+        """Scan DKG for collaboration opportunities and spawn follow-up agents."""
+        from darwin.sub_agents.base import TaskScope, TokenBudget
+        from darwin.sub_agents.recon_agent import ReconAgent
+        from darwin.sub_agents.exploit_agent import ExploitAgent
+        from darwin.sub_agents.pivot_agent import PivotAgent
+
+        existing = getattr(pool, '_agents', {})
+
+        # Check for new credentials → spawn PivotAgent
+        creds = self.dkg.query_nodes("Credential")
+        hosts = self.dkg.query_nodes("Host")
+        if creds and len(hosts) > 1 and "pivot-primary" not in existing:
+            scope = TaskScope(
+                target_hosts=[h.get("ip", h.get("id", "")) for h in hosts],
+            )
+            pivot = PivotAgent(
+                agent_id="pivot-followup", task_scope=scope,
+                dkg=self.dkg,
+                budget=TokenBudget(max_tokens=32000, max_iterations=15),
+            )
+            pool.spawn(pivot)
+            log.info("Spawned follow-up PivotAgent")
+
+        # Check for new internal hosts → spawn ReconAgent
+        internal_hosts = [h for h in hosts if h.get("is_internal")]
+        for h in internal_hosts:
+            agent_id = f"recon-internal-{h.get('id', h.get('ip', ''))}"
+            if agent_id not in existing:
+                scope = TaskScope(target_hosts=[
+                    h.get("ip", "") or h.get("id", "")
+                ])
+                recon = ReconAgent(
+                    agent_id=agent_id, task_scope=scope,
+                    dkg=self.dkg,
+                    budget=TokenBudget(max_tokens=32000, max_iterations=15),
+                )
+                pool.spawn(recon)
+                log.info("Spawned internal ReconAgent: %s", agent_id)
+
+        # Check for new vulns → spawn ExploitAgent (if not already targeting this type)
+        vulns = self.dkg.query_nodes("Vulnerability")
+        existing_vuln_types: set[str] = set()
+        for aid, agent in existing.items():
+            if hasattr(agent, 'agent_type') and str(agent.agent_type) == 'exploit':
+                # Extract vuln type from agent_id
+                parts = aid.split("-", 1)
+                if len(parts) > 1:
+                    existing_vuln_types.add(parts[1])
+
+        exploit_count = sum(
+            1 for a in existing.values()
+            if getattr(a, 'agent_type', None) and str(a.agent_type) == 'exploit'
+        )
+        for v in vulns:
+            vt = (v.get("vuln_type") or v.get("type") or "").lower()
+            if vt and vt not in existing_vuln_types and exploit_count < 3:
+                agent_id = f"exploit-{vt}"
+                endpoint = v.get("endpoint", target_url)
+                scope = TaskScope(target_hosts=[endpoint])
+                exploit = ExploitAgent(
+                    agent_id=agent_id, task_scope=scope,
+                    dkg=self.dkg, dpm=self.dpm, dave=self.dave,
+                    cteg=self.cteg,
+                    budget=TokenBudget(max_tokens=48000, max_iterations=12),
+                )
+                pool.spawn(exploit)
+                exploit_count += 1
+                existing_vuln_types.add(vt)
+                log.info("Spawned follow-up ExploitAgent: %s", agent_id)
+
+    # ── Coordinated / Distributed Mode (Legacy) ──────────────────────
 
     async def _run_coordinated_cycle(self) -> TaskResult | None:
         """Coordinated Mode: spawn 1-2 sub-agents for parallel execution.
@@ -1902,6 +2613,7 @@ Respond ONLY with a JSON array of next steps (max 5)."""
                 dkg=self.dkg,
                 dpm=self.dpm,
                 dave=self.dave,
+                cteg=self.cteg,
                 budget=TokenBudget(max_tokens=64000, max_iterations=15),
             )
             pool.spawn(exploit)
@@ -1970,6 +2682,7 @@ Respond ONLY with a JSON array of next steps (max 5)."""
                 dkg=self.dkg,
                 dpm=self.dpm,
                 dave=self.dave,
+                cteg=self.cteg,
                 budget=TokenBudget(max_tokens=48000, max_iterations=12),
             )
             pool.spawn(exploit)

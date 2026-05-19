@@ -4,6 +4,8 @@ Reference:
   - VulnBot roles/role.py:16-90 — Role._plan() + Role._react()
   - Cochise executor.py:129 — temporary Executor per task
   - CPA hub/task/engine.go — TaskEngine state machine
+
+v2: Added LangGraph-powered ReAct loop with checkpointing.
 """
 
 from __future__ import annotations
@@ -197,6 +199,149 @@ class BaseSubAgent(ABC):
             self.findings.append({"error": str(e)})
 
         return self._build_result()
+
+    async def run_with_langgraph(self) -> SubAgentResult:
+        """Run the ReAct loop using LangGraph StateGraph for structured state management.
+
+        Nodes: observe → plan → act → evaluate (loop back or exit)
+        Falls back to classic run() if LangGraph is not available.
+        """
+        try:
+            from langgraph.graph import StateGraph, END
+        except ImportError:
+            return await self.run()
+
+        # Use plain dict state to avoid TypedDict introspection issues
+        builder = StateGraph(dict)
+
+        # ── Node implementations ──────────────────────────────
+        async def observe_node(state: dict) -> dict:
+            self._maybe_compress()
+            obs = []
+            vulns = self.dkg.query_nodes("Vulnerability")
+            if vulns:
+                obs.append(f"DKG Vulnerabilities ({len(vulns)})")
+                for v in vulns[:5]:
+                    obs.append(f"  - {v.get('vuln_type', '?')} at {v.get('endpoint', '?')}")
+            flags = self.dkg.query_nodes("Flag")
+            if flags:
+                obs.append(f"DKG Flags ({len(flags)})")
+            hosts = self.dkg.query_nodes("Host")
+            if hosts:
+                obs.append(f"DKG Hosts: {len(hosts)}")
+            creds = self.dkg.query_nodes("Credential")
+            if creds:
+                obs.append(f"DKG Credentials: {len(creds)}")
+            return {
+                "observations": obs,
+                "plan": state.get("plan", []),
+                "iteration": state.get("iteration", 0),
+                "findings_count": state.get("findings_count", 0),
+                "done": False,
+            }
+
+        async def plan_node(state: dict) -> dict:
+            if not state.get("plan"):
+                new_plan = await self._generate_plan()
+                if not new_plan:
+                    new_plan = [{
+                        "id": "default-explore",
+                        "instruction": "Explore target and identify vulnerabilities",
+                        "action": "recon",
+                        "dependent_task_ids": [],
+                    }]
+                return {**state, "plan": new_plan}
+            return state
+
+        async def act_node(state: dict) -> dict:
+            task = self._select_next_task_from_plan(state.get("plan", []))
+            if not task:
+                return {**state, "done": True}
+
+            self.iteration = state.get("iteration", 0) + 1
+            result = await self._execute_task(task)
+            success, new_findings = await self._evaluate_result(task, result)
+            self._write_findings_to_dkg(task, result, new_findings)
+
+            updated_plan = []
+            for t in state.get("plan", []):
+                if t.get("id") == task.get("id"):
+                    updated_plan.append({**t, "_done": True})
+                else:
+                    updated_plan.append(t)
+
+            return {
+                "observations": state.get("observations", []),
+                "plan": updated_plan,
+                "iteration": self.iteration,
+                "findings_count": state.get("findings_count", 0) + len(new_findings),
+                "done": False,
+            }
+
+        async def evaluate_node(state: dict) -> dict:
+            plan = state.get("plan", [])
+            pending = [t for t in plan if not t.get("_done")]
+            done = (
+                not pending
+                or self.budget.tokens_exceeded()
+                or self.budget.time_exceeded()
+                or state.get("iteration", 0) >= self.budget.max_iterations
+                or self._is_stalled()
+            )
+            return {**state, "done": done}
+
+        def should_continue(state: dict) -> str:
+            return "end" if state.get("done") else "observe"
+
+        # ── Build and run ─────────────────────────────────────
+        builder.add_node("observe", observe_node)
+        builder.add_node("plan", plan_node)
+        builder.add_node("act", act_node)
+        builder.add_node("evaluate", evaluate_node)
+
+        builder.set_entry_point("observe")
+        builder.add_edge("observe", "plan")
+        builder.add_edge("plan", "act")
+        builder.add_edge("act", "evaluate")
+        builder.add_conditional_edges("evaluate", should_continue, {
+            "observe": "observe",
+            "end": END,
+        })
+
+        graph = builder.compile()
+        self.budget.start_time = time.time()
+
+        try:
+            await graph.ainvoke({
+                "observations": [],
+                "plan": [],
+                "iteration": 0,
+                "findings_count": 0,
+                "done": False,
+            })
+            self.state = SubAgentState.DONE
+        except Exception as e:
+            self.state = SubAgentState.CANCELLED
+            self.findings.append({"error": str(e)})
+
+        return self._build_result()
+
+    def _select_next_task_from_plan(self, plan: list) -> dict | None:
+        """Select next task respecting dependencies (for LangGraph mode)."""
+        for task in plan:
+            if task.get("_done"):
+                continue
+            deps = task.get("dependent_task_ids", [])
+            if all(
+                any(t.get("id") == d and t.get("_done") for t in plan)
+                for d in deps
+            ):
+                return task
+        # Fallback: first non-done task
+        for task in plan:
+            if not task.get("_done"):
+                return task
+        return None
 
     # ── Plan Generation ─────────────────────────────────────────
 

@@ -1,0 +1,148 @@
+{
+  "target": "http://localhost",
+  "model": "deepseek/deepseek-v4-pro",
+  "provider": "deepseek",
+  "time_budget": 600,
+  "events": [
+    {
+      "timestamp": "2026-05-19T21:55:18",
+      "elapsed_s": 0.0,
+      "phase": "init",
+      "level": "info",
+      "event": "task_start",
+      "target": "http://localhost",
+      "description": "Perform a comprehensive penetration test. Discover all open ports, enumerate services, identify vulnerabilities, exploit them, and capture proof flags."
+    },
+    {
+      "timestamp": "2026-05-19T21:55:28",
+      "elapsed_s": 10.017,
+      "phase": "recon",
+      "level": "info",
+      "event": "recon_nmap_start",
+      "host": "localhost"
+    },
+    {
+      "timestamp": "2026-05-19T21:56:03",
+      "elapsed_s": 45.078,
+      "phase": "recon",
+      "level": "info",
+      "event": "recon_done",
+      "dkg_summary": "Host: 1\n  - id=host-localhost: {'ip': 'localhost', 'is_reachable': True, 'is_internal': False, '_version': 3}\nService: 4\n  - id=svc-localhost-22: {'port': 22, 'protocol': 'tcp', 'version': 'OpenSSH 8.9p1 Ubuntu 3ubuntu0.15 (Ubuntu Linux; protocol 2.0)', 'banner': 'ssh', '_version': 1}\n  - id=svc-localhost-1053: {'port': 1053, 'protocol': 'tcp', 'version': 'tcpwrapped', 'banner': 'tcpwrapped', '_version': 1}\n  - id=svc-localhost-32773: {'port': 32773, 'protocol': 'tcp', 'version': 'Apache httpd 2.4.67 ((Debian))', 'banner': 'http', '_version': 1}\n  - id=svc-http-32773: {'port': 32773, 'protocol': 'HTTP', 'version': 'unknown', 'banner': '', '_version': 1}\nEndpoint: 6\n  - id=endpoint-http://localhost:32773/dashboard: {'url': 'http://localhost:32773/dashboard', 'method': 'GET', 'params': '', 'auth_required': False, '_version': 1}\n  - id=endpoint-http://localhost:32773/logout: {'url': 'http://localhost:32773/logout', 'method': 'GET', 'params': '', 'auth_required': False, '_version': 1}\n  - id=endpoint-http://localhost:32773/server-status: {'url': 'http://localhost:32773/server-status', 'method': 'GET', 'params': '', 'auth_required': False, '_version': 1}\n  - id=endpoint-http://localhost:32773/javascript/jquery/jquery: {'url': 'http://localhost:32773/javascript/jquery/jquery', 'method': 'GET', 'params': '', 'auth_required': False, '_version': 1}\n  - id=endpoint-http://localhost:32773/static/css/bootstrap.min.css: {'url': 'http://localhost:32773/static/css/bootstrap.min.css', 'method': 'GET', 'params': '', 'auth_required': False, '_version': 1}\n  - id=endpoint-http://localhost:32773-param-username: {'url': 'http://localhost:32773', 'method': 'POST', 'params': 'username', 'auth_required': False, '_version': 1}\nVulnerability: 10\n  - id=nikto-http://localhost:32773-Target IP:          127.0.0.1: {'vuln_type': 'info', 'endpoint': 'http://localhost:32773', 'parameter': '', 'severity': 'low', 'source': 'nikto', 'detail': 'Target IP:          127.0.0.1', '_version': 1}\n  - id=nikto-http://localhost:32773-Target Hostname:    localhost: {'vuln_type': 'info', 'endpoint': 'http://localhost:32773', 'parameter': '', 'severity': 'low', 'source': 'nikto', 'detail': 'Target Hostname:    localhost', '_version': 1}\n  - id=nikto-http://localhost:32773-Target Port:        32773: {'vuln_type': 'info', 'endpoint': 'http://localhost:32773', 'parameter': '', 'severity': 'low', 'source': 'nikto', 'detail': 'Target Port:        32773', '_version': 1}\n  - id=nikto-http://localhost:32773-Start Time:         2026-05-19 21:56:03 : {'vuln_type': 'info', 'endpoint': 'http://localhost:32773', 'parameter': '', 'severity': 'low', 'source': 'nikto', 'detail': 'Start Time:         2026-05-19 21:56:03 (GMT8)', '_version': 1}\n  - id=nikto-http://localhost:32773-Server: Apache/2.4.67 (Debian): {'vuln_type': 'info', 'endpoint': 'http://localhost:32773', 'parameter': '', 'severity': 'low', 'source': 'nikto', 'detail': 'Server: Apache/2.4.67 (Debian)', '_version': 1}\n  - id=nikto-http://localhost:32773-The anti-clickjacking X-Frame-Options he: {'vuln_type': 'info', 'endpoint': 'http://localhost:32773', 'parameter': '', 'severity': 'low', 'source': 'nikto', 'detail': 'The anti-clickjacking X-Frame-Options header is not present.', '_version': 1}\n  - id=nikto-http://localhost:32773-No CGI Directories found (use '-C all' t: {'vuln_type': 'info', 'endpoint': 'http://localhost:32773', 'parameter': '', 'severity': 'low', 'source': 'nikto', 'detail': \"No CGI Directories found (use '-C all' to force check all possible dirs)\", '_version': 1}\n  - id=nikto-http://localhost:32773-Allowed HTTP Methods: HEAD, OPTIONS, GET: {'vuln_type': 'info', 'endpoint': 'http://localhost:32773', 'parameter': '', 'severity': 'low', 'source': 'nikto', 'detail': 'Allowed HTTP Methods: HEAD, OPTIONS, GET, POST', '_version': 1}\n  ... and 2 more",
+      "step": 1
+    },
+    {
+      "timestamp": "2026-05-19T21:57:15",
+      "elapsed_s": 117.223,
+      "phase": "recon",
+      "level": "info",
+      "event": "auto_login_ok",
+      "url": "http://localhost:32773",
+      "username": "test"
+    },
+    {
+      "timestamp": "2026-05-19T21:58:51",
+      "elapsed_s": 212.956,
+      "phase": "analyze",
+      "level": "info",
+      "event": "llm_analyze_call",
+      "prompt": "Target information:\nHost: 1\n  - id=host-localhost: {'ip': 'localhost', 'is_reachable': True, 'is_internal': False, '_version': 3}\nService: 4\n  - id=svc-localhost-22: {'port': 22, 'protocol': 'tcp', 'version': 'OpenSSH 8.9p1 Ubuntu 3ubuntu0.15 (Ubuntu Linux; protocol 2.0)', 'banner': 'ssh', '_version': 1}\n  - id=svc-localhost-1053: {'port': 1053, 'protocol': 'tcp', 'version': 'tcpwrapped', 'banner': 'tcpwrapped', '_version': 1}\n  - id=svc-localhost-32773: {'port': 32773, 'protocol': 'tcp', 'version': 'Apache httpd 2.4.67 ((Debian))', 'banner': 'http', '_version': 1}\n  - id=svc-http-32773: {'port': 32773, 'protocol': 'HTTP', 'version': 'unknown', 'banner': '', '_version': 1}\nEndpoint: 6\n  - id=endpoint-http://localhost:32773/dashboard: {'url': 'http://localhost:32773/dashboard', 'method': 'GET', 'params': '', 'auth_required': False, '_version': 1}\n  - id=endpoint-http://localhost:32773/logout: {'url': 'http://localhost:32773/logout', 'method': 'GET', 'params': '', 'auth_required': False, '_version': 1}\n  - id=endpoint-http://localhost:32773/server-status: {'url': 'http://localhost:32773/server-status', 'method': 'GET', 'params': '', 'auth_required': False, '_version': 1}\n  - id=endpoint-http://localhost:32773/javascript/jquery/jquery: {'url': 'http://localhost:32773/javascript/jquery/jquery', 'method': 'GET', 'params': '', 'auth_required': False, '_version': 1}\n  - id=endpoint-http://localhost:32773/static/css/bootstrap.min.css: {'url': 'http://localhost:32773/static/css/bootstrap.min.css', 'method': 'GET', 'params': '', 'auth_required': False, '_version': 1}\n  - id=endpoint-http://localhost:32773-param-username: {'url': 'http://localhost:32773', 'method': 'POST', 'params': 'username', 'auth_required': False, '_version': 1}\nVulnerability: 10\n  - id=nikto-http://localhost:32773-Target IP:          127.0.0.1: {'vuln_type': 'info', 'endpoint': 'http://localhost:32773', 'parameter': '', 'severity': 'low', 'source': 'nikto', 'detail': 'Target IP:          127.0.0.1', '_version': 1}\n  - id=nikto-http://localhost:32773-Target Hostname:    localhost: {'vuln_type': 'info', 'endpoint': 'http://localhost:32773', 'parameter': '', 'severity': 'low', 'source': 'nikto', 'detail': 'Target Hostname:    localhost', '_version': 1}\n  - id=nikto-http://localhost:32773-Target Port:        32773: {'vuln_type': 'info', 'endpoint': 'http://localhost:32773', 'parameter': '', 'severity': 'low', 'source': 'nikto', 'detail': 'Target Port:        32773', '_version': 1}\n  - id=nikto-http://localhost:32773-Start Time:         2026-05-19 21:56:03 : {'vuln_type': 'info', 'endpoint': 'http://localhost:32773', 'parameter': '', 'severity': 'low', 'source': 'nikto', 'detail': 'Start Time:         2026-05-19 21:56:03 (GMT8)', '_version': 1}\n  - id=nikto-http://localhost:32773-Server: Apache/2.4.67 (Debian): {'vuln_type': 'info', 'endpoint': 'http://localhost:32773', 'parameter': '', 'severity': 'low', 'source': 'nikto', 'detail': 'Server: Apache/2.4.67 (Debian)', '_version': 1}\n  - id=nikto-http://localhost:32773-The anti-clickjacking X-Frame-Options he: {'vuln_type': 'info', 'endpoint': 'http://localhost:32773', 'parameter': '', 'severity': 'low', 'source': 'nikto', 'detail': 'The anti-clickjacking X-Frame-Options header is not present.', '_version': 1}\n  - id=nikto-http://localhost:32773-No CGI Directories found (use '-C all' t: {'vuln_type': 'info', 'endpoint': 'http://localhost:32773', 'parameter': '', 'severity': 'low', 'source': 'nikto', 'detail': \"No CGI Directories found (use '-C all' to force check all possible dirs)\", '_version': 1}\n  - id=nikto-http://localhost:32773-Allowed HTTP Methods: HEAD, OPTIONS, GET: {'vuln_type': 'info', 'endpoint': 'http://localhost:32773', 'parameter': '', 'severity': 'low', 'source': 'nikto', 'detail': 'Allowed HTTP Methods: HEAD, OPTIONS, GET, POST', '_version': 1}\n  ... and 2 more\n\nIdentify potential vulnerabilities.",
+      "response": "[\n  {\n    \"vuln_type\": \"Information_Disclosure\",\n    \"endpoint\": \"http://localhost:32773/server-status\",\n    \"param\": \"\",\n    \"confidence\": 0.9,\n    \"evidence\": \"The /server-status endpoint is exposed without authentication, typical Apache mod_status page reveals server activity and potentially sensitive request details.\",\n    \"suggested_tool\": \"curl_get\",\n    \"tool_args\": {\n      \"url\": \"http://localhost:32773/server-status\"\n    }\n  },\n  {\n    \"vuln_type\": \"SQL_Injection\",\n    \"endpoint\": \"http://localhost:32773\",\n    \"param\": \"username\",\n    \"confidence\": 0.7,\n    \"evidence\": \"POST parameter 'username' at root endpoint indicates a login form; common entry point for SQL injection.\",\n    \"suggested_tool\": \"sqlmap_test\",\n    \"tool_args\": {\n      \"url\": \"http://localhost:32773\",\n      \"param\": \"username\",\n      \"method\": \"POST\"\n    }\n  },\n  {\n    \"vuln_type\": \"LFI\",\n    \"endpoint\": \"http://localhost:32773/javascript/jquery/jquery\",\n    \"param\": \"\",\n    \"confidence\": 0.6,\n    \"evidence\": \"Static file path may be vulnerable to path traversal attacks, allowing access to local files like /etc/passwd.\",\n    \"suggested_tool\": \"curl_get\",\n    \"tool_args\": {\n      \"url\": \"http://localhost:32773/javascript/jquery/../../../../etc/passwd\"\n    }\n  },\n  {\n    \"vuln_type\": \"auth_bypass\",\n    \"endpoint\": \"http://localhost:32773/dashboard\",\n    \"param\": \"\",\n    \"confidence\": 0.8,\n    \"evidence\": \"/dashboard endpoint has auth_required set to false, implying sensitive admin functionality may be accessible without credentials.\",\n    \"suggested_tool\": \"curl_get\",\n    \"tool_args\": {\n      \"url\": \"http://localhost:32773/dashboard\"\n    }\n  }\n]",
+      "tokens_used": 4203,
+      "cteg_suggestions": {
+        "bypass_strategies": [],
+        "exploit_strategies": [],
+        "static_knowledge": [],
+        "combined_count": 0
+      }
+    },
+    {
+      "timestamp": "2026-05-19T21:59:38",
+      "elapsed_s": 260.194,
+      "phase": "analyze",
+      "level": "info",
+      "event": "analyze_done",
+      "hypotheses": 5,
+      "dkg_summary": "Host: 1\n  - id=host-localhost: {'ip': 'localhost', 'is_reachable': True, 'is_internal': False, '_version': 3}\nService: 4\n  - id=svc-localhost-22: {'port': 22, 'protocol': 'tcp', 'version': 'OpenSSH 8.9p1 Ubuntu 3ubuntu0.15 (Ubuntu Linux; protocol 2.0)', 'banner': 'ssh', '_version': 1}\n  - id=svc-localhost-1053: {'port': 1053, 'protocol': 'tcp', 'version': 'tcpwrapped', 'banner': 'tcpwrapped', '_version': 1}\n  - id=svc-localhost-32773: {'port': 32773, 'protocol': 'tcp', 'version': 'Apache httpd 2.4.67 ((Debian))', 'banner': 'http', '_version': 1}\n  - id=svc-http-32773: {'port': 32773, 'protocol': 'HTTP', 'version': 'unknown', 'banner': '', '_version': 1}\nEndpoint: 6\n  - id=endpoint-http://localhost:32773/dashboard: {'url': 'http://localhost:32773/dashboard', 'method': 'GET', 'params': '', 'auth_required': False, '_version': 1}\n  - id=endpoint-http://localhost:32773/logout: {'url': 'http://localhost:32773/logout', 'method': 'GET', 'params': '', 'auth_required': False, '_version': 1}\n  - id=endpoint-http://localhost:32773/server-status: {'url': 'http://localhost:32773/server-status', 'method': 'GET', 'params': '', 'auth_required': False, '_version': 1}\n  - id=endpoint-http://localhost:32773/javascript/jquery/jquery: {'url': 'http://localhost:32773/javascript/jquery/jquery', 'method': 'GET', 'params': '', 'auth_required': False, '_version': 1}\n  - id=endpoint-http://localhost:32773/static/css/bootstrap.min.css: {'url': 'http://localhost:32773/static/css/bootstrap.min.css', 'method': 'GET', 'params': '', 'auth_required': False, '_version': 1}\n  - id=endpoint-http://localhost:32773-param-username: {'url': 'http://localhost:32773', 'method': 'POST', 'params': 'username', 'auth_required': False, '_version': 1}\nVulnerability: 15\n  - id=nikto-http://localhost:32773-Target IP:          127.0.0.1: {'vuln_type': 'info', 'endpoint': 'http://localhost:32773', 'parameter': '', 'severity': 'low', 'source': 'nikto', 'detail': 'Target IP:          127.0.0.1', '_version': 1}\n  - id=nikto-http://localhost:32773-Target Hostname:    localhost: {'vuln_type': 'info', 'endpoint': 'http://localhost:32773', 'parameter': '', 'severity': 'low', 'source': 'nikto', 'detail': 'Target Hostname:    localhost', '_version': 1}\n  - id=nikto-http://localhost:32773-Target Port:        32773: {'vuln_type': 'info', 'endpoint': 'http://localhost:32773', 'parameter': '', 'severity': 'low', 'source': 'nikto', 'detail': 'Target Port:        32773', '_version': 1}\n  - id=nikto-http://localhost:32773-Start Time:         2026-05-19 21:56:03 : {'vuln_type': 'info', 'endpoint': 'http://localhost:32773', 'parameter': '', 'severity': 'low', 'source': 'nikto', 'detail': 'Start Time:         2026-05-19 21:56:03 (GMT8)', '_version': 1}\n  - id=nikto-http://localhost:32773-Server: Apache/2.4.67 (Debian): {'vuln_type': 'info', 'endpoint': 'http://localhost:32773', 'parameter': '', 'severity': 'low', 'source': 'nikto', 'detail': 'Server: Apache/2.4.67 (Debian)', '_version': 1}\n  - id=nikto-http://localhost:32773-The anti-clickjacking X-Frame-Options he: {'vuln_type': 'info', 'endpoint': 'http://localhost:32773', 'parameter': '', 'severity': 'low', 'source': 'nikto', 'detail': 'The anti-clickjacking X-Frame-Options header is not present.', '_version': 1}\n  - id=nikto-http://localhost:32773-No CGI Directories found (use '-C all' t: {'vuln_type': 'info', 'endpoint': 'http://localhost:32773', 'parameter': '', 'severity': 'low', 'source': 'nikto', 'detail': \"No CGI Directories found (use '-C all' to force check all possible dirs)\", '_version': 1}\n  - id=nikto-http://localhost:32773-Allowed HTTP Methods: HEAD, OPTIONS, GET: {'vuln_type': 'info', 'endpoint': 'http://localhost:32773', 'parameter': '', 'severity': 'low', 'source': 'nikto', 'detail': 'Allowed HTTP Methods: HEAD, OPTIONS, GET, POST', '_version': 1}\n  ... and 7 more"
+    },
+    {
+      "timestamp": "2026-05-19T22:00:11",
+      "elapsed_s": 292.747,
+      "phase": "analyze",
+      "level": "info",
+      "event": "loop_iteration",
+      "loop": 1,
+      "b_value": 0.26,
+      "mode": "solo"
+    },
+    {
+      "timestamp": "2026-05-19T22:01:23",
+      "elapsed_s": 364.982,
+      "phase": "analyze",
+      "level": "info",
+      "event": "systematic_exploit",
+      "tool": "curl_get",
+      "url": "http://localhost:32773/javascript/jquery/jquery",
+      "vt": "lfi",
+      "result": "HTTP/1.1 200 OK\r\nDate: Tue, 19 May 2026 14:01:23 GMT\r\nServer: Apache/2.4.67 (Debian)\r\nContent-Location: jquery.js\r\nVary: negotiate,Accept-Encoding\r\nTCN: choice\r\nLast-Modified: Tue, 12 Jan 2021 20:55:26 GMT\r\nETag: \"46370-5b8ba3dee2b80;651f8f15f7484\r\nAccept-Ranges: bytes\r\nContent-Length: 287600\r\nConte"
+    },
+    {
+      "timestamp": "2026-05-19T22:01:23",
+      "elapsed_s": 365.004,
+      "phase": "analyze",
+      "level": "info",
+      "event": "systematic_exploit",
+      "tool": "curl_get",
+      "url": "http://localhost:32773/dashboard",
+      "vt": "auth_bypass",
+      "result": "HTTP/1.1 200 OK\r\nDate: Tue, 19 May 2026 14:01:23 GMT\r\nServer: Apache/2.4.67 (Debian)\r\nContent-Length: 1847\r\nCache-Control: public, max-age=0\r\nPragma: no-cache\r\nExpires: 0\r\nVary: Cookie,Accept-Encoding\r\nContent-Type: text/html; charset=utf-8\r\n\r\n<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n    <meta charse"
+    },
+    {
+      "timestamp": "2026-05-19T22:01:23",
+      "elapsed_s": 365.019,
+      "phase": "analyze",
+      "level": "info",
+      "event": "systematic_exploit",
+      "tool": "curl_get",
+      "url": "http://localhost:32773",
+      "vt": "auth",
+      "result": "HTTP/1.1 200 OK\r\nDate: Tue, 19 May 2026 14:01:23 GMT\r\nServer: Apache/2.4.67 (Debian)\r\nContent-Length: 1184\r\nCache-Control: public, max-age=0\r\nPragma: no-cache\r\nExpires: 0\r\nVary: Accept-Encoding\r\nContent-Type: text/html; charset=utf-8\r\n\r\n<!-- TODO: Delete the testing account (test:test). --> \n<!DOCTY"
+    },
+    {
+      "timestamp": "2026-05-19T22:01:23",
+      "elapsed_s": 365.035,
+      "phase": "analyze",
+      "level": "info",
+      "event": "systematic_exploit",
+      "tool": "curl_get",
+      "url": "http://localhost:32773/server-status",
+      "vt": "information_disclosure",
+      "result": "HTTP/1.1 403 Forbidden\r\nDate: Tue, 19 May 2026 14:01:23 GMT\r\nServer: Apache/2.4.67 (Debian)\r\nContent-Length: 317\r\nContent-Type: text/html; charset=iso-8859-1\r\n\r\n<!DOCTYPE HTML PUBLIC \"-//W3C//DTD HTML 4.01//EN\" \"http://www.w3.org/TR/html4/strict.dtd\">\n<html><head>\n<title>403 Forbidden</title>\n</head"
+    },
+    {
+      "timestamp": "2026-05-19T22:01:23",
+      "elapsed_s": 365.035,
+      "phase": "analyze",
+      "level": "info",
+      "event": "systematic_exploit",
+      "tool": "sqlmap_test",
+      "url": "http://localhost:32773",
+      "vt": "sql_injection",
+      "result": ""
+    },
+    {
+      "timestamp": "2026-05-19T22:02:15",
+      "elapsed_s": 417.112,
+      "phase": "done",
+      "level": "info",
+      "event": "task_end",
+      "success": true,
+      "flag": "FLAG{39c35247bd1ebb5196f6e49b51300fd895e4ce83559a7db6b89cc8b76b31c59f}",
+      "steps": 7,
+      "tokens_used": 0,
+      "time_elapsed": 417.1084101200104,
+      "error": ""
+    }
+  ],
+  "dkg_summary": "Host: 1\n  - id=host-localhost: {'ip': 'localhost', 'is_reachable': True, 'is_internal': False, '_version': 3}\nService: 4\n  - id=svc-localhost-22: {'port': 22, 'protocol': 'tcp', 'version': 'OpenSSH 8.9p1 Ubuntu 3ubuntu0.15 (Ubuntu Linux; protocol 2.0)', 'banner': 'ssh', '_version': 1}\n  - id=svc-localhost-1053: {'port': 1053, 'protocol': 'tcp', 'version': 'tcpwrapped', 'banner': 'tcpwrapped', '_version': 1}\n  - id=svc-localhost-32773: {'port': 32773, 'protocol': 'tcp', 'version': 'Apache httpd 2.4.67 ((Debian))', 'banner': 'http', '_version': 1}\n  - id=svc-http-32773: {'port': 32773, 'protocol': 'HTTP', 'version': 'unknown', 'banner': '', '_version': 1}\nEndpoint: 6\n  - id=endpoint-http://localhost:32773/dashboard: {'url': 'http://localhost:32773/dashboard', 'method': 'GET', 'params': '', 'auth_required': False, '_version': 1}\n  - id=endpoint-http://localhost:32773/logout: {'url': 'http://localhost:32773/logout', 'method': 'GET', 'params': '', 'auth_required': False, '_version': 1}\n  - id=endpoint-http://localhost:32773/server-status: {'url': 'http://localhost:32773/server-status', 'method': 'GET', 'params': '', 'auth_required': False, '_version': 1}\n  - id=endpoint-http://localhost:32773/javascript/jquery/jquery: {'url': 'http://localhost:32773/javascript/jquery/jquery', 'method': 'GET', 'params': '', 'auth_required': False, '_version': 1}\n  - id=endpoint-http://localhost:32773/static/css/bootstrap.min.css: {'url': 'http://localhost:32773/static/css/bootstrap.min.css', 'method': 'GET', 'params': '', 'auth_required': False, '_version': 1}\n  - id=endpoint-http://localhost:32773-param-username: {'url': 'http://localhost:32773', 'method': 'POST', 'params': 'username', 'auth_required': False, '_version': 1}\nVulnerability: 15\n  - id=nikto-http://localhost:32773-Target IP:          127.0.0.1: {'vuln_type': 'info', 'endpoint': 'http://localhost:32773', 'parameter': '', 'severity': 'low', 'source': 'nikto', 'detail': 'Target IP:          127.0.0.1', '_version': 1}\n  - id=nikto-http://localhost:32773-Target Hostname:    localhost: {'vuln_type': 'info', 'endpoint': 'http://localhost:32773', 'parameter': '', 'severity': 'low', 'source': 'nikto', 'detail': 'Target Hostname:    localhost', '_version': 1}\n  - id=nikto-http://localhost:32773-Target Port:        32773: {'vuln_type': 'info', 'endpoint': 'http://localhost:32773', 'parameter': '', 'severity': 'low', 'source': 'nikto', 'detail': 'Target Port:        32773', '_version': 1}\n  - id=nikto-http://localhost:32773-Start Time:         2026-05-19 21:56:03 : {'vuln_type': 'info', 'endpoint': 'http://localhost:32773', 'parameter': '', 'severity': 'low', 'source': 'nikto', 'detail': 'Start Time:         2026-05-19 21:56:03 (GMT8)', '_version': 1}\n  - id=nikto-http://localhost:32773-Server: Apache/2.4.67 (Debian): {'vuln_type': 'info', 'endpoint': 'http://localhost:32773', 'parameter': '', 'severity': 'low', 'source': 'nikto', 'detail': 'Server: Apache/2.4.67 (Debian)', '_version': 1}\n  - id=nikto-http://localhost:32773-The anti-clickjacking X-Frame-Options he: {'vuln_type': 'info', 'endpoint': 'http://localhost:32773', 'parameter': '', 'severity': 'low', 'source': 'nikto', 'detail': 'The anti-clickjacking X-Frame-Options header is not present.', '_version': 1}\n  - id=nikto-http://localhost:32773-No CGI Directories found (use '-C all' t: {'vuln_type': 'info', 'endpoint': 'http://localhost:32773', 'parameter': '', 'severity': 'low', 'source': 'nikto', 'detail': \"No CGI Directories found (use '-C all' to force check all possible dirs)\", '_version': 1}\n  - id=nikto-http://localhost:32773-Allowed HTTP Methods: HEAD, OPTIONS, GET: {'vuln_type': 'info', 'endpoint': 'http://localhost:32773', 'parameter': '', 'severity': 'low', 'source': 'nikto', 'detail': 'Allowed HTTP Methods: HEAD, OPTIONS, GET, POST', '_version': 1}\n  ... and 7 more",
+  "cteg_patterns_committed": 0
+}

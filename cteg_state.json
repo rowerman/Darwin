@@ -497,7 +497,7 @@
       "abstract_description": " exploitation; via curl_get; on http://localhost:32772/; (GET)",
       "vulnerability_type": "",
       "required_context": "",
-      "total_attempts": 52,
+      "total_attempts": 255,
       "total_successes": 0,
       "success_rate": 0.0,
       "last_successful_use": "",
@@ -506,6 +506,6 @@
     }
   ],
   "edges": [],
-  "task_count": 2,
-  "created_at": "2026-05-18T21:50:10.611191"
+  "task_count": 13,
+  "created_at": "2026-05-19T22:03:16.114768"
 }

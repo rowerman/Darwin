@@ -1,7 +1,8 @@
 """Dynamic Scaling Engine — B dimension + TDI'' + scaling state machine.
 
 Reference: pentestgpt_v2 TDA-EGATS (difficulty-aware MCTS)
-           DARWIN framework spec — B = 0.4*N_norm + 0.3*M_domain + 0.3*L_move
+           DARWIN framework spec — B = 0.30*N_norm + 0.15*M_domain + 0.20*L_move
+           + 0.20*V_diversity + 0.15*D_present
 """
 
 from __future__ import annotations
@@ -81,9 +82,9 @@ class TDAState:
         """Update defense complexity from DPM."""
         self.D = defense_state.defense_complexity
 
-    def update_breadth(self, dkg: DKG):
-        """Update task breadth from DKG topology."""
-        self.B = compute_task_breadth(dkg)
+    def update_breadth(self, dkg: DKG, defense_state: DefenseStateVector | None = None):
+        """Update task breadth from DKG topology and defense state."""
+        self.B = compute_task_breadth(dkg, defense_state)
 
     def update_all(
         self,
@@ -103,7 +104,7 @@ class TDAState:
         if defense_state:
             self.update_defense_complexity(defense_state)
         if dkg:
-            self.update_breadth(dkg)
+            self.update_breadth(dkg, defense_state)
         self.observation_count += 1
 
     def summary(self) -> str:
@@ -114,16 +115,20 @@ class TDAState:
         )
 
 
-def compute_task_breadth(dkg: DKG) -> float:
+def compute_task_breadth(dkg: DKG, defense_state: DefenseStateVector | None = None) -> float:
     """Compute B (Task Breadth) from current DKG state.
 
-    B = 0.4 * N_norm + 0.3 * M_domain + 0.3 * L_move
+    B = 0.30*N_norm + 0.15*M_domain + 0.20*L_move
+      + 0.20*V_diversity + 0.15*D_present
 
-    Reference: DARWIN framework spec — DKG topology drives scaling decisions.
+    V_diversity captures vulnerability type variety — even a single host
+    with multiple vuln types and WAF benefits from multi-agent coordination.
+    D_present captures the presence of active defenses (WAF/Honey/Trap).
     """
     hosts = dkg.query_nodes("Host")
     domains = dkg.query_nodes("Domain")
     credentials = dkg.query_nodes("Credential")
+    vulnerabilities = dkg.query_nodes("Vulnerability")
 
     n_targets = len(hosts)
     is_multi_domain = len(domains) > 1
@@ -136,7 +141,26 @@ def compute_task_breadth(dkg: DKG) -> float:
     M_domain = 1.0 if is_multi_domain else 0.0
     L_move = 1.0 if needs_lateral else 0.0
 
-    return 0.4 * N_norm + 0.3 * M_domain + 0.3 * L_move
+    # Vulnerability diversity: count unique vuln types in DKG
+    vuln_types: set[str] = set()
+    for v in vulnerabilities:
+        vt = v.get("vuln_type") or v.get("type") or ""
+        if vt:
+            vuln_types.add(vt.lower())
+    V_diversity = min(len(vuln_types) / 5.0, 1.0)
+
+    # Defense presence: 1.0 if WAF/Honey/Trap detected
+    D_present = 0.0
+    if defense_state is not None:
+        D_present = 1.0 if defense_state.defense_complexity > 0.1 else 0.0
+
+    return (
+        0.30 * N_norm
+        + 0.15 * M_domain
+        + 0.20 * L_move
+        + 0.20 * V_diversity
+        + 0.15 * D_present
+    )
 
 
 class DynamicScalingEngine:
@@ -162,8 +186,8 @@ class DynamicScalingEngine:
 
     def decide(self, dkg: DKG, defense_state: DefenseStateVector | None = None) -> ScalingLevel:
         """Decide scaling level based on current state."""
-        # Compute B from DKG
-        B = compute_task_breadth(dkg)
+        # Compute B from DKG (now includes vuln diversity + defense presence)
+        B = compute_task_breadth(dkg, defense_state)
         self.tda.B = B
 
         # Update defense complexity
@@ -245,18 +269,23 @@ class CollaborationOpportunity:
 def scan_collaboration_opportunities(dkg: DKG) -> List[CollaborationOpportunity]:
     """Scan DKG for cross-agent collaboration opportunities.
 
-    Called periodically by the Orchestrator (every ~5 cycles) to detect
+    Called periodically by the Orchestrator (every cycle) to detect
     patterns that require agent coordination:
-    1. New credentials → can they be reused on other hosts?
-    2. New sessions → do they reveal previously unreachable hosts?
-    3. Cross-vulnerability patterns → does Agent-A's finding help Agent-B?
+
+    1. Credential reuse — can new creds unlock unreached hosts?
+    2. Session-based discovery — high-privilege sessions revealing internal hosts
+    3. Vulnerability chains — complementary vuln types forming attack chains
+    4. Agent conflict — multiple agents targeting the same endpoint
+    5. Credential + auth bypass — stolen creds enabling auth-required exploits
     """
-    opportunities = []
+    opportunities: List[CollaborationOpportunity] = []
 
     credentials = dkg.query_nodes("Credential")
     sessions = dkg.query_nodes("Session")
     hosts = dkg.query_nodes("Host")
     vulnerabilities = dkg.query_nodes("Vulnerability")
+    endpoints = dkg.query_nodes("Endpoint")
+    flags = dkg.query_nodes("Flag")
 
     # 1. Credential reuse opportunity
     if credentials and len(hosts) > 1:
@@ -271,11 +300,10 @@ def scan_collaboration_opportunities(dkg: DKG) -> List[CollaborationOpportunity]
                 dkg_evidence={"credentials": len(credentials), "unreached": len(unreached_hosts)},
             ))
 
-    # 2. New internal host discovery via session
+    # 2. New internal host discovery via high-privilege session
     if sessions:
         for session in sessions:
             session_host = session.get("host", "")
-            # Check if this session reveals new network access
             if session.get("access_level") in ("root", "admin", "system"):
                 opportunities.append(CollaborationOpportunity(
                     opportunity_type="new_internal_host",
@@ -286,18 +314,91 @@ def scan_collaboration_opportunities(dkg: DKG) -> List[CollaborationOpportunity]
                     dkg_evidence={"session_host": session_host},
                 ))
 
-    # 3. Cross-vulnerability patterns
+    # 3. Cross-vulnerability chains
     if len(vulnerabilities) >= 2:
-        vuln_types = [v.get("type") for v in vulnerabilities]
-        # Check for complementary vulnerability chains
-        if "SQLi" in vuln_types and "FileUpload" in vuln_types:
+        vuln_types_lower = [
+            (v.get("vuln_type") or v.get("type") or "").lower()
+            for v in vulnerabilities
+        ]
+
+        # Chain patterns: (pair, chain_name, confidence)
+        chains = [
+            (("sqli", "fileupload"), "sqli_fileupload_chain",
+             "SQLi credentials → authenticated file upload → shell", 0.6),
+            (("sqli", "lfi"), "sqli_lfi_chain",
+             "SQLi data extraction + LFI log poisoning → RCE", 0.55),
+            (("xss", "sqli"), "xss_sqli_chain",
+             "XSS session theft → authenticated SQLi", 0.5),
+            (("fileupload", "lfi"), "fileupload_lfi_chain",
+             "File upload + LFI include → RCE", 0.65),
+            (("ssrf", "cmdi"), "ssrf_cmdi_chain",
+             "SSRF internal probe + CMDi on internal service", 0.55),
+            (("idor", "sqli"), "idor_sqli_chain",
+             "IDOR data leak → targeted SQLi on exposed parameters", 0.5),
+            (("idor", "xss"), "idor_xss_chain",
+             "IDOR user data → XSS against admin viewers", 0.45),
+        ]
+
+        for (a, b), chain_name, desc, conf in chains:
+            if a in vuln_types_lower and b in vuln_types_lower:
+                opportunities.append(CollaborationOpportunity(
+                    opportunity_type="vuln_cross_reference",
+                    source_agent=f"exploit_{a}",
+                    target_agent=f"exploit_{b}",
+                    description=desc,
+                    confidence=conf,
+                    dkg_evidence={"vuln_types": vuln_types_lower, "chain": chain_name},
+                ))
+
+    # 4. Agent conflict detection — multiple agents targeting same endpoint
+    if len(vulnerabilities) >= 2:
+        endpoint_counts: dict[str, int] = {}
+        for v in vulnerabilities:
+            ep = v.get("endpoint", "")
+            if ep:
+                endpoint_counts[ep] = endpoint_counts.get(ep, 0) + 1
+        for ep, count in endpoint_counts.items():
+            if count >= 2:
+                opportunities.append(CollaborationOpportunity(
+                    opportunity_type="agent_conflict",
+                    source_agent="orchestrator",
+                    target_agent="orchestrator",
+                    description=f"{count} agents targeting same endpoint: {ep} — coordinate or deduplicate",
+                    confidence=0.8,
+                    dkg_evidence={"endpoint": ep, "agent_count": count},
+                ))
+
+    # 5. Credential + auth-required endpoint → coordinated auth bypass
+    if credentials:
+        auth_endpoints = [
+            e for e in endpoints
+            if e.get("auth_required") or "login" in (e.get("url", "") or "")
+        ]
+        if auth_endpoints and len(vulnerabilities) > 0:
             opportunities.append(CollaborationOpportunity(
-                opportunity_type="vuln_cross_reference",
-                source_agent="exploit_sqli",
-                target_agent="exploit_upload",
-                description="SQLi credentials could enable authenticated file upload exploitation",
-                confidence=0.5,
-                dkg_evidence={"vuln_types": vuln_types},
+                opportunity_type="credential_chain",
+                source_agent="recon",
+                target_agent="exploit",
+                description=f"Credentials + {len(auth_endpoints)} auth endpoints + {len(vulnerabilities)} vulns → authenticated exploit",
+                confidence=0.6,
+                dkg_evidence={
+                    "credentials": len(credentials),
+                    "auth_endpoints": len(auth_endpoints),
+                    "vulns": len(vulnerabilities),
+                },
+            ))
+
+    # 6. Flag found → signal all agents to stop (high priority)
+    if flags:
+        verified = [f for f in flags if f.get("verified") or f.get("value", "").startswith("flag{")]
+        if verified:
+            opportunities.append(CollaborationOpportunity(
+                opportunity_type="flag_captured",
+                source_agent="orchestrator",
+                target_agent="all",
+                description=f"Flag captured: {verified[0].get('value', '')[:60]} — terminate all agents",
+                confidence=1.0,
+                dkg_evidence={"flag": verified[0].get("value", "")[:60]},
             ))
 
     return opportunities

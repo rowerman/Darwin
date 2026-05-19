@@ -4,10 +4,15 @@ Reference:
   - Cochise src/cochise/knowledge.py:73 — incremental knowledge accumulation
   - AWE MemoryStorage (SQLite) — node/edge schema design
   - VulnBot db/models/ — relational model for pentest entities
+
+v2: Added asyncio.Event notification per node type for real-time
+    multi-agent coordination. Agents can await wait_for_nodes()
+    instead of polling.
 """
 
 from __future__ import annotations
 
+import asyncio
 import json
 import threading
 from datetime import datetime
@@ -43,9 +48,10 @@ EDGE_TYPES = [
 
 
 class DKG:
-    """Dynamic Knowledge Graph with JSON persistence.
+    """Dynamic Knowledge Graph with JSON persistence + async notifications.
 
     Thread-safe for multi-agent concurrent reads/writes.
+    Agents can subscribe to node type changes via asyncio.Event notifications.
     """
 
     def __init__(self, storage_path: str | None = None):
@@ -54,21 +60,47 @@ class DKG:
         self._lock = threading.RLock()
         self._created_at = datetime.now().isoformat()
 
+        # Notification system: one asyncio.Event per node type
+        self._events: dict[str, asyncio.Event] = {
+            nt: asyncio.Event() for nt in NODE_TYPES
+        }
+        # Track node counts per type for change detection
+        self._node_counts: dict[str, int] = {nt: 0 for nt in NODE_TYPES}
+
     # ── Node Operations ─────────────────────────────────────────────
 
     def add_node(
         self, node_type: str, node_id: str, properties: Dict[str, Any] | None = None
     ) -> str:
-        """Add or update a typed node. Returns node_id."""
+        """Add or update a typed node. Returns node_id.
+
+        Triggers asyncio.Event notification for the node type,
+        enabling real-time multi-agent coordination.
+        New nodes start at _version=1; updates increment the counter.
+        """
         if node_type not in NODE_TYPES:
             raise ValueError(f"Unknown node type: {node_type}. Valid: {NODE_TYPES}")
         with self._lock:
+            is_new = node_id not in self.graph
             props = properties or {}
             props["type"] = node_type
             props.setdefault("created_at", datetime.now().isoformat())
             props["updated_at"] = datetime.now().isoformat()
+            if is_new:
+                props["_version"] = 1
+            else:
+                props["_version"] = self.graph.nodes[node_id].get("_version", 0) + 1
             self.graph.add_node(node_id, **props)
             self._persist()
+
+        # Notify subscribers when new nodes appear
+        if is_new:
+            self._node_counts[node_type] = self._node_counts.get(node_type, 0) + 1
+            event = self._events.get(node_type)
+            if event:
+                event.set()
+                event.clear()  # Reset for next notification
+
         return node_id
 
     def get_node(self, node_id: str) -> Dict[str, Any] | None:
@@ -101,9 +133,159 @@ class DKG:
                 return False
             for k, v in properties.items():
                 self.graph.nodes[node_id][k] = v
+            self.graph.nodes[node_id]["_version"] = (
+                self.graph.nodes[node_id].get("_version", 0) + 1
+            )
             self.graph.nodes[node_id]["updated_at"] = datetime.now().isoformat()
             self._persist()
         return True
+
+    def update_node_if_current(
+        self, node_id: str, expected_version: int, properties: Dict[str, Any],
+    ) -> bool:
+        """Optimistic locking: update only if node version matches expected.
+
+        Returns True if update succeeded, False if version mismatch (stale read).
+        Prevents lost updates when multiple agents modify the same node.
+        """
+        with self._lock:
+            if node_id not in self.graph:
+                return False
+            current = self.graph.nodes[node_id].get("_version", 0)
+            if current != expected_version:
+                return False
+            for k, v in properties.items():
+                self.graph.nodes[node_id][k] = v
+            self.graph.nodes[node_id]["_version"] = current + 1
+            self.graph.nodes[node_id]["updated_at"] = datetime.now().isoformat()
+            self._persist()
+        return True
+
+    def get_node_version(self, node_id: str) -> int | None:
+        """Get the current version of a node (for optimistic locking)."""
+        with self._lock:
+            if node_id not in self.graph:
+                return None
+            return self.graph.nodes[node_id].get("_version", 0)
+
+    # ── Endpoint Claiming (Agent Dedup) ───────────────────────────────
+
+    def claim_endpoint(self, agent_id: str, endpoint_url: str) -> bool:
+        """Register an agent as working on a specific endpoint.
+
+        Returns True if claim succeeded, False if already claimed by another agent.
+        Uses a dedicated Claim node type in the graph.
+        """
+        claim_id = f"claim-{endpoint_url}"
+        with self._lock:
+            if claim_id in self.graph:
+                existing = self.graph.nodes[claim_id].get("claimed_by", "")
+                if existing and existing != agent_id:
+                    return False  # Another agent already owns this
+            self.graph.add_node(claim_id,
+                type="_claim", claimed_by=agent_id, endpoint=endpoint_url,
+                claimed_at=datetime.now().isoformat(),
+            )
+            self._node_counts["_claim"] = self._node_counts.get("_claim", 0) + 1
+        return True
+
+    def release_endpoint(self, agent_id: str, endpoint_url: str) -> None:
+        """Release an agent's claim on an endpoint."""
+        claim_id = f"claim-{endpoint_url}"
+        with self._lock:
+            if claim_id in self.graph:
+                existing = self.graph.nodes[claim_id].get("claimed_by", "")
+                if existing == agent_id:
+                    self.graph.remove_node(claim_id)
+
+    def is_endpoint_claimed(self, endpoint_url: str) -> tuple[bool, str]:
+        """Check if an endpoint is claimed. Returns (claimed, agent_id)."""
+        claim_id = f"claim-{endpoint_url}"
+        with self._lock:
+            if claim_id in self.graph:
+                return True, self.graph.nodes[claim_id].get("claimed_by", "")
+        return False, ""
+
+    def get_claimed_endpoints(self, agent_id: str) -> list[str]:
+        """Get all endpoints claimed by a specific agent."""
+        results = []
+        with self._lock:
+            for nid, data in self.graph.nodes(data=True):
+                if (data.get("type") == "_claim"
+                        and data.get("claimed_by") == agent_id):
+                    results.append(data.get("endpoint", ""))
+        return results
+
+    # ── Scoped Views ──────────────────────────────────────────────────
+
+    def get_scoped_view(
+        self,
+        agent_type: str,
+        target_hosts: list[str] | None = None,
+        max_nodes: int = 50,
+    ) -> dict:
+        """Return a scoped DKG view tailored to an agent's role.
+
+        ReconAgent sees: Host, Service, Endpoint within its target hosts.
+        ExploitAgent sees: Vulnerability, Endpoint, Service within its targets.
+        PivotAgent sees: Host, Credential, Session across all hosts.
+
+        Args:
+            agent_type: 'recon', 'exploit', or 'pivot'
+            target_hosts: host IPs/IDs the agent is responsible for
+            max_nodes: cap on returned nodes per type
+        """
+        agent_type = agent_type.lower()
+        target_set = set(target_hosts or [])
+
+        # Filter functions per agent type
+        def _in_targets(node: dict) -> bool:
+            if not target_set:
+                return True
+            ep = node.get("endpoint", "") or node.get("url", "") or node.get("ip", "")
+            nid = node.get("id", "")
+            # Substring match: endpoint URL contains the target host
+            return any(
+                t in ep or t in nid
+                for t in target_set
+            )
+
+        node_types: list[str]
+        if agent_type in ("recon", "reconagent"):
+            node_types = ["Host", "Service", "Endpoint"]
+        elif agent_type in ("exploit", "exploitagent"):
+            node_types = ["Vulnerability", "Endpoint", "Service", "Flag"]
+        elif agent_type in ("pivot", "pivotagent"):
+            node_types = ["Host", "Credential", "Session"]
+        else:
+            node_types = NODE_TYPES
+
+        view: dict[str, list[dict]] = {}
+        with self._lock:
+            for nt in node_types:
+                nodes = []
+                for nid, data in self.graph.nodes(data=True):
+                    if data.get("type") != nt:
+                        continue
+                    node = {"id": nid, **dict(data)}
+                    if _in_targets(node):
+                        nodes.append(node)
+                        if len(nodes) >= max_nodes:
+                            break
+                view[nt] = nodes
+        return view
+
+    def get_relevant_vulnerabilities(self, host_or_service: str) -> list[dict]:
+        """Get vulnerabilities relevant to a specific host or service."""
+        vulns = []
+        with self._lock:
+            for nid, data in self.graph.nodes(data=True):
+                if data.get("type") != "Vulnerability":
+                    continue
+                ep = data.get("endpoint", "")
+                if host_or_service in ep or host_or_service in nid:
+                    vulns.append({"id": nid, **dict(data)})
+        return vulns
 
     # ── Edge Operations ─────────────────────────────────────────────
 
@@ -187,6 +369,48 @@ class DKG:
                 if len(nodes) > 8:
                     lines.append(f"  ... and {len(nodes) - 8} more")
         return "\n".join(lines) if lines else "DKG is empty"
+
+        # ── Async Notification API ────────────────────────────────────────
+
+    async def wait_for_nodes(
+        self, node_type: str, min_count: int = 1, timeout: float = 60.0,
+    ) -> bool:
+        """Wait until at least min_count nodes of node_type exist.
+
+        Returns True if the condition was met, False on timeout.
+        Used by the orchestrator to react to agent discoveries in real-time.
+        """
+        deadline = asyncio.get_event_loop().time() + timeout
+        while True:
+            current = len(self.query_nodes(node_type))
+            if current >= min_count:
+                return True
+            remaining = deadline - asyncio.get_event_loop().time()
+            if remaining <= 0:
+                return False
+            try:
+                await asyncio.wait_for(
+                    self._events[node_type].wait(), timeout=min(remaining, 5.0),
+                )
+            except asyncio.TimeoutError:
+                continue
+
+    async def wait_for_new_nodes(
+        self, node_type: str, since_count: int, timeout: float = 30.0,
+    ) -> bool:
+        """Wait until the count of node_type exceeds since_count.
+
+        Returns True if new nodes appeared, False on timeout.
+        """
+        return await self.wait_for_nodes(node_type, since_count + 1, timeout)
+
+    def get_node_count(self, node_type: str) -> int:
+        """Get the current count of nodes of the given type."""
+        return len(self.query_nodes(node_type))
+
+    def subscribe(self, node_type: str) -> asyncio.Event:
+        """Get the asyncio.Event for a node type (for custom wait logic)."""
+        return self._events.get(node_type, asyncio.Event())
 
     # ── Persistence ─────────────────────────────────────────────────
 

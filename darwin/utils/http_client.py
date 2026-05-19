@@ -133,6 +133,12 @@ class HTTPClient:
         base = url.rstrip("/")
         login_urls = [base, f"{base}/login", f"{base}/signin"]
 
+        # Record pre-login cookie count to detect genuine new cookies
+        pre_cookies = 0
+        if self._session and self._session.cookie_jar:
+            pre_cookies = len(list(self._session.cookie_jar))
+
+        login_success = False
         for login_url in login_urls:
             try:
                 resp = await self.get(login_url)
@@ -140,11 +146,11 @@ class HTTPClient:
                 continue
 
             body = resp.body
-            # Detect login form: must have username or password field
+            # Detect login form: must have username OR password field
+            # (two-step login may have only username on first page)
             bl = body.lower()
             if "password" not in bl and "username" not in bl:
                 continue
-            # Also accept forms with only username (multi-step login)
 
             _log.info("Login form detected at %s", login_url)
 
@@ -202,15 +208,26 @@ class HTTPClient:
             except Exception:
                 continue
 
-            # Check if login succeeded: redirect + new cookies
+            # Check if login succeeded
+            post_cookies_1 = len(list(self._session.cookie_jar)) if self._session and self._session.cookie_jar else 0
             if login_resp.status_code in (302, 301, 303, 307, 308):
-                _log.info("Login redirect to %s", login_resp.headers.get("location", "?"))
-                # Follow redirect
+                _log.info("Login redirect to %s (status=%d)",
+                         login_resp.headers.get("location", "?"), login_resp.status_code)
                 redirect_url = _urljoin(submit_url, login_resp.headers.get("location", ""))
                 try:
                     await self.get(redirect_url)
                 except Exception:
                     pass
+                login_success = True
+                break
+            elif "set-cookie" in str(login_resp.headers).lower():
+                _log.info("Login Set-Cookie after POST (status=%d)", login_resp.status_code)
+                login_success = True
+                break
+            elif post_cookies_1 > pre_cookies:
+                _log.info("Login: %d new cookies after POST", post_cookies_1 - pre_cookies)
+                login_success = True
+                break
 
             # Check for multi-step login (username page → password page)
             new_body = login_resp.body
@@ -220,46 +237,64 @@ class HTTPClient:
             # Does the response contain a password field?
             resp_has_pw = 'type="password"' in nl_body or "type='password'" in nl_body
             if resp_has_pw and not orig_has_pw:
-                # Multi-step: first form had no password, response asks for one
-                pw_inputs = _re.findall(r'<input[^>]+name=["\'](\w+)["\']', new_body, _re.I)
-                pw_data = {}
+                # Multi-step login: username-only form → password form
+                # Collect ALL input fields from the password page (username,
+                # password, hidden CSRF tokens, user_id, etc.)
+                pw_inputs = _re.findall(
+                    r'<input[^>]+name=["\'](\w+)["\']', new_body, _re.I
+                )
+                # Also find input values (for hidden/prefilled fields)
+                input_vals = dict(_re.findall(
+                    r'<input[^>]+name=["\'](\w+)["\'][^>]+value=["\']([^"\']*)["\']',
+                    new_body, _re.I
+                ))
+                pw_data = {user_field: username}  # re-submit username
                 for name in pw_inputs:
                     nl = name.lower()
                     if nl in ("password", "pass", "passwd", "pwd"):
                         pw_data[name] = password
-                if pw_data:
-                    # Include hidden fields from this page (type=hidden and HTML5 hidden attr)
-                    pw_hidden = _re.findall(
-                        r'<input[^>]+(?:type=["\']hidden["\']|hidden\b)[^>]+name=["\'](\w+)["\'][^>]+value=["\']([^"\']*)["\']', new_body, _re.I
+                    elif nl != user_field.lower():
+                        # Include all other fields with their values (hidden tokens, etc.)
+                        if name in input_vals and name not in pw_data:
+                            pw_data[name] = input_vals[name]
+
+                if any(nl in ("password", "pass") for nl in [n.lower() for n in pw_inputs]):
+                    pw_submit_url = (
+                        str(login_resp.url) if hasattr(login_resp, 'url') and login_resp.url
+                        else submit_url
                     )
-                    for h_name, h_value in pw_hidden:
-                        if h_name not in pw_data:
-                            pw_data[h_name] = h_value
-                    # Also catch hidden attr before value: name="x" value="y" hidden
-                    pw_hidden2 = _re.findall(
-                        r'<input[^>]+name=["\'](\w+)["\'][^>]+value=["\']([^"\']*)["\'][^>]+hidden\b', new_body, _re.I
-                    )
-                    for h_name, h_value in pw_hidden2:
-                        if h_name not in pw_data:
-                            pw_data[h_name] = h_value
-                    # Submit to the actual password page URL (after redirect)
-                    pw_submit_url = str(login_resp.url) if hasattr(login_resp, 'url') and login_resp.url else submit_url
                     try:
                         pw_resp = await self.post(pw_submit_url, data=pw_data)
-                        if pw_resp.status_code in (302, 301, 303):
+                        # Success: redirect OR Set-Cookie header OR new cookies
+                        post_cookies = len(list(self._session.cookie_jar)) if self._session and self._session.cookie_jar else 0
+                        if pw_resp.status_code in (302, 301, 303, 307, 308):
                             redirect_url = _urljoin(submit_url, pw_resp.headers.get("location", ""))
                             try:
                                 await self.get(redirect_url)
                             except Exception:
                                 pass
+                            login_success = True
+                            break
+                        elif "set-cookie" in str(pw_resp.headers).lower():
+                            _log.info("Login Set-Cookie detected after password submission")
+                            login_success = True
+                            break
+                        elif post_cookies > pre_cookies:
+                            _log.info("Login: %d new cookies after password submission",
+                                     post_cookies - pre_cookies)
+                            login_success = True
+                            break
                     except Exception:
                         pass
 
-        # After for loop: check if we succeeded
+        # After for loop: check if we succeeded (redirect OR genuine new cookies)
+        if login_success:
+            return True
         if self._session and self._session.cookie_jar:
             jar_cookies = list(self._session.cookie_jar)
-            if jar_cookies:
-                _log.info("Login appears successful (%d cookies in jar)", len(jar_cookies))
+            new_cookies = len(jar_cookies) - pre_cookies
+            if new_cookies > 0:
+                _log.info("Login appears successful (%d new cookies in jar)", new_cookies)
                 return True
 
         return False
