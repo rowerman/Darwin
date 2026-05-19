@@ -72,14 +72,34 @@ class DAVE:
 
     # Honey flag patterns
     HONEY_FLAG_PATTERNS = [
-        re.compile(r"flag\{this_is_a_honeypot\}", re.IGNORECASE),
-        re.compile(r"flag\{test\}", re.IGNORECASE),
-        re.compile(r"flag\{example\}", re.IGNORECASE),
-        re.compile(r"flag\{sample\}", re.IGNORECASE),
-        re.compile(r"flag\{congratulations_fake\}", re.IGNORECASE),
-        re.compile(r"flag\{fake_flag\}", re.IGNORECASE),
-        re.compile(r"flag\{you_win\}", re.IGNORECASE),
+        re.compile(r"flag\{this_is_a_honeypot[\w_]*\}", re.IGNORECASE),
+        re.compile(r"flag\{test[\w_]*\}", re.IGNORECASE),
+        re.compile(r"flag\{example[\w_]*\}", re.IGNORECASE),
+        re.compile(r"flag\{sample[\w_]*\}", re.IGNORECASE),
+        re.compile(r"flag\{congratulations[\w_]*\}", re.IGNORECASE),
+        re.compile(r"flag\{fake[\w_]*\}", re.IGNORECASE),
+        re.compile(r"flag\{you_win[\w_]*\}", re.IGNORECASE),
+        re.compile(r"flag\{honeypot[\w_]*\}", re.IGNORECASE),
+        re.compile(r"FLAG\{TEST[\w_]*\}", re.IGNORECASE),
     ]
+
+    @classmethod
+    def verify_basic(cls, flag: str, response_body: str = "") -> tuple[bool, str]:
+        """Lightweight L4-only verification without browser or full pipeline.
+
+        Returns (is_valid, reason).
+        Rejects honeypot flags (flag{test}, flag{example}, etc.).
+        Used by Solo mode where full DAVE pipeline is not needed.
+        """
+        if not flag:
+            return False, "empty flag"
+        for pattern in cls.HONEY_FLAG_PATTERNS:
+            if pattern.search(flag):
+                return False, f"honeypot flag: {flag}"
+        # Check flag matches expected format
+        if not cls.FLAG_PATTERN.search(flag):
+            return False, f"flag format mismatch: {flag[:50]}"
+        return True, "valid"
 
     def __init__(self, browser_enabled: bool = False):
         self.browser_enabled = browser_enabled

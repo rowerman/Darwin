@@ -1,0 +1,403 @@
+{
+  "target": "localhost",
+  "model": "deepseek/deepseek-v4-pro",
+  "provider": "deepseek",
+  "time_budget": 300,
+  "events": [
+    {
+      "timestamp": "2026-05-18T16:03:22",
+      "elapsed_s": 0.0,
+      "phase": "init",
+      "level": "info",
+      "event": "task_start",
+      "target": "localhost",
+      "description": "Find and capture the flag from the target web application."
+    },
+    {
+      "timestamp": "2026-05-18T16:03:32",
+      "elapsed_s": 10.014,
+      "phase": "recon",
+      "level": "info",
+      "event": "recon_nmap_start",
+      "host": "localhost"
+    },
+    {
+      "timestamp": "2026-05-18T16:03:57",
+      "elapsed_s": 34.511,
+      "phase": "recon",
+      "level": "info",
+      "event": "recon_done",
+      "dkg_summary": "Host: 1\n  - id=host-localhost: {'ip': 'localhost', 'is_reachable': True, 'is_internal': False}\nService: 4\n  - id=svc-localhost-22: {'port': 22, 'protocol': 'tcp', 'version': 'OpenSSH 8.9p1 Ubuntu 3ubuntu0.15 (Ubuntu Linux; protocol 2.0)', 'banner': 'ssh'}\n  - id=svc-localhost-1053: {'port': 1053, 'protocol': 'tcp', 'version': 'tcpwrapped', 'banner': 'tcpwrapped'}\n  - id=svc-localhost-32771: {'port': 32771, 'protocol': 'tcp', 'version': 'sometimes-rpc5?', 'banner': 'sometimes-rpc5?'}\n  - id=svc-http-32771: {'port': 32771, 'protocol': 'HTTP', 'version': 'unknown', 'banner': ''}\nEndpoint: 5\n  - id=endpoint-http://localhost:32771/docs: {'url': 'http://localhost:32771/docs', 'method': 'GET', 'params': '', 'auth_required': False}\n  - id=endpoint-http://localhost:32771/ping: {'url': 'http://localhost:32771/ping', 'method': 'GET', 'params': '', 'auth_required': False}\n  - id=endpoint-http://localhost:32771/token: {'url': 'http://localhost:32771/token', 'method': 'GET', 'params': '', 'auth_required': False}\n  - id=endpoint-http://localhost:32771-param-password: {'url': 'http://localhost:32771', 'method': 'POST', 'params': 'password', 'auth_required': False}\n  - id=endpoint-http://localhost:32771-param-username: {'url': 'http://localhost:32771', 'method': 'POST', 'params': 'username', 'auth_required': False}\nVulnerability: 10\n  - id=nikto-http://localhost:32771-Target IP:          127.0.0.1: {'endpoint': 'http://localhost:32771', 'parameter': '', 'severity': 'low', 'source': 'nikto', 'detail': 'Target IP:          127.0.0.1'}\n  - id=nikto-http://localhost:32771-Target Hostname:    localhost: {'endpoint': 'http://localhost:32771', 'parameter': '', 'severity': 'low', 'source': 'nikto', 'detail': 'Target Hostname:    localhost'}\n  - id=nikto-http://localhost:32771-Target Port:        32771: {'endpoint': 'http://localhost:32771', 'parameter': '', 'severity': 'low', 'source': 'nikto', 'detail': 'Target Port:        32771'}\n  - id=nikto-http://localhost:32771-Start Time:         2026-05-18 16:03:57 : {'endpoint': 'http://localhost:32771', 'parameter': '', 'severity': 'low', 'source': 'nikto', 'detail': 'Start Time:         2026-05-18 16:03:57 (GMT8)'}\n  - id=nikto-http://localhost:32771-Server: uvicorn: {'endpoint': 'http://localhost:32771', 'parameter': '', 'severity': 'low', 'source': 'nikto', 'detail': 'Server: uvicorn'}\n  - id=nikto-http://localhost:32771-The anti-clickjacking X-Frame-Options he: {'endpoint': 'http://localhost:32771', 'parameter': '', 'severity': 'low', 'source': 'nikto', 'detail': 'The anti-clickjacking X-Frame-Options header is not present.'}\n  - id=nikto-http://localhost:32771-No CGI Directories found (use '-C all' t: {'endpoint': 'http://localhost:32771', 'parameter': '', 'severity': 'low', 'source': 'nikto', 'detail': \"No CGI Directories found (use '-C all' to force check all possible dirs)\"}\n  - id=nikto-http://localhost:32771-Allowed HTTP Methods: GET: {'endpoint': 'http://localhost:32771', 'parameter': '', 'severity': 'low', 'source': 'nikto', 'detail': 'Allowed HTTP Methods: GET'}\n  ... and 2 more",
+      "step": 1
+    },
+    {
+      "timestamp": "2026-05-18T16:03:57",
+      "elapsed_s": 34.513,
+      "phase": "recon",
+      "level": "info",
+      "event": "scaling_decision",
+      "scaling_level": "solo",
+      "dkg_summary": {
+        "n_hosts": 1,
+        "n_vulns": 10,
+        "n_flags": 0,
+        "n_endpoints": 5,
+        "hosts": [
+          {
+            "id": "host-localhost",
+            "ip": "localhost",
+            "is_reachable": true,
+            "is_internal": false,
+            "type": "Host",
+            "created_at": "2026-05-18T16:03:46.446481",
+            "updated_at": "2026-05-18T16:03:46.446483"
+          }
+        ],
+        "vulnerabilities": [
+          {
+            "id": "nikto-http://localhost:32771-Target IP:          127.0.0.1",
+            "type": "Vulnerability",
+            "endpoint": "http://localhost:32771",
+            "parameter": "",
+            "severity": "low",
+            "source": "nikto",
+            "detail": "Target IP:          127.0.0.1",
+            "created_at": "2026-05-18T16:03:57.380933",
+            "updated_at": "2026-05-18T16:03:57.380958"
+          },
+          {
+            "id": "nikto-http://localhost:32771-Target Hostname:    localhost",
+            "type": "Vulnerability",
+            "endpoint": "http://localhost:32771",
+            "parameter": "",
+            "severity": "low",
+            "source": "nikto",
+            "detail": "Target Hostname:    localhost",
+            "created_at": "2026-05-18T16:03:57.380997",
+            "updated_at": "2026-05-18T16:03:57.381003"
+          },
+          {
+            "id": "nikto-http://localhost:32771-Target Port:        32771",
+            "type": "Vulnerability",
+            "endpoint": "http://localhost:32771",
+            "parameter": "",
+            "severity": "low",
+            "source": "nikto",
+            "detail": "Target Port:        32771",
+            "created_at": "2026-05-18T16:03:57.381020",
+            "updated_at": "2026-05-18T16:03:57.381025"
+          },
+          {
+            "id": "nikto-http://localhost:32771-Start Time:         2026-05-18 16:03:57 ",
+            "type": "Vulnerability",
+            "endpoint": "http://localhost:32771",
+            "parameter": "",
+            "severity": "low",
+            "source": "nikto",
+            "detail": "Start Time:         2026-05-18 16:03:57 (GMT8)",
+            "created_at": "2026-05-18T16:03:57.381042",
+            "updated_at": "2026-05-18T16:03:57.381047"
+          },
+          {
+            "id": "nikto-http://localhost:32771-Server: uvicorn",
+            "type": "Vulnerability",
+            "endpoint": "http://localhost:32771",
+            "parameter": "",
+            "severity": "low",
+            "source": "nikto",
+            "detail": "Server: uvicorn",
+            "created_at": "2026-05-18T16:03:57.381062",
+            "updated_at": "2026-05-18T16:03:57.381067"
+          },
+          {
+            "id": "nikto-http://localhost:32771-The anti-clickjacking X-Frame-Options he",
+            "type": "Vulnerability",
+            "endpoint": "http://localhost:32771",
+            "parameter": "",
+            "severity": "low",
+            "source": "nikto",
+            "detail": "The anti-clickjacking X-Frame-Options header is not present.",
+            "created_at": "2026-05-18T16:03:57.381084",
+            "updated_at": "2026-05-18T16:03:57.381089"
+          },
+          {
+            "id": "nikto-http://localhost:32771-No CGI Directories found (use '-C all' t",
+            "type": "Vulnerability",
+            "endpoint": "http://localhost:32771",
+            "parameter": "",
+            "severity": "low",
+            "source": "nikto",
+            "detail": "No CGI Directories found (use '-C all' to force check all possible dirs)",
+            "created_at": "2026-05-18T16:03:57.381103",
+            "updated_at": "2026-05-18T16:03:57.381109"
+          },
+          {
+            "id": "nikto-http://localhost:32771-Allowed HTTP Methods: GET",
+            "type": "Vulnerability",
+            "endpoint": "http://localhost:32771",
+            "parameter": "",
+            "severity": "low",
+            "source": "nikto",
+            "detail": "Allowed HTTP Methods: GET",
+            "created_at": "2026-05-18T16:03:57.381122",
+            "updated_at": "2026-05-18T16:03:57.381127"
+          },
+          {
+            "id": "nikto-http://localhost:32771-21 items checked: 0 error(s) and 2 item(",
+            "type": "Vulnerability",
+            "endpoint": "http://localhost:32771",
+            "parameter": "",
+            "severity": "low",
+            "source": "nikto",
+            "detail": "21 items checked: 0 error(s) and 2 item(s) reported on remote host",
+            "created_at": "2026-05-18T16:03:57.381141",
+            "updated_at": "2026-05-18T16:03:57.381147"
+          },
+          {
+            "id": "nikto-http://localhost:32771-End Time:           2026-05-18 16:03:57 ",
+            "type": "Vulnerability",
+            "endpoint": "http://localhost:32771",
+            "parameter": "",
+            "severity": "low",
+            "source": "nikto",
+            "detail": "End Time:           2026-05-18 16:03:57 (GMT8) (0 seconds)",
+            "created_at": "2026-05-18T16:03:57.381160",
+            "updated_at": "2026-05-18T16:03:57.381165"
+          }
+        ],
+        "flags_captured": []
+      }
+    },
+    {
+      "timestamp": "2026-05-18T16:04:38",
+      "elapsed_s": 75.32,
+      "phase": "analyze",
+      "level": "info",
+      "event": "llm_analyze_call",
+      "prompt": "Target information:\nHost: 1\n  - id=host-localhost: {'ip': 'localhost', 'is_reachable': True, 'is_internal': False}\nService: 4\n  - id=svc-localhost-22: {'port': 22, 'protocol': 'tcp', 'version': 'OpenSSH 8.9p1 Ubuntu 3ubuntu0.15 (Ubuntu Linux; protocol 2.0)', 'banner': 'ssh'}\n  - id=svc-localhost-1053: {'port': 1053, 'protocol': 'tcp', 'version': 'tcpwrapped', 'banner': 'tcpwrapped'}\n  - id=svc-localhost-32771: {'port': 32771, 'protocol': 'tcp', 'version': 'sometimes-rpc5?', 'banner': 'sometimes-rpc5?'}\n  - id=svc-http-32771: {'port': 32771, 'protocol': 'HTTP', 'version': 'unknown', 'banner': ''}\nEndpoint: 5\n  - id=endpoint-http://localhost:32771/docs: {'url': 'http://localhost:32771/docs', 'method': 'GET', 'params': '', 'auth_required': False}\n  - id=endpoint-http://localhost:32771/ping: {'url': 'http://localhost:32771/ping', 'method': 'GET', 'params': '', 'auth_required': False}\n  - id=endpoint-http://localhost:32771/token: {'url': 'http://localhost:32771/token', 'method': 'GET', 'params': '', 'auth_required': False}\n  - id=endpoint-http://localhost:32771-param-password: {'url': 'http://localhost:32771', 'method': 'POST', 'params': 'password', 'auth_required': False}\n  - id=endpoint-http://localhost:32771-param-username: {'url': 'http://localhost:32771', 'method': 'POST', 'params': 'username', 'auth_required': False}\nVulnerability: 10\n  - id=nikto-http://localhost:32771-Target IP:          127.0.0.1: {'endpoint': 'http://localhost:32771', 'parameter': '', 'severity': 'low', 'source': 'nikto', 'detail': 'Target IP:          127.0.0.1'}\n  - id=nikto-http://localhost:32771-Target Hostname:    localhost: {'endpoint': 'http://localhost:32771', 'parameter': '', 'severity': 'low', 'source': 'nikto', 'detail': 'Target Hostname:    localhost'}\n  - id=nikto-http://localhost:32771-Target Port:        32771: {'endpoint': 'http://localhost:32771', 'parameter': '', 'severity': 'low', 'source': 'nikto', 'detail': 'Target Port:        32771'}\n  - id=nikto-http://localhost:32771-Start Time:         2026-05-18 16:03:57 : {'endpoint': 'http://localhost:32771', 'parameter': '', 'severity': 'low', 'source': 'nikto', 'detail': 'Start Time:         2026-05-18 16:03:57 (GMT8)'}\n  - id=nikto-http://localhost:32771-Server: uvicorn: {'endpoint': 'http://localhost:32771', 'parameter': '', 'severity': 'low', 'source': 'nikto', 'detail': 'Server: uvicorn'}\n  - id=nikto-http://localhost:32771-The anti-clickjacking X-Frame-Options he: {'endpoint': 'http://localhost:32771', 'parameter': '', 'severity': 'low', 'source': 'nikto', 'detail': 'The anti-clickjacking X-Frame-Options header is not present.'}\n  - id=nikto-http://localhost:32771-No CGI Directories found (use '-C all' t: {'endpoint': 'http://localhost:32771', 'parameter': '', 'severity': 'low', 'source': 'nikto', 'detail': \"No CGI Directories found (use '-C all' to force check all possible dirs)\"}\n  - id=nikto-http://localhost:32771-Allowed HTTP Methods: GET: {'endpoint': 'http://localhost:32771', 'parameter': '', 'severity': 'low', 'source': 'nikto', 'detail': 'Allowed HTTP Methods: GET'}\n  ... and 2 more\n\nIdentify potential vulnerabilities.",
+      "response": "[\n  {\n    \"vuln_type\": \"SQLi\",\n    \"endpoint\": \"http://localhost:32771\",\n    \"param\": \"username\",\n    \"confidence\": 0.6,\n    \"evidence\": \"POST endpoint accepts 'username' and 'password' parameters, typical of authentication forms which are often vulnerable to SQL injection if input is not sanitized.\"\n  }\n]",
+      "tokens_used": 1072,
+      "cteg_suggestions": {
+        "bypass_strategies": [],
+        "exploit_strategies": []
+      }
+    },
+    {
+      "timestamp": "2026-05-18T16:04:38",
+      "elapsed_s": 75.321,
+      "phase": "analyze",
+      "level": "info",
+      "event": "analyze_done",
+      "vuln_count": 4,
+      "vulns": [
+        {
+          "type": "SQLi",
+          "endpoint": "http://localhost:32771",
+          "confidence": 0.6
+        },
+        {
+          "type": "XSS",
+          "endpoint": "http://localhost:32771",
+          "confidence": 0.3
+        },
+        {
+          "type": "CMDI",
+          "endpoint": "http://localhost:32771",
+          "confidence": 0.3
+        },
+        {
+          "type": "SQLI",
+          "endpoint": "http://localhost:32771",
+          "confidence": 0.35
+        }
+      ],
+      "tokens_used": 1072
+    },
+    {
+      "timestamp": "2026-05-18T16:06:14",
+      "elapsed_s": 171.874,
+      "phase": "exploit",
+      "level": "info",
+      "event": "auto_login_ok",
+      "url": "http://localhost:32771",
+      "username": "demo"
+    },
+    {
+      "timestamp": "2026-05-18T16:06:41",
+      "elapsed_s": 199.109,
+      "phase": "exploit",
+      "level": "info",
+      "event": "llm_explore_call",
+      "iteration": 1,
+      "response": "[{\"action\": \"get\", \"url\": \"http://localhost:32771/openapi.json\", \"headers\": {}, \"reason\": \"Fetch API spec to discover endpoints\"}, {\"action\": \"get\", \"url\": \"http://localhost:32771/edit_profile/0\", \"headers\": {\"X-UserId\": \"0\"}, \"reason\": \"IDOR: attempt to view profile 0 via X-UserId header\"}, {\"action\": \"get\", \"url\": \"http://localhost:32771/edit_profile/2\", \"headers\": {\"X-UserId\": \"2\"}, \"reason\": \"IDOR: attempt to view profile 2 via X-UserId header\"}, {\"action\": \"get\", \"url\": \"http://localhost:32771/edit_profile/10032\", \"headers\": {\"X-UserId\": \"10032\"}, \"reason\": \"IDOR: attempt to view profile 10032 via X-UserId header\"}, {\"action\": \"get\", \"url\": \"http://localhost:32771/docs\", \"headers\": {}, \"reason\": \"Check Swagger UI for interactive API docs\"}]",
+      "tokens_used": 751
+    },
+    {
+      "timestamp": "2026-05-18T16:06:41",
+      "elapsed_s": 199.119,
+      "phase": "exploit",
+      "level": "info",
+      "event": "llm_action",
+      "iteration": 1,
+      "action": "get",
+      "url": "http://localhost:32771/openapi.json",
+      "headers": {},
+      "status": 200,
+      "result": "status=200 len=3894 ids=['200', '422', '200', '200', '422']"
+    },
+    {
+      "timestamp": "2026-05-18T16:06:41",
+      "elapsed_s": 199.124,
+      "phase": "exploit",
+      "level": "info",
+      "event": "llm_action",
+      "iteration": 1,
+      "action": "get",
+      "url": "http://localhost:32771/edit_profile/0",
+      "headers": {
+        "X-UserId": "0"
+      },
+      "status": 401,
+      "result": "status=401 len=43"
+    },
+    {
+      "timestamp": "2026-05-18T16:06:41",
+      "elapsed_s": 199.127,
+      "phase": "exploit",
+      "level": "info",
+      "event": "llm_action",
+      "iteration": 1,
+      "action": "get",
+      "url": "http://localhost:32771/edit_profile/2",
+      "headers": {
+        "X-UserId": "2"
+      },
+      "status": 401,
+      "result": "status=401 len=43"
+    },
+    {
+      "timestamp": "2026-05-18T16:06:41",
+      "elapsed_s": 199.13,
+      "phase": "exploit",
+      "level": "info",
+      "event": "llm_action",
+      "iteration": 1,
+      "action": "get",
+      "url": "http://localhost:32771/edit_profile/10032",
+      "headers": {
+        "X-UserId": "10032"
+      },
+      "status": 401,
+      "result": "status=401 len=43"
+    },
+    {
+      "timestamp": "2026-05-18T16:06:42",
+      "elapsed_s": 199.133,
+      "phase": "exploit",
+      "level": "info",
+      "event": "llm_action",
+      "iteration": 1,
+      "action": "get",
+      "url": "http://localhost:32771/docs",
+      "headers": {},
+      "status": 200,
+      "result": "status=200 len=939 title='FastAPI - Swagger UI'"
+    },
+    {
+      "timestamp": "2026-05-18T16:07:36",
+      "elapsed_s": 254.06,
+      "phase": "exploit",
+      "level": "info",
+      "event": "llm_explore_call",
+      "iteration": 2,
+      "response": "[{\"action\": \"get\", \"url\": \"http://localhost:32771/openapi.json\", \"headers\": {}, \"reason\": \"Get full API spec without truncation\"}, {\"action\": \"get\", \"url\": \"http://localhost:32771/edit_profile/1\", \"headers\": {}, \"reason\": \"View edit_profile/1 HTML to find form action and hidden fields\"}, {\"action\": \"get\", \"url\": \"http://localhost:32771/company/0/jobs\", \"headers\": {}, \"reason\": \"IDOR: check company 0 jobs\"}, {\"action\": \"get\", \"url\": \"http://localhost:32771/company/2/jobs\", \"headers\": {}, \"reason\": \"IDOR: check company 2 jobs\"}, {\"action\": \"get\", \"url\": \"http://localhost:32771/company/10032/jobs\", \"headers\": {}, \"reason\": \"IDOR: check company 10032 jobs\"}]",
+      "tokens_used": 1552
+    },
+    {
+      "timestamp": "2026-05-18T16:07:36",
+      "elapsed_s": 254.07,
+      "phase": "exploit",
+      "level": "info",
+      "event": "llm_action",
+      "iteration": 2,
+      "action": "get",
+      "url": "http://localhost:32771/edit_profile/1",
+      "headers": {},
+      "status": 200,
+      "result": "status=200 len=1425 title='Edit Profile'"
+    },
+    {
+      "timestamp": "2026-05-18T16:07:36",
+      "elapsed_s": 254.074,
+      "phase": "exploit",
+      "level": "info",
+      "event": "llm_action",
+      "iteration": 2,
+      "action": "get",
+      "url": "http://localhost:32771/company/0/jobs",
+      "headers": {},
+      "status": 401,
+      "result": "status=401 len=43"
+    },
+    {
+      "timestamp": "2026-05-18T16:07:36",
+      "elapsed_s": 254.076,
+      "phase": "exploit",
+      "level": "info",
+      "event": "llm_action",
+      "iteration": 2,
+      "action": "get",
+      "url": "http://localhost:32771/company/2/jobs",
+      "headers": {},
+      "status": 401,
+      "result": "status=401 len=43"
+    },
+    {
+      "timestamp": "2026-05-18T16:07:36",
+      "elapsed_s": 254.078,
+      "phase": "exploit",
+      "level": "info",
+      "event": "llm_action",
+      "iteration": 2,
+      "action": "get",
+      "url": "http://localhost:32771/company/10032/jobs",
+      "headers": {},
+      "status": 401,
+      "result": "status=401 len=43"
+    },
+    {
+      "timestamp": "2026-05-18T16:08:26",
+      "elapsed_s": 303.823,
+      "phase": "exploit",
+      "level": "info",
+      "event": "llm_explore_call",
+      "iteration": 3,
+      "response": "[{\"action\": \"get\", \"url\": \"http://localhost:32771/openapi.json\", \"headers\": {}, \"reason\": \"Fetch full API spec to discover endpoints\"}, {\"action\": \"get\", \"url\": \"http://localhost:32771/edit_profile/1\", \"headers\": {}, \"reason\": \"Get edit profile form HTML to identify hidden fields and actions\"}, {\"action\": \"get\", \"url\": \"http://localhost:32771/edit_profile/10033\", \"headers\": {\"X-UserId\": \"1\"}, \"reason\": \"IDOR: try accessing another profile with X-UserId of current user\"}, {\"action\": \"get\", \"url\": \"http://localhost:32771/company/2/jobs\", \"headers\": {\"X-UserId\": \"1\"}, \"reason\": \"IDOR: try accessing company 2 jobs with X-UserId header\"}, {\"action\": \"get\", \"url\": \"http://localhost:32771/admin\", \"headers\": {}, \"reason\": \"Check for admin panel\"}, {\"action\": \"get\", \"url\": \"http://localhost:32771/flag\", \"headers\": {}, \"reason\": \"Try common flag endpoint\"}, {\"action\": \"get\", \"url\": \"http://localhost:32771/profile\", \"headers\": {}, \"reason\": \"Try common profile endpoint for user enumeration\"}, {\"a",
+      "tokens_used": 2550
+    },
+    {
+      "timestamp": "2026-05-18T16:09:18",
+      "elapsed_s": 355.142,
+      "phase": "exploit",
+      "level": "info",
+      "event": "llm_exploit_plan",
+      "response": "```json\n[\n  {\n    \"tool\": \"sqlmap_test\",\n    \"params\": {\n      \"url\": \"http://localhost:32771\",\n      \"param\": \"username\",\n      \"method\": \"POST\"\n    },\n    \"reason\": \"High\u2011confidence SQL injection on the username parameter. Use sqlmap to automate detection and exploitation, leveraging its built\u2011in evasion techniques.\"\n  },\n  {\n    \"tool\": \"sqlmap_test\",\n    \"params\": {\n      \"url\": \"http://localhost:32771\",\n      \"param\": \"password\",\n      \"method\": \"POST\"\n    },\n    \"reason\": \"Secondary SQLi vector on the password parameter. Even with lower confidence, it\u2019s worth testing in case username filtering exists.\"\n  },\n  {\n    \"tool\": \"send_payload\",\n    \"params\": {\n      \"url\": \"http://localhost:32771\",\n      \"method\": \"POST\",\n      \"data\": {\n        \"username\": \"admin' OR '1'='1\",\n        \"password\": \"anything\"\n      },\n      \"headers\": {\n        \"Content-Type\": \"application/x-www-form-urlencoded\"\n      }\n    },\n    \"reason\": \"Manual auth\u2011bypass payload to test for simple SQL injection, especially useful if automated tools are blocked or time\u2011out.\"\n  },\n  {\n    \"tool\": \"command_injection_test\",\n    \"params\": {\n      \"url\": \"http://localhost:32771\",\n      \"param\": \"username\",\n      \"method\": \"POST\"\n    },\n    \"reason\": \"Low\u2011confidence command injection on username. Test for shell command execution, as the login process might unsafely pass input to a backend command.\"\n  },\n  {\n    \"tool\": \"ffuf_fuzz\",\n    \"params\": {\n      \"url\": \"http://localhost:32771/FUZZ\",\n      \"wordlist\": \"common.txt\"\n    },\n    \"reason\": \"Discover hidden directories or files that might hold the flag (e.g., /admin, /backup, /flag.txt).\"\n  },\n  {\n    \"tool\": \"send_payload\",\n    \"params\": {\n      \"url\": \"http://localhost:32771\",\n      \"method\": \"POST\",\n      \"data\": {\n        \"username\": \"admin'; SELECT flag FROM flags -- \",\n        \"password\": \"test\"\n      },\n      \"headers\": {\n        \"Content-Type\": \"application/x-www-form-urlencoded\"\n      }\n    },\n    \"reason\": \"Secondary SQLi extraction payload ",
+      "tokens_used": 1512
+    },
+    {
+      "timestamp": "2026-05-18T16:09:18",
+      "elapsed_s": 355.246,
+      "phase": "failed",
+      "level": "error",
+      "event": "task_end",
+      "success": false,
+      "flag": "",
+      "steps": 11,
+      "tokens_used": 1512,
+      "time_elapsed": 355.24526715278625,
+      "error": "All vulnerabilities exhausted, no flag found"
+    }
+  ],
+  "dkg_summary": "Host: 1\n  - id=host-localhost: {'ip': 'localhost', 'is_reachable': True, 'is_internal': False}\nService: 4\n  - id=svc-localhost-22: {'port': 22, 'protocol': 'tcp', 'version': 'OpenSSH 8.9p1 Ubuntu 3ubuntu0.15 (Ubuntu Linux; protocol 2.0)', 'banner': 'ssh'}\n  - id=svc-localhost-1053: {'port': 1053, 'protocol': 'tcp', 'version': 'tcpwrapped', 'banner': 'tcpwrapped'}\n  - id=svc-localhost-32771: {'port': 32771, 'protocol': 'tcp', 'version': 'sometimes-rpc5?', 'banner': 'sometimes-rpc5?'}\n  - id=svc-http-32771: {'port': 32771, 'protocol': 'HTTP', 'version': 'unknown', 'banner': ''}\nEndpoint: 15\n  - id=endpoint-http://localhost:32771/docs: {'url': 'http://localhost:32771/docs', 'method': 'GET', 'params': '', 'auth_required': False}\n  - id=endpoint-http://localhost:32771/ping: {'url': 'http://localhost:32771/ping', 'method': 'GET', 'params': '', 'auth_required': False}\n  - id=endpoint-http://localhost:32771/token: {'url': 'http://localhost:32771/token', 'method': 'GET', 'params': '', 'auth_required': False}\n  - id=endpoint-http://localhost:32771-param-password: {'url': 'http://localhost:32771', 'method': 'POST', 'params': 'password', 'auth_required': False}\n  - id=endpoint-http://localhost:32771-param-username: {'url': 'http://localhost:32771', 'method': 'POST', 'params': 'username', 'auth_required': False}\n  - id=auth-/dashboard: {'url': 'http://localhost:32771/dashboard', 'method': 'GET', 'params': '', 'auth_required': True}\n  - id=auth-/orders: {'url': 'http://localhost:32771/orders', 'method': 'GET', 'params': '', 'auth_required': True}\n  - id=auth-/profile: {'url': 'http://localhost:32771/profile', 'method': 'GET', 'params': '', 'auth_required': True}\n  ... and 7 more\nVulnerability: 11\n  - id=nikto-http://localhost:32771-Target IP:          127.0.0.1: {'endpoint': 'http://localhost:32771', 'parameter': '', 'severity': 'low', 'source': 'nikto', 'detail': 'Target IP:          127.0.0.1'}\n  - id=nikto-http://localhost:32771-Target Hostname:    localhost: {'endpoint': 'http://localhost:32771', 'parameter': '', 'severity': 'low', 'source': 'nikto', 'detail': 'Target Hostname:    localhost'}\n  - id=nikto-http://localhost:32771-Target Port:        32771: {'endpoint': 'http://localhost:32771', 'parameter': '', 'severity': 'low', 'source': 'nikto', 'detail': 'Target Port:        32771'}\n  - id=nikto-http://localhost:32771-Start Time:         2026-05-18 16:03:57 : {'endpoint': 'http://localhost:32771', 'parameter': '', 'severity': 'low', 'source': 'nikto', 'detail': 'Start Time:         2026-05-18 16:03:57 (GMT8)'}\n  - id=nikto-http://localhost:32771-Server: uvicorn: {'endpoint': 'http://localhost:32771', 'parameter': '', 'severity': 'low', 'source': 'nikto', 'detail': 'Server: uvicorn'}\n  - id=nikto-http://localhost:32771-The anti-clickjacking X-Frame-Options he: {'endpoint': 'http://localhost:32771', 'parameter': '', 'severity': 'low', 'source': 'nikto', 'detail': 'The anti-clickjacking X-Frame-Options header is not present.'}\n  - id=nikto-http://localhost:32771-No CGI Directories found (use '-C all' t: {'endpoint': 'http://localhost:32771', 'parameter': '', 'severity': 'low', 'source': 'nikto', 'detail': \"No CGI Directories found (use '-C all' to force check all possible dirs)\"}\n  - id=nikto-http://localhost:32771-Allowed HTTP Methods: GET: {'endpoint': 'http://localhost:32771', 'parameter': '', 'severity': 'low', 'source': 'nikto', 'detail': 'Allowed HTTP Methods: GET'}\n  ... and 3 more",
+  "cteg_patterns_committed": 0
+}

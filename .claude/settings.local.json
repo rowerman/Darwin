@@ -51,7 +51,10 @@
       "Bash(bash *)",
       "Read(//home/kianabin/.local/bin/**)",
       "Read(//tmp/**)",
-      "Bash(plannotator --help)"
+      "Bash(plannotator --help)",
+      "Bash(./venv/bin/pip install *)",
+      "Bash(./venv/bin/pip list *)",
+      "Bash(HF_HUB_OFFLINE=1 ./venv/bin/python *)"
     ]
   }
 }

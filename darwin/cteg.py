@@ -54,7 +54,7 @@ class BypassPattern:
 
 @dataclass
 class ExploitPattern:
-    """Abstract exploitation technique pattern."""
+    """Abstract exploitation technique pattern with concrete steps."""
     pattern_id: str
     mechanism: str
     abstract_description: str
@@ -65,6 +65,8 @@ class ExploitPattern:
     last_successful_use: str = ""
     half_life_days: int = 30
     created_from_task: str = ""
+    concrete_techniques: List[str] = field(default_factory=list)  # actual steps that worked
+    technology_stack: List[str] = field(default_factory=list)  # what tech this applies to
 
     @property
     def success_rate(self) -> float:
@@ -84,14 +86,18 @@ class TaskRecord:
     successful_bypasses: List[Dict[str, Any]] = field(default_factory=list)
     failed_bypasses: List[Dict[str, Any]] = field(default_factory=list)
     exploit_chain: List[Dict[str, Any]] = field(default_factory=list)
+    technology_stack: List[str] = field(default_factory=list)  # e.g. ["FastAPI","JWT","Jinja2","MySQL"]
+    key_findings: List[str] = field(default_factory=list)  # e.g. ["default creds demo:demo","OpenAPI at /openapi.json"]
     timestamp: str = ""
 
     def summary(self) -> str:
         return (
             f"Task {self.task_id} ({self.benchmark}): {self.outcome}\n"
             f"  Vulns: {self.vulnerability_types}\n"
+            f"  Tech: {self.technology_stack}\n"
             f"  Defense: {self.defense_encountered}\n"
-            f"  Bypasses: {len(self.successful_bypasses)} success / {len(self.failed_bypasses)} fail"
+            f"  Bypasses: {len(self.successful_bypasses)} success / {len(self.failed_bypasses)} fail\n"
+            f"  Chain: {len(self.exploit_chain)} steps"
         )
 
 
@@ -116,9 +122,66 @@ class CTEG:
         self._created_at = datetime.now().isoformat()
         self._task_count = 0
 
+        # Lazy-init embedder for semantic search
+        self._embedder = None
+        self._embedding_cache: Dict[str, Any] = {}  # node_id -> embedding vector
+
         # Load existing state if available
         if os.path.exists(storage_path):
             self._load(storage_path)
+
+    def _get_embedder(self):
+        """Lazy-init the embedder.
+
+        Uses SentenceTransformer (neural semantic search) when model is cached.
+        Falls back to TF-IDF vectorizer (lightweight, no model download).
+        Set DARWIN_USE_NEURAL=1 to enable neural embeddings.
+        """
+        if self._embedder is None:
+            import os
+            if os.environ.get("DARWIN_USE_NEURAL") == "1":
+                try:
+                    from sentence_transformers import SentenceTransformer
+                    self._embedder = SentenceTransformer(
+                        'all-MiniLM-L6-v2', local_files_only=True,
+                    )
+                except Exception:
+                    self._embedder = None
+            else:
+                self._embedder = None  # use TF-IDF by default
+        return self._embedder
+
+    def _build_vocabulary(self) -> Dict[str, int]:
+        """Build shared vocabulary from all knowledge patterns for TF-IDF."""
+        vocab: Dict[str, int] = {}
+        with self._lock:
+            for nid, data in self.graph.nodes(data=True):
+                if data.get("type") != "KnowledgePattern":
+                    continue
+                text = data.get("embed_text", data.get("description", ""))
+                for word in text.lower().split():
+                    word = word.strip('.,;:!?()[]{}"\'')
+                    if len(word) > 1 and word not in vocab:
+                        vocab[word] = len(vocab)
+        return vocab
+
+    def _tfidf_vector(self, text: str, vocab: Dict[str, int],
+                      idf: Dict[str, float]) -> "np.ndarray":
+        """Convert text to TF-IDF vector using shared vocabulary."""
+        import numpy as np
+        vec = np.zeros(len(vocab))
+        words = text.lower().split()
+        if not words:
+            return vec
+        for word in words:
+            word = word.strip('.,;:!?()[]{}"\'')
+            if word in vocab:
+                tf = 1.0  # binary term frequency for short queries
+                vec[vocab[word]] = tf * idf.get(word, 1.0)
+        norm = np.linalg.norm(vec)
+        if norm > 0:
+            vec = vec / norm
+        return vec
 
     # ── Pattern Storage ──────────────────────────────────────────
 
@@ -228,21 +291,43 @@ class CTEG:
             )
             patterns.append((pattern, "bypass_failed_against"))
 
-        # Extract exploit patterns
+        # Extract exploit patterns with concrete techniques
         for step in task_record.exploit_chain:
             vuln_type = step.get("vuln_type", task_record.vulnerability_types[0] if task_record.vulnerability_types else "unknown")
-            mechanism = step.get("mechanism", "unknown")
+            mechanism = step.get("mechanism", "") or step.get("tool", "") or step.get("action", "unknown")
+            tool = step.get("tool", "")
+            url = step.get("url", "")
+            method = step.get("method", "GET")
+
+            # Build a rich description from concrete step details
+            desc_parts = [f"{vuln_type} exploitation"]
+            if tool:
+                desc_parts.append(f"via {tool}")
+            if url:
+                desc_parts.append(f"on {url}")
+            if method:
+                desc_parts.append(f"({method})")
+
+            # Collect concrete techniques from all steps
+            concrete = []
+            for s in task_record.exploit_chain:
+                parts = [s.get('tool', ''), s.get('method', 'GET'),
+                         s.get('url', s.get('params', '')), "→",
+                         (s.get('result', '') or '')[:80]]
+                concrete.append(" ".join(p for p in parts if p))
 
             pattern = ExploitPattern(
                 pattern_id=f"ep-{vuln_type}-{task_record.task_id[:8]}",
                 mechanism=mechanism,
-                abstract_description=f"{vuln_type} exploitation via {mechanism}",
+                abstract_description="; ".join(desc_parts),
                 vulnerability_type=vuln_type,
                 required_context=step.get("context", ""),
                 total_attempts=1,
                 total_successes=1 if task_record.outcome == "success" else 0,
                 last_successful_use=task_record.timestamp if task_record.outcome == "success" else "",
                 created_from_task=task_record.task_id,
+                concrete_techniques=concrete,
+                technology_stack=task_record.technology_stack,
             )
             patterns.append((pattern, "exploit_applies_to_vuln"))
 
@@ -361,11 +446,60 @@ class CTEG:
         return results
 
     def get_suggestions(
-        self, defense_type: str = "", vuln_type: str = "", top_k: int = 3
-    ) -> Dict[str, List[Dict[str, Any]]]:
-        """Get combined suggestions for a new task."""
+        self, defense_type: str = "", vuln_type: str = "",
+        query: str = "", top_k: int = 3,
+    ) -> Dict[str, Any]:
+        """Get combined suggestions: static RAG knowledge + dynamic CTEG patterns.
+
+        Queries both:
+        1. RAG knowledge base (static, pre-loaded patterns)
+        2. CTEG learned patterns (dynamic, from prior tasks)
+
+        Merges, deduplicates, and returns ranked results.
+        Used by _run_solo_cycle to provide the LLM with relevant exploitation guidance.
+
+        Args:
+            defense_type: Optional defense type filter for bypass patterns
+            vuln_type: Optional vulnerability type filter
+            query: Natural language query for RAG search (e.g. "FastAPI IDOR")
+            top_k: Max patterns to return per category
+
+        Returns:
+            Dict with static_knowledge, learned_patterns, bypass_strategies, exploit_strategies
+        """
+        # 1. Query CTEG learned patterns (from prior tasks)
         bypass = self.query_bypass_patterns(defense_type, vuln_type, top_k)
         exploit = self.query_exploit_patterns(vuln_type, top_k) if vuln_type else []
+
+        # 2. Query RAG knowledge base (static patterns)
+        rag_results: List[Dict[str, Any]] = []
+        if query:
+            rag_results = self.query_rag(query, top_k=top_k)
+
+        # 3. Build learned exploit strategies with concrete techniques
+        exploit_strategies = []
+        for e in exploit:
+            strat = {
+                "mechanism": e.mechanism,
+                "description": e.abstract_description,
+                "success_rate": e.success_rate,
+                "context": e.required_context,
+                "techniques": e.concrete_techniques,
+                "source": "learned",
+            }
+            exploit_strategies.append(strat)
+
+        # 4. Merge: learned patterns first (higher confidence), then RAG
+        static_knowledge = []
+        for r in rag_results:
+            static_knowledge.append({
+                "title": r.get("title", ""),
+                "description": r.get("description", ""),
+                "techniques": r.get("techniques", []),
+                "category": r.get("category", ""),
+                "score": r.get("score", 0),
+                "source": "static_knowledge",
+            })
 
         return {
             "bypass_strategies": [
@@ -373,11 +507,9 @@ class CTEG:
                  "success_rate": b.success_rate, "preconditions": b.preconditions}
                 for b in bypass
             ],
-            "exploit_strategies": [
-                {"mechanism": e.mechanism, "description": e.abstract_description,
-                 "success_rate": e.success_rate, "context": e.required_context}
-                for e in exploit
-            ],
+            "exploit_strategies": exploit_strategies,
+            "static_knowledge": static_knowledge,
+            "combined_count": len(exploit_strategies) + len(static_knowledge),
         }
 
     # ── Decay & Maintenance ──────────────────────────────────────
@@ -449,6 +581,200 @@ class CTEG:
             self._task_count = data.get("task_count", 0)
         except (FileNotFoundError, json.JSONDecodeError):
             pass
+
+    def load_knowledge_base(self, knowledge_path: str = "knowledge/") -> int:
+        """Load pre-built penetration testing patterns from JSON files.
+
+        Each JSON file contains an array of pattern objects with:
+        id, type, category, title, description, techniques, indicators, tags.
+        Stored as KnowledgePattern nodes in the CTEG graph.
+        Pre-computes embeddings for semantic search.
+
+        Returns number of patterns loaded.
+        """
+        import glob
+        count = 0
+        embedder = self._get_embedder()
+        texts_to_embed: List[tuple[str, str]] = []  # (node_id, text)
+
+        for fpath in sorted(glob.glob(f"{knowledge_path}*.json")):
+            try:
+                with open(fpath, encoding="utf-8") as f:
+                    patterns = json.load(f)
+                for p in patterns:
+                    node_id = p.get("id", f"kb-{count}")
+                    if self.graph.has_node(node_id):
+                        continue
+                    # Build rich text for embedding
+                    embed_text = (
+                        f"{p.get('category','')}: {p.get('title','')}. "
+                        f"{p.get('description','')} "
+                        f"Indicators: {'; '.join(p.get('indicators',[]))}. "
+                        f"Tags: {', '.join(p.get('tags',[]))}."
+                    )
+                    self.graph.add_node(
+                        node_id,
+                        type="KnowledgePattern",
+                        category=p.get("category", ""),
+                        title=p.get("title", ""),
+                        description=p.get("description", ""),
+                        techniques=p.get("techniques", []),
+                        indicators=p.get("indicators", []),
+                        tags=p.get("tags", []),
+                        confidence=p.get("confidence", 0.5),
+                        source="knowledge_base",
+                        embed_text=embed_text,
+                    )
+                    texts_to_embed.append((node_id, embed_text))
+                    count += 1
+            except Exception:
+                pass
+
+        # Pre-compute embeddings in batch
+        if embedder and texts_to_embed:
+            try:
+                texts = [t for _, t in texts_to_embed]
+                embeddings = embedder.encode(texts, show_progress_bar=False)
+                for (nid, _), emb in zip(texts_to_embed, embeddings):
+                    self._embedding_cache[nid] = emb
+            except Exception:
+                pass
+
+        return count
+
+    def query_rag(self, query: str, top_k: int = 5,
+                  category: str | None = None) -> List[Dict[str, Any]]:
+        """Semantic search over knowledge patterns using cosine similarity.
+
+        Uses SentenceTransformer embeddings (all-MiniLM-L6-v2, 384-dim).
+        Falls back to keyword matching if embedder is unavailable.
+
+        Args:
+            query: Natural language query (e.g. "IDOR in FastAPI edit profile")
+            top_k: Number of results to return
+            category: Optional filter by category (IDOR, SQLI, AUTH, etc.)
+
+        Returns:
+            List of matching pattern dicts with similarity scores.
+        """
+        embedder = self._get_embedder()
+
+        if embedder:
+            return self._semantic_search(query, top_k, category)
+        else:
+            return self._keyword_search(query, top_k, category)
+
+    def _semantic_search(self, query: str, top_k: int,
+                         category: str | None) -> List[Dict[str, Any]]:
+        """Vector-based semantic search.
+
+        Uses SentenceTransformer if available (real semantic search).
+        Falls back to TF-IDF + cosine similarity (lightweight, no model download).
+        """
+        import numpy as np
+        embedder = self._get_embedder()
+
+        if embedder:
+            # Neural embedding path
+            query_vec = embedder.encode([query], show_progress_bar=False)[0]
+            q_norm = np.linalg.norm(query_vec)
+            results: List[tuple[float, Dict]] = []
+            with self._lock:
+                for nid, data in self.graph.nodes(data=True):
+                    if data.get("type") != "KnowledgePattern":
+                        continue
+                    if category and data.get("category", "") != category:
+                        continue
+                    if nid in self._embedding_cache:
+                        node_vec = self._embedding_cache[nid]
+                    else:
+                        try:
+                            embed_text = data.get("embed_text", data.get("description", ""))
+                            node_vec = embedder.encode([embed_text], show_progress_bar=False)[0]
+                            self._embedding_cache[nid] = node_vec
+                        except Exception:
+                            continue
+                    n_norm = np.linalg.norm(node_vec)
+                    sim = float(np.dot(query_vec, node_vec) / (q_norm * n_norm)) if q_norm > 0 and n_norm > 0 else 0.0
+                    tag_boost = 0.15 if any(t.lower() in query.lower() for t in data.get("tags", [])) else 0.0
+                    results.append((sim + tag_boost, dict(data)))
+        else:
+            # TF-IDF vector path (lightweight, no model download)
+            vocab = self._build_vocabulary()
+            if not vocab:
+                return self._keyword_search(query, top_k, category)
+
+            # Compute IDF for all terms
+            N = sum(1 for _, d in self.graph.nodes(data=True)
+                    if d.get("type") == "KnowledgePattern")
+            df: Dict[str, int] = {}
+            for word in vocab:
+                for _, d in self.graph.nodes(data=True):
+                    if d.get("type") == "KnowledgePattern":
+                        text = d.get("embed_text", d.get("description", ""))
+                        if word in text.lower():
+                            df[word] = df.get(word, 0) + 1
+            idf = {w: np.log((N + 1) / (df.get(w, 0) + 1)) + 1 for w in vocab}
+
+            query_vec = self._tfidf_vector(query, vocab, idf)
+            results: List[tuple[float, Dict]] = []
+            with self._lock:
+                for nid, data in self.graph.nodes(data=True):
+                    if data.get("type") != "KnowledgePattern":
+                        continue
+                    if category and data.get("category", "") != category:
+                        continue
+                    embed_text = data.get("embed_text", data.get("description", ""))
+                    node_vec = self._tfidf_vector(embed_text, vocab, idf)
+                    sim = float(np.dot(query_vec, node_vec))
+                    tag_boost = 0.15 if any(t.lower() in query.lower() for t in data.get("tags", [])) else 0.0
+                    results.append((sim + tag_boost, dict(data)))
+
+        results.sort(key=lambda x: x[0], reverse=True)
+        return [
+            {"id": r[1].get("id", ""), "title": r[1].get("title", ""),
+             "description": r[1].get("description", ""),
+             "techniques": r[1].get("techniques", []),
+             "indicators": r[1].get("indicators", []),
+             "score": round(r[0], 3), "category": r[1].get("category", "")}
+            for r in results[:top_k]
+        ]
+
+    def _keyword_search(self, query: str, top_k: int,
+                        category: str | None) -> List[Dict[str, Any]]:
+        """Fallback keyword-based search when embedder unavailable."""
+        results: List[tuple[float, Dict]] = []
+        query_lower = query.lower()
+        query_words = set(query_lower.split())
+
+        with self._lock:
+            for nid, data in self.graph.nodes(data=True):
+                if data.get("type") != "KnowledgePattern":
+                    continue
+                if category and data.get("category", "") != category:
+                    continue
+
+                search_text = (
+                    f"{data.get('title','')} {data.get('description','')} "
+                    f"{' '.join(data.get('tags',[]))} "
+                    f"{' '.join(data.get('indicators',[]))}"
+                ).lower()
+                text_words = set(search_text.split())
+                overlap = len(query_words & text_words)
+                tag_match = any(t in query_lower for t in data.get("tags", []))
+                score = overlap * 1.0 + (2.0 if tag_match else 0)
+                if score > 0:
+                    results.append((score, dict(data)))
+
+        results.sort(key=lambda x: x[0], reverse=True)
+        return [
+            {"id": r[1].get("id", ""), "title": r[1].get("title", ""),
+             "description": r[1].get("description", ""),
+             "techniques": r[1].get("techniques", []),
+             "indicators": r[1].get("indicators", []),
+             "score": r[0], "category": r[1].get("category", "")}
+            for r in results[:top_k]
+        ]
 
     def to_dict(self) -> Dict[str, Any]:
         with self._lock:

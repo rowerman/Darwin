@@ -218,6 +218,106 @@
       "type": "Endpoint",
       "created_at": "2026-05-18T21:22:59.094191",
       "updated_at": "2026-05-18T21:22:59.094202"
+    },
+    {
+      "id": "auth-/dashboard",
+      "url": "http://localhost:32772/dashboard",
+      "method": "GET",
+      "params": "",
+      "auth_required": true,
+      "type": "Endpoint",
+      "created_at": "2026-05-18T21:24:35.286077",
+      "updated_at": "2026-05-18T21:24:35.286102"
+    },
+    {
+      "id": "auth-/orders",
+      "url": "http://localhost:32772/orders",
+      "method": "GET",
+      "params": "",
+      "auth_required": true,
+      "type": "Endpoint",
+      "created_at": "2026-05-18T21:24:35.286143",
+      "updated_at": "2026-05-18T21:24:35.286150"
+    },
+    {
+      "id": "auth-/profile",
+      "url": "http://localhost:32772/profile",
+      "method": "GET",
+      "params": "",
+      "auth_required": true,
+      "type": "Endpoint",
+      "created_at": "2026-05-18T21:24:35.286167",
+      "updated_at": "2026-05-18T21:24:35.286172"
+    },
+    {
+      "id": "auth-/account",
+      "url": "http://localhost:32772/account",
+      "method": "GET",
+      "params": "",
+      "auth_required": true,
+      "type": "Endpoint",
+      "created_at": "2026-05-18T21:24:35.286186",
+      "updated_at": "2026-05-18T21:24:35.286191"
+    },
+    {
+      "id": "auth-/admin",
+      "url": "http://localhost:32772/admin",
+      "method": "GET",
+      "params": "",
+      "auth_required": true,
+      "type": "Endpoint",
+      "created_at": "2026-05-18T21:24:35.286204",
+      "updated_at": "2026-05-18T21:24:35.286209"
+    },
+    {
+      "id": "auth-/docs",
+      "url": "http://localhost:32772/docs",
+      "method": "GET",
+      "params": "",
+      "auth_required": true,
+      "type": "Endpoint",
+      "created_at": "2026-05-18T21:24:35.286223",
+      "updated_at": "2026-05-18T21:24:35.286228"
+    },
+    {
+      "id": "auth-/edit_profile/1",
+      "url": "http://localhost:32772/edit_profile/1",
+      "method": "GET",
+      "params": "",
+      "auth_required": true,
+      "type": "Endpoint",
+      "created_at": "2026-05-18T21:24:35.286253",
+      "updated_at": "2026-05-18T21:24:35.286258"
+    },
+    {
+      "id": "auth-/company/1/jobs",
+      "url": "http://localhost:32772/company/1/jobs",
+      "method": "GET",
+      "params": "",
+      "auth_required": true,
+      "type": "Endpoint",
+      "created_at": "2026-05-18T21:24:35.286271",
+      "updated_at": "2026-05-18T21:24:35.286276"
+    },
+    {
+      "id": "auth-/user/1",
+      "url": "http://localhost:32772/user/1",
+      "method": "GET",
+      "params": "",
+      "auth_required": true,
+      "type": "Endpoint",
+      "created_at": "2026-05-18T21:24:35.286289",
+      "updated_at": "2026-05-18T21:24:35.286294"
+    },
+    {
+      "id": "auth-/users/1",
+      "url": "http://localhost:32772/users/1",
+      "method": "GET",
+      "params": "",
+      "auth_required": true,
+      "type": "Endpoint",
+      "created_at": "2026-05-18T21:24:35.286308",
+      "updated_at": "2026-05-18T21:24:35.286313"
     }
   ],
   "edges": [],

@@ -31,7 +31,7 @@ async def main():
     else:
         print("MCP servers:    (none enabled in config/mcp_servers.yaml)")
 
-    orch = Orchestrator(llm_session=llm, time_budget=300, token_budget=100000)
+    orch = Orchestrator(llm_session=llm, time_budget=600, token_budget=200000)
     print("Starting penetration test ...\n")
 
     result = await orch.run(

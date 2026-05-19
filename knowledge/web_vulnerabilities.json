@@ -1,0 +1,150 @@
+[
+  {
+    "id": "idor-url-path",
+    "type": "ExploitPattern",
+    "category": "IDOR",
+    "title": "URL Path IDOR — Direct Object Reference in URL",
+    "description": "When URLs contain numeric IDs (/order/123, /user/456), try adjacent values to access other users' data.",
+    "techniques": [
+      "Increment/decrement numeric path segments by ±1, ±10",
+      "Try common IDs: 0, 1, 2, admin user IDs",
+      "Check if authentication is checked per-resource",
+      "If data returned differs, you found IDOR"
+    ],
+    "indicators": ["Numeric path segments", "Resource names in URL", "Same endpoint returns different data for different IDs"],
+    "tags": ["idor", "authorization", "web"],
+    "confidence": 0.7
+  },
+  {
+    "id": "idor-custom-header",
+    "type": "ExploitPattern",
+    "category": "IDOR",
+    "title": "Header-Based IDOR — Custom Auth Headers",
+    "description": "Applications may trust custom HTTP headers (X-UserId, X-Auth-User, X-Forwarded-User) to identify users. Set these headers to different user IDs to access other users' data.",
+    "techniques": [
+      "Try headers: X-UserId, X-User-Id, X-Forwarded-User, X-Auth-User, X-Authenticated-User",
+      "Try ID values: 0, 1, 2, 10032, 10033, 10052",
+      "Try the header on every authenticated page",
+      "If response changes (different user data or status code), you found IDOR"
+    ],
+    "indicators": ["Dashboard/profile pages showing user info", "API endpoints with user-specific data", "JavaScript sending X-UserId in fetch requests"],
+    "tags": ["idor", "header-injection", "web"],
+    "confidence": 0.6
+  },
+  {
+    "id": "idor-post-body",
+    "type": "ExploitPattern",
+    "category": "IDOR",
+    "title": "POST Body IDOR — Privilege Escalation via Form Fields",
+    "description": "Profile edit forms may accept privilege escalation fields (is_admin, role, user_id) that the attacker can tamper with. POST to edit endpoints with these fields set to elevated values.",
+    "techniques": [
+      "On profile/edit pages: POST with is_admin=1, admin=true, role=admin",
+      "Change user_id in POST body to another user's ID",
+      "Try adding fields: is_admin, admin, role, permissions, groups",
+      "After state change, revisit data pages to check for new access"
+    ],
+    "indicators": ["Profile/edit forms", "Hidden user_id fields in forms", "Admin status indicators in page content"],
+    "tags": ["idor", "privilege-escalation", "web", "post"],
+    "confidence": 0.65
+  },
+  {
+    "id": "sqli-login-bypass",
+    "type": "ExploitPattern",
+    "category": "SQLI",
+    "title": "SQL Injection — Authentication Bypass",
+    "description": "Login forms that concatenate user input into SQL queries can be bypassed. Try classic SQLi payloads in username/password fields.",
+    "techniques": [
+      "Username: ' OR '1'='1, admin'--, ' OR 1=1--",
+      "Username: ' UNION SELECT 1,'admin','password'--",
+      "If SQL error returned, parametrize further",
+      "Use sqlmap if available: sqlmap -u URL --data='username=*&password=*'"
+    ],
+    "indicators": ["Login forms", "Database error messages in responses", "Numeric user IDs suggesting DB backend"],
+    "tags": ["sqli", "authentication", "web"],
+    "confidence": 0.7
+  },
+  {
+    "id": "sqli-union-based",
+    "type": "ExploitPattern",
+    "category": "SQLI",
+    "title": "SQL Injection — UNION-Based Data Extraction",
+    "description": "Use UNION SELECT to extract data from other database tables when the query result is displayed on the page.",
+    "techniques": [
+      "Determine column count: ' ORDER BY 1--, ORDER BY 2--, ...",
+      "Find visible columns: ' UNION SELECT 1,2,3,4,5--",
+      "Extract data: ' UNION SELECT username,password,3,4,5 FROM users--",
+      "Use sqlmap with --technique=U for automated UNION exploitation"
+    ],
+    "indicators": ["Tabular data display", "Search/filter parameters", "Database errors visible"],
+    "tags": ["sqli", "data-extraction", "web"],
+    "confidence": 0.6
+  },
+  {
+    "id": "default-credentials",
+    "type": "ExploitPattern",
+    "category": "AUTH",
+    "title": "Default Credentials",
+    "description": "Many applications ship with default test accounts. Try common credential pairs on every login form discovered.",
+    "techniques": [
+      "Try: test/test, admin/admin, admin/password, demo/demo, guest/guest, root/root",
+      "Check HTML comments for hints: <!-- TODO: delete test account -->",
+      "Look for hardcoded credentials in JavaScript or page source",
+      "After login, immediately check all authenticated pages for sensitive data"
+    ],
+    "indicators": ["Login form detected", "HTML comments mentioning accounts", "Default installation documentation referenced"],
+    "tags": ["authentication", "default-credentials", "web"],
+    "confidence": 0.8
+  },
+  {
+    "id": "jwt-manipulation",
+    "type": "ExploitPattern",
+    "category": "AUTH",
+    "title": "JWT Token Manipulation",
+    "description": "Applications using JWT for authentication may be vulnerable to token manipulation, especially with weak secrets. Try decoding, modifying, and replaying JWTs.",
+    "techniques": [
+      "Decode JWT with jwt.io or Python jose library",
+      "Check if 'alg':'none' is accepted (no signature)",
+      "Try weak secrets: 'secret', 'your_secret_key', 'password'",
+      "Modify 'sub' claim to another user's ID",
+      "Check token expiration — may be infinite",
+      "Send modified JWT in Authorization: Bearer or Cookie header"
+    ],
+    "indicators": ["JWT in cookie or Authorization header", "FastAPI/Swagger UI", "Bearer token in responses"],
+    "tags": ["authentication", "jwt", "token-manipulation", "web"],
+    "confidence": 0.6
+  },
+  {
+    "id": "swagger-api-discovery",
+    "type": "ExploitPattern",
+    "category": "RECON",
+    "title": "API Discovery via Swagger/OpenAPI",
+    "description": "FastAPI and other frameworks auto-generate API documentation at /docs or /openapi.json. This reveals ALL endpoints, parameters, and request formats.",
+    "techniques": [
+      "Fetch /openapi.json, /docs, /swagger.json, /api/docs",
+      "Parse paths and methods from the OpenAPI spec",
+      "Try every discovered endpoint with authentication",
+      "Look for {id} parameters in paths — IDOR targets",
+      "Look for POST endpoints with interesting field names (is_admin, role)"
+    ],
+    "indicators": ["FastAPI/uvicorn server header", "Swagger UI at /docs", "OpenAPI JSON at /openapi.json"],
+    "tags": ["recon", "api-discovery", "fastapi", "web"],
+    "confidence": 0.9
+  },
+  {
+    "id": "jwt-weak-secret",
+    "type": "ExploitPattern",
+    "category": "AUTH",
+    "title": "JWT Signature Forging with Weak Secret",
+    "description": "JWTs with weak secrets can be forged. FastAPI apps often use 'your_secret_key' or 'secret' as the signing key. Forge a JWT with a different sub claim to access other users' data.",
+    "techniques": [
+      "Decode existing JWT to extract algorithm and claims",
+      "Try common weak secrets: 'your_secret_key', 'secret', 'SECRET_KEY', 'changeme'",
+      "Use Python jose library to forge token with modified 'sub'",
+      "Send forged token in Cookie: access_token=Bearer <forged_jwt>",
+      "Access /company/{id}/jobs or similar endpoints with forged token"
+    ],
+    "indicators": ["JWT token", "HS256 algorithm", "FastAPI/Swagger docs", "Hardcoded SECRET_KEY in source if visible"],
+    "tags": ["authentication", "jwt", "token-forging", "web", "fastapi"],
+    "confidence": 0.55
+  }
+]

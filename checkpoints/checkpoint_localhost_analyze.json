@@ -6,8 +6,8 @@
       "is_reachable": true,
       "is_internal": false,
       "type": "Host",
-      "created_at": "2026-05-18T15:06:55.442474",
-      "updated_at": "2026-05-18T15:06:55.442476"
+      "created_at": "2026-05-18T16:10:48.097156",
+      "updated_at": "2026-05-18T16:10:48.097158"
     },
     {
       "id": "svc-localhost-22",
@@ -16,8 +16,8 @@
       "version": "OpenSSH 8.9p1 Ubuntu 3ubuntu0.15 (Ubuntu Linux; protocol 2.0)",
       "banner": "ssh",
       "type": "Service",
-      "created_at": "2026-05-18T15:06:55.442443",
-      "updated_at": "2026-05-18T15:06:55.442446"
+      "created_at": "2026-05-18T16:10:48.097127",
+      "updated_at": "2026-05-18T16:10:48.097130"
     },
     {
       "id": "svc-localhost-1053",
@@ -26,236 +26,217 @@
       "version": "tcpwrapped",
       "banner": "tcpwrapped",
       "type": "Service",
-      "created_at": "2026-05-18T15:06:55.442465",
-      "updated_at": "2026-05-18T15:06:55.442467"
+      "created_at": "2026-05-18T16:10:48.097147",
+      "updated_at": "2026-05-18T16:10:48.097150"
     },
     {
-      "id": "svc-localhost-32770",
-      "port": 32770,
+      "id": "svc-localhost-32771",
+      "port": 32771,
       "protocol": "tcp",
-      "version": "Apache httpd 2.4.67 ((Debian))",
-      "banner": "http",
+      "version": "sometimes-rpc5?",
+      "banner": "sometimes-rpc5?",
       "type": "Service",
-      "created_at": "2026-05-18T15:06:55.442482",
-      "updated_at": "2026-05-18T15:06:55.442484"
+      "created_at": "2026-05-18T16:10:48.097164",
+      "updated_at": "2026-05-18T16:10:48.097166"
     },
     {
-      "id": "endpoint-http://localhost:32770/dashboard",
-      "url": "http://localhost:32770/dashboard",
+      "id": "endpoint-http://localhost:32771/docs",
+      "url": "http://localhost:32771/docs",
       "method": "GET",
       "params": "",
       "auth_required": false,
       "type": "Endpoint",
-      "created_at": "2026-05-18T15:07:06.926709",
-      "updated_at": "2026-05-18T15:07:06.926724"
+      "created_at": "2026-05-18T16:10:58.183305",
+      "updated_at": "2026-05-18T16:10:58.183330"
     },
     {
-      "id": "endpoint-http://localhost:32770/logout",
-      "url": "http://localhost:32770/logout",
+      "id": "endpoint-http://localhost:32771/ping",
+      "url": "http://localhost:32771/ping",
       "method": "GET",
       "params": "",
       "auth_required": false,
       "type": "Endpoint",
-      "created_at": "2026-05-18T15:07:06.926751",
-      "updated_at": "2026-05-18T15:07:06.926754"
+      "created_at": "2026-05-18T16:10:58.183369",
+      "updated_at": "2026-05-18T16:10:58.183375"
     },
     {
-      "id": "endpoint-http://localhost:32770/server-status",
-      "url": "http://localhost:32770/server-status",
-      "method": "GET",
-      "params": "",
-      "auth_required": false,
-      "type": "Endpoint",
-      "created_at": "2026-05-18T15:07:06.926764",
-      "updated_at": "2026-05-18T15:07:06.926767"
-    },
-    {
-      "id": "endpoint-http://localhost:32770/javascript/jquery/jquery",
-      "url": "http://localhost:32770/javascript/jquery/jquery",
-      "method": "GET",
-      "params": "",
-      "auth_required": false,
-      "type": "Endpoint",
-      "created_at": "2026-05-18T15:07:06.926775",
-      "updated_at": "2026-05-18T15:07:06.926778"
-    },
-    {
-      "id": "nikto-http://localhost:32770-Target IP:          127.0.0.1",
+      "id": "nikto-http://localhost:32771-Target IP:          127.0.0.1",
       "type": "Vulnerability",
-      "endpoint": "http://localhost:32770",
+      "endpoint": "http://localhost:32771",
       "parameter": "",
       "severity": "low",
       "source": "nikto",
       "detail": "Target IP:          127.0.0.1",
-      "created_at": "2026-05-18T15:07:07.476617",
-      "updated_at": "2026-05-18T15:07:07.476631"
+      "created_at": "2026-05-18T16:10:58.661970",
+      "updated_at": "2026-05-18T16:10:58.661994"
     },
     {
-      "id": "nikto-http://localhost:32770-Target Hostname:    localhost",
+      "id": "nikto-http://localhost:32771-Target Hostname:    localhost",
       "type": "Vulnerability",
-      "endpoint": "http://localhost:32770",
+      "endpoint": "http://localhost:32771",
       "parameter": "",
       "severity": "low",
       "source": "nikto",
       "detail": "Target Hostname:    localhost",
-      "created_at": "2026-05-18T15:07:07.476654",
-      "updated_at": "2026-05-18T15:07:07.476657"
+      "created_at": "2026-05-18T16:10:58.662032",
+      "updated_at": "2026-05-18T16:10:58.662038"
     },
     {
-      "id": "nikto-http://localhost:32770-Target Port:        32770",
+      "id": "nikto-http://localhost:32771-Target Port:        32771",
       "type": "Vulnerability",
-      "endpoint": "http://localhost:32770",
+      "endpoint": "http://localhost:32771",
       "parameter": "",
       "severity": "low",
       "source": "nikto",
-      "detail": "Target Port:        32770",
-      "created_at": "2026-05-18T15:07:07.476665",
-      "updated_at": "2026-05-18T15:07:07.476668"
+      "detail": "Target Port:        32771",
+      "created_at": "2026-05-18T16:10:58.662056",
+      "updated_at": "2026-05-18T16:10:58.662061"
     },
     {
-      "id": "nikto-http://localhost:32770-Start Time:         2026-05-18 15:07:07 ",
+      "id": "nikto-http://localhost:32771-Start Time:         2026-05-18 16:10:58 ",
       "type": "Vulnerability",
-      "endpoint": "http://localhost:32770",
+      "endpoint": "http://localhost:32771",
       "parameter": "",
       "severity": "low",
       "source": "nikto",
-      "detail": "Start Time:         2026-05-18 15:07:07 (GMT8)",
-      "created_at": "2026-05-18T15:07:07.476677",
-      "updated_at": "2026-05-18T15:07:07.476679"
+      "detail": "Start Time:         2026-05-18 16:10:58 (GMT8)",
+      "created_at": "2026-05-18T16:10:58.662077",
+      "updated_at": "2026-05-18T16:10:58.662082"
     },
     {
-      "id": "nikto-http://localhost:32770-Server: Apache/2.4.67 (Debian)",
+      "id": "nikto-http://localhost:32771-Server: uvicorn",
       "type": "Vulnerability",
-      "endpoint": "http://localhost:32770",
+      "endpoint": "http://localhost:32771",
       "parameter": "",
       "severity": "low",
       "source": "nikto",
-      "detail": "Server: Apache/2.4.67 (Debian)",
-      "created_at": "2026-05-18T15:07:07.476686",
-      "updated_at": "2026-05-18T15:07:07.476689"
+      "detail": "Server: uvicorn",
+      "created_at": "2026-05-18T16:10:58.662096",
+      "updated_at": "2026-05-18T16:10:58.662101"
     },
     {
-      "id": "nikto-http://localhost:32770-The anti-clickjacking X-Frame-Options he",
+      "id": "nikto-http://localhost:32771-The anti-clickjacking X-Frame-Options he",
       "type": "Vulnerability",
-      "endpoint": "http://localhost:32770",
+      "endpoint": "http://localhost:32771",
       "parameter": "",
       "severity": "low",
       "source": "nikto",
       "detail": "The anti-clickjacking X-Frame-Options header is not present.",
-      "created_at": "2026-05-18T15:07:07.476696",
-      "updated_at": "2026-05-18T15:07:07.476698"
+      "created_at": "2026-05-18T16:10:58.662119",
+      "updated_at": "2026-05-18T16:10:58.662124"
     },
     {
-      "id": "nikto-http://localhost:32770-No CGI Directories found (use '-C all' t",
+      "id": "nikto-http://localhost:32771-No CGI Directories found (use '-C all' t",
       "type": "Vulnerability",
-      "endpoint": "http://localhost:32770",
+      "endpoint": "http://localhost:32771",
       "parameter": "",
       "severity": "low",
       "source": "nikto",
       "detail": "No CGI Directories found (use '-C all' to force check all possible dirs)",
-      "created_at": "2026-05-18T15:07:07.476704",
-      "updated_at": "2026-05-18T15:07:07.476707"
+      "created_at": "2026-05-18T16:10:58.662138",
+      "updated_at": "2026-05-18T16:10:58.662143"
     },
     {
-      "id": "nikto-http://localhost:32770-Allowed HTTP Methods: OPTIONS, POST, GET",
+      "id": "nikto-http://localhost:32771-Allowed HTTP Methods: GET",
       "type": "Vulnerability",
-      "endpoint": "http://localhost:32770",
+      "endpoint": "http://localhost:32771",
       "parameter": "",
       "severity": "low",
       "source": "nikto",
-      "detail": "Allowed HTTP Methods: OPTIONS, POST, GET, HEAD",
-      "created_at": "2026-05-18T15:07:07.476714",
-      "updated_at": "2026-05-18T15:07:07.476716"
+      "detail": "Allowed HTTP Methods: GET",
+      "created_at": "2026-05-18T16:10:58.662157",
+      "updated_at": "2026-05-18T16:10:58.662162"
     },
     {
-      "id": "nikto-http://localhost:32770-21 items checked: 0 error(s) and 2 item(",
+      "id": "nikto-http://localhost:32771-21 items checked: 0 error(s) and 2 item(",
       "type": "Vulnerability",
-      "endpoint": "http://localhost:32770",
+      "endpoint": "http://localhost:32771",
       "parameter": "",
       "severity": "low",
       "source": "nikto",
       "detail": "21 items checked: 0 error(s) and 2 item(s) reported on remote host",
-      "created_at": "2026-05-18T15:07:07.476722",
-      "updated_at": "2026-05-18T15:07:07.476725"
+      "created_at": "2026-05-18T16:10:58.662175",
+      "updated_at": "2026-05-18T16:10:58.662180"
     },
     {
-      "id": "nikto-http://localhost:32770-End Time:           2026-05-18 15:07:07 ",
+      "id": "nikto-http://localhost:32771-End Time:           2026-05-18 16:10:58 ",
       "type": "Vulnerability",
-      "endpoint": "http://localhost:32770",
+      "endpoint": "http://localhost:32771",
       "parameter": "",
       "severity": "low",
       "source": "nikto",
-      "detail": "End Time:           2026-05-18 15:07:07 (GMT8) (0 seconds)",
-      "created_at": "2026-05-18T15:07:07.476731",
-      "updated_at": "2026-05-18T15:07:07.476734"
+      "detail": "End Time:           2026-05-18 16:10:58 (GMT8) (0 seconds)",
+      "created_at": "2026-05-18T16:10:58.662194",
+      "updated_at": "2026-05-18T16:10:58.662199"
     },
     {
-      "id": "svc-http-32770",
-      "port": 32770,
+      "id": "svc-http-32771",
+      "port": 32771,
       "protocol": "HTTP",
       "version": "unknown",
       "banner": "",
       "type": "Service",
-      "created_at": "2026-05-18T15:07:07.476879",
-      "updated_at": "2026-05-18T15:07:07.476883"
+      "created_at": "2026-05-18T16:10:58.662411",
+      "updated_at": "2026-05-18T16:10:58.662419"
     },
     {
-      "id": "endpoint-http://localhost:32770/static/css/bootstrap.min.css",
-      "url": "http://localhost:32770/static/css/bootstrap.min.css",
+      "id": "endpoint-http://localhost:32771/token",
+      "url": "http://localhost:32771/token",
       "method": "GET",
       "params": "",
       "auth_required": false,
       "type": "Endpoint",
-      "created_at": "2026-05-18T15:07:07.477555",
-      "updated_at": "2026-05-18T15:07:07.477561"
+      "created_at": "2026-05-18T16:10:58.663834",
+      "updated_at": "2026-05-18T16:10:58.663847"
     },
     {
-      "id": "endpoint-http://localhost:32770-param-username",
-      "url": "http://localhost:32770",
+      "id": "endpoint-http://localhost:32771-param-password",
+      "url": "http://localhost:32771",
+      "method": "POST",
+      "params": "password",
+      "auth_required": false,
+      "type": "Endpoint",
+      "created_at": "2026-05-18T16:10:58.664252",
+      "updated_at": "2026-05-18T16:10:58.664262"
+    },
+    {
+      "id": "endpoint-http://localhost:32771-param-username",
+      "url": "http://localhost:32771",
       "method": "POST",
       "params": "username",
       "auth_required": false,
       "type": "Endpoint",
-      "created_at": "2026-05-18T15:07:07.477808",
-      "updated_at": "2026-05-18T15:07:07.477814"
+      "created_at": "2026-05-18T16:10:58.664285",
+      "updated_at": "2026-05-18T16:10:58.664291"
     },
     {
       "id": "vuln-1",
       "type": "Vulnerability",
-      "endpoint": "http://localhost:32770",
+      "endpoint": "http://localhost:32771",
       "parameter": "",
       "severity": "unknown",
-      "created_at": "2026-05-18T15:08:27.203305",
-      "updated_at": "2026-05-18T15:08:27.203315"
+      "created_at": "2026-05-18T16:11:48.247466",
+      "updated_at": "2026-05-18T16:11:48.247480"
     },
     {
       "id": "vuln-2",
       "type": "Vulnerability",
-      "endpoint": "http://localhost:32770",
+      "endpoint": "http://localhost:32771",
       "parameter": "",
       "severity": "unknown",
-      "created_at": "2026-05-18T15:08:27.203344",
-      "updated_at": "2026-05-18T15:08:27.203346"
+      "created_at": "2026-05-18T16:11:48.247511",
+      "updated_at": "2026-05-18T16:11:48.247515"
     },
     {
       "id": "vuln-3",
       "type": "Vulnerability",
-      "endpoint": "http://localhost:32770/server-status",
+      "endpoint": "http://localhost:32771/token",
       "parameter": "",
       "severity": "unknown",
-      "created_at": "2026-05-18T15:08:27.203356",
-      "updated_at": "2026-05-18T15:08:27.203359"
-    },
-    {
-      "id": "vuln-4",
-      "type": "Vulnerability",
-      "endpoint": "http://localhost:32770",
-      "parameter": "username",
-      "severity": "unknown",
-      "created_at": "2026-05-18T15:08:27.203372",
-      "updated_at": "2026-05-18T15:08:27.203374"
+      "created_at": "2026-05-18T16:11:48.247531",
+      "updated_at": "2026-05-18T16:11:48.247534"
     }
   ],
   "edges": [],
-  "created_at": "2026-05-18T15:06:26.875892"
+  "created_at": "2026-05-18T16:10:24.496932"
 }

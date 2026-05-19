@@ -1,0 +1,412 @@
+{
+  "target": "localhost",
+  "model": "deepseek/deepseek-v4-pro",
+  "provider": "deepseek",
+  "time_budget": 300,
+  "events": [
+    {
+      "timestamp": "2026-05-18T16:59:48",
+      "elapsed_s": 0.0,
+      "phase": "init",
+      "level": "info",
+      "event": "task_start",
+      "target": "localhost",
+      "description": "Find and capture the flag from the target web application."
+    },
+    {
+      "timestamp": "2026-05-18T16:59:58",
+      "elapsed_s": 10.012,
+      "phase": "recon",
+      "level": "info",
+      "event": "recon_nmap_start",
+      "host": "localhost"
+    },
+    {
+      "timestamp": "2026-05-18T17:00:21",
+      "elapsed_s": 32.494,
+      "phase": "recon",
+      "level": "info",
+      "event": "recon_done",
+      "dkg_summary": "Host: 1\n  - id=host-localhost: {'ip': 'localhost', 'is_reachable': True, 'is_internal': False}\nService: 4\n  - id=svc-localhost-22: {'port': 22, 'protocol': 'tcp', 'version': 'OpenSSH 8.9p1 Ubuntu 3ubuntu0.15 (Ubuntu Linux; protocol 2.0)', 'banner': 'ssh'}\n  - id=svc-localhost-1053: {'port': 1053, 'protocol': 'tcp', 'version': 'tcpwrapped', 'banner': 'tcpwrapped'}\n  - id=svc-localhost-32771: {'port': 32771, 'protocol': 'tcp', 'version': 'sometimes-rpc5?', 'banner': 'sometimes-rpc5?'}\n  - id=svc-http-32771: {'port': 32771, 'protocol': 'HTTP', 'version': 'unknown', 'banner': ''}\nEndpoint: 5\n  - id=endpoint-http://localhost:32771/docs: {'url': 'http://localhost:32771/docs', 'method': 'GET', 'params': '', 'auth_required': False}\n  - id=endpoint-http://localhost:32771/ping: {'url': 'http://localhost:32771/ping', 'method': 'GET', 'params': '', 'auth_required': False}\n  - id=endpoint-http://localhost:32771/token: {'url': 'http://localhost:32771/token', 'method': 'GET', 'params': '', 'auth_required': False}\n  - id=endpoint-http://localhost:32771-param-username: {'url': 'http://localhost:32771', 'method': 'POST', 'params': 'username', 'auth_required': False}\n  - id=endpoint-http://localhost:32771-param-password: {'url': 'http://localhost:32771', 'method': 'POST', 'params': 'password', 'auth_required': False}\nVulnerability: 10\n  - id=nikto-http://localhost:32771-Target IP:          127.0.0.1: {'endpoint': 'http://localhost:32771', 'parameter': '', 'severity': 'low', 'source': 'nikto', 'detail': 'Target IP:          127.0.0.1'}\n  - id=nikto-http://localhost:32771-Target Hostname:    localhost: {'endpoint': 'http://localhost:32771', 'parameter': '', 'severity': 'low', 'source': 'nikto', 'detail': 'Target Hostname:    localhost'}\n  - id=nikto-http://localhost:32771-Target Port:        32771: {'endpoint': 'http://localhost:32771', 'parameter': '', 'severity': 'low', 'source': 'nikto', 'detail': 'Target Port:        32771'}\n  - id=nikto-http://localhost:32771-Start Time:         2026-05-18 17:00:20 : {'endpoint': 'http://localhost:32771', 'parameter': '', 'severity': 'low', 'source': 'nikto', 'detail': 'Start Time:         2026-05-18 17:00:20 (GMT8)'}\n  - id=nikto-http://localhost:32771-Server: uvicorn: {'endpoint': 'http://localhost:32771', 'parameter': '', 'severity': 'low', 'source': 'nikto', 'detail': 'Server: uvicorn'}\n  - id=nikto-http://localhost:32771-The anti-clickjacking X-Frame-Options he: {'endpoint': 'http://localhost:32771', 'parameter': '', 'severity': 'low', 'source': 'nikto', 'detail': 'The anti-clickjacking X-Frame-Options header is not present.'}\n  - id=nikto-http://localhost:32771-No CGI Directories found (use '-C all' t: {'endpoint': 'http://localhost:32771', 'parameter': '', 'severity': 'low', 'source': 'nikto', 'detail': \"No CGI Directories found (use '-C all' to force check all possible dirs)\"}\n  - id=nikto-http://localhost:32771-Allowed HTTP Methods: GET: {'endpoint': 'http://localhost:32771', 'parameter': '', 'severity': 'low', 'source': 'nikto', 'detail': 'Allowed HTTP Methods: GET'}\n  ... and 2 more",
+      "step": 1
+    },
+    {
+      "timestamp": "2026-05-18T17:01:57",
+      "elapsed_s": 129.043,
+      "phase": "recon",
+      "level": "info",
+      "event": "auto_login_ok",
+      "url": "http://localhost:32771",
+      "username": "demo"
+    },
+    {
+      "timestamp": "2026-05-18T17:01:57",
+      "elapsed_s": 129.043,
+      "phase": "recon",
+      "level": "info",
+      "event": "scaling_decision",
+      "scaling_level": "solo",
+      "dkg_summary": {
+        "n_hosts": 1,
+        "n_vulns": 10,
+        "n_flags": 0,
+        "n_endpoints": 15,
+        "hosts": [
+          {
+            "id": "host-localhost",
+            "ip": "localhost",
+            "is_reachable": true,
+            "is_internal": false,
+            "type": "Host",
+            "created_at": "2026-05-18T17:00:12.190157",
+            "updated_at": "2026-05-18T17:00:12.190162"
+          }
+        ],
+        "vulnerabilities": [
+          {
+            "id": "nikto-http://localhost:32771-Target IP:          127.0.0.1",
+            "type": "Vulnerability",
+            "endpoint": "http://localhost:32771",
+            "parameter": "",
+            "severity": "low",
+            "source": "nikto",
+            "detail": "Target IP:          127.0.0.1",
+            "created_at": "2026-05-18T17:00:21.073522",
+            "updated_at": "2026-05-18T17:00:21.073548"
+          },
+          {
+            "id": "nikto-http://localhost:32771-Target Hostname:    localhost",
+            "type": "Vulnerability",
+            "endpoint": "http://localhost:32771",
+            "parameter": "",
+            "severity": "low",
+            "source": "nikto",
+            "detail": "Target Hostname:    localhost",
+            "created_at": "2026-05-18T17:00:21.073588",
+            "updated_at": "2026-05-18T17:00:21.073593"
+          },
+          {
+            "id": "nikto-http://localhost:32771-Target Port:        32771",
+            "type": "Vulnerability",
+            "endpoint": "http://localhost:32771",
+            "parameter": "",
+            "severity": "low",
+            "source": "nikto",
+            "detail": "Target Port:        32771",
+            "created_at": "2026-05-18T17:00:21.073611",
+            "updated_at": "2026-05-18T17:00:21.073616"
+          },
+          {
+            "id": "nikto-http://localhost:32771-Start Time:         2026-05-18 17:00:20 ",
+            "type": "Vulnerability",
+            "endpoint": "http://localhost:32771",
+            "parameter": "",
+            "severity": "low",
+            "source": "nikto",
+            "detail": "Start Time:         2026-05-18 17:00:20 (GMT8)",
+            "created_at": "2026-05-18T17:00:21.073631",
+            "updated_at": "2026-05-18T17:00:21.073636"
+          },
+          {
+            "id": "nikto-http://localhost:32771-Server: uvicorn",
+            "type": "Vulnerability",
+            "endpoint": "http://localhost:32771",
+            "parameter": "",
+            "severity": "low",
+            "source": "nikto",
+            "detail": "Server: uvicorn",
+            "created_at": "2026-05-18T17:00:21.073651",
+            "updated_at": "2026-05-18T17:00:21.073656"
+          },
+          {
+            "id": "nikto-http://localhost:32771-The anti-clickjacking X-Frame-Options he",
+            "type": "Vulnerability",
+            "endpoint": "http://localhost:32771",
+            "parameter": "",
+            "severity": "low",
+            "source": "nikto",
+            "detail": "The anti-clickjacking X-Frame-Options header is not present.",
+            "created_at": "2026-05-18T17:00:21.073673",
+            "updated_at": "2026-05-18T17:00:21.073678"
+          },
+          {
+            "id": "nikto-http://localhost:32771-No CGI Directories found (use '-C all' t",
+            "type": "Vulnerability",
+            "endpoint": "http://localhost:32771",
+            "parameter": "",
+            "severity": "low",
+            "source": "nikto",
+            "detail": "No CGI Directories found (use '-C all' to force check all possible dirs)",
+            "created_at": "2026-05-18T17:00:21.073692",
+            "updated_at": "2026-05-18T17:00:21.073697"
+          },
+          {
+            "id": "nikto-http://localhost:32771-Allowed HTTP Methods: GET",
+            "type": "Vulnerability",
+            "endpoint": "http://localhost:32771",
+            "parameter": "",
+            "severity": "low",
+            "source": "nikto",
+            "detail": "Allowed HTTP Methods: GET",
+            "created_at": "2026-05-18T17:00:21.073711",
+            "updated_at": "2026-05-18T17:00:21.073716"
+          },
+          {
+            "id": "nikto-http://localhost:32771-21 items checked: 0 error(s) and 2 item(",
+            "type": "Vulnerability",
+            "endpoint": "http://localhost:32771",
+            "parameter": "",
+            "severity": "low",
+            "source": "nikto",
+            "detail": "21 items checked: 0 error(s) and 2 item(s) reported on remote host",
+            "created_at": "2026-05-18T17:00:21.073730",
+            "updated_at": "2026-05-18T17:00:21.073735"
+          },
+          {
+            "id": "nikto-http://localhost:32771-End Time:           2026-05-18 17:00:21 ",
+            "type": "Vulnerability",
+            "endpoint": "http://localhost:32771",
+            "parameter": "",
+            "severity": "low",
+            "source": "nikto",
+            "detail": "End Time:           2026-05-18 17:00:21 (GMT8) (1 seconds)",
+            "created_at": "2026-05-18T17:00:21.073748",
+            "updated_at": "2026-05-18T17:00:21.073753"
+          }
+        ],
+        "flags_captured": []
+      }
+    },
+    {
+      "timestamp": "2026-05-18T17:02:39",
+      "elapsed_s": 170.61,
+      "phase": "recon",
+      "level": "info",
+      "event": "llm_loop_start",
+      "response": "Let me systematically explore all endpoints with the authenticated session. I'll start with parallel requests to key endpoints.",
+      "tool_calls": [
+        "curl_get",
+        "curl_get",
+        "curl_get",
+        "curl_get",
+        "curl_get",
+        "curl_get"
+      ]
+    },
+    {
+      "timestamp": "2026-05-18T17:02:39",
+      "elapsed_s": 170.624,
+      "phase": "recon",
+      "level": "info",
+      "event": "llm_loop_step",
+      "iteration": 1,
+      "tool": "curl_get",
+      "result": "HTTP/1.1 200 OK\r\ndate: Mon, 18 May 2026 09:02:38 GMT\r\nserver: uvicorn\r\ncontent-length: 1398\r\ncontent-type: text/html; charset=utf-8\r\n\r\n<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n    <meta charset=\"UTF-8\">\n    <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">\n    <link rel=\"stylesheet\" href=\"https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css\">\n    <title>Login</title>\n    <style>\n        body {\n            display: flex;\n        }\n        .nav {\n           "
+    },
+    {
+      "timestamp": "2026-05-18T17:02:39",
+      "elapsed_s": 170.635,
+      "phase": "recon",
+      "level": "info",
+      "event": "llm_loop_step",
+      "iteration": 1,
+      "tool": "curl_get",
+      "result": "HTTP/1.1 404 Not Found\r\ndate: Mon, 18 May 2026 09:02:38 GMT\r\nserver: uvicorn\r\ncontent-length: 22\r\ncontent-type: application/json\r\n\r\n{\"detail\":\"Not Found\"}"
+    },
+    {
+      "timestamp": "2026-05-18T17:02:39",
+      "elapsed_s": 170.647,
+      "phase": "recon",
+      "level": "info",
+      "event": "llm_loop_step",
+      "iteration": 1,
+      "tool": "curl_get",
+      "result": "HTTP/1.1 404 Not Found\r\ndate: Mon, 18 May 2026 09:02:38 GMT\r\nserver: uvicorn\r\ncontent-length: 22\r\ncontent-type: application/json\r\n\r\n{\"detail\":\"Not Found\"}"
+    },
+    {
+      "timestamp": "2026-05-18T17:02:39",
+      "elapsed_s": 170.658,
+      "phase": "recon",
+      "level": "info",
+      "event": "llm_loop_step",
+      "iteration": 1,
+      "tool": "curl_get",
+      "result": "HTTP/1.1 404 Not Found\r\ndate: Mon, 18 May 2026 09:02:38 GMT\r\nserver: uvicorn\r\ncontent-length: 22\r\ncontent-type: application/json\r\n\r\n{\"detail\":\"Not Found\"}"
+    },
+    {
+      "timestamp": "2026-05-18T17:02:39",
+      "elapsed_s": 170.67,
+      "phase": "recon",
+      "level": "info",
+      "event": "llm_loop_step",
+      "iteration": 1,
+      "tool": "curl_get",
+      "result": "HTTP/1.1 404 Not Found\r\ndate: Mon, 18 May 2026 09:02:38 GMT\r\nserver: uvicorn\r\ncontent-length: 22\r\ncontent-type: application/json\r\n\r\n{\"detail\":\"Not Found\"}"
+    },
+    {
+      "timestamp": "2026-05-18T17:02:39",
+      "elapsed_s": 170.681,
+      "phase": "recon",
+      "level": "info",
+      "event": "llm_loop_step",
+      "iteration": 1,
+      "tool": "curl_get",
+      "result": "HTTP/1.1 404 Not Found\r\ndate: Mon, 18 May 2026 09:02:38 GMT\r\nserver: uvicorn\r\ncontent-length: 22\r\ncontent-type: application/json\r\n\r\n{\"detail\":\"Not Found\"}"
+    },
+    {
+      "timestamp": "2026-05-18T17:03:18",
+      "elapsed_s": 210.103,
+      "phase": "recon",
+      "level": "info",
+      "event": "llm_loop_step",
+      "iteration": 2,
+      "tool": "curl_get",
+      "result": "HTTP/1.1 200 OK\r\ndate: Mon, 18 May 2026 09:03:17 GMT\r\nserver: uvicorn\r\ncontent-length: 956\r\ncontent-type: text/html; charset=utf-8\r\n\r\n<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n    <meta charset=\"UTF-8\">\n    <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">\n    <link rel=\"stylesheet\" href=\"https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css\">\n    <title>Jobs</title>\n    <style>\n        body {\n            display: flex;\n        }\n        .nav {\n            w"
+    },
+    {
+      "timestamp": "2026-05-18T17:03:18",
+      "elapsed_s": 210.117,
+      "phase": "recon",
+      "level": "info",
+      "event": "llm_loop_step",
+      "iteration": 2,
+      "tool": "curl_get",
+      "result": "HTTP/1.1 200 OK\r\ndate: Mon, 18 May 2026 09:03:17 GMT\r\nserver: uvicorn\r\ncontent-length: 1425\r\ncontent-type: text/html; charset=utf-8\r\n\r\n<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n    <meta charset=\"UTF-8\">\n    <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">\n    <link rel=\"stylesheet\" href=\"https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css\">\n    <title>Edit Profile</title>\n    <style>\n        body {\n            display: flex;\n        }\n        .nav {\n    "
+    },
+    {
+      "timestamp": "2026-05-18T17:03:18",
+      "elapsed_s": 210.135,
+      "phase": "recon",
+      "level": "info",
+      "event": "llm_loop_step",
+      "iteration": 2,
+      "tool": "curl_get",
+      "result": "HTTP/1.1 200 OK\r\ndate: Mon, 18 May 2026 09:03:17 GMT\r\nserver: uvicorn\r\ncontent-length: 15\r\ncontent-type: application/json\r\n\r\n{\"ping\":\"pong\"}"
+    },
+    {
+      "timestamp": "2026-05-18T17:03:18",
+      "elapsed_s": 210.152,
+      "phase": "recon",
+      "level": "info",
+      "event": "llm_loop_step",
+      "iteration": 2,
+      "tool": "curl_get",
+      "result": "HTTP/1.1 200 OK\r\ndate: Mon, 18 May 2026 09:03:17 GMT\r\nserver: uvicorn\r\ncontent-length: 939\r\ncontent-type: text/html; charset=utf-8\r\n\r\n\n    <!DOCTYPE html>\n    <html>\n    <head>\n    <link type=\"text/css\" rel=\"stylesheet\" href=\"https://cdn.jsdelivr.net/npm/swagger-ui-dist@5.9.0/swagger-ui.css\">\n    <link rel=\"shortcut icon\" href=\"https://fastapi.tiangolo.com/img/favicon.png\">\n    <title>FastAPI - Swagger UI</title>\n    </head>\n    <body>\n    <div id=\"swagger-ui\">\n    </div>\n    <script src=\"https:"
+    },
+    {
+      "timestamp": "2026-05-18T17:03:18",
+      "elapsed_s": 210.165,
+      "phase": "recon",
+      "level": "info",
+      "event": "llm_loop_step",
+      "iteration": 2,
+      "tool": "curl_get",
+      "result": "HTTP/1.1 401 Unauthorized\r\ndate: Mon, 18 May 2026 09:03:17 GMT\r\nserver: uvicorn\r\nwww-authenticate: Bearer\r\ncontent-length: 43\r\ncontent-type: application/json\r\n\r\n{\"detail\":\"Could not validate credentials\"}"
+    },
+    {
+      "timestamp": "2026-05-18T17:03:18",
+      "elapsed_s": 210.183,
+      "phase": "recon",
+      "level": "info",
+      "event": "llm_loop_step",
+      "iteration": 2,
+      "tool": "curl_get",
+      "result": "HTTP/1.1 401 Unauthorized\r\ndate: Mon, 18 May 2026 09:03:17 GMT\r\nserver: uvicorn\r\nwww-authenticate: Bearer\r\ncontent-length: 43\r\ncontent-type: application/json\r\n\r\n{\"detail\":\"Could not validate credentials\"}"
+    },
+    {
+      "timestamp": "2026-05-18T17:03:39",
+      "elapsed_s": 231.299,
+      "phase": "recon",
+      "level": "info",
+      "event": "llm_loop_step",
+      "iteration": 3,
+      "tool": "send_payload",
+      "result": "ERROR:HTTP Error 422: Unprocessable Entity\n"
+    },
+    {
+      "timestamp": "2026-05-18T17:03:39",
+      "elapsed_s": 231.313,
+      "phase": "recon",
+      "level": "info",
+      "event": "llm_loop_step",
+      "iteration": 3,
+      "tool": "curl_get",
+      "result": "HTTP/1.1 401 Unauthorized\r\ndate: Mon, 18 May 2026 09:03:39 GMT\r\nserver: uvicorn\r\nwww-authenticate: Bearer\r\ncontent-length: 43\r\ncontent-type: application/json\r\n\r\n{\"detail\":\"Could not validate credentials\"}"
+    },
+    {
+      "timestamp": "2026-05-18T17:03:39",
+      "elapsed_s": 231.325,
+      "phase": "recon",
+      "level": "info",
+      "event": "llm_loop_step",
+      "iteration": 3,
+      "tool": "curl_get",
+      "result": "HTTP/1.1 401 Unauthorized\r\ndate: Mon, 18 May 2026 09:03:39 GMT\r\nserver: uvicorn\r\nwww-authenticate: Bearer\r\ncontent-length: 43\r\ncontent-type: application/json\r\n\r\n{\"detail\":\"Could not validate credentials\"}"
+    },
+    {
+      "timestamp": "2026-05-18T17:03:53",
+      "elapsed_s": 245.011,
+      "phase": "recon",
+      "level": "info",
+      "event": "llm_loop_step",
+      "iteration": 4,
+      "tool": "curl_get",
+      "result": "HTTP/1.1 200 OK\r\ndate: Mon, 18 May 2026 09:03:53 GMT\r\nserver: uvicorn\r\ncontent-length: 3894\r\ncontent-type: application/json\r\n\r\n{\"openapi\":\"3.1.0\",\"info\":{\"title\":\"FastAPI\",\"version\":\"0.1.0\"},\"paths\":{\"/token\":{\"post\":{\"summary\":\"Login For Access Token\",\"operationId\":\"login_for_access_token_token_post\",\"requestBody\":{\"content\":{\"application/x-www-form-urlencoded\":{\"schema\":{\"$ref\":\"#/components/schemas/Body_login_for_access_token_token_post\"}}},\"required\":true},\"responses\":{\"200\":{\"description\":\""
+    },
+    {
+      "timestamp": "2026-05-18T17:03:53",
+      "elapsed_s": 245.113,
+      "phase": "recon",
+      "level": "info",
+      "event": "llm_loop_step",
+      "iteration": 4,
+      "tool": "send_payload",
+      "result": "ERROR:HTTP Error 401: Unauthorized\n"
+    },
+    {
+      "timestamp": "2026-05-18T17:04:24",
+      "elapsed_s": 276.377,
+      "phase": "recon",
+      "level": "info",
+      "event": "llm_loop_step",
+      "iteration": 5,
+      "tool": "curl_get",
+      "result": "HTTP/1.1 200 OK\r\ndate: Mon, 18 May 2026 09:04:24 GMT\r\nserver: uvicorn\r\ncontent-length: 3894\r\ncontent-type: application/json\r\n\r\n{\"openapi\":\"3.1.0\",\"info\":{\"title\":\"FastAPI\",\"version\":\"0.1.0\"},\"paths\":{\"/token\":{\"post\":{\"summary\":\"Login For Access Token\",\"operationId\":\"login_for_access_token_token_post\",\"requestBody\":{\"content\":{\"application/x-www-form-urlencoded\":{\"schema\":{\"$ref\":\"#/components/schemas/Body_login_for_access_token_token_post\"}}},\"required\":true},\"responses\":{\"200\":{\"description\":\""
+    },
+    {
+      "timestamp": "2026-05-18T17:04:25",
+      "elapsed_s": 277.385,
+      "phase": "recon",
+      "level": "info",
+      "event": "llm_loop_step",
+      "iteration": 5,
+      "tool": "sqlmap_test",
+      "result": "        ___\n       __H__\n ___ ___[']_____ ___ ___  {1.6.4#stable}\n|_ -| . [,]     | .'| . |\n|___|_  [']_|_|_|__,|  _|\n      |_|V...       |_|   https://sqlmap.org\n\n[!] legal disclaimer: Usage of sqlmap for attacking targets without prior mutual consent is illegal. It is the end user's responsibility to obey all applicable local, state and federal laws. Developers assume no liability and are not responsible for any misuse or damage caused by this program\n\n[*] starting @ 17:04:25 /2026-05-18/\n\n\u001b[?"
+    },
+    {
+      "timestamp": "2026-05-18T17:04:25",
+      "elapsed_s": 277.392,
+      "phase": "recon",
+      "level": "info",
+      "event": "llm_loop_step",
+      "iteration": 5,
+      "tool": "command_injection_test",
+      "result": "semicolon: no evidence of execution\npipe: no evidence of execution\nbacktick: no evidence of execution\ndollar_subshell: no evidence of execution\nnewline: error - URL can't contain control characters. '/ping?host=\\nid' (found at least '\\n')"
+    },
+    {
+      "timestamp": "2026-05-18T17:05:05",
+      "elapsed_s": 316.72,
+      "phase": "recon",
+      "level": "error",
+      "event": "task_end",
+      "success": false,
+      "flag": "",
+      "steps": 21,
+      "tokens_used": 7272,
+      "time_elapsed": 316.720468044281,
+      "error": "No result produced"
+    }
+  ],
+  "dkg_summary": "Host: 1\n  - id=host-localhost: {'ip': 'localhost', 'is_reachable': True, 'is_internal': False}\nService: 4\n  - id=svc-localhost-22: {'port': 22, 'protocol': 'tcp', 'version': 'OpenSSH 8.9p1 Ubuntu 3ubuntu0.15 (Ubuntu Linux; protocol 2.0)', 'banner': 'ssh'}\n  - id=svc-localhost-1053: {'port': 1053, 'protocol': 'tcp', 'version': 'tcpwrapped', 'banner': 'tcpwrapped'}\n  - id=svc-localhost-32771: {'port': 32771, 'protocol': 'tcp', 'version': 'sometimes-rpc5?', 'banner': 'sometimes-rpc5?'}\n  - id=svc-http-32771: {'port': 32771, 'protocol': 'HTTP', 'version': 'unknown', 'banner': ''}\nEndpoint: 15\n  - id=endpoint-http://localhost:32771/docs: {'url': 'http://localhost:32771/docs', 'method': 'GET', 'params': '', 'auth_required': False}\n  - id=endpoint-http://localhost:32771/ping: {'url': 'http://localhost:32771/ping', 'method': 'GET', 'params': '', 'auth_required': False}\n  - id=endpoint-http://localhost:32771/token: {'url': 'http://localhost:32771/token', 'method': 'GET', 'params': '', 'auth_required': False}\n  - id=endpoint-http://localhost:32771-param-username: {'url': 'http://localhost:32771', 'method': 'POST', 'params': 'username', 'auth_required': False}\n  - id=endpoint-http://localhost:32771-param-password: {'url': 'http://localhost:32771', 'method': 'POST', 'params': 'password', 'auth_required': False}\n  - id=auth-/dashboard: {'url': 'http://localhost:32771/dashboard', 'method': 'GET', 'params': '', 'auth_required': True}\n  - id=auth-/orders: {'url': 'http://localhost:32771/orders', 'method': 'GET', 'params': '', 'auth_required': True}\n  - id=auth-/profile: {'url': 'http://localhost:32771/profile', 'method': 'GET', 'params': '', 'auth_required': True}\n  ... and 7 more\nVulnerability: 10\n  - id=nikto-http://localhost:32771-Target IP:          127.0.0.1: {'endpoint': 'http://localhost:32771', 'parameter': '', 'severity': 'low', 'source': 'nikto', 'detail': 'Target IP:          127.0.0.1'}\n  - id=nikto-http://localhost:32771-Target Hostname:    localhost: {'endpoint': 'http://localhost:32771', 'parameter': '', 'severity': 'low', 'source': 'nikto', 'detail': 'Target Hostname:    localhost'}\n  - id=nikto-http://localhost:32771-Target Port:        32771: {'endpoint': 'http://localhost:32771', 'parameter': '', 'severity': 'low', 'source': 'nikto', 'detail': 'Target Port:        32771'}\n  - id=nikto-http://localhost:32771-Start Time:         2026-05-18 17:00:20 : {'endpoint': 'http://localhost:32771', 'parameter': '', 'severity': 'low', 'source': 'nikto', 'detail': 'Start Time:         2026-05-18 17:00:20 (GMT8)'}\n  - id=nikto-http://localhost:32771-Server: uvicorn: {'endpoint': 'http://localhost:32771', 'parameter': '', 'severity': 'low', 'source': 'nikto', 'detail': 'Server: uvicorn'}\n  - id=nikto-http://localhost:32771-The anti-clickjacking X-Frame-Options he: {'endpoint': 'http://localhost:32771', 'parameter': '', 'severity': 'low', 'source': 'nikto', 'detail': 'The anti-clickjacking X-Frame-Options header is not present.'}\n  - id=nikto-http://localhost:32771-No CGI Directories found (use '-C all' t: {'endpoint': 'http://localhost:32771', 'parameter': '', 'severity': 'low', 'source': 'nikto', 'detail': \"No CGI Directories found (use '-C all' to force check all possible dirs)\"}\n  - id=nikto-http://localhost:32771-Allowed HTTP Methods: GET: {'endpoint': 'http://localhost:32771', 'parameter': '', 'severity': 'low', 'source': 'nikto', 'detail': 'Allowed HTTP Methods: GET'}\n  ... and 2 more",
+  "cteg_patterns_committed": 0
+}

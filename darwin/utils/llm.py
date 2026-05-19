@@ -135,25 +135,28 @@ class LLMSession:
 
         content = choice.message.content or ""
         tool_calls_raw = getattr(choice.message, "tool_calls", None)
+        reasoning = getattr(choice.message, "reasoning_content", None)
 
         # Add response to conversation history
+        assistant_msg: Dict[str, Any] = {"role": "assistant", "content": content}
+        if reasoning:
+            assistant_msg["reasoning_content"] = reasoning
         if tool_calls_raw:
-            self.conversation_history.append({
-                "role": "assistant",
-                "content": content,
-                "tool_calls": [
-                    {"id": tc.id, "type": "function",
-                     "function": {"name": tc.function.name, "arguments": tc.function.arguments}}
-                    for tc in tool_calls_raw
-                ],
-            })
+            assistant_msg["tool_calls"] = [
+                {"id": tc.id, "type": "function",
+                 "function": {"name": tc.function.name, "arguments": tc.function.arguments}}
+                for tc in tool_calls_raw
+            ]
+            self.conversation_history.append(assistant_msg)
             parsed_calls = [
-                {"name": tc.function.name, "arguments": json.loads(tc.function.arguments)}
+                {"id": tc.id, "name": tc.function.name,
+                 "arguments": json.loads(tc.function.arguments)}
                 for tc in tool_calls_raw
             ]
             return content, parsed_calls
         else:
-            self.conversation_history.append({"role": "assistant", "content": content})
+            self.conversation_history.append(assistant_msg)
+            return content, None
             return content, None
 
     def _build_messages(
@@ -162,7 +165,11 @@ class LLMSession:
         """Build message list, continuing conversation history if available."""
         if self.conversation_history:
             messages = self.conversation_history.copy()
-            messages.append({"role": "user", "content": prompt})
+            # If last message was a tool result, don't add a user message —
+            # the LLM should respond to tool results directly (API requirement)
+            last_role = messages[-1].get("role", "") if messages else ""
+            if last_role != "tool":
+                messages.append({"role": "user", "content": prompt})
             return messages
 
         messages = []

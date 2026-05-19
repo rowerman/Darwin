@@ -385,6 +385,43 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
         timeout=60,
     )
 
+    # ── Knowledge search (RAG) ─────────────────────────────────
+    async def knowledge_search(query: str, category: str = "") -> ToolResult:
+        """Search penetration testing knowledge base for exploit patterns."""
+        try:
+            import os as _os
+            _os.environ.setdefault("HF_HUB_OFFLINE", "1")
+            from darwin.cteg import CTEG
+            cteg = CTEG(storage_path="cteg_state.json")
+            cteg.load_knowledge_base("knowledge/")
+            results = cteg.query_rag(query, top_k=5, category=category or None)
+            if not results:
+                return ToolResult(tool_name="knowledge_search", success=True,
+                    stdout="No matching knowledge patterns found.", stderr="", exit_code=0, elapsed_ms=0)
+            output = "## Knowledge Base\n\n"
+            for i, r in enumerate(results, 1):
+                output += f"### {i}. {r['title']} (score:{r['score']:.0f}, {r['category']})\n"
+                output += f"{r['description']}\n"
+                output += "**Techniques:**\n"
+                for t in r.get('techniques', [])[:5]:
+                    output += f"  - {t}\n"
+                output += "\n"
+            return ToolResult(tool_name="knowledge_search", success=True,
+                stdout=output, stderr="", exit_code=0, elapsed_ms=0)
+        except Exception as e:
+            return ToolResult(tool_name="knowledge_search", success=False,
+                stdout="", stderr=str(e), exit_code=1, elapsed_ms=0)
+
+    gateway.register(
+        name="knowledge_search",
+        func=knowledge_search,
+        description="Search penetration testing knowledge base for exploit patterns, techniques, and bypass strategies",
+        parameters={
+            "query": {"type": "string", "description": "Natural language query (e.g. 'IDOR in FastAPI')"},
+            "category": {"type": "string", "description": "Optional filter: IDOR, SQLI, AUTH, RECON"},
+        },
+    )
+
     return gateway
 
 

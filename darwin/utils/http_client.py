@@ -150,11 +150,11 @@ class HTTPClient:
 
             # Extract form: find <form> action, method, and all <input> fields
             import re as _re
-            form_match = _re.search(
-                r'<form[^>]*action=["\']([^"\']*)["\'][^>]*method=["\'](\w+)["\']', body, _re.I
-            )
-            action = form_match.group(1) if form_match else ""
-            method = (form_match.group(2) or "post").upper() if form_match else "POST"
+            # Match form attributes in any order
+            action_m = _re.search(r'''action=["']([^"']*)["']''', body, _re.I)
+            method_m = _re.search(r'''method=["'](\w+)["']''', body, _re.I)
+            action = action_m.group(1) if action_m else ""
+            method = (method_m.group(1) or "post").upper() if method_m else "POST"
 
             # Build the submission URL
             from urllib.parse import urljoin as _urljoin
