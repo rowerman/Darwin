@@ -1,0 +1,49 @@
+{
+  "target": "http://localhost",
+  "model": "openai/gpt-5",
+  "provider": "openai",
+  "time_budget": 600,
+  "events": [
+    {
+      "timestamp": "2026-05-22T13:50:25",
+      "elapsed_s": 0.0,
+      "phase": "init",
+      "level": "info",
+      "event": "task_start",
+      "target": "http://localhost",
+      "description": "Perform a comprehensive penetration test. Discover all open ports, enumerate services, identify vulnerabilities, exploit them, and capture proof flags."
+    },
+    {
+      "timestamp": "2026-05-22T13:50:35",
+      "elapsed_s": 10.009,
+      "phase": "recon",
+      "level": "info",
+      "event": "recon_nmap_start",
+      "host": "localhost"
+    },
+    {
+      "timestamp": "2026-05-22T13:51:11",
+      "elapsed_s": 46.034,
+      "phase": "recon",
+      "level": "info",
+      "event": "recon_done",
+      "dkg_summary": "Host: 1\n  - id=host-localhost: {'ip': 'localhost', 'is_reachable': True, 'is_internal': False, '_version': 3}\nService: 4\n  - id=svc-localhost-22: {'port': 22, 'protocol': 'tcp', 'version': 'OpenSSH 8.9p1 Ubuntu 3ubuntu0.15 (Ubuntu Linux; protocol 2.0)', 'banner': 'ssh', '_version': 1}\n  - id=svc-localhost-1053: {'port': 1053, 'protocol': 'tcp', 'version': 'tcpwrapped', 'banner': 'tcpwrapped', '_version': 2, 'http_reachable': False}\n  - id=svc-localhost-8000: {'port': 8000, 'protocol': 'tcp', 'version': 'uvicorn', 'banner': 'http-alt', '_version': 1}\n  - id=svc-http-8000: {'port': 8000, 'protocol': 'HTTP', 'version': 'unknown', 'banner': '', '_version': 1}\nEndpoint: 5\n  - id=endpoint-http://localhost:8000/docs: {'url': 'http://localhost:8000/docs', 'method': 'GET', 'params': '', 'auth_required': False, '_version': 1}\n  - id=endpoint-http://localhost:8000/jobs: {'url': 'http://localhost:8000/jobs', 'method': 'POST', 'params': '', 'auth_required': False, '_version': 2}\n  - id=endpoint-http://localhost:8000/ping: {'url': 'http://localhost:8000/ping', 'method': 'GET', 'params': '', 'auth_required': False, '_version': 2}\n  - id=endpoint-http://localhost:8000-param-job_type: {'url': 'http://localhost:8000', 'method': 'POST', 'params': 'job_type', 'auth_required': False, '_version': 1}\n  - id=endpoint-http://localhost:8000-param-job-type: {'url': 'http://localhost:8000', 'method': 'POST', 'params': 'job-type', 'auth_required': False, '_version': 1}\nVulnerability: 10\n  - id=nikto-http://localhost:8000-Target IP:          127.0.0.1: {'vuln_type': 'info', 'endpoint': 'http://localhost:8000', 'parameter': '', 'severity': 'low', 'source': 'nikto', 'detail': 'Target IP:          127.0.0.1', '_version': 1}\n  - id=nikto-http://localhost:8000-Target Hostname:    localhost: {'vuln_type': 'info', 'endpoint': 'http://localhost:8000', 'parameter': '', 'severity': 'low', 'source': 'nikto', 'detail': 'Target Hostname:    localhost', '_version': 1}\n  - id=nikto-http://localhost:8000-Target Port:        8000: {'vuln_type': 'info', 'endpoint': 'http://localhost:8000', 'parameter': '', 'severity': 'low', 'source': 'nikto', 'detail': 'Target Port:        8000', '_version': 1}\n  - id=nikto-http://localhost:8000-Start Time:         2026-05-22 13:50:59 : {'vuln_type': 'info', 'endpoint': 'http://localhost:8000', 'parameter': '', 'severity': 'low', 'source': 'nikto', 'detail': 'Start Time:         2026-05-22 13:50:59 (GMT8)', '_version': 1}\n  - id=nikto-http://localhost:8000-Server: uvicorn: {'vuln_type': 'info', 'endpoint': 'http://localhost:8000', 'parameter': '', 'severity': 'low', 'source': 'nikto', 'detail': 'Server: uvicorn', '_version': 1}\n  - id=nikto-http://localhost:8000-The anti-clickjacking X-Frame-Options he: {'vuln_type': 'info', 'endpoint': 'http://localhost:8000', 'parameter': '', 'severity': 'low', 'source': 'nikto', 'detail': 'The anti-clickjacking X-Frame-Options header is not present.', '_version': 1}\n  - id=nikto-http://localhost:8000-No CGI Directories found (use '-C all' t: {'vuln_type': 'info', 'endpoint': 'http://localhost:8000', 'parameter': '', 'severity': 'low', 'source': 'nikto', 'detail': \"No CGI Directories found (use '-C all' to force check all possible dirs)\", '_version': 1}\n  - id=nikto-http://localhost:8000-Allowed HTTP Methods: GET: {'vuln_type': 'info', 'endpoint': 'http://localhost:8000', 'parameter': '', 'severity': 'low', 'source': 'nikto', 'detail': 'Allowed HTTP Methods: GET', '_version': 1}\n  ... and 2 more",
+      "step": 1
+    },
+    {
+      "timestamp": "2026-05-22T13:51:11",
+      "elapsed_s": 46.09,
+      "phase": "recon",
+      "level": "error",
+      "event": "task_end",
+      "success": false,
+      "flag": "",
+      "steps": 1,
+      "tokens_used": 493,
+      "time_elapsed": 46.08920168876648,
+      "error": "litellm.UnsupportedParamsError: gpt-5 models (including gpt-5-codex) don't support temperature=0.2. Only temperature=1 is supported. For gpt-5.1, temperature is supported when reasoning_effort='none' (or not specified, as it defaults to 'none'). To drop unsupported params set `litellm.drop_params = True`"
+    }
+  ],
+  "dkg_summary": "Host: 1\n  - id=host-localhost: {'ip': 'localhost', 'is_reachable': True, 'is_internal': False, '_version': 3}\nService: 4\n  - id=svc-localhost-22: {'port': 22, 'protocol': 'tcp', 'version': 'OpenSSH 8.9p1 Ubuntu 3ubuntu0.15 (Ubuntu Linux; protocol 2.0)', 'banner': 'ssh', '_version': 1}\n  - id=svc-localhost-1053: {'port': 1053, 'protocol': 'tcp', 'version': 'tcpwrapped', 'banner': 'tcpwrapped', '_version': 2, 'http_reachable': False}\n  - id=svc-localhost-8000: {'port': 8000, 'protocol': 'tcp', 'version': 'uvicorn', 'banner': 'http-alt', '_version': 1}\n  - id=svc-http-8000: {'port': 8000, 'protocol': 'HTTP', 'version': 'unknown', 'banner': '', '_version': 1}\nEndpoint: 5\n  - id=endpoint-http://localhost:8000/docs: {'url': 'http://localhost:8000/docs', 'method': 'GET', 'params': '', 'auth_required': False, '_version': 1}\n  - id=endpoint-http://localhost:8000/jobs: {'url': 'http://localhost:8000/jobs', 'method': 'POST', 'params': '', 'auth_required': False, '_version': 2}\n  - id=endpoint-http://localhost:8000/ping: {'url': 'http://localhost:8000/ping', 'method': 'GET', 'params': '', 'auth_required': False, '_version': 2}\n  - id=endpoint-http://localhost:8000-param-job_type: {'url': 'http://localhost:8000', 'method': 'POST', 'params': 'job_type', 'auth_required': False, '_version': 1}\n  - id=endpoint-http://localhost:8000-param-job-type: {'url': 'http://localhost:8000', 'method': 'POST', 'params': 'job-type', 'auth_required': False, '_version': 1}\nVulnerability: 10\n  - id=nikto-http://localhost:8000-Target IP:          127.0.0.1: {'vuln_type': 'info', 'endpoint': 'http://localhost:8000', 'parameter': '', 'severity': 'low', 'source': 'nikto', 'detail': 'Target IP:          127.0.0.1', '_version': 1}\n  - id=nikto-http://localhost:8000-Target Hostname:    localhost: {'vuln_type': 'info', 'endpoint': 'http://localhost:8000', 'parameter': '', 'severity': 'low', 'source': 'nikto', 'detail': 'Target Hostname:    localhost', '_version': 1}\n  - id=nikto-http://localhost:8000-Target Port:        8000: {'vuln_type': 'info', 'endpoint': 'http://localhost:8000', 'parameter': '', 'severity': 'low', 'source': 'nikto', 'detail': 'Target Port:        8000', '_version': 1}\n  - id=nikto-http://localhost:8000-Start Time:         2026-05-22 13:50:59 : {'vuln_type': 'info', 'endpoint': 'http://localhost:8000', 'parameter': '', 'severity': 'low', 'source': 'nikto', 'detail': 'Start Time:         2026-05-22 13:50:59 (GMT8)', '_version': 1}\n  - id=nikto-http://localhost:8000-Server: uvicorn: {'vuln_type': 'info', 'endpoint': 'http://localhost:8000', 'parameter': '', 'severity': 'low', 'source': 'nikto', 'detail': 'Server: uvicorn', '_version': 1}\n  - id=nikto-http://localhost:8000-The anti-clickjacking X-Frame-Options he: {'vuln_type': 'info', 'endpoint': 'http://localhost:8000', 'parameter': '', 'severity': 'low', 'source': 'nikto', 'detail': 'The anti-clickjacking X-Frame-Options header is not present.', '_version': 1}\n  - id=nikto-http://localhost:8000-No CGI Directories found (use '-C all' t: {'vuln_type': 'info', 'endpoint': 'http://localhost:8000', 'parameter': '', 'severity': 'low', 'source': 'nikto', 'detail': \"No CGI Directories found (use '-C all' to force check all possible dirs)\", '_version': 1}\n  - id=nikto-http://localhost:8000-Allowed HTTP Methods: GET: {'vuln_type': 'info', 'endpoint': 'http://localhost:8000', 'parameter': '', 'severity': 'low', 'source': 'nikto', 'detail': 'Allowed HTTP Methods: GET', '_version': 1}\n  ... and 2 more",
+  "cteg_patterns_committed": 0
+}

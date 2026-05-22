@@ -1,0 +1,37 @@
+[
+  {
+    "id": "ad-enum-001",
+    "category": "windows_ad",
+    "subcategory": "enumeration",
+    "title": "Domain User Enumeration via LDAP",
+    "description": "Enumerate domain users, groups, and computers using LDAP queries with low-privilege credentials.",
+    "techniques": [
+      "ldapsearch -x -H ldap://<DC_IP> -D '<USER>@<DOMAIN>' -w '<PASS>' -b 'DC=<DOMAIN>,DC=local'",
+      "netexec ldap <DC_IP> -u <USER> -p <PASS> --users",
+      "netexec smb <TARGET> --shares"
+    ],
+    "indicators": ["LDAP port 389/636 open", "Anonymous bind enabled"],
+    "prerequisites": ["Network access to DC", "Valid domain credentials"],
+    "tools": ["ldapsearch", "netexec"],
+    "tags": ["ldap", "enumeration", "users", "groups", "domain", "active-directory"],
+    "confidence": 0.9,
+    "mitre_attack": "T1018"
+  },
+  {
+    "id": "ad-enum-002",
+    "category": "windows_ad",
+    "subcategory": "enumeration",
+    "title": "BloodHound Data Collection",
+    "description": "Collect AD relationship data for attack path analysis.",
+    "techniques": [
+      "bloodhound-python -d <DOMAIN> -u <USER> -p <PASS> -c All -ns <DC_IP>",
+      "netexec ldap <DC_IP> -u <USER> -p <PASS> --bloodhound"
+    ],
+    "indicators": ["Domain environment detected", "LDAP accessible"],
+    "prerequisites": ["Domain credentials", "bloodhound installed"],
+    "tools": ["bloodhound-python", "netexec"],
+    "tags": ["bloodhound", "enumeration", "attack-path", "domain"],
+    "confidence": 0.85,
+    "mitre_attack": "T1087"
+  }
+]

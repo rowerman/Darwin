@@ -1,8 +1,8 @@
 """Dynamic Scaling Engine — B dimension + TDI'' + scaling state machine.
 
 Reference: pentestgpt_v2 TDA-EGATS (difficulty-aware MCTS)
-           DARWIN framework spec — B = 0.30*N_norm + 0.15*M_domain + 0.20*L_move
-           + 0.20*V_diversity + 0.15*D_present
+           DARWIN framework spec — B = 0.28*N_norm + 0.12*M_domain + 0.18*L_move
+           + 0.18*V_diversity + 0.14*D_present + 0.10*env_complexity
 """
 
 from __future__ import annotations
@@ -118,12 +118,12 @@ class TDAState:
 def compute_task_breadth(dkg: DKG, defense_state: DefenseStateVector | None = None) -> float:
     """Compute B (Task Breadth) from current DKG state.
 
-    B = 0.30*N_norm + 0.15*M_domain + 0.20*L_move
-      + 0.20*V_diversity + 0.15*D_present
+    B = 0.28*N_norm + 0.12*M_domain + 0.18*L_move
+      + 0.18*V_diversity + 0.14*D_present + 0.10*env_complexity
 
-    V_diversity captures vulnerability type variety — even a single host
-    with multiple vuln types and WAF benefits from multi-agent coordination.
-    D_present captures the presence of active defenses (WAF/Honey/Trap).
+    env_complexity = 1.0 for AD (SMB+LDAP), 0.8 for cloud (K8s API).
+    This ensures domain/cloud environments trigger Coordinated/Distributed
+    mode with specialized agents (ADAgent, CloudAgent).
     """
     hosts = dkg.query_nodes("Host")
     domains = dkg.query_nodes("Domain")
@@ -133,9 +133,14 @@ def compute_task_breadth(dkg: DKG, defense_state: DefenseStateVector | None = No
     n_targets = len(hosts)
     is_multi_domain = len(domains) > 1
 
-    # Detect lateral movement need: internal hosts + available credentials
+    # Detect lateral movement need:
+    # - internal hosts discovered by PivotAgent + available credentials, OR
+    # - multiple hosts with credentials (potential lateral move before internal scan)
     internal_hosts = [h for h in hosts if h.get("is_internal", False)]
-    needs_lateral = len(internal_hosts) > 0 and len(credentials) > 0
+    needs_lateral = (
+        (len(internal_hosts) > 0 and len(credentials) > 0)
+        or (len(hosts) > 1 and len(credentials) > 0)
+    )
 
     N_norm = min(n_targets / 5.0, 1.0)
     M_domain = 1.0 if is_multi_domain else 0.0
@@ -154,13 +159,28 @@ def compute_task_breadth(dkg: DKG, defense_state: DefenseStateVector | None = No
     if defense_state is not None:
         D_present = 1.0 if defense_state.defense_complexity > 0.1 else 0.0
 
-    return (
-        0.30 * N_norm
-        + 0.15 * M_domain
-        + 0.20 * L_move
-        + 0.20 * V_diversity
-        + 0.15 * D_present
+    # Environment complexity boost: AD/cloud environments trigger higher B
+    is_ad = bool(domains) or any(
+        s.get("port") in (445, 389, 636, 3268, 3269) for s in dkg.query_nodes("Service")
     )
+    is_cloud = any(
+        s.get("port") in (6443, 10250, 10255) for s in dkg.query_nodes("Service")
+    )
+    env_complexity = 0.0
+    if is_ad: env_complexity = 1.0   # AD requires multi-agent
+    elif is_cloud: env_complexity = 0.8  # K8s benefits from coordination
+
+    # B with environment-aware boost
+    b_raw = (
+        0.28 * N_norm
+        + 0.12 * M_domain
+        + 0.18 * L_move
+        + 0.18 * V_diversity
+        + 0.14 * D_present
+        + 0.10 * env_complexity
+    )
+
+    return min(b_raw, 1.0)
 
 
 class DynamicScalingEngine:

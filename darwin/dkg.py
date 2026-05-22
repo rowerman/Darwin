@@ -31,6 +31,9 @@ NODE_TYPES = [
     "Session",        # host, user, access_level, shell_type
     "Domain",         # name, functional_level, trusts
     "Flag",           # value, location, verified, is_honeypot_flag
+    "Plan",           # plan_id, phase, goal, total_tasks, completed, failed, status
+    "Task",           # plan_id, instruction, tool, params, status, dependencies, attempts
+    "PlanSummary",    # source_plan_id, phase, completed_tasks, key_findings, failed_approaches
 ]
 
 # Edge types
@@ -44,6 +47,9 @@ EDGE_TYPES = [
     "host_in_domain",        # Host → Domain
     "domain_trusts",         # Domain → Domain (type: trust_direction)
     "vuln_exploited_by",     # Vulnerability → Credential/Session
+    "plan_contains_task",    # Plan → Task
+    "task_depends_on",       # Task → Task
+    "plan_successor",        # Plan → PlanSummary
 ]
 
 

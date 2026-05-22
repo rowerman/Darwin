@@ -138,6 +138,18 @@ def register_recon_tools(gateway: MCPGateway) -> MCPGateway:
         parser=_parse_nmap_output,
     )
 
+    # ── nmap vulners: CVE detection for services ─────────────────
+    gateway.register_shell_tool(
+        name="nmap_vulners_scan",
+        command_template="nmap -sV --script vulners {target} -p {ports} 2>&1",
+        description="Scan target with nmap vulners NSE script. Detects CVEs for each discovered service based on version fingerprint. Provides CVE IDs, CVSS scores, and exploit availability links.",
+        parameters={
+            "target": {"type": "string", "description": "Target IP or hostname"},
+            "ports": {"type": "string", "description": "Ports to scan (e.g. '80,443' or '1-1000')"},
+        },
+        timeout=300,
+    )
+
     # ── masscan: Fast port scanning ─────────────────────────────
     gateway.register_shell_tool(
         name="masscan_scan",

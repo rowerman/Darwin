@@ -55,7 +55,30 @@
       "Bash(./venv/bin/pip install *)",
       "Bash(./venv/bin/pip list *)",
       "Bash(HF_HUB_OFFLINE=1 ./venv/bin/python *)",
-      "WebSearch"
+      "WebSearch",
+      "Bash(awk '{print $2}')",
+      "Bash(go-exploitdb --help)",
+      "Bash(pip search *)",
+      "Bash(dpkg -l exploitdb)",
+      "Bash(pip list *)",
+      "Bash(go-exploitdb fetch *)",
+      "Bash(gem list *)",
+      "Bash(snap list *)",
+      "Bash(go-exploitdb search *)",
+      "Bash(go-exploitdb)",
+      "Bash(msfconsole --version)",
+      "Bash(grep -n \"except.*Exception\\\\|except:$\" /home/kianabin/Darwin/darwin/orchestrator.py)",
+      "Bash(sqlite3 *)",
+      "Bash(cp -r /home/kianabin/paper_analysis/container-pentester-agent/knowledge/attck-containers knowledge/cloud/)",
+      "Bash(cp -r /home/kianabin/paper_analysis/container-pentester-agent/knowledge/attack-cases knowledge/cloud/)",
+      "Bash(cp -r /home/kianabin/paper_analysis/container-pentester-agent/knowledge/cis-benchmark knowledge/cloud/)",
+      "Bash(cp -r /home/kianabin/paper_analysis/container-pentester-agent/knowledge/remediation-templates knowledge/cloud/)",
+      "Bash(awk '/^        else:/{found=1} found{print NR\": \"$0; if\\(/self\\\\._exploit_chain/\\)exit}' darwin/orchestrator.py)",
+      "Bash(awk 'NR>=800 && NR<=816' darwin/orchestrator.py)",
+      "Bash(awk 'NR>=955 && NR<=965' darwin/orchestrator.py)",
+      "Bash(awk 'NR>=1970 && NR<=1985' darwin/orchestrator.py)",
+      "Bash(awk 'NR>=2060 && NR<=2075' darwin/orchestrator.py)",
+      "Bash(awk 'NR>=2985 && NR<=2995' darwin/orchestrator.py)"
     ]
   }
 }

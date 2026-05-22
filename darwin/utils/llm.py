@@ -119,10 +119,15 @@ class LLMSession:
         messages = self._build_messages(prompt, system_prompt)
         self.conversation_history = messages.copy()
 
+        temp = temperature if temperature is not None else self.temperature
+        # gpt-5 only supports temperature=1
+        if "gpt-5" in self.model:
+            temp = 1
+
         kwargs = dict(
             model=self.model,
             messages=messages,
-            temperature=temperature if temperature is not None else self.temperature,
+            temperature=temp,
             max_tokens=self.max_tokens,
         )
 
@@ -185,6 +190,26 @@ class LLMSession:
             "tool_call_id": tool_call_id,
             "content": result,
         })
+
+    def add_context_message(self, content: str, role: str = "user") -> None:
+        """Inject a message into conversation history without requiring a tool call.
+        Use for system diagnostics, filter debug reports, etc.
+        """
+        self.conversation_history.append({
+            "role": role,
+            "content": content,
+        })
+
+    def replace_system_prompt(self, new_system_prompt: str) -> None:
+        """Replace the first system message, preserving all other messages.
+        Enables phase transitions (e.g. ANALYZE -> ORCHESTRATOR) without
+        destroying user/assistant/tool context.
+        """
+        for i, msg in enumerate(self.conversation_history):
+            if msg.get("role") == "system":
+                self.conversation_history[i] = {"role": "system", "content": new_system_prompt}
+                return
+        self.conversation_history.insert(0, {"role": "system", "content": new_system_prompt})
 
     def reset(self) -> None:
         """Clear conversation history."""

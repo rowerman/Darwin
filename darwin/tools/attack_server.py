@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import re
 import time
+from pathlib import Path
 from typing import Any, Dict
 
 from darwin.tools.mcp_gateway import MCPGateway, ToolResult
@@ -155,31 +156,57 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
 
     # ── SQL injection test ──────────────────────────────────────
     async def sqlmap_test(url: str, param: str, technique: str = "BEUSTQ",
-                         method: str = "GET") -> ToolResult:
-        """Run sqlmap against a target parameter."""
-        # Level 2, risk 1 for speed; capture full output, grep for key results
+                         method: str = "GET", body_format: str = "form",
+                         content_type: str = "") -> ToolResult:
+        """Run sqlmap against a target parameter.
+
+        Args:
+            url: Target URL
+            param: Parameter name to test
+            technique: SQLi techniques (BEUSTQ)
+            method: HTTP method (GET/POST)
+            body_format: For POST: "form" (urlencoded) or "json" (JSON body)
+            content_type: Custom Content-Type header (overrides body_format)
+        """
+        # Level 2, risk 1 for speed
+        base_cmd = (f"sqlmap -u '{url}' --technique={technique} --batch "
+                     f"--level=2 --risk=1 --flush-session --smart "
+                     f"--threads=4 --output-dir=/tmp/sqlmap")
         if method.upper() == "POST":
-            cmd = f"sqlmap -u '{url}' --data='{param}=*' --technique={technique} --batch --level=2 --risk=1 --flush-session --smart --threads=4 --output-dir=/tmp/sqlmap 2>&1"
+            if body_format == "json":
+                # JSON body: {"param":"*"} — sqlmap's injection marker
+                ct = content_type or "application/json"
+                data_str = f'{{"{param}":"*"}}'
+                cmd = f"{base_cmd} --data='{data_str}' --headers='Content-Type: {ct}' 2>&1"
+            else:
+                # Form-urlencoded (default)
+                ct = content_type or "application/x-www-form-urlencoded"
+                if ct != "application/x-www-form-urlencoded":
+                    cmd = f"{base_cmd} --data='{param}=*' --headers='Content-Type: {ct}' 2>&1"
+                else:
+                    cmd = f"{base_cmd} --data='{param}=*' 2>&1"
         else:
-            cmd = f"sqlmap -u '{url}' -p {param} --technique={technique} --batch --level=2 --risk=1 --flush-session --smart --threads=4 --output-dir=/tmp/sqlmap 2>&1"
-        return await _run_shell(cmd, timeout=60)
+            cmd = f"{base_cmd} -p {param} 2>&1"
+        return await _run_shell(cmd, timeout=25)
 
     gateway.register(
         name="sqlmap_test",
         func=sqlmap_test,
-        description="Test for SQL injection vulnerability using sqlmap",
+        description="Test for SQL injection vulnerability using sqlmap. For JSON APIs, set body_format='json'.",
         parameters={
             "url": {"type": "string", "description": "Target URL with parameters"},
             "param": {"type": "string", "description": "Parameter to test for injection"},
             "technique": {"type": "string", "description": "SQLi techniques: B(E)oolean, E(rror), U(nion), S(tacked), T(ime), Q(uery)"},
             "method": {"type": "string", "description": "HTTP method (GET/POST)"},
+            "body_format": {"type": "string", "description": "For POST: 'form' (urlencoded) or 'json' (JSON body)"},
+            "content_type": {"type": "string", "description": "Custom Content-Type header value"},
         },
     )
 
     # ── Web fuzzing (ffuf) ──────────────────────────────────────
     gateway.register_shell_tool(
         name="ffuf_fuzz",
-        command_template="ffuf -u '{url}' -w /usr/share/wordlists/dirb/common.txt -mc 200,301,302,403 -o /dev/null 2>&1 | head -100",
+        command_template="ffuf -u '{url}' -w /usr/share/dirb/wordlists/common.txt -mc 200,301,302,403 -o /dev/null 2>&1 | head -100",
         description="Fuzz web parameters or paths using ffuf",
         parameters={
             "url": {"type": "string", "description": "Target URL with FUZZ keyword"},
@@ -323,8 +350,8 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
 
     # ── Hydra: Brute force ───────────────────────────────────────
     async def hydra_http_brute(
-        url: str, userlist: str = "/usr/share/wordlists/dirb/common.txt",
-        passlist: str = "/usr/share/wordlists/dirb/common.txt",
+        url: str, userlist: str = "/usr/share/dirb/wordlists/common.txt",
+        passlist: str = "/usr/share/dirb/wordlists/common.txt",
     ) -> ToolResult:
         """Brute force HTTP POST login form."""
         import urllib.parse
@@ -352,7 +379,7 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
 
     gateway.register_shell_tool(
         name="hydra_ssh_brute",
-        command_template="hydra -l root -P /usr/share/wordlists/dirb/common.txt ssh://{target} -t 4 -f 2>&1 | head -50",
+        command_template="hydra -l root -P /usr/share/dirb/wordlists/common.txt ssh://{target} -t 4 -f 2>&1 | head -50",
         description="Brute force SSH login with common passwords using hydra",
         parameters={
             "target": {"type": "string", "description": "Target hostname or IP"},
@@ -385,26 +412,48 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
         timeout=60,
     )
 
-    # ── Knowledge search (RAG) ─────────────────────────────────
+    # ── Knowledge search (DarwinRAG + keyword fallback) ──────────
     async def knowledge_search(query: str, category: str = "") -> ToolResult:
-        """Search penetration testing knowledge base for exploit patterns."""
+        """Search penetration testing knowledge base for exploit patterns using
+        TF-IDF semantic search with keyword-based fallback."""
         try:
-            import os as _os
-            _os.environ.setdefault("HF_HUB_OFFLINE", "1")
-            from darwin.cteg import CTEG
-            cteg = CTEG(storage_path="cteg_state.json")
-            cteg.load_knowledge_base("knowledge/")
-            results = cteg.query_rag(query, top_k=5, category=category or None)
+            from darwin.rag import get_rag
+            rag = get_rag()
+            results = rag.search(query, top_k=5, category=category)
+
+            # Fallback: keyword-based search via KnowledgeBase
             if not results:
+                try:
+                    from darwin.knowledge_base import KnowledgeBase
+                    kb = KnowledgeBase()
+                    kb_entries = kb.search(query, category=category or "", top_k=5)
+                    if kb_entries:
+                        output = "## Knowledge Base (keyword match)\n\n"
+                        for i, e in enumerate(kb_entries, 1):
+                            output += f"### {i}. {e.title} ({e.category}/{e.subcategory})"
+                            if e.mitre_attack:
+                                output += f" MITRE:{e.mitre_attack}"
+                            output += f"\n{e.description}\n"
+                            if e.techniques:
+                                output += "**Techniques:**\n"
+                                for t in e.techniques[:5]:
+                                    output += f"  - {t}\n"
+                            output += "\n"
+                        return ToolResult(tool_name="knowledge_search", success=True,
+                            stdout=output, stderr="", exit_code=0, elapsed_ms=0)
+                except ImportError:
+                    pass
                 return ToolResult(tool_name="knowledge_search", success=True,
                     stdout="No matching knowledge patterns found.", stderr="", exit_code=0, elapsed_ms=0)
+
             output = "## Knowledge Base\n\n"
             for i, r in enumerate(results, 1):
-                output += f"### {i}. {r['title']} (score:{r['score']:.0f}, {r['category']})\n"
+                output += f"### {i}. {r['title']} (score:{r['score']:.3f}, {r.get('collection','')}/{r['category']})\n"
                 output += f"{r['description']}\n"
-                output += "**Techniques:**\n"
-                for t in r.get('techniques', [])[:5]:
-                    output += f"  - {t}\n"
+                if r.get('techniques'):
+                    output += "**Techniques:**\n"
+                    for t in r.get('techniques', [])[:5]:
+                        output += f"  - {t}\n"
                 output += "\n"
             return ToolResult(tool_name="knowledge_search", success=True,
                 stdout=output, stderr="", exit_code=0, elapsed_ms=0)
@@ -419,6 +468,138 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
         parameters={
             "query": {"type": "string", "description": "Natural language query (e.g. 'IDOR in FastAPI')"},
             "category": {"type": "string", "description": "Optional filter: IDOR, SQLI, AUTH, RECON"},
+        },
+    )
+
+    # ── CVE Lookup: NIST NVD API ──────────────────────────────────
+    async def cve_lookup(cve_id: str) -> ToolResult:
+        """Look up CVE details from the NIST NVD API (free, no key required)."""
+        import urllib.request as _ur, json as _json
+        try:
+            url = f"https://services.nvd.nist.gov/rest/json/cves/2.0?cveId={cve_id}"
+            req = _ur.Request(url, headers={"User-Agent": "DARWIN/0.1"})
+            with _ur.urlopen(req, timeout=15) as resp:
+                data = _json.loads(resp.read())
+            vulns = data.get("vulnerabilities", [])
+            if not vulns:
+                return ToolResult(tool_name="cve_lookup", success=True,
+                    stdout=f"No CVE data found for {cve_id}", stderr="", exit_code=0, elapsed_ms=0)
+            cve = vulns[0].get("cve", {})
+            desc = cve.get("descriptions", [{}])[0].get("value", "")[:500]
+            metrics = cve.get("metrics", {})
+            cvss_v31 = metrics.get("cvssMetricV31", [{}])[0].get("cvssData", {})
+            cvss_score = cvss_v31.get("baseScore", "N/A")
+            cvss_severity = cvss_v31.get("baseSeverity", "N/A")
+            vector = cvss_v31.get("vectorString", "")
+            published = cve.get("published", "")
+            modified = cve.get("lastModified", "")
+            refs = [r.get("url", "") for r in cve.get("references", [])[:5]]
+            output = (
+                f"CVE: {cve_id}\n"
+                f"CVSS v3.1: {cvss_score} ({cvss_severity})\n"
+                f"Vector: {vector}\n"
+                f"Published: {published}\n"
+                f"Modified: {modified}\n"
+                f"Description: {desc}\n"
+                f"References:\n" + "\n".join(f"  - {r}" for r in refs)
+            )
+            return ToolResult(tool_name="cve_lookup", success=True, stdout=output,
+                stderr="", exit_code=0, elapsed_ms=0,
+                parsed_output={"cve_id": cve_id, "cvss_score": cvss_score,
+                    "severity": cvss_severity, "description": desc[:200], "references": refs})
+        except Exception as e:
+            return ToolResult(tool_name="cve_lookup", success=False,
+                stdout="", stderr=str(e), exit_code=1, elapsed_ms=0)
+
+    gateway.register(
+        name="cve_lookup",
+        func=cve_lookup,
+        description="Look up CVE details from NIST NVD: CVSS score, severity, description, affected versions, and references. Use to assess vulnerability severity and find patches.",
+        parameters={
+            "cve_id": {"type": "string", "description": "CVE ID (e.g. CVE-2021-44228, CVE-2023-12345)"},
+        },
+    )
+
+    # ── Metasploit exploit search ──────────────────────────────────
+    async def metasploit_search(query: str) -> ToolResult:
+        """Search Metasploit Framework for available exploit modules."""
+        import asyncio
+        try:
+            cmd = f"msfconsole -q -x 'search {query}; exit' 2>&1"
+            proc = await asyncio.create_subprocess_shell(
+                cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=60)
+            output = stdout.decode("utf-8", errors="replace")
+            err_output = stderr.decode("utf-8", errors="replace")
+            # Check if msfconsole is not installed (shell returns "not found")
+            if "not found" in output.lower() or "not found" in err_output.lower():
+                return ToolResult(tool_name="metasploit_search", success=False,
+                    stdout="msfconsole not installed. Install: curl https://raw.githubusercontent.com/rapid7/metasploit-omnibus/master/config/templates/metasploit-framework-wrappers/msfupdate.erb > msfinstall && sudo bash msfinstall",
+                    stderr="msfconsole not found on PATH", exit_code=127, elapsed_ms=0)
+            if "Matching Modules" in output or "exploit/" in output:
+                return ToolResult(tool_name="metasploit_search", success=True,
+                    stdout=output[:5000], stderr=err_output,
+                    exit_code=proc.returncode or 0, elapsed_ms=0)
+            return ToolResult(tool_name="metasploit_search", success=False,
+                stdout=output[:2000] or "No matching modules found",
+                stderr=err_output, exit_code=proc.returncode or 0, elapsed_ms=0)
+        except asyncio.TimeoutError:
+            return ToolResult(tool_name="metasploit_search", success=False,
+                stdout="msfconsole search timed out", stderr="", exit_code=1, elapsed_ms=0)
+        except Exception as e:
+            return ToolResult(tool_name="metasploit_search", success=False,
+                stdout=f"msfconsole search failed: {e}", stderr=str(e), exit_code=1, elapsed_ms=0)
+
+    gateway.register(
+        name="metasploit_search",
+        func=metasploit_search,
+        description="Search Metasploit Framework for available exploit modules, auxiliary scanners, and post-exploitation modules matching the query. Returns module name, rank, and description. Requires msfconsole installed.",
+        parameters={
+            "query": {"type": "string", "description": "Search term: software name, CVE ID, or vulnerability type (e.g. 'apache struts', 'CVE-2021-44228', 'samba')"},
+        },
+    )
+
+    # ── go-exploitdb local search ──────────────────────────────────
+    async def go_exploitdb_search(query: str, limit: int = 10) -> ToolResult:
+        """Search the local go-exploitdb database for exploits matching a CVE or keyword."""
+        import sqlite3
+        db_path = Path(__file__).parent.parent.parent / "go-exploitdb.sqlite3"
+        if not db_path.exists():
+            return ToolResult(tool_name="go_exploitdb_search", success=False,
+                stdout="go-exploitdb database not found. Run: go-exploitdb fetch",
+                stderr="", exit_code=1, elapsed_ms=0)
+        try:
+            conn = sqlite3.connect(str(db_path))
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT cve_id, description, url, exploit_type FROM exploits "
+                "WHERE cve_id LIKE ? OR description LIKE ? LIMIT ?",
+                (f"%{query}%", f"%{query}%", limit),
+            )
+            rows = cursor.fetchall()
+            conn.close()
+            if not rows:
+                return ToolResult(tool_name="go_exploitdb_search", success=True,
+                    stdout="No matching exploits found in local database.",
+                    stderr="", exit_code=0, elapsed_ms=0)
+            results = [f"CVE: {r[0]}\nDescription: {r[1]}\nURL: {r[2]}\nType: {r[3]}" for r in rows]
+            return ToolResult(tool_name="go_exploitdb_search", success=True,
+                stdout="\n---\n".join(results), stderr="",
+                exit_code=0, elapsed_ms=0)
+        except Exception as e:
+            return ToolResult(tool_name="go_exploitdb_search", success=False,
+                stdout="", stderr=str(e), exit_code=1, elapsed_ms=0)
+
+    gateway.register(
+        name="go_exploitdb_search",
+        func=go_exploitdb_search,
+        description="Search local go-exploitdb for public exploits matching a CVE ID or keyword. Returns exploit type, description, and references. Requires go-exploitdb database (fetch with: go-exploitdb fetch).",
+        parameters={
+            "query": {"type": "string", "description": "CVE ID or keyword to search for (e.g. 'CVE-2021-44228', 'Apache')"},
+            "limit": {"type": "integer", "description": "Max results (default 10)"},
         },
     )
 

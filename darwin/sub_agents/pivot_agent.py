@@ -7,6 +7,7 @@ Reference: Cochise executor.py — SSH command execution + credential reuse
 from __future__ import annotations
 
 import json
+import re
 from typing import Any, Dict, List
 
 from darwin.dkg import DKG
@@ -17,33 +18,12 @@ from darwin.tools.mcp_gateway import MCPGateway
 from darwin.utils.llm import LLMSession
 
 
-SYSTEM_PROMPT_PIVOT = """You are a lateral movement specialist. Your goal is to use
-captured credentials and sessions to move between hosts.
-
-## Capabilities
-- Credential reuse: Try known passwords on other services/hosts
-- SSH key reuse: Try captured SSH keys on other hosts
-- Pass-the-Hash: Use NTLM hashes for Windows lateral movement
-- Tunnel setup: Establish proxy tunnels to reach internal networks
-
-## Available Commands
-You have access to shell execution for tools like:
-ssh, impacket-psexec, impacket-wmiexec, chisel, socat, proxychains
-
-## Workflow
-1. Check DKG for available credentials and sessions
-2. Check DKG for unreached internal hosts
-3. Attempt credential reuse / lateral movement
-4. Report new sessions and reachable hosts to DKG
-
-## Output
-Report any new sessions established or hosts reached."""
-
-
 class PivotAgent(BaseSubAgent):
     """Lateral movement agent.
 
     Uses captured credentials to move between hosts, expanding the attack surface.
+    All decision-making (credential selection, host targeting, result evaluation,
+    replanning) is LLM-driven.
 
     Reference: Cochise executor.py — credential-based movement patterns
     """
@@ -101,7 +81,7 @@ class PivotAgent(BaseSubAgent):
         )
 
     async def _generate_plan(self) -> List[Dict[str, Any]]:
-        """Generate lateral movement plan — LLM-driven with SYSTEM_PROMPT_PIVOT."""
+        """Generate lateral movement plan — LLM-driven with PivotAgent system prompt."""
         credentials = self.dkg.query_nodes("Credential")
         sessions = self.dkg.query_nodes("Session")
         hosts = self.dkg.query_nodes("Host")
@@ -120,6 +100,8 @@ class PivotAgent(BaseSubAgent):
         session_text = "\n".join(f"- {s.get('host','?')} as {s.get('user','?')}"
                                  for s in sessions[:5])
 
+        from darwin.prompts.pivot_agent import SYSTEM_PROMPT_PIVOT
+
         prompt = f"""Credentials available:
 {cred_text}
 
@@ -131,18 +113,22 @@ Active sessions:
 
 Create a lateral movement plan with 2-5 steps. Test credentials on unreached hosts.
 Output as JSON array:
-[{{"id": "pivot-1", "instruction": "...", "tool": "ssh_brute", "params": {{...}}}}]"""
+[{{"id": "pivot-1", "instruction": "...", "tool": "test_credential", "params": {{...}}, "dependent_task_ids": []}}]"""
 
         self._maybe_compress()
         content, _ = self.llm.generate(
             prompt=prompt,
-            system_prompt=SYSTEM_PROMPT_PIVOT,
+            system_prompt=SYSTEM_PROMPT_PIVOT.format(
+                credentials=cred_text,
+                hosts=host_text,
+                sessions=session_text or "(none)",
+                tools="test_credential, ssh_exec, ssh_key_exec",
+            ),
         )
         try:
-            import json as _json, re as _re
-            match = _re.search(r'\[.*\]', content, re.DOTALL)
+            match = re.search(r'\[.*\]', content, re.DOTALL)
             if match:
-                llm_plan = _json.loads(match.group(0))
+                llm_plan = json.loads(match.group(0))
                 if isinstance(llm_plan, list) and len(llm_plan) > 0:
                     return llm_plan
         except Exception:
@@ -155,9 +141,11 @@ Output as JSON array:
             target_hosts = [h["id"] for h in hosts
                            if h["id"] not in sessioned_hosts and h["id"] != cred.get("source_host","")]
             for target in target_hosts[:3]:
+                cred_user = cred.get("user", "")
+                cred_pass = cred.get("password", "")
                 plan.append({
                     "id": f"pivot-{i}-{target}",
-                    "instruction": f"Test credential {cred.get('user','')} on {target}",
+                    "instruction": f"Test credential {cred_user} on {target}",
                     "action": "credential_test",
                     "tool": "test_credential" if cred_pass else "ssh_exec",
                     "params": {
@@ -170,7 +158,6 @@ Output as JSON array:
                     "dependent_task_ids": [],
                 })
 
-        # Also add tasks to probe internal hosts from existing sessions
         for session in sessions:
             session_host = session.get("host", "")
             if session.get("access_level") in ("root", "admin", "system"):
@@ -190,34 +177,143 @@ Output as JSON array:
         return plan
 
     async def _execute_task(self, task: Dict[str, Any]) -> Any:
-        """Execute a lateral movement task."""
-        tool_name = task.get("tool", "test_credential")
-        params = task.get("params", {})
+        """Execute a lateral movement task — LLM decides which credential to use
+        on which host with which tool.
+
+        The LLM receives the DKG state (credentials, hosts, sessions) and available
+        pivot tool definitions to make the best lateral movement decision.
+        """
+        tool_defs = self.tools.get_tool_definitions()
+        tool_names = self.tools.get_tool_names()
+
+        # Gather current DKG context
+        credentials = self.dkg.query_nodes("Credential")
+        hosts = self.dkg.query_nodes("Host")
+        sessions = self.dkg.query_nodes("Session")
+        sessioned_hosts = {s.get("host", "") for s in sessions}
+
+        unreached = [h.get("id", "") for h in hosts
+                     if h.get("id", "") not in sessioned_hosts]
+
+        ctx = (
+            f"Credentials: {len(credentials)}, "
+            f"Unreached hosts: {len(unreached)}, "
+            f"Active sessions: {len(sessions)}"
+        )
+
+        prompt = (
+            f"Task: {task['instruction']}\n"
+            f"DKG Context: {ctx}\n"
+            f"Unreached hosts: {', '.join(unreached[:5]) if unreached else '(all reached)'}\n"
+            f"Available tools: {', '.join(sorted(tool_names))}\n\n"
+            f"Choose the best lateral movement tool and parameters. "
+            f"Prioritize testing credentials on unreached hosts. "
+            f"If a credential has a password, use test_credential. "
+            f"If a credential has an SSH key path, use ssh_key_exec."
+        )
+
+        from darwin.prompts.pivot_agent import SYSTEM_PROMPT_PIVOT
+
+        self._maybe_compress()
+        content, tool_calls = self.llm.generate(
+            prompt=prompt,
+            system_prompt=SYSTEM_PROMPT_PIVOT.format(
+                credentials=str([c.get("user", "") for c in credentials[:5]]),
+                hosts=str(unreached[:5]),
+                sessions=str(list(sessioned_hosts)[:5]),
+                tools=", ".join(tool_names),
+            ),
+            tools=tool_defs,
+        )
+
+        if tool_calls:
+            call = tool_calls[0]
+            tool_name = call.get("name", "test_credential")
+            params = call.get("arguments", {})
+        else:
+            # Fallback: use the task's specified tool
+            tool_name = task.get("tool", "test_credential")
+            params = task.get("params", {})
+
         result = await self.tools.call(tool_name, params)
         self.budget.tokens_used += 800
+        task["_tool_used"] = tool_name
+        task["_params_used"] = params
         return result
 
     async def _evaluate_result(
         self, task: Dict[str, Any], result: Any
     ) -> tuple[bool, List[Dict[str, Any]]]:
-        """Evaluate pivot result — check for successful session establishment."""
+        """Evaluate pivot result — LLM-driven analysis for session establishment
+        and internal network discovery.
+
+        Falls back to regex for flags and basic shell/protocol indicators.
+        """
         findings = []
 
-        if not hasattr(result, "success"):
+        if result is None or not hasattr(result, "success"):
             return False, findings
 
         stdout = getattr(result, "stdout", "")
-        success = result.success
+        tool_name = task.get("_tool_used", task.get("tool", ""))
+        params = task.get("params", {})
+        host = params.get("host", "")
+        user = params.get("user", "")
 
-        if success:
-            params = task.get("params", {})
-            host = params.get("host", "")
-            user = params.get("user", "")
+        # Always extract flags via regex (most reliable signal)
+        flags = re.findall(r"flag\{[a-zA-Z0-9_\-!@#$%^&*()+=]+\}", stdout, re.IGNORECASE)
+        for flag in flags:
+            findings.append({"type": "flag", "value": flag, "source": "pivot_stdout"})
 
-            # Check if we got a shell
+        if flags:
+            self.findings.extend(findings)
+            return True, findings
+
+        # LLM-driven evaluation
+        from darwin.prompts.pivot_agent import SYSTEM_PROMPT_PIVOT_EVALUATE
+        try:
+            eval_prompt = SYSTEM_PROMPT_PIVOT_EVALUATE.format(
+                tool_name=tool_name,
+                target_host=host,
+                tool_output=stdout[:3000],
+            )
+            self._maybe_compress()
+            content, _ = self.llm.generate(
+                prompt=eval_prompt,
+                system_prompt="You are a lateral movement result evaluator. Output ONLY valid JSON.",
+            )
+            match = re.search(r'\{[^{}]*\}', content, re.DOTALL)
+            if match:
+                eval_result = json.loads(match.group(0))
+                if isinstance(eval_result, dict):
+                    for f in eval_result.get("findings", []):
+                        if isinstance(f, dict):
+                            findings.append(f)
+                    # Process new sessions found by LLM
+                    if eval_result.get("new_session_established"):
+                        findings.append({
+                            "type": "new_session",
+                            "host": host,
+                            "user": user,
+                            "access_level": eval_result.get("access_level", "user"),
+                            "evidence": stdout[:200],
+                            "source": "pivot",
+                        })
+                    # Process internal hosts discovered
+                    for ip in eval_result.get("internal_hosts_found", []):
+                        findings.append({
+                            "type": "new_internal_host",
+                            "host": ip,
+                            "evidence": f"Discovered via session on {host}",
+                            "source": "pivot",
+                        })
+        except Exception:
+            pass
+
+        # Fallback: basic regex-based checks if LLM produced nothing
+        if not findings:
             shell_indicators = ["uid=", "gid=", "Linux", "Windows", "$ ", "# "]
             got_shell = any(ind in stdout for ind in shell_indicators)
-
             if got_shell:
                 findings.append({
                     "type": "new_session",
@@ -227,22 +323,17 @@ Output as JSON array:
                     "evidence": stdout[:200],
                     "source": "pivot",
                 })
-
                 # Mark host as reachable
                 self.dkg.update_node(host, {"is_reachable": True})
-
-                # Record new session in DKG
+                # Record session in DKG
                 self.dkg.add_node("Session", f"session-{host}-{user}", {
-                    "host": host,
-                    "user": user,
-                    "access_level": "shell",
-                    "shell_type": "ssh",
+                    "host": host, "user": user,
+                    "access_level": "shell", "shell_type": "ssh",
                     "established_by": self.agent_id,
                 })
 
-            # Check for internal network discovery
+            # Check for internal network discovery via regex
             if "inet " in stdout or "addr:" in stdout:
-                import re
                 ips = re.findall(r"(?:inet\s+|addr:)(\d+\.\d+\.\d+\.\d+)", stdout)
                 for ip in ips:
                     if ip not in ("127.0.0.1", "0.0.0.0"):
@@ -252,17 +343,123 @@ Output as JSON array:
                             "evidence": f"Discovered via session on {host}",
                             "source": "pivot",
                         })
-                        # Add to DKG
                         self.dkg.add_node("Host", ip, {
                             "ip": ip,
-                            "is_reachable": False,  # indirectly reachable
+                            "is_reachable": False,
                             "is_internal": True,
                             "discovered_by": self.agent_id,
                             "reachable_via": host,
                         })
 
+        # Write DKG updates for new sessions discovered by LLM
+        for f in findings:
+            if f.get("type") == "new_session":
+                f_host = f.get("host", host)
+                f_user = f.get("user", user)
+                if f_host:
+                    self.dkg.update_node(f_host, {"is_reachable": True})
+                    self.dkg.add_node("Session", f"session-{f_host}-{f_user}", {
+                        "host": f_host, "user": f_user,
+                        "access_level": f.get("access_level", "shell"),
+                        "shell_type": "ssh",
+                        "established_by": self.agent_id,
+                    })
+            elif f.get("type") == "new_internal_host":
+                f_ip = f.get("host", "")
+                if f_ip:
+                    self.dkg.add_node("Host", f_ip, {
+                        "ip": f_ip,
+                        "is_reachable": False,
+                        "is_internal": True,
+                        "discovered_by": self.agent_id,
+                        "reachable_via": host,
+                    })
+
         self.findings.extend(findings)
         return len(findings) > 0, findings
+
+    async def _replan_after_failure(
+        self, failed_task: Dict[str, Any], result: Any
+    ) -> List[Dict[str, Any]]:
+        """LLM-driven replanning after a failed lateral movement attempt.
+
+        Analyzes failure and proposes alternative credentials, hosts, or tools.
+        """
+        stdout = getattr(result, "stdout", "") if hasattr(result, "stdout") else ""
+        tool_name = failed_task.get("_tool_used", failed_task.get("tool", ""))
+
+        # Gather current DKG state for context
+        credentials = self.dkg.query_nodes("Credential")
+        sessions = self.dkg.query_nodes("Session")
+        hosts = self.dkg.query_nodes("Host")
+        sessioned_hosts = {s.get("host", "") for s in sessions}
+        unreached = [h.get("id", "") for h in hosts
+                     if h.get("id", "") not in sessioned_hosts]
+
+        from darwin.prompts.pivot_agent import SYSTEM_PROMPT_PIVOT_REPLAN
+
+        try:
+            replan_prompt = SYSTEM_PROMPT_PIVOT_REPLAN.format(
+                task_instruction=failed_task.get("instruction", ""),
+                tool_name=tool_name,
+                result_summary=stdout[:1500],
+                credentials=str([c.get("user", "") for c in credentials[:5]]),
+                unreached_hosts=str(unreached[:5]),
+            )
+            self._maybe_compress()
+            content, _ = self.llm.generate(
+                prompt=replan_prompt,
+                system_prompt="You are a lateral movement strategist. Output ONLY valid JSON array.",
+            )
+            match = re.search(r'\[.*\]', content, re.DOTALL)
+            if match:
+                new_tasks = json.loads(match.group(0))
+                if isinstance(new_tasks, list) and new_tasks:
+                    self.plan = [t for t in self.plan if t.get("id") != failed_task.get("id")]
+                    self.plan.extend(new_tasks)
+                    return self.plan
+        except Exception:
+            pass
+
+        self._mark_task_done(failed_task)
+        return self.plan
+
+    async def _update_plan(
+        self, completed_task: Dict[str, Any], result: Any
+    ) -> List[Dict[str, Any]]:
+        """LLM-driven plan update after a successful lateral movement.
+
+        Analyzes new sessions/hosts and decides whether to add follow-up pivot tasks.
+        """
+        stdout = getattr(result, "stdout", "") if hasattr(result, "stdout") else ""
+
+        self._mark_task_done(completed_task)
+
+        remaining = [t for t in self.plan if not t.get("done", False)]
+        if not remaining:
+            return self.plan
+
+        try:
+            self._maybe_compress()
+            content, _ = self.llm.generate(
+                prompt=(
+                    f"Lateral movement task COMPLETED: '{completed_task['instruction']}'\n"
+                    f"Output: {stdout[:1200]}\n"
+                    f"Remaining plan: {json.dumps(remaining[:3], indent=2)}\n\n"
+                    f"Based on what we learned, should we add follow-up pivot tasks? "
+                    f"Output a JSON array of additional tasks, or [] if none needed."
+                ),
+                system_prompt="You are a lateral movement strategist. Output ONLY valid JSON array.",
+            )
+            match = re.search(r'\[.*\]', content, re.DOTALL)
+            if match:
+                new_tasks = json.loads(match.group(0))
+                if isinstance(new_tasks, list) and new_tasks:
+                    self.plan.extend(new_tasks)
+        except Exception:
+            pass
+
+        return self.plan
 
     def _write_findings_to_dkg(
         self, task: Dict[str, Any], result: Any, findings: List[Dict[str, Any]]

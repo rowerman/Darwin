@@ -1,0 +1,158 @@
+{
+  "target": "http://localhost",
+  "model": "openai/gpt-5",
+  "provider": "openai",
+  "time_budget": 600,
+  "events": [
+    {
+      "timestamp": "2026-05-22T14:57:56",
+      "elapsed_s": 0.0,
+      "phase": "init",
+      "level": "info",
+      "event": "task_start",
+      "target": "http://localhost",
+      "description": "Perform a comprehensive penetration test. Discover all open ports, enumerate services, identify vulnerabilities, exploit them, and capture proof flags."
+    },
+    {
+      "timestamp": "2026-05-22T14:58:06",
+      "elapsed_s": 10.016,
+      "phase": "recon",
+      "level": "info",
+      "event": "recon_nmap_start",
+      "host": "localhost"
+    },
+    {
+      "timestamp": "2026-05-22T14:58:41",
+      "elapsed_s": 45.181,
+      "phase": "recon",
+      "level": "info",
+      "event": "recon_done",
+      "dkg_summary": "Host: 1\n  - id=host-localhost: {'ip': 'localhost', 'is_reachable': True, 'is_internal': False, '_version': 3}\nService: 4\n  - id=svc-localhost-22: {'port': 22, 'protocol': 'tcp', 'version': 'OpenSSH 8.9p1 Ubuntu 3ubuntu0.15 (Ubuntu Linux; protocol 2.0)', 'banner': 'ssh', '_version': 1}\n  - id=svc-localhost-1053: {'port': 1053, 'protocol': 'tcp', 'version': 'tcpwrapped', 'banner': 'tcpwrapped', '_version': 2, 'http_reachable': False}\n  - id=svc-localhost-8000: {'port': 8000, 'protocol': 'tcp', 'version': 'uvicorn', 'banner': 'http-alt', '_version': 1}\n  - id=svc-http-8000: {'port': 8000, 'protocol': 'HTTP', 'version': 'unknown', 'banner': '', '_version': 1}\nEndpoint: 5\n  - id=endpoint-http://localhost:8000/docs: {'url': 'http://localhost:8000/docs', 'method': 'GET', 'params': '', 'auth_required': False, '_version': 1}\n  - id=endpoint-http://localhost:8000/jobs: {'url': 'http://localhost:8000/jobs', 'method': 'POST', 'params': '', 'auth_required': False, '_version': 2}\n  - id=endpoint-http://localhost:8000/ping: {'url': 'http://localhost:8000/ping', 'method': 'GET', 'params': '', 'auth_required': False, '_version': 2}\n  - id=endpoint-http://localhost:8000-param-job_type: {'url': 'http://localhost:8000', 'method': 'POST', 'params': 'job_type', 'auth_required': False, '_version': 1}\n  - id=endpoint-http://localhost:8000-param-job-type: {'url': 'http://localhost:8000', 'method': 'POST', 'params': 'job-type', 'auth_required': False, '_version': 1}\nVulnerability: 10\n  - id=nikto-http://localhost:8000-Target IP:          127.0.0.1: {'vuln_type': 'info', 'endpoint': 'http://localhost:8000', 'parameter': '', 'severity': 'low', 'source': 'nikto', 'detail': 'Target IP:          127.0.0.1', '_version': 1}\n  - id=nikto-http://localhost:8000-Target Hostname:    localhost: {'vuln_type': 'info', 'endpoint': 'http://localhost:8000', 'parameter': '', 'severity': 'low', 'source': 'nikto', 'detail': 'Target Hostname:    localhost', '_version': 1}\n  - id=nikto-http://localhost:8000-Target Port:        8000: {'vuln_type': 'info', 'endpoint': 'http://localhost:8000', 'parameter': '', 'severity': 'low', 'source': 'nikto', 'detail': 'Target Port:        8000', '_version': 1}\n  - id=nikto-http://localhost:8000-Start Time:         2026-05-22 14:58:29 : {'vuln_type': 'info', 'endpoint': 'http://localhost:8000', 'parameter': '', 'severity': 'low', 'source': 'nikto', 'detail': 'Start Time:         2026-05-22 14:58:29 (GMT8)', '_version': 1}\n  - id=nikto-http://localhost:8000-Server: uvicorn: {'vuln_type': 'info', 'endpoint': 'http://localhost:8000', 'parameter': '', 'severity': 'low', 'source': 'nikto', 'detail': 'Server: uvicorn', '_version': 1}\n  - id=nikto-http://localhost:8000-The anti-clickjacking X-Frame-Options he: {'vuln_type': 'info', 'endpoint': 'http://localhost:8000', 'parameter': '', 'severity': 'low', 'source': 'nikto', 'detail': 'The anti-clickjacking X-Frame-Options header is not present.', '_version': 1}\n  - id=nikto-http://localhost:8000-No CGI Directories found (use '-C all' t: {'vuln_type': 'info', 'endpoint': 'http://localhost:8000', 'parameter': '', 'severity': 'low', 'source': 'nikto', 'detail': \"No CGI Directories found (use '-C all' to force check all possible dirs)\", '_version': 1}\n  - id=nikto-http://localhost:8000-Allowed HTTP Methods: GET: {'vuln_type': 'info', 'endpoint': 'http://localhost:8000', 'parameter': '', 'severity': 'low', 'source': 'nikto', 'detail': 'Allowed HTTP Methods: GET', '_version': 1}\n  ... and 2 more",
+      "step": 1
+    },
+    {
+      "timestamp": "2026-05-22T14:59:33",
+      "elapsed_s": 97.236,
+      "phase": "analyze",
+      "level": "info",
+      "event": "llm_analyze_call",
+      "prompt": "Target information:\n\n## WARNING \u2014 Ports found by nmap but NOT HTTP-reachable:\n- svc-localhost-1053: port 1053/tcp\nDo NOT generate hypotheses for these services \u2014 you cannot connect to them.\nHost: 1\n  - id=host-localhost: {'ip': 'localhost', 'is_reachable': True, 'is_internal': False, '_version': 3}\nService: 4\n  - id=svc-localhost-22: {'port': 22, 'protocol': 'tcp', 'version': 'OpenSSH 8.9p1 Ubuntu 3ubuntu0.15 (Ubuntu Linux; protocol 2.0)', 'banner': 'ssh', '_version': 1}\n  - id=svc-localhost-1053: {'port': 1053, 'protocol': 'tcp', 'version': 'tcpwrapped', 'banner': 'tcpwrapped', '_version': 2, 'http_reachable': False}\n  - id=svc-localhost-8000: {'port': 8000, 'protocol': 'tcp', 'version': 'uvicorn', 'banner': 'http-alt', '_version': 1}\n  - id=svc-http-8000: {'port': 8000, 'protocol': 'HTTP', 'version': 'unknown', 'banner': '', '_version': 1}\nEndpoint: 5\n  - id=endpoint-http://localhost:8000/docs: {'url': 'http://localhost:8000/docs', 'method': 'GET', 'params': '', 'auth_required': False, '_version': 1}\n  - id=endpoint-http://localhost:8000/jobs: {'url': 'http://localhost:8000/jobs', 'method': 'POST', 'params': '', 'auth_required': False, '_version': 2}\n  - id=endpoint-http://localhost:8000/ping: {'url': 'http://localhost:8000/ping', 'method': 'GET', 'params': '', 'auth_required': False, '_version': 2}\n  - id=endpoint-http://localhost:8000-param-job_type: {'url': 'http://localhost:8000', 'method': 'POST', 'params': 'job_type', 'auth_required': False, '_version': 1}\n  - id=endpoint-http://localhost:8000-param-job-type: {'url': 'http://localhost:8000', 'method': 'POST', 'params': 'job-type', 'auth_required': False, '_version': 1}\nVulnerability: 10\n  - id=nikto-http://localhost:8000-Target IP:          127.0.0.1: {'vuln_type': 'info', 'endpoint': 'http://localhost:8000', 'parameter': '', 'severity': 'low', 'source': 'nikto', 'detail': 'Target IP:          127.0.0.1', '_version': 1}\n  - id=nikto-http://localhost:8000-Target Hostname:    localhost: {'vuln_type': 'info', 'endpoint': 'http://localhost:8000', 'parameter': '', 'severity': 'low', 'source': 'nikto', 'detail': 'Target Hostname:    localhost', '_version': 1}\n  - id=nikto-http://localhost:8000-Target Port:        8000: {'vuln_type': 'info', 'endpoint': 'http://localhost:8000', 'parameter': '', 'severity': 'low', 'source': 'nikto', 'detail': 'Target Port:        8000', '_version': 1}\n  - id=nikto-http://localhost:8000-Start Time:         2026-05-22 14:58:29 : {'vuln_type': 'info', 'endpoint': 'http://localhost:8000', 'parameter': '', 'severity': 'low', 'source': 'nikto', 'detail': 'Start Time:         2026-05-22 14:58:29 (GMT8)', '_version': 1}\n  - id=nikto-http://localhost:8000-Server: uvicorn: {'vuln_type': 'info', 'endpoint': 'http://localhost:8000', 'parameter': '', 'severity': 'low', 'source': 'nikto', 'detail': 'Server: uvicorn', '_version': 1}\n  - id=nikto-http://localhost:8000-The anti-clickjacking X-Frame-Options he: {'vuln_type': 'info', 'endpoint': 'http://localhost:8000', 'parameter': '', 'severity': 'low', 'source': 'nikto', 'detail': 'The anti-clickjacking X-Frame-Options header is not present.', '_version': 1}\n  - id=nikto-http://localhost:8000-No CGI Directories found (use '-C all' t: {'vuln_type': 'info', 'endpoint': 'http://localhost:8000', 'parameter': '', 'severity': 'low', 'source': 'nikto', 'detail': \"No CGI Directories found (use '-C all' to force check all possible dirs)\", '_version': 1}\n  - id=nikto-http://localhost:8000-Allowed HTTP Methods: GET: {'vuln_type': 'info', 'endpoint': 'http://localhost:8000', 'parameter': '', 'severity': 'low', 'source': 'nikto', 'detail': 'Allowed HTTP Methods: GET', '_version': 1}\n  ... and 2 more\n\nIdentify potential vulnerabilities.\n\n## Relevant Attack Techniques from Knowledge Base\n[network/network/protocol_attacks] LLMNR/NBT-NS Poisoning: Respond to LLMNR and NetBIOS Name Service broadcasts to capture NTLMv2 hashes. Exploits Windows name resolution fallback behavior when DNS fails.\n[network/network/protocol_attacks] ARP Spoofing / Man-in-the-Middle: Perform ARP cache poisoning to intercept traffic between hosts on the local network segment. Enables credential capture and session hijacking.\n[web/RECON/] FastAPI/OpenAPI \u2014 Full API Surface Discovery and Exploitation: FastAPI applications expose complete API documentation at /openapi.json. This reveals every endpoint, parameter, request body field, and authentication requirement. Use this to plan comprehensive expl\n[web/RECON/] API Discovery via Swagger/OpenAPI: FastAPI and other frameworks auto-generate API documentation at /docs or /openapi.json. This reveals ALL endpoints, parameters, and request formats.",
+      "response": "[\n  {\n    \"vuln_type\": \"AuthBypass\",\n    \"endpoint\": \"http://localhost:8000/jobs\",\n    \"param\": null,\n    \"confidence\": 0.7,\n    \"evidence\": \"Endpoint listing shows POST /jobs with auth_required=False, indicating a state-changing action exposed without authentication on a FastAPI/uvicorn service.\",\n    \"suggested_tool\": \"http_post\",\n    \"tool_args\": {\n      \"url\": \"http://localhost:8000/jobs\",\n      \"data\": \"{\\\"job_type\\\":\\\"test\\\"}\",\n      \"headers\": \"Content-Type: application/json\"\n    }\n    }\n  ,\n  {\n    \"vuln_type\": \"AuthBypass\",\n    \"endpoint\": \"http://localhost:8000/docs\",\n    \"param\": null,\n    \"confidence\": 0.75,\n    \"evidence\": \"FastAPI auto-generated Swagger UI is publicly accessible (auth_required=False). In production, exposing /docs can disclose the full API surface and facilitate unauthorized use.\",\n    \"suggested_tool\": \"curl_get\",\n    \"tool_args\": {\n      \"url\": \"http://localhost:8000/docs\"\n    }\n  },\n  {\n    \"vuln_type\": \"CMDi\",\n    \"endpoint\": \"http://localhost:8000/\",\n    \"param\": \"job_type\",\n    \"confidence\": 0.45,\n    \"evidence\": \"A POST endpoint at / with parameter 'job_type' suggests server-side dispatching based on user input; mis-implemented job executors in FastAPI often shell out, risking command injection.\",\n    \"suggested_tool\": \"command_injection_test\",\n    \"tool_args\": {\n      \"url\": \"http://localhost:8000\",\n      \"param\": \"job_type\"\n    }\n  },\n  {\n    \"vuln_type\": \"CMDi\",\n    \"endpoint\": \"http://localhost:8000/\",\n    \"param\": \"job-type\",\n    \"confidence\": 0.4,\n    \"evidence\": \"Alternate parameter name 'job-type' for POST / indicates similar job selection behavior; if interpolated into shell commands, it could allow command injection.\",\n    \"suggested_tool\": \"command_injection_test\",\n    \"tool_args\": {\n      \"url\": \"http://localhost:8000\",\n      \"param\": \"job-type\"\n    }\n  }\n]",
+      "tokens_used": 2199,
+      "cteg_suggestions": {
+        "bypass_strategies": [],
+        "exploit_strategies": []
+      }
+    },
+    {
+      "timestamp": "2026-05-22T14:59:57",
+      "elapsed_s": 121.334,
+      "phase": "analyze",
+      "level": "info",
+      "event": "analyze_done",
+      "hypotheses": 7,
+      "dkg_summary": "Host: 1\n  - id=host-localhost: {'ip': 'localhost', 'is_reachable': True, 'is_internal': False, '_version': 3}\nService: 4\n  - id=svc-localhost-22: {'port': 22, 'protocol': 'tcp', 'version': 'OpenSSH 8.9p1 Ubuntu 3ubuntu0.15 (Ubuntu Linux; protocol 2.0)', 'banner': 'ssh', '_version': 1}\n  - id=svc-localhost-1053: {'port': 1053, 'protocol': 'tcp', 'version': 'tcpwrapped', 'banner': 'tcpwrapped', '_version': 2, 'http_reachable': False}\n  - id=svc-localhost-8000: {'port': 8000, 'protocol': 'tcp', 'version': 'uvicorn', 'banner': 'http-alt', '_version': 1}\n  - id=svc-http-8000: {'port': 8000, 'protocol': 'HTTP', 'version': 'unknown', 'banner': '', '_version': 1}\nEndpoint: 5\n  - id=endpoint-http://localhost:8000/docs: {'url': 'http://localhost:8000/docs', 'method': 'GET', 'params': '', 'auth_required': False, '_version': 1}\n  - id=endpoint-http://localhost:8000/jobs: {'url': 'http://localhost:8000/jobs', 'method': 'POST', 'params': '', 'auth_required': False, '_version': 2}\n  - id=endpoint-http://localhost:8000/ping: {'url': 'http://localhost:8000/ping', 'method': 'GET', 'params': '', 'auth_required': False, '_version': 2}\n  - id=endpoint-http://localhost:8000-param-job_type: {'url': 'http://localhost:8000', 'method': 'POST', 'params': 'job_type', 'auth_required': False, '_version': 1}\n  - id=endpoint-http://localhost:8000-param-job-type: {'url': 'http://localhost:8000', 'method': 'POST', 'params': 'job-type', 'auth_required': False, '_version': 1}\nVulnerability: 17\n  - id=nikto-http://localhost:8000-Target IP:          127.0.0.1: {'vuln_type': 'info', 'endpoint': 'http://localhost:8000', 'parameter': '', 'severity': 'low', 'source': 'nikto', 'detail': 'Target IP:          127.0.0.1', '_version': 1}\n  - id=nikto-http://localhost:8000-Target Hostname:    localhost: {'vuln_type': 'info', 'endpoint': 'http://localhost:8000', 'parameter': '', 'severity': 'low', 'source': 'nikto', 'detail': 'Target Hostname:    localhost', '_version': 1}\n  - id=nikto-http://localhost:8000-Target Port:        8000: {'vuln_type': 'info', 'endpoint': 'http://localhost:8000', 'parameter': '', 'severity': 'low', 'source': 'nikto', 'detail': 'Target Port:        8000', '_version': 1}\n  - id=nikto-http://localhost:8000-Start Time:         2026-05-22 14:58:29 : {'vuln_type': 'info', 'endpoint': 'http://localhost:8000', 'parameter': '', 'severity': 'low', 'source': 'nikto', 'detail': 'Start Time:         2026-05-22 14:58:29 (GMT8)', '_version': 1}\n  - id=nikto-http://localhost:8000-Server: uvicorn: {'vuln_type': 'info', 'endpoint': 'http://localhost:8000', 'parameter': '', 'severity': 'low', 'source': 'nikto', 'detail': 'Server: uvicorn', '_version': 1}\n  - id=nikto-http://localhost:8000-The anti-clickjacking X-Frame-Options he: {'vuln_type': 'info', 'endpoint': 'http://localhost:8000', 'parameter': '', 'severity': 'low', 'source': 'nikto', 'detail': 'The anti-clickjacking X-Frame-Options header is not present.', '_version': 1}\n  - id=nikto-http://localhost:8000-No CGI Directories found (use '-C all' t: {'vuln_type': 'info', 'endpoint': 'http://localhost:8000', 'parameter': '', 'severity': 'low', 'source': 'nikto', 'detail': \"No CGI Directories found (use '-C all' to force check all possible dirs)\", '_version': 1}\n  - id=nikto-http://localhost:8000-Allowed HTTP Methods: GET: {'vuln_type': 'info', 'endpoint': 'http://localhost:8000', 'parameter': '', 'severity': 'low', 'source': 'nikto', 'detail': 'Allowed HTTP Methods: GET', '_version': 1}\n  ... and 9 more"
+    },
+    {
+      "timestamp": "2026-05-22T15:00:15",
+      "elapsed_s": 139.692,
+      "phase": "analyze",
+      "level": "info",
+      "event": "loop_iteration",
+      "loop": 1,
+      "b_value": 0.236,
+      "mode": "solo"
+    },
+    {
+      "timestamp": "2026-05-22T15:00:59",
+      "elapsed_s": 183.463,
+      "phase": "analyze",
+      "level": "info",
+      "event": "systematic_exploit",
+      "tool": "curl_get",
+      "url": "http://localhost:8000/jobs",
+      "vt": "authbypass",
+      "result": "HTTP/1.1 405 Method Not Allowed\r\ndate: Fri, 22 May 2026 07:00:59 GMT\r\nserver: uvicorn\r\nallow: POST\r\ncontent-length: 31\r\ncontent-type: application/json\r\n\r\n{\"detail\":\"Method Not Allowed\"}"
+    },
+    {
+      "timestamp": "2026-05-22T15:00:59",
+      "elapsed_s": 183.487,
+      "phase": "analyze",
+      "level": "info",
+      "event": "systematic_exploit",
+      "tool": "curl_get",
+      "url": "http://localhost:8000/docs",
+      "vt": "authbypass",
+      "result": "HTTP/1.1 200 OK\r\ndate: Fri, 22 May 2026 07:00:59 GMT\r\nserver: uvicorn\r\ncontent-length: 931\r\ncontent-type: text/html; charset=utf-8\r\n\r\n\n    <!DOCTYPE html>\n    <html>\n    <head>\n    <link type=\"text/css\" rel=\"stylesheet\" href=\"https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui.css\">\n    <link "
+    },
+    {
+      "timestamp": "2026-05-22T15:00:59",
+      "elapsed_s": 183.5,
+      "phase": "analyze",
+      "level": "info",
+      "event": "systematic_exploit",
+      "tool": "command_injection_test",
+      "url": "http://localhost:8000/",
+      "vt": "cmdi",
+      "result": "semicolon: no evidence of execution\npipe: no evidence of execution\nbacktick: no evidence of execution\ndollar_subshell: no evidence of execution\nnewline: error - URL can't contain control characters. '/?job_type=\\nid' (found at least '\\n')"
+    },
+    {
+      "timestamp": "2026-05-22T15:00:59",
+      "elapsed_s": 183.511,
+      "phase": "analyze",
+      "level": "info",
+      "event": "systematic_exploit",
+      "tool": "command_injection_test",
+      "url": "http://localhost:8000/",
+      "vt": "cmdi",
+      "result": "semicolon: no evidence of execution\npipe: no evidence of execution\nbacktick: no evidence of execution\ndollar_subshell: no evidence of execution\nnewline: error - URL can't contain control characters. '/?job-type=\\nid' (found at least '\\n')"
+    },
+    {
+      "timestamp": "2026-05-22T15:00:59",
+      "elapsed_s": 183.531,
+      "phase": "analyze",
+      "level": "info",
+      "event": "systematic_exploit",
+      "tool": "curl_get",
+      "url": "http://localhost:8000",
+      "vt": "auth",
+      "result": "HTTP/1.1 200 OK\r\ndate: Fri, 22 May 2026 07:00:59 GMT\r\nserver: uvicorn\r\ncontent-length: 3961\r\ncontent-type: text/html; charset=utf-8\r\n\r\n<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n    <meta charset=\"UTF-8\">\n    <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">\n    <title>Ultimate Job"
+    },
+    {
+      "timestamp": "2026-05-22T15:00:59",
+      "elapsed_s": 183.531,
+      "phase": "analyze",
+      "level": "info",
+      "event": "systematic_exploit",
+      "tool": "command_injection_test",
+      "url": "http://localhost:8000",
+      "vt": "cmdi",
+      "result": ""
+    },
+    {
+      "timestamp": "2026-05-22T15:05:57",
+      "elapsed_s": 481.733,
+      "phase": "analyze",
+      "level": "info",
+      "event": "loop_iteration",
+      "loop": 2,
+      "b_value": 0.236,
+      "mode": "solo"
+    },
+    {
+      "timestamp": "2026-05-22T15:10:45",
+      "elapsed_s": 768.972,
+      "phase": "analyze",
+      "level": "error",
+      "event": "task_end",
+      "success": false,
+      "flag": "",
+      "steps": 47,
+      "tokens_used": 3430,
+      "time_elapsed": 768.971506357193,
+      "error": "No result produced"
+    }
+  ],
+  "dkg_summary": "Host: 1\n  - id=host-localhost: {'ip': 'localhost', 'is_reachable': True, 'is_internal': False, '_version': 3}\nService: 4\n  - id=svc-localhost-22: {'port': 22, 'protocol': 'tcp', 'version': 'OpenSSH 8.9p1 Ubuntu 3ubuntu0.15 (Ubuntu Linux; protocol 2.0)', 'banner': 'ssh', '_version': 1}\n  - id=svc-localhost-1053: {'port': 1053, 'protocol': 'tcp', 'version': 'tcpwrapped', 'banner': 'tcpwrapped', '_version': 2, 'http_reachable': False}\n  - id=svc-localhost-8000: {'port': 8000, 'protocol': 'tcp', 'version': 'uvicorn', 'banner': 'http-alt', '_version': 1}\n  - id=svc-http-8000: {'port': 8000, 'protocol': 'HTTP', 'version': 'unknown', 'banner': '', '_version': 1}\nEndpoint: 5\n  - id=endpoint-http://localhost:8000/docs: {'url': 'http://localhost:8000/docs', 'method': 'GET', 'params': '', 'auth_required': False, '_version': 1}\n  - id=endpoint-http://localhost:8000/jobs: {'url': 'http://localhost:8000/jobs', 'method': 'POST', 'params': '', 'auth_required': False, '_version': 2}\n  - id=endpoint-http://localhost:8000/ping: {'url': 'http://localhost:8000/ping', 'method': 'GET', 'params': '', 'auth_required': False, '_version': 2}\n  - id=endpoint-http://localhost:8000-param-job_type: {'url': 'http://localhost:8000', 'method': 'POST', 'params': 'job_type', 'auth_required': False, '_version': 1}\n  - id=endpoint-http://localhost:8000-param-job-type: {'url': 'http://localhost:8000', 'method': 'POST', 'params': 'job-type', 'auth_required': False, '_version': 1}\nVulnerability: 17\n  - id=nikto-http://localhost:8000-Target IP:          127.0.0.1: {'vuln_type': 'info', 'endpoint': 'http://localhost:8000', 'parameter': '', 'severity': 'low', 'source': 'nikto', 'detail': 'Target IP:          127.0.0.1', '_version': 1}\n  - id=nikto-http://localhost:8000-Target Hostname:    localhost: {'vuln_type': 'info', 'endpoint': 'http://localhost:8000', 'parameter': '', 'severity': 'low', 'source': 'nikto', 'detail': 'Target Hostname:    localhost', '_version': 1}\n  - id=nikto-http://localhost:8000-Target Port:        8000: {'vuln_type': 'info', 'endpoint': 'http://localhost:8000', 'parameter': '', 'severity': 'low', 'source': 'nikto', 'detail': 'Target Port:        8000', '_version': 1}\n  - id=nikto-http://localhost:8000-Start Time:         2026-05-22 14:58:29 : {'vuln_type': 'info', 'endpoint': 'http://localhost:8000', 'parameter': '', 'severity': 'low', 'source': 'nikto', 'detail': 'Start Time:         2026-05-22 14:58:29 (GMT8)', '_version': 1}\n  - id=nikto-http://localhost:8000-Server: uvicorn: {'vuln_type': 'info', 'endpoint': 'http://localhost:8000', 'parameter': '', 'severity': 'low', 'source': 'nikto', 'detail': 'Server: uvicorn', '_version': 1}\n  - id=nikto-http://localhost:8000-The anti-clickjacking X-Frame-Options he: {'vuln_type': 'info', 'endpoint': 'http://localhost:8000', 'parameter': '', 'severity': 'low', 'source': 'nikto', 'detail': 'The anti-clickjacking X-Frame-Options header is not present.', '_version': 1}\n  - id=nikto-http://localhost:8000-No CGI Directories found (use '-C all' t: {'vuln_type': 'info', 'endpoint': 'http://localhost:8000', 'parameter': '', 'severity': 'low', 'source': 'nikto', 'detail': \"No CGI Directories found (use '-C all' to force check all possible dirs)\", '_version': 1}\n  - id=nikto-http://localhost:8000-Allowed HTTP Methods: GET: {'vuln_type': 'info', 'endpoint': 'http://localhost:8000', 'parameter': '', 'severity': 'low', 'source': 'nikto', 'detail': 'Allowed HTTP Methods: GET', '_version': 1}\n  ... and 9 more\nPlan: 1\n  - id=plan-1779433215: {'plan_id': 'plan-1779433215', 'phase': 'exploit', 'goal': 'Capture flag on http://localhost', 'total_tasks': 7, 'completed': 4, 'failed': 3, 'status': 'completed', '_version': 6}\nTask: 7\n  - id=task-1: {'plan_id': 'plan-1779433215', 'instruction': 'Fetch the OpenAPI specification to enumerate all endpoints, parameters, and request bodies for hidden surfaces and potential flag/credential routes.', 'tool': 'send_payload', 'params': {'url': 'http://localhost:8000/openapi.json', 'method': 'GET', 'headers': {'Accept': 'application/json'}}, 'status': 'done', 'dependencies': [], 'attempts': 1, 'max_attempts': 3, 'result_summary': 'ToolResult(tool_name=\\'curl_get\\', success=True, stdout=\\'HTTP/1.1 200 OK\\\\r\\\\ndate: Fri, 22 May 2026 07:01:10 GMT\\\\r\\\\nserver: uvicorn\\\\r\\\\ncontent-length: 590\\\\r\\\\ncontent-type: application/json\\\\r\\\\n\\\\r\\\\n{\"openapi\":\"3.1.0\",\"info\":{\"title\":\"FastAPI\",\"version\":\"0.1.0\"},\"paths\":{\"/jobs\":{\"post\":{\"summary\":\"Jobs\",\"operationId\":\"jobs_jobs_post\",\"responses\":{\"200\":{\"description\":\"Successful Response\",\"content\":{\"application/json\":{\"schema\":{}}}}}}},\"/ping\":{\"get\":{\"summary\":\"Ping\",\"operationId\":\"ping_ping_get\",\"', '_version': 2}\n  - id=task-2: {'plan_id': 'plan-1779433215', 'instruction': 'Access the Swagger UI to verify it is publicly reachable and inspect any try-it-out operations for sensitive actions.', 'tool': 'send_payload', 'params': {'url': 'http://localhost:8000/docs', 'method': 'GET'}, 'status': 'pending', 'dependencies': [], 'attempts': 0, 'max_attempts': 3, 'result_summary': '', '_version': 1}\n  - id=task-3: {'plan_id': 'plan-1779433215', 'instruction': 'Attempt an unauthenticated job submission to validate the auth bypass and inspect the response for tokens, paths, or flags.', 'tool': 'send_payload', 'params': {'url': 'http://localhost:8000/jobs', 'method': 'POST', 'headers': {'Content-Type': 'application/json'}, 'body': '{\"job_type\":\"test\"}'}, 'status': 'done', 'dependencies': [], 'attempts': 1, 'max_attempts': 3, 'result_summary': \"ToolResult(tool_name='http_post', success=True, stdout='HTTP 200\\\\ndate: Fri, 22 May 2026 07:01:35 GMT\\\\nserver: uvicorn\\\\ncontent-length: 2\\\\ncontent-type: application/json\\\\nconnection: close\\\\n\\\\n[]', stderr='', exit_code=0, elapsed_ms=0, parsed_output={'status': 200, 'headers': {'date': 'Fri, 22 May 2026 07:01:35 GMT', 'server': 'uvicorn', 'content-length': '2', 'content-type': 'application/json', 'connection': 'close'}, 'body': '[]'})\", '_version': 2}\n  - id=task-4: {'plan_id': 'plan-1779433215', 'instruction': \"Test for command injection via the 'job_type' parameter on the root POST endpoint using shell metacharacters.\", 'tool': 'command_injection_test', 'params': {'url': 'http://localhost:8000', 'param': 'job_type'}, 'status': 'pending', 'dependencies': ['task-1'], 'attempts': 0, 'max_attempts': 3, 'result_summary': '', '_version': 1}\n  - id=task-5: {'plan_id': 'plan-1779433215', 'instruction': \"Test for command injection via the 'job-type' parameter on the root POST endpoint using shell metacharacters.\", 'tool': 'command_injection_test', 'params': {'url': 'http://localhost:8000', 'param': 'job-type'}, 'status': 'done', 'dependencies': ['task-1'], 'attempts': 1, 'max_attempts': 3, 'result_summary': 'ToolResult(tool_name=\\'command_injection_test\\', success=True, stdout=\"semicolon: no evidence of execution\\\\npipe: no evidence of execution\\\\nbacktick: no evidence of execution\\\\ndollar_subshell: no evidence of execution\\\\nnewline: error - URL can\\'t contain control characters. \\'/?job-type=\\\\\\\\nid\\' (found at least \\'\\\\\\\\n\\')\", stderr=\\'\\', exit_code=0, elapsed_ms=0, parsed_output={})', '_version': 2}\n  - id=task-6: {'plan_id': 'plan-1779433215', 'instruction': 'Probe for environment configuration leakage by requesting the .env file.', 'tool': 'send_payload', 'params': {'url': 'http://localhost:8000/.env', 'method': 'GET'}, 'status': 'failed', 'dependencies': [], 'attempts': 1, 'max_attempts': 3, 'result_summary': \"ToolResult(tool_name='http_post', success=False, stdout='', stderr='HTTP Error 500: Internal Server Error', exit_code=1, elapsed_ms=0, parsed_output={})\", '_version': 2}\n  - id=task-7: {'plan_id': 'plan-1779433215', 'instruction': 'Check for exposed metrics that might leak secrets, tokens, or flags.', 'tool': 'send_payload', 'params': {'url': 'http://localhost:8000/metrics', 'method': 'GET'}, 'status': 'done', 'dependencies': [], 'attempts': 1, 'max_attempts': 3, 'result_summary': 'ToolResult(tool_name=\\'curl_get\\', success=True, stdout=\\'HTTP/1.1 404 Not Found\\\\r\\\\ndate: Fri, 22 May 2026 07:02:08 GMT\\\\r\\\\nserver: uvicorn\\\\r\\\\ncontent-length: 22\\\\r\\\\ncontent-type: application/json\\\\r\\\\n\\\\r\\\\n{\"detail\":\"Not Found\"}\\', stderr=\\'\\', exit_code=0, elapsed_ms=0, parsed_output={})', '_version': 2}",
+  "cteg_patterns_committed": 0
+}

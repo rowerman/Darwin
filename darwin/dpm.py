@@ -16,6 +16,8 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+from darwin.prompts.dpm_classifier import DPM_CLASSIFIER_PROMPT
+
 # WAF fingerprint database path (relative to project root)
 _WAF_DB_PATH = Path(__file__).parent.parent / "config" / "waf_fingerprints.yaml"
 
@@ -478,7 +480,7 @@ class DefensePerceptionModule:
     def _build_classifier_prompt(
         self, dsv: DefenseStateVector, probes: List[Any], responses: List[Any]
     ) -> str:
-        """Build prompt for LLM defense classifier."""
+        """Build prompt for LLM defense classifier using the template from darwin.prompts."""
         resp_summary = []
         for r in responses[-5:]:  # last 5 responses
             resp_summary.append(
@@ -492,18 +494,11 @@ class DefensePerceptionModule:
                 f"  {p.probe_value}: blocked={p.blocked}, modified={p.modified}"
             )
 
-        return f"""Analyze whether the target has active defenses.
-
-HTTP responses:
-{chr(10).join(resp_summary)}
-
-Filter probes:
-{chr(10).join(probe_summary)}
-
-Current assessment: WAF={dsv.waf_type}({dsv.waf_confidence:.2f}),
-filter={dsv.sanitization_strategy.value}({dsv.sanitization_strictness:.2f})
-
-Output JSON:
-{{"waf_type": "modsecurity_crs|cloudflare|naxsi|coraza|unknown",
- "waf_confidence": 0.0-1.0,
- "defense_category": "waf|cloak|honey|trap|none"}}"""
+        return DPM_CLASSIFIER_PROMPT.format(
+            http_responses="\n".join(resp_summary) if resp_summary else "(none)",
+            probe_results="\n".join(probe_summary) if probe_summary else "(none)",
+            waf_type=dsv.waf_type or "unknown",
+            waf_confidence=f"{dsv.waf_confidence:.2f}",
+            sanitization_strategy=dsv.sanitization_strategy.value,
+            sanitization_strictness=f"{dsv.sanitization_strictness:.2f}",
+        )
