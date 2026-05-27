@@ -1,0 +1,23 @@
+scenario:
+  id: AD-12
+  name: "Network Configuration Operators to SYSTEM"
+  technique: "CVE-2025-21293 (CVSS 8.8)"
+  difficulty: L2
+  cve: "CVE-2025-21293"
+network:
+  dc_ip: 192.168.56.10
+  domain: north.sevenkingdoms.local
+attacker:
+  credentials:
+    username: netcfg_user
+    password: "NetConfig123!"
+    domain: north
+target:
+  group: "Network Configuration Operators"
+  patch_requirement: "MUST NOT have January 2025 patch (KB5049983)"
+  exploit: |
+    1. Network Configuration Operators group has excessive registry permissions
+    2. Register malicious Performance Counter DLL under DnsCache/NetBT keys
+    3. PerfMon.exe or WMI query triggers DLL → SYSTEM code execution
+flag:
+  location: "C:\\Users\\Public\\flag.txt on DC (after SYSTEM escalation)"

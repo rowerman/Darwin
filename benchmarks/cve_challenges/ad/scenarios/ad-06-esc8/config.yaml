@@ -1,0 +1,17 @@
+scenario:
+  id: AD-06
+  name: "SMB Relay to AD CS (ESC8)"
+  technique: "ESC8 + CVE-2025-53778 (CBT Bypass)"
+  difficulty: L2
+network:
+  dc_ip: 192.168.56.10
+  domain: north.sevenkingdoms.local
+  ca_web_endpoint: "http://winterfell/certsrv"
+attacker:
+  entry: "Network position to coerce authentication"
+target:
+  smb_signing: "DISABLED (HKLM\\SYSTEM\\CurrentControlSet\\Services\\LanmanServer\\Parameters\\RequireSecuritySignature=0)"
+  adcs_web_enrollment: "Enabled, EPA/CBT set to Relaxed"
+  cbt_bypass: "CVE-2025-53778 — NTLM local auth CBT not checked"
+flag:
+  location: "Machine certificate (base64) → Domain Admin NTLM hash"

@@ -16,7 +16,7 @@ from typing import Any, Dict, List, Optional
 
 from darwin.dkg import DKG
 from darwin.sub_agents.base import BaseSubAgent, SubAgentResult, TokenBudget, AgentType
-from darwin.tools.mcp_gateway import MCPGateway, ToolResult
+from darwin.tools.attack_server import create_attack_gateway
 from darwin.utils.llm import LLMSession
 
 
@@ -38,7 +38,7 @@ class ADAgent(BaseSubAgent):
             SYSTEM_PROMPT_AD_REPLAN,
         )
 
-        tools = self._create_ad_tools()
+        tools = create_attack_gateway()
         super().__init__(
             agent_id=agent_id,
             agent_type=AgentType.AD,
@@ -52,47 +52,6 @@ class ADAgent(BaseSubAgent):
         self._system_prompt = SYSTEM_PROMPT_AD
         self._evaluate_prompt = SYSTEM_PROMPT_AD_EVALUATE
         self._replan_prompt = SYSTEM_PROMPT_AD_REPLAN
-
-    def _create_ad_tools(self) -> MCPGateway:
-        gateway = MCPGateway()
-
-        def _register(cmd_name, template, desc, params, timeout=30):
-            async def _run(**kwargs) -> ToolResult:
-                import asyncio
-                cmd = template.format(**kwargs)
-                try:
-                    proc = await asyncio.create_subprocess_shell(
-                        cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
-                    stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
-                    return ToolResult(tool_name=cmd_name, success=(proc.returncode == 0),
-                        stdout=stdout.decode("utf-8", errors="replace")[:5000],
-                        stderr=stderr.decode("utf-8", errors="replace")[:1000],
-                        exit_code=proc.returncode or 0, elapsed_ms=0)
-                except asyncio.TimeoutError:
-                    return ToolResult(tool_name=cmd_name, success=False,
-                        stdout="", stderr="timeout", exit_code=1, elapsed_ms=0)
-                except Exception as e:
-                    return ToolResult(tool_name=cmd_name, success=False,
-                        stdout="", stderr=str(e), exit_code=1, elapsed_ms=0)
-            gateway.register(name=cmd_name, func=_run, description=desc, parameters=params)
-
-        _register("netexec_enum", "netexec smb {target} --shares 2>&1",
-            "Enumerate SMB shares on target", {"target": {"type": "string", "description": "Target IP or hostname"}})
-        _register("netexec_ldap_enum", "netexec ldap {target} -u {user} -p {password} --users 2>&1",
-            "Enumerate AD users via LDAP",
-            {"target": {"type": "string"}, "user": {"type": "string"}, "password": {"type": "string"}})
-        _register("impacket_secretsdump", "impacket-secretsdump {target} 2>&1 | head -100",
-            "Dump SAM/LSA secrets from target",
-            {"target": {"type": "string", "description": "DOMAIN/USER:PASSWORD@TARGET"}})
-        _register("impacket_psexec", "impacket-psexec {target} 2>&1",
-            "Execute commands via PsExec",
-            {"target": {"type": "string", "description": "DOMAIN/USER:PASSWORD@TARGET"}})
-        _register("impacket_wmiexec", "impacket-wmiexec {target} 2>&1",
-            "Execute commands via WMI", {"target": {"type": "string"}})
-        _register("ldapsearch_ad", "ldapsearch -x -H ldap://{target} -D '{user}@{domain}' -w '{password}' -b '{base_dn}' 2>&1 | head -50",
-            "Query LDAP directory", {"target": {"type": "string"}, "user": {"type": "string"},
-            "password": {"type": "string"}, "domain": {"type": "string"}, "base_dn": {"type": "string"}})
-        return gateway
 
     async def _generate_plan(self) -> List[Dict[str, Any]]:
         tools = sorted(self.tools.get_tool_names()) if self.tools else []

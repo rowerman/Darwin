@@ -158,6 +158,50 @@ class ExperimentRunner:
                 time_elapsed=0,
             )
 
+    async def run_chains(
+        self,
+        chains: List[Dict[str, Any]],
+        benchmark_name: str = "cve_chains",
+    ) -> Dict[str, Any]:
+        """Run multiple attack chains and return aggregated results.
+
+        Each chain config dict must have:
+            - chain_yaml: path to chain.yaml
+            - steps: list of {target_url, description, username?, password?}
+
+        Returns a dict with per-chain results.
+        """
+        from experiments.chain_runner import run_chain
+
+        all_results = {}
+        for chain_cfg in chains:
+            chain_yaml = chain_cfg["chain_yaml"]
+            steps_config = chain_cfg.get("steps", [])
+            chain_id = chain_cfg.get("id", chain_yaml)
+
+            print(f"\n{'='*60}")
+            print(f"Chain: {chain_id}")
+            print(f"{'='*60}")
+
+            result = await run_chain(
+                chain_yaml=chain_yaml,
+                steps_config=steps_config,
+                time_budget_per_step=self.time_budget,
+            )
+
+            all_results[chain_id] = result
+
+            completed = result["completed_steps"]
+            total = result["total_steps"]
+            print(f"\nChain {chain_id}: {completed}/{total} steps completed "
+                  f"({'SUCCESS' if result['success'] else 'INCOMPLETE'})")
+            for step in result["per_step_results"]:
+                status = "✓" if step["success"] else "✗"
+                print(f"  Step {step['step']} {status} {step['scenario']}: "
+                      f"{step.get('flag','') or step.get('error','')}")
+
+        return all_results
+
     def _save_results(self, benchmark_name: str, metrics: ExperimentMetrics):
         """Save experiment results to JSON."""
         path = self.output_dir / f"{self.config_name}_{benchmark_name}_results.json"

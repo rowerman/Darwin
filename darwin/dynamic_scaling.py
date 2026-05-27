@@ -119,17 +119,20 @@ def compute_task_breadth(dkg: DKG, defense_state: DefenseStateVector | None = No
     """Compute B (Task Breadth) from current DKG state.
 
     B = 0.28*N_norm + 0.12*M_domain + 0.18*L_move
-      + 0.18*V_diversity + 0.14*D_present + 0.10*env_complexity
+      + 0.18*V_diversity + 0.14*D_present + 0.18*env_complexity
 
-    env_complexity = 1.0 for AD (SMB+LDAP), 0.8 for cloud (K8s API).
-    This ensures domain/cloud environments trigger Coordinated/Distributed
-    mode with specialized agents (ADAgent, CloudAgent).
+    N_norm uses service (port) count rather than host count so multi-port
+    single-host targets (e.g. HTTP+SSH+MySQL+LDAP) score higher.
+    env_complexity = 1.0 for AD (SMB+LDAP), 0.8 for cloud (K8s API),
+    weighted at 0.18 to reliably push single-host AD/cloud into Coordinated.
     """
     hosts = dkg.query_nodes("Host")
     domains = dkg.query_nodes("Domain")
     credentials = dkg.query_nodes("Credential")
     vulnerabilities = dkg.query_nodes("Vulnerability")
+    services = dkg.query_nodes("Service")
 
+    n_services = len(services)
     n_targets = len(hosts)
     is_multi_domain = len(domains) > 1
 
@@ -142,7 +145,8 @@ def compute_task_breadth(dkg: DKG, defense_state: DefenseStateVector | None = No
         or (len(hosts) > 1 and len(credentials) > 0)
     )
 
-    N_norm = min(n_targets / 5.0, 1.0)
+    # N_norm uses service count to reward multi-port/multi-service targets
+    N_norm = min(n_services / 6.0, 1.0) if n_services > 0 else min(n_targets / 5.0, 1.0)
     M_domain = 1.0 if is_multi_domain else 0.0
     L_move = 1.0 if needs_lateral else 0.0
 
@@ -177,7 +181,7 @@ def compute_task_breadth(dkg: DKG, defense_state: DefenseStateVector | None = No
         + 0.18 * L_move
         + 0.18 * V_diversity
         + 0.14 * D_present
-        + 0.10 * env_complexity
+        + 0.18 * env_complexity
     )
 
     return min(b_raw, 1.0)

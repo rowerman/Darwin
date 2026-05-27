@@ -1,496 +1,6 @@
 {
   "nodes": [
     {
-      "id": "xss-reflected",
-      "type": "KnowledgePattern",
-      "category": "XSS",
-      "title": "Reflected XSS \u2014 Query Parameter Injection",
-      "description": "Reflected Cross-Site Scripting occurs when user input in URL parameters is reflected back in the HTML response without sanitization. Test all query parameters for script reflection.",
-      "techniques": [
-        "Inject <script>alert(1)</script> in every query parameter",
-        "Try event handlers: <img src=x onerror=alert(1)>",
-        "Try attribute break-out: '\"><script>alert(1)</script>",
-        "If blocked by WAF, try encoding: double URL encode, HTML entities",
-        "Check for Content-Security-Policy header that might block execution"
-      ],
-      "indicators": [
-        "Input reflected in response",
-        "No CSP header",
-        "User-controllable query parameters",
-        "Error messages showing raw input"
-      ],
-      "tags": [
-        "xss",
-        "injection",
-        "web",
-        "reflected"
-      ],
-      "confidence": 0.7,
-      "source": "knowledge_base",
-      "embed_text": "XSS: Reflected XSS \u2014 Query Parameter Injection. Reflected Cross-Site Scripting occurs when user input in URL parameters is reflected back in the HTML response without sanitization. Test all query parameters for script reflection. Indicators: Input reflected in response; No CSP header; User-controllable query parameters; Error messages showing raw input. Tags: xss, injection, web, reflected."
-    },
-    {
-      "id": "cmdi-basic",
-      "type": "KnowledgePattern",
-      "category": "CMDI",
-      "title": "Command Injection \u2014 Shell Metacharacters",
-      "description": "When user input is passed to shell commands without sanitization, inject shell metacharacters to execute arbitrary commands. Common in ping, traceroute, file upload, and system utility endpoints.",
-      "techniques": [
-        "Inject semicolon: ; id",
-        "Inject pipe: | id",
-        "Inject backtick: `id`",
-        "Inject subshell: $(id)",
-        "Inject newline: %0aid (in URL)",
-        "If filtered, try: ||id, &&id, %0aid, `id`",
-        "Check response for command output (uid=, gid=, root:, etc.)"
-      ],
-      "indicators": [
-        "System utility endpoints (ping, nslookup)",
-        "File operations",
-        "Shell error messages",
-        "Path-like parameters"
-      ],
-      "tags": [
-        "cmdi",
-        "injection",
-        "web",
-        "shell"
-      ],
-      "confidence": 0.6,
-      "source": "knowledge_base",
-      "embed_text": "CMDI: Command Injection \u2014 Shell Metacharacters. When user input is passed to shell commands without sanitization, inject shell metacharacters to execute arbitrary commands. Common in ping, traceroute, file upload, and system utility endpoints. Indicators: System utility endpoints (ping, nslookup); File operations; Shell error messages; Path-like parameters. Tags: cmdi, injection, web, shell."
-    },
-    {
-      "id": "ssti-basic",
-      "type": "KnowledgePattern",
-      "category": "SSTI",
-      "title": "Server-Side Template Injection \u2014 Jinja2/FastAPI",
-      "description": "Template engines like Jinja2 (Flask/FastAPI) can execute arbitrary code if user input is embedded in templates without sanitization. Test with template syntax injection.",
-      "techniques": [
-        "Inject {{7*7}} \u2014 if response shows 49, SSTI confirmed",
-        "Jinja2 RCE: {{ ''.__class__.__mro__[1].__subclasses__() }}",
-        "Simpler probe: ${7*7}, {{config}}, {{self}}",
-        "If Jinja2 confirmed: {{ lipsum.__globals__['os'].popen('id').read() }}",
-        "Check for template engine indicators in headers or error messages"
-      ],
-      "indicators": [
-        "Jinja2/FastAPI/Flask server",
-        "User input in page rendering",
-        "Template syntax in error messages",
-        "{{ }} in response"
-      ],
-      "tags": [
-        "ssti",
-        "injection",
-        "web",
-        "jinja2",
-        "fastapi",
-        "flask"
-      ],
-      "confidence": 0.5,
-      "source": "knowledge_base",
-      "embed_text": "SSTI: Server-Side Template Injection \u2014 Jinja2/FastAPI. Template engines like Jinja2 (Flask/FastAPI) can execute arbitrary code if user input is embedded in templates without sanitization. Test with template syntax injection. Indicators: Jinja2/FastAPI/Flask server; User input in page rendering; Template syntax in error messages; {{ }} in response. Tags: ssti, injection, web, jinja2, fastapi, flask."
-    },
-    {
-      "id": "lfi-path-traversal",
-      "type": "KnowledgePattern",
-      "category": "LFI",
-      "title": "Local File Inclusion \u2014 Path Traversal",
-      "description": "When file paths are constructed from user input, use ../ sequences to escape the intended directory and read sensitive files. Common in file download, image serving, and template endpoints.",
-      "techniques": [
-        "Try: ../../../etc/passwd",
-        "Try: ....//....//....//etc/passwd (if ../ is filtered)",
-        "Try: /etc/passwd (absolute path)",
-        "Try null byte: ../../../etc/passwd%00 (legacy PHP)",
-        "Try PHP wrappers: php://filter/convert.base64-encode/resource=index.php",
-        "Target high-value files: /etc/passwd, /flag, /app/flag.txt, /proc/self/environ",
-        "Check response for file contents or error messages"
-      ],
-      "indicators": [
-        "File path parameters (?file=, ?path=, ?template=)",
-        "Download endpoints",
-        "Error messages with file paths",
-        "Static file serving"
-      ],
-      "tags": [
-        "lfi",
-        "path-traversal",
-        "web",
-        "file-read"
-      ],
-      "confidence": 0.6,
-      "source": "knowledge_base",
-      "embed_text": "LFI: Local File Inclusion \u2014 Path Traversal. When file paths are constructed from user input, use ../ sequences to escape the intended directory and read sensitive files. Common in file download, image serving, and template endpoints. Indicators: File path parameters (?file=, ?path=, ?template=); Download endpoints; Error messages with file paths; Static file serving. Tags: lfi, path-traversal, web, file-read."
-    },
-    {
-      "id": "idor-indirect-archive",
-      "type": "KnowledgePattern",
-      "category": "IDOR",
-      "title": "Indirect IDOR \u2014 State-Changing Actions Without Auth Check",
-      "description": "Some IDORs require first performing a state-changing action (archive, share, transfer) that lacks authorization checks. After changing ownership, the resource becomes accessible. Look for actions that change resource ownership without verifying the caller.",
-      "techniques": [
-        "Find endpoints that change resource state: /archive, /share, /transfer, /assign, /claim",
-        "Try these actions on resources belonging to other users",
-        "After state change, check if the resource is now accessible via your session",
-        "Look for actions that are GET-based (no CSRF protection)",
-        "Check if the state change assigns you as the new owner/archiver"
-      ],
-      "indicators": [
-        "Resource action endpoints",
-        "State-changing GET requests",
-        "Missing CSRF tokens",
-        "Archive/share/claim patterns"
-      ],
-      "tags": [
-        "idor",
-        "authorization",
-        "state-change",
-        "web",
-        "indirect"
-      ],
-      "confidence": 0.6,
-      "source": "knowledge_base",
-      "embed_text": "IDOR: Indirect IDOR \u2014 State-Changing Actions Without Auth Check. Some IDORs require first performing a state-changing action (archive, share, transfer) that lacks authorization checks. After changing ownership, the resource becomes accessible. Look for actions that change resource ownership without verifying the caller. Indicators: Resource action endpoints; State-changing GET requests; Missing CSRF tokens; Archive/share/claim patterns. Tags: idor, authorization, state-change, web, indirect."
-    },
-    {
-      "id": "auth-bypass-header-injection",
-      "type": "KnowledgePattern",
-      "category": "AUTH",
-      "title": "Authentication Bypass \u2014 Header Injection (X-Forwarded, X-Original)",
-      "description": "Applications behind proxies or API gateways may trust headers like X-Forwarded-User, X-Original-URL, X-Rewrite-URL. Inject these headers to bypass authentication or access restricted endpoints.",
-      "techniques": [
-        "Try: X-Forwarded-User: admin",
-        "Try: X-Original-URL: /admin",
-        "Try: X-Rewrite-URL: /flag",
-        "Try: X-Forwarded-Host: internal-admin.local",
-        "Try: X-Forwarded-For: 127.0.0.1 (local access bypass)",
-        "Try: X-Real-IP: 127.0.0.1",
-        "Check if response differs (status code, content) with headers vs without"
-      ],
-      "indicators": [
-        "Proxy/CDN headers in response",
-        "API gateway patterns",
-        "Internal vs external access differences"
-      ],
-      "tags": [
-        "authentication",
-        "header-injection",
-        "web",
-        "proxy",
-        "bypass"
-      ],
-      "confidence": 0.5,
-      "source": "knowledge_base",
-      "embed_text": "AUTH: Authentication Bypass \u2014 Header Injection (X-Forwarded, X-Original). Applications behind proxies or API gateways may trust headers like X-Forwarded-User, X-Original-URL, X-Rewrite-URL. Inject these headers to bypass authentication or access restricted endpoints. Indicators: Proxy/CDN headers in response; API gateway patterns; Internal vs external access differences. Tags: authentication, header-injection, web, proxy, bypass."
-    },
-    {
-      "id": "idor-two-factor-auth",
-      "type": "KnowledgePattern",
-      "category": "IDOR",
-      "title": "IDOR with Two-Factor/Multi-Step Authentication",
-      "description": "Multi-step login flows (username \u2192 password \u2192 2FA) may have IDOR in intermediate steps. After submitting username, the password page may expose user IDs or accept headers that allow impersonating other users.",
-      "techniques": [
-        "After username step, check if response contains user_id or account_id",
-        "If user_id is in response, modify it and re-submit",
-        "Check if hidden fields (user_id, account_id) are tamperable",
-        "Try skipping steps: go directly to dashboard after username step",
-        "Check if session tokens are predictable or weakly signed"
-      ],
-      "indicators": [
-        "Multi-step login",
-        "Hidden user_id fields",
-        "Welcome messages before authentication",
-        "Two-page login forms"
-      ],
-      "tags": [
-        "idor",
-        "authentication",
-        "multi-step",
-        "web"
-      ],
-      "confidence": 0.55,
-      "source": "knowledge_base",
-      "embed_text": "IDOR: IDOR with Two-Factor/Multi-Step Authentication. Multi-step login flows (username \u2192 password \u2192 2FA) may have IDOR in intermediate steps. After submitting username, the password page may expose user IDs or accept headers that allow impersonating other users. Indicators: Multi-step login; Hidden user_id fields; Welcome messages before authentication; Two-page login forms. Tags: idor, authentication, multi-step, web."
-    },
-    {
-      "id": "fastapi-openapi-exploit",
-      "type": "KnowledgePattern",
-      "category": "RECON",
-      "title": "FastAPI/OpenAPI \u2014 Full API Surface Discovery and Exploitation",
-      "description": "FastAPI applications expose complete API documentation at /openapi.json. This reveals every endpoint, parameter, request body field, and authentication requirement. Use this to plan comprehensive exploitation.",
-      "techniques": [
-        "Fetch /openapi.json and parse all paths and methods",
-        "Identify POST endpoints with interesting body fields (is_admin, role, permissions)",
-        "Find endpoints with {id} path parameters \u2014 IDOR targets",
-        "Find endpoints without authentication requirements (no security: [...] in spec)",
-        "Test every POST endpoint with modified request bodies",
-        "Look for PATCH/PUT endpoints that allow partial updates (mass assignment)",
-        "Check for hidden/debug endpoints not shown in the UI"
-      ],
-      "indicators": [
-        "FastAPI/uvicorn server header",
-        "/docs endpoint",
-        "/openapi.json accessible",
-        "Swagger UI",
-        "ReDoc"
-      ],
-      "tags": [
-        "recon",
-        "api-discovery",
-        "fastapi",
-        "openapi",
-        "swagger",
-        "web"
-      ],
-      "confidence": 0.95,
-      "source": "knowledge_base",
-      "embed_text": "RECON: FastAPI/OpenAPI \u2014 Full API Surface Discovery and Exploitation. FastAPI applications expose complete API documentation at /openapi.json. This reveals every endpoint, parameter, request body field, and authentication requirement. Use this to plan comprehensive exploitation. Indicators: FastAPI/uvicorn server header; /docs endpoint; /openapi.json accessible; Swagger UI; ReDoc. Tags: recon, api-discovery, fastapi, openapi, swagger, web."
-    },
-    {
-      "id": "idor-url-path",
-      "type": "KnowledgePattern",
-      "category": "IDOR",
-      "title": "URL Path IDOR \u2014 Direct Object Reference in URL",
-      "description": "When URLs contain numeric IDs (/order/123, /user/456), try adjacent values to access other users' data.",
-      "techniques": [
-        "Increment/decrement numeric path segments by \u00b11, \u00b110",
-        "Try common IDs: 0, 1, 2, admin user IDs",
-        "Check if authentication is checked per-resource",
-        "If data returned differs, you found IDOR"
-      ],
-      "indicators": [
-        "Numeric path segments",
-        "Resource names in URL",
-        "Same endpoint returns different data for different IDs"
-      ],
-      "tags": [
-        "idor",
-        "authorization",
-        "web"
-      ],
-      "confidence": 0.7,
-      "source": "knowledge_base",
-      "embed_text": "IDOR: URL Path IDOR \u2014 Direct Object Reference in URL. When URLs contain numeric IDs (/order/123, /user/456), try adjacent values to access other users' data. Indicators: Numeric path segments; Resource names in URL; Same endpoint returns different data for different IDs. Tags: idor, authorization, web."
-    },
-    {
-      "id": "idor-custom-header",
-      "type": "KnowledgePattern",
-      "category": "IDOR",
-      "title": "Header-Based IDOR \u2014 Custom Auth Headers",
-      "description": "Applications may trust custom HTTP headers (X-UserId, X-Auth-User, X-Forwarded-User) to identify users. Set these headers to different user IDs to access other users' data.",
-      "techniques": [
-        "Try headers: X-UserId, X-User-Id, X-Forwarded-User, X-Auth-User, X-Authenticated-User",
-        "Try ID values: 0, 1, 2, 10032, 10033, 10052",
-        "Try the header on every authenticated page",
-        "If response changes (different user data or status code), you found IDOR"
-      ],
-      "indicators": [
-        "Dashboard/profile pages showing user info",
-        "API endpoints with user-specific data",
-        "JavaScript sending X-UserId in fetch requests"
-      ],
-      "tags": [
-        "idor",
-        "header-injection",
-        "web"
-      ],
-      "confidence": 0.6,
-      "source": "knowledge_base",
-      "embed_text": "IDOR: Header-Based IDOR \u2014 Custom Auth Headers. Applications may trust custom HTTP headers (X-UserId, X-Auth-User, X-Forwarded-User) to identify users. Set these headers to different user IDs to access other users' data. Indicators: Dashboard/profile pages showing user info; API endpoints with user-specific data; JavaScript sending X-UserId in fetch requests. Tags: idor, header-injection, web."
-    },
-    {
-      "id": "idor-post-body",
-      "type": "KnowledgePattern",
-      "category": "IDOR",
-      "title": "POST Body IDOR \u2014 Privilege Escalation via Form Fields",
-      "description": "Profile edit forms may accept privilege escalation fields (is_admin, role, user_id) that the attacker can tamper with. POST to edit endpoints with these fields set to elevated values.",
-      "techniques": [
-        "On profile/edit pages: POST with is_admin=1, admin=true, role=admin",
-        "Change user_id in POST body to another user's ID",
-        "Try adding fields: is_admin, admin, role, permissions, groups",
-        "After state change, revisit data pages to check for new access"
-      ],
-      "indicators": [
-        "Profile/edit forms",
-        "Hidden user_id fields in forms",
-        "Admin status indicators in page content"
-      ],
-      "tags": [
-        "idor",
-        "privilege-escalation",
-        "web",
-        "post"
-      ],
-      "confidence": 0.65,
-      "source": "knowledge_base",
-      "embed_text": "IDOR: POST Body IDOR \u2014 Privilege Escalation via Form Fields. Profile edit forms may accept privilege escalation fields (is_admin, role, user_id) that the attacker can tamper with. POST to edit endpoints with these fields set to elevated values. Indicators: Profile/edit forms; Hidden user_id fields in forms; Admin status indicators in page content. Tags: idor, privilege-escalation, web, post."
-    },
-    {
-      "id": "sqli-login-bypass",
-      "type": "KnowledgePattern",
-      "category": "SQLI",
-      "title": "SQL Injection \u2014 Authentication Bypass",
-      "description": "Login forms that concatenate user input into SQL queries can be bypassed. Try classic SQLi payloads in username/password fields.",
-      "techniques": [
-        "Username: ' OR '1'='1, admin'--, ' OR 1=1--",
-        "Username: ' UNION SELECT 1,'admin','password'--",
-        "If SQL error returned, parametrize further",
-        "Use sqlmap if available: sqlmap -u URL --data='username=*&password=*'"
-      ],
-      "indicators": [
-        "Login forms",
-        "Database error messages in responses",
-        "Numeric user IDs suggesting DB backend"
-      ],
-      "tags": [
-        "sqli",
-        "authentication",
-        "web"
-      ],
-      "confidence": 0.7,
-      "source": "knowledge_base",
-      "embed_text": "SQLI: SQL Injection \u2014 Authentication Bypass. Login forms that concatenate user input into SQL queries can be bypassed. Try classic SQLi payloads in username/password fields. Indicators: Login forms; Database error messages in responses; Numeric user IDs suggesting DB backend. Tags: sqli, authentication, web."
-    },
-    {
-      "id": "sqli-union-based",
-      "type": "KnowledgePattern",
-      "category": "SQLI",
-      "title": "SQL Injection \u2014 UNION-Based Data Extraction",
-      "description": "Use UNION SELECT to extract data from other database tables when the query result is displayed on the page.",
-      "techniques": [
-        "Determine column count: ' ORDER BY 1--, ORDER BY 2--, ...",
-        "Find visible columns: ' UNION SELECT 1,2,3,4,5--",
-        "Extract data: ' UNION SELECT username,password,3,4,5 FROM users--",
-        "Use sqlmap with --technique=U for automated UNION exploitation"
-      ],
-      "indicators": [
-        "Tabular data display",
-        "Search/filter parameters",
-        "Database errors visible"
-      ],
-      "tags": [
-        "sqli",
-        "data-extraction",
-        "web"
-      ],
-      "confidence": 0.6,
-      "source": "knowledge_base",
-      "embed_text": "SQLI: SQL Injection \u2014 UNION-Based Data Extraction. Use UNION SELECT to extract data from other database tables when the query result is displayed on the page. Indicators: Tabular data display; Search/filter parameters; Database errors visible. Tags: sqli, data-extraction, web."
-    },
-    {
-      "id": "default-credentials",
-      "type": "KnowledgePattern",
-      "category": "AUTH",
-      "title": "Default Credentials",
-      "description": "Many applications ship with default test accounts. Try common credential pairs on every login form discovered.",
-      "techniques": [
-        "Try: test/test, admin/admin, admin/password, demo/demo, guest/guest, root/root",
-        "Check HTML comments for hints: <!-- TODO: delete test account -->",
-        "Look for hardcoded credentials in JavaScript or page source",
-        "After login, immediately check all authenticated pages for sensitive data"
-      ],
-      "indicators": [
-        "Login form detected",
-        "HTML comments mentioning accounts",
-        "Default installation documentation referenced"
-      ],
-      "tags": [
-        "authentication",
-        "default-credentials",
-        "web"
-      ],
-      "confidence": 0.8,
-      "source": "knowledge_base",
-      "embed_text": "AUTH: Default Credentials. Many applications ship with default test accounts. Try common credential pairs on every login form discovered. Indicators: Login form detected; HTML comments mentioning accounts; Default installation documentation referenced. Tags: authentication, default-credentials, web."
-    },
-    {
-      "id": "jwt-manipulation",
-      "type": "KnowledgePattern",
-      "category": "AUTH",
-      "title": "JWT Token Manipulation",
-      "description": "Applications using JWT for authentication may be vulnerable to token manipulation, especially with weak secrets. Try decoding, modifying, and replaying JWTs.",
-      "techniques": [
-        "Decode JWT with jwt.io or Python jose library",
-        "Check if 'alg':'none' is accepted (no signature)",
-        "Try weak secrets: 'secret', 'your_secret_key', 'password'",
-        "Modify 'sub' claim to another user's ID",
-        "Check token expiration \u2014 may be infinite",
-        "Send modified JWT in Authorization: Bearer or Cookie header"
-      ],
-      "indicators": [
-        "JWT in cookie or Authorization header",
-        "FastAPI/Swagger UI",
-        "Bearer token in responses"
-      ],
-      "tags": [
-        "authentication",
-        "jwt",
-        "token-manipulation",
-        "web"
-      ],
-      "confidence": 0.6,
-      "source": "knowledge_base",
-      "embed_text": "AUTH: JWT Token Manipulation. Applications using JWT for authentication may be vulnerable to token manipulation, especially with weak secrets. Try decoding, modifying, and replaying JWTs. Indicators: JWT in cookie or Authorization header; FastAPI/Swagger UI; Bearer token in responses. Tags: authentication, jwt, token-manipulation, web."
-    },
-    {
-      "id": "swagger-api-discovery",
-      "type": "KnowledgePattern",
-      "category": "RECON",
-      "title": "API Discovery via Swagger/OpenAPI",
-      "description": "FastAPI and other frameworks auto-generate API documentation at /docs or /openapi.json. This reveals ALL endpoints, parameters, and request formats.",
-      "techniques": [
-        "Fetch /openapi.json, /docs, /swagger.json, /api/docs",
-        "Parse paths and methods from the OpenAPI spec",
-        "Try every discovered endpoint with authentication",
-        "Look for {id} parameters in paths \u2014 IDOR targets",
-        "Look for POST endpoints with interesting field names (is_admin, role)"
-      ],
-      "indicators": [
-        "FastAPI/uvicorn server header",
-        "Swagger UI at /docs",
-        "OpenAPI JSON at /openapi.json"
-      ],
-      "tags": [
-        "recon",
-        "api-discovery",
-        "fastapi",
-        "web"
-      ],
-      "confidence": 0.9,
-      "source": "knowledge_base",
-      "embed_text": "RECON: API Discovery via Swagger/OpenAPI. FastAPI and other frameworks auto-generate API documentation at /docs or /openapi.json. This reveals ALL endpoints, parameters, and request formats. Indicators: FastAPI/uvicorn server header; Swagger UI at /docs; OpenAPI JSON at /openapi.json. Tags: recon, api-discovery, fastapi, web."
-    },
-    {
-      "id": "jwt-weak-secret",
-      "type": "KnowledgePattern",
-      "category": "AUTH",
-      "title": "JWT Signature Forging with Weak Secret",
-      "description": "JWTs with weak secrets can be forged. FastAPI apps often use 'your_secret_key' or 'secret' as the signing key. Forge a JWT with a different sub claim to access other users' data.",
-      "techniques": [
-        "Decode existing JWT to extract algorithm and claims",
-        "Try common weak secrets: 'your_secret_key', 'secret', 'SECRET_KEY', 'changeme'",
-        "Use Python jose library to forge token with modified 'sub'",
-        "Send forged token in Cookie: access_token=Bearer <forged_jwt>",
-        "Access /company/{id}/jobs or similar endpoints with forged token"
-      ],
-      "indicators": [
-        "JWT token",
-        "HS256 algorithm",
-        "FastAPI/Swagger docs",
-        "Hardcoded SECRET_KEY in source if visible"
-      ],
-      "tags": [
-        "authentication",
-        "jwt",
-        "token-forging",
-        "web",
-        "fastapi"
-      ],
-      "confidence": 0.55,
-      "source": "knowledge_base",
-      "embed_text": "AUTH: JWT Signature Forging with Weak Secret. JWTs with weak secrets can be forged. FastAPI apps often use 'your_secret_key' or 'secret' as the signing key. Forge a JWT with a different sub claim to access other users' data. Indicators: JWT token; HS256 algorithm; FastAPI/Swagger docs; Hardcoded SECRET_KEY in source if visible. Tags: authentication, jwt, token-forging, web, fastapi."
-    },
-    {
       "id": "ep--task-177",
       "type": "ExploitPattern",
       "mechanism": "curl_get",
@@ -525,12 +35,13 @@
       "abstract_description": "curl_get exploitation; via curl_get; on http://localhost:8000/openapi.json; (GET)",
       "vulnerability_type": "curl_get",
       "required_context": "",
-      "total_attempts": 32,
-      "total_successes": 0,
-      "success_rate": 0.0,
-      "last_successful_use": "",
+      "total_attempts": 348,
+      "total_successes": 11,
+      "success_rate": 0.031609195402298854,
+      "last_successful_use": "2026-05-23T19:27:04.849115",
       "half_life_days": 30,
-      "created_at": "2026-05-22T10:43:52.014287"
+      "created_at": "2026-05-22T10:43:52.014287",
+      "reinforcement_count": 11
     },
     {
       "id": "ep-CMDI-task-177",
@@ -539,7 +50,7 @@
       "abstract_description": "CMDI exploitation; via command_injection_test; on http://localhost:8000/ping; (GET)",
       "vulnerability_type": "CMDI",
       "required_context": "",
-      "total_attempts": 8,
+      "total_attempts": 17,
       "total_successes": 0,
       "success_rate": 0.0,
       "last_successful_use": "",
@@ -553,12 +64,13 @@
       "abstract_description": "INJECTION exploitation; via send_payload; on http://localhost:8000/jobs; (POST)",
       "vulnerability_type": "INJECTION",
       "required_context": "",
-      "total_attempts": 31,
-      "total_successes": 0,
-      "success_rate": 0.0,
-      "last_successful_use": "",
+      "total_attempts": 129,
+      "total_successes": 6,
+      "success_rate": 0.046511627906976744,
+      "last_successful_use": "2026-05-23T19:27:04.829637",
       "half_life_days": 30,
-      "created_at": "2026-05-22T10:43:52.018223"
+      "created_at": "2026-05-22T10:43:52.018223",
+      "reinforcement_count": 6
     },
     {
       "id": "ep-http_post-task-177",
@@ -567,12 +79,13 @@
       "abstract_description": "http_post exploitation; via http_post; on http://localhost:8000/jobs; (GET)",
       "vulnerability_type": "http_post",
       "required_context": "",
-      "total_attempts": 15,
-      "total_successes": 0,
-      "success_rate": 0.0,
-      "last_successful_use": "",
+      "total_attempts": 97,
+      "total_successes": 11,
+      "success_rate": 0.1134020618556701,
+      "last_successful_use": "2026-05-23T19:27:04.839382",
       "half_life_days": 30,
-      "created_at": "2026-05-22T10:43:52.026378"
+      "created_at": "2026-05-22T10:43:52.026378",
+      "reinforcement_count": 11
     },
     {
       "id": "ep-SQLI-task-177",
@@ -581,12 +94,13 @@
       "abstract_description": "SQLI exploitation; via sqlmap_test; on http://localhost:8000/jobs; (POST)",
       "vulnerability_type": "SQLI",
       "required_context": "",
-      "total_attempts": 2,
-      "total_successes": 0,
-      "success_rate": 0.0,
-      "last_successful_use": "",
+      "total_attempts": 14,
+      "total_successes": 1,
+      "success_rate": 0.07142857142857142,
+      "last_successful_use": "2026-05-23T19:27:04.818578",
       "half_life_days": 30,
-      "created_at": "2026-05-22T11:06:11.452774"
+      "created_at": "2026-05-22T11:06:11.452774",
+      "reinforcement_count": 1
     },
     {
       "id": "ep-XSS-task-177",
@@ -595,7 +109,7 @@
       "abstract_description": "XSS exploitation; via xss_reflection_test; on http://localhost:8000/docs; (GET)",
       "vulnerability_type": "XSS",
       "required_context": "",
-      "total_attempts": 2,
+      "total_attempts": 5,
       "total_successes": 0,
       "success_rate": 0.0,
       "last_successful_use": "",
@@ -623,7 +137,7 @@
       "abstract_description": "form_extract exploitation; via form_extract; on http://localhost:8000/; (GET)",
       "vulnerability_type": "form_extract",
       "required_context": "",
-      "total_attempts": 1,
+      "total_attempts": 6,
       "total_successes": 0,
       "success_rate": 0.0,
       "last_successful_use": "",
@@ -637,7 +151,7 @@
       "abstract_description": "metasploit_search exploitation; via metasploit_search; (GET)",
       "vulnerability_type": "metasploit_search",
       "required_context": "",
-      "total_attempts": 1,
+      "total_attempts": 2,
       "total_successes": 0,
       "success_rate": 0.0,
       "last_successful_use": "",
@@ -651,12 +165,13 @@
       "abstract_description": "FUZZ exploitation; via ffuf_fuzz; on http://localhost:8000/FUZZ; (GET)",
       "vulnerability_type": "FUZZ",
       "required_context": "",
-      "total_attempts": 2,
-      "total_successes": 0,
-      "success_rate": 0.0,
-      "last_successful_use": "",
+      "total_attempts": 11,
+      "total_successes": 1,
+      "success_rate": 0.09090909090909091,
+      "last_successful_use": "2026-05-23T19:27:04.822984",
       "half_life_days": 30,
-      "created_at": "2026-05-22T16:15:29.767506"
+      "created_at": "2026-05-22T16:15:29.767506",
+      "reinforcement_count": 1
     },
     {
       "id": "ep-AUTH-task-177",
@@ -671,9 +186,184 @@
       "last_successful_use": "",
       "half_life_days": 30,
       "created_at": "2026-05-22T16:51:32.929570"
+    },
+    {
+      "id": "ep-knowledge_search-task-177",
+      "type": "ExploitPattern",
+      "mechanism": "knowledge_search",
+      "abstract_description": "knowledge_search exploitation; via knowledge_search; (GET)",
+      "vulnerability_type": "knowledge_search",
+      "required_context": "",
+      "total_attempts": 3,
+      "total_successes": 0,
+      "success_rate": 0.0,
+      "last_successful_use": "",
+      "half_life_days": 30,
+      "created_at": "2026-05-23T16:07:16.834349"
+    },
+    {
+      "id": "ep-try_login-task-177",
+      "type": "ExploitPattern",
+      "mechanism": "try_login",
+      "abstract_description": "try_login exploitation; via try_login; on http://localhost:32768; (GET)",
+      "vulnerability_type": "try_login",
+      "required_context": "",
+      "total_attempts": 5,
+      "total_successes": 2,
+      "success_rate": 0.4,
+      "last_successful_use": "2026-05-23T19:27:04.832084",
+      "half_life_days": 30,
+      "created_at": "2026-05-23T19:27:04.820470",
+      "reinforcement_count": 1
+    },
+    {
+      "id": "ep-searchsploit_search-task-177",
+      "type": "ExploitPattern",
+      "mechanism": "searchsploit_search",
+      "abstract_description": "searchsploit_search exploitation; via searchsploit_search; (GET)",
+      "vulnerability_type": "searchsploit_search",
+      "required_context": "",
+      "total_attempts": 1,
+      "total_successes": 0,
+      "success_rate": 0.0,
+      "last_successful_use": "",
+      "half_life_days": 30,
+      "created_at": "2026-05-23T19:41:53.871625"
+    },
+    {
+      "id": "ep-cve_lookup-task-177",
+      "type": "ExploitPattern",
+      "mechanism": "cve_lookup",
+      "abstract_description": "cve_lookup exploitation; via cve_lookup; (GET)",
+      "vulnerability_type": "cve_lookup",
+      "required_context": "",
+      "total_attempts": 2,
+      "total_successes": 0,
+      "success_rate": 0.0,
+      "last_successful_use": "",
+      "half_life_days": 30,
+      "created_at": "2026-05-23T19:41:53.873602"
+    },
+    {
+      "id": "ep-go_exploitdb_search-task-177",
+      "type": "ExploitPattern",
+      "mechanism": "go_exploitdb_search",
+      "abstract_description": "go_exploitdb_search exploitation; via go_exploitdb_search; (GET)",
+      "vulnerability_type": "go_exploitdb_search",
+      "required_context": "",
+      "total_attempts": 2,
+      "total_successes": 0,
+      "success_rate": 0.0,
+      "last_successful_use": "",
+      "half_life_days": 30,
+      "created_at": "2026-05-23T19:41:53.875819"
+    },
+    {
+      "id": "ep-whatweb_scan-task-177",
+      "type": "ExploitPattern",
+      "mechanism": "whatweb_scan",
+      "abstract_description": "whatweb_scan exploitation; via whatweb_scan; on http://localhost:39025; (GET)",
+      "vulnerability_type": "whatweb_scan",
+      "required_context": "",
+      "total_attempts": 23,
+      "total_successes": 0,
+      "success_rate": 0.0,
+      "last_successful_use": "",
+      "half_life_days": 30,
+      "created_at": "2026-05-25T15:36:22.427902"
+    },
+    {
+      "id": "ep-gobuster_dir-task-177",
+      "type": "ExploitPattern",
+      "mechanism": "gobuster_dir",
+      "abstract_description": "gobuster_dir exploitation; via gobuster_dir; on http://localhost:19432; (GET)",
+      "vulnerability_type": "gobuster_dir",
+      "required_context": "",
+      "total_attempts": 6,
+      "total_successes": 0,
+      "success_rate": 0.0,
+      "last_successful_use": "",
+      "half_life_days": 30,
+      "created_at": "2026-05-25T15:58:37.468863"
+    },
+    {
+      "id": "ep-dirb_scan-task-177",
+      "type": "ExploitPattern",
+      "mechanism": "dirb_scan",
+      "abstract_description": "dirb_scan exploitation; via dirb_scan; on http://localhost:7890; (GET)",
+      "vulnerability_type": "dirb_scan",
+      "required_context": "",
+      "total_attempts": 5,
+      "total_successes": 0,
+      "success_rate": 0.0,
+      "last_successful_use": "",
+      "half_life_days": 30,
+      "created_at": "2026-05-25T15:58:37.471640"
+    },
+    {
+      "id": "ep-nikto_scan-task-177",
+      "type": "ExploitPattern",
+      "mechanism": "nikto_scan",
+      "abstract_description": "nikto_scan exploitation; via nikto_scan; on http://localhost:7890; (GET)",
+      "vulnerability_type": "nikto_scan",
+      "required_context": "",
+      "total_attempts": 1,
+      "total_successes": 0,
+      "success_rate": 0.0,
+      "last_successful_use": "",
+      "half_life_days": 30,
+      "created_at": "2026-05-25T17:41:54.943516"
+    },
+    {
+      "id": "ep-response_parse-task-177",
+      "type": "ExploitPattern",
+      "mechanism": "response_parse",
+      "abstract_description": "response_parse exploitation; via response_parse; (GET)",
+      "vulnerability_type": "response_parse",
+      "required_context": "",
+      "total_attempts": 1,
+      "total_successes": 0,
+      "success_rate": 0.0,
+      "last_successful_use": "",
+      "half_life_days": 30,
+      "created_at": "2026-05-25T18:31:38.742193"
+    },
+    {
+      "id": "bp-double_url_encode-WAF",
+      "type": "BypassPattern",
+      "mechanism": "double_url_encode",
+      "abstract_description": "Double URL encoding bypasses ModSecurity CRS",
+      "applicable_defense_types": [
+        "WAF"
+      ],
+      "applicable_vuln_types": [
+        "SQLi"
+      ],
+      "preconditions": [],
+      "total_attempts": 1,
+      "total_successes": 1,
+      "success_rate": 1.0,
+      "last_successful_use": "2026-05-26T14:29:13",
+      "half_life_days": 30,
+      "reinforcement_count": 0,
+      "created_at": "2026-05-26T14:29:13.177707"
+    },
+    {
+      "id": "ep-SQLi-test-001",
+      "type": "ExploitPattern",
+      "mechanism": "sqlmap",
+      "abstract_description": "SQLi exploitation; via sqlmap; (GET)",
+      "vulnerability_type": "SQLi",
+      "required_context": "",
+      "total_attempts": 1,
+      "total_successes": 1,
+      "success_rate": 1.0,
+      "last_successful_use": "2026-05-26T14:29:13",
+      "half_life_days": 30,
+      "created_at": "2026-05-26T14:29:13.179539"
     }
   ],
   "edges": [],
-  "task_count": 40,
-  "created_at": "2026-05-22T16:38:52.370882"
+  "task_count": 78,
+  "created_at": "2026-05-26T17:28:09.353149"
 }

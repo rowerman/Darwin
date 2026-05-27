@@ -1,0 +1,21 @@
+services:
+  db:
+    image: postgres:16.6
+    environment:
+      POSTGRES_USER: products
+      POSTGRES_PASSWORD: productspass
+      POSTGRES_DB: shop
+    volumes:
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
+
+  web:
+    build: ./app
+    ports:
+      - "3001:3000"
+    environment:
+      DB_HOST: db
+      DB_USER: products
+      DB_PASS: productspass
+      DB_NAME: shop
+    depends_on:
+      - db

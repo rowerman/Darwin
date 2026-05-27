@@ -1,0 +1,20 @@
+scenario:
+  id: AD-03
+  name: "LDAPNightmare RCE"
+  technique: "CVE-2024-49112 (CVSS 9.8)"
+  difficulty: L2
+  cve: "CVE-2024-49112"
+network:
+  dc_ip: 192.168.56.10
+  domain: north.sevenkingdoms.local
+  dc_hostname: winterfell
+attacker:
+  entry: "External network (no credentials needed)"
+  credentials: null
+target:
+  vulnerable_service: "LDAP over UDP (port 389)"
+  windows_version: "Windows Server 2022 WITHOUT December 2024 cumulative update (KB5048667)"
+  patch_requirement: "MUST NOT have Dec 2024 patches installed"
+flag:
+  location: "C:\\Users\\Public\\flag.txt on DC"
+exploit: "DCE/RPC → DNS SRV → malicious CLDAP referral → integer overflow in wldap32.dll → LSASS crash/RCE"

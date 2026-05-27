@@ -1,0 +1,20 @@
+services:
+  db:
+    image: mysql:8.0.35
+    environment:
+      MYSQL_ROOT_PASSWORD: rootpass123
+      MYSQL_DATABASE: vulnapp
+      MYSQL_USER: app
+      MYSQL_PASSWORD: apppass
+    command: --secure-file-priv=""
+    volumes:
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
+
+  web:
+    build: .
+    ports:
+      - "3002:80"
+    volumes:
+      - ./app:/var/www/html
+    environment:
+      DB_HOST: db

@@ -1,0 +1,30 @@
+# Chain: "MySQL UDF to K8s Cluster Admin" (Cross-Chain-7)
+# Steps: 4 | Domains: Web/DB → Linux → K8s
+name: "MySQL UDF to K8s Cluster Admin"
+chain_id: Cross-Chain-7
+steps: 4
+domains: [web, db, linux, k8s]
+nodes:
+  - step: 1
+    scenario: web-08
+    description: "Web SQLi → MySQL UDF command execution"
+    flag: "flag{chain7-step1-mysql}"
+    next_hint: "Use MySQL UDF sys_exec to enumerate the host and find kubeconfig"
+
+  - step: 2
+    scenario: lnx-01
+    description: "nftables kernel exploit → root on the database host"
+    flag: "flag{chain7-step2-privesc}"
+    next_hint: "From root, find kubeconfig in /home/*/.kube/config"
+
+  - step: 3
+    scenario: k8s-06
+    description: "RBAC abuse via discovered kubeconfig → read all secrets"
+    flag: "flag{chain7-step3-rbac}"
+    next_hint: "Find a privileged ServiceAccount token for cluster-admin access"
+
+  - step: 4
+    scenario: k8s-08
+    description: "etcd unauthorized → full cluster control"
+    flag: "flag{chain7-step4-etcd-final}"
+    next_hint: null

@@ -1,0 +1,12 @@
+services:
+  oracle:
+    image: gvenzl/oracle-xe:21.3.0-slim
+    ports:
+      - "1521:1521"
+    environment:
+      ORACLE_PASSWORD: password123
+      APP_USER: app
+      APP_USER_PASSWORD: apppass
+      ORACLE_DATABASE: XEPDB1
+    volumes:
+      - ./flag.txt:/flag.txt:ro

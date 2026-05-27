@@ -1,0 +1,59 @@
+{
+  "target": "http://localhost",
+  "model": "deepseek/deepseek-v4-pro",
+  "provider": "deepseek",
+  "time_budget": 600,
+  "events": [
+    {
+      "timestamp": "2026-05-25T15:29:55",
+      "elapsed_s": 0.0,
+      "phase": "init",
+      "level": "info",
+      "event": "task_start",
+      "target": "http://localhost",
+      "description": "Perform a comprehensive penetration test. Discover all open ports, enumerate services, identify vulnerabilities, exploit them, and capture proof flags."
+    },
+    {
+      "timestamp": "2026-05-25T15:30:05",
+      "elapsed_s": 10.019,
+      "phase": "bootstrap",
+      "level": "info",
+      "event": "bootstrap_nmap",
+      "host": "localhost"
+    },
+    {
+      "timestamp": "2026-05-25T15:31:53",
+      "elapsed_s": 118.089,
+      "phase": "bootstrap",
+      "level": "info",
+      "event": "bootstrap_done",
+      "dkg_summary": "Host: 1\n  - id=host-localhost: {'ip': 'localhost', 'is_reachable': True, 'is_internal': False, '_version': 10}\nService: 10\n  - id=svc-localhost-22: {'port': 22, 'protocol': 'tcp', 'version': 'OpenSSH 8.9p1 Ubuntu 3ubuntu0.15 (Ubuntu Linux; protocol 2.0)', 'banner': 'ssh', '_version': 2, 'skip_exploit': True}\n  - id=svc-localhost-1053: {'port': 1053, 'protocol': 'tcp', 'version': 'tcpwrapped', 'banner': 'tcpwrapped', '_version': 1}\n  - id=svc-localhost-7890: {'port': 7890, 'protocol': 'tcp', 'version': 'unknown', 'banner': 'unknown', '_version': 1}\n  - id=svc-localhost-19432: {'port': 19432, 'protocol': 'tcp', 'version': 'unknown', 'banner': 'unknown', '_version': 1}\n  - id=svc-localhost-35161: {'port': 35161, 'protocol': 'tcp', 'version': 'unknown', 'banner': 'unknown', '_version': 1}\n  - id=svc-localhost-39025: {'port': 39025, 'protocol': 'tcp', 'version': 'unknown', 'banner': 'unknown', '_version': 1}\n  - id=svc-localhost-39725: {'port': 39725, 'protocol': 'tcp', 'version': 'unknown', 'banner': 'unknown', '_version': 1}\n  - id=svc-localhost-43771: {'port': 43771, 'protocol': 'tcp', 'version': 'ssl/unknown', 'banner': 'ssl/unknown', '_version': 1}\n  ... and 2 more",
+      "step": 1
+    },
+    {
+      "timestamp": "2026-05-25T15:31:53",
+      "elapsed_s": 118.091,
+      "phase": "bootstrap",
+      "level": "info",
+      "event": "loop_iteration",
+      "loop": 1,
+      "b_value": 0.05600000000000001,
+      "mode": "solo"
+    },
+    {
+      "timestamp": "2026-05-25T15:36:22",
+      "elapsed_s": 387.105,
+      "phase": "bootstrap",
+      "level": "error",
+      "event": "task_end",
+      "success": false,
+      "flag": "",
+      "steps": 35,
+      "tokens_used": 15893,
+      "time_elapsed": 387.1046633720398,
+      "error": "No result produced"
+    }
+  ],
+  "dkg_summary": "Host: 1\n  - id=host-localhost: {'ip': 'localhost', 'is_reachable': True, 'is_internal': False, '_version': 10}\nService: 10\n  - id=svc-localhost-22: {'port': 22, 'protocol': 'tcp', 'version': 'OpenSSH 8.9p1 Ubuntu 3ubuntu0.15 (Ubuntu Linux; protocol 2.0)', 'banner': 'ssh', '_version': 2, 'skip_exploit': True}\n  - id=svc-localhost-1053: {'port': 1053, 'protocol': 'tcp', 'version': 'tcpwrapped', 'banner': 'tcpwrapped', '_version': 1}\n  - id=svc-localhost-7890: {'port': 7890, 'protocol': 'tcp', 'version': 'unknown', 'banner': 'unknown', '_version': 1}\n  - id=svc-localhost-19432: {'port': 19432, 'protocol': 'tcp', 'version': 'unknown', 'banner': 'unknown', '_version': 1}\n  - id=svc-localhost-35161: {'port': 35161, 'protocol': 'tcp', 'version': 'unknown', 'banner': 'unknown', '_version': 1}\n  - id=svc-localhost-39025: {'port': 39025, 'protocol': 'tcp', 'version': 'unknown', 'banner': 'unknown', '_version': 1}\n  - id=svc-localhost-39725: {'port': 39725, 'protocol': 'tcp', 'version': 'unknown', 'banner': 'unknown', '_version': 1}\n  - id=svc-localhost-43771: {'port': 43771, 'protocol': 'tcp', 'version': 'ssl/unknown', 'banner': 'ssl/unknown', '_version': 1}\n  ... and 2 more\nPlan: 1\n  - id=plan-1779694313: {'plan_id': 'plan-1779694313', 'phase': 'explore', 'goal': 'Capture flag on http://localhost', 'total_tasks': 8, 'completed': 1, 'failed': 3, 'status': 'in_progress', '_version': 4}\nTask: 4\n  - id=task-1: {'plan_id': 'plan-1779694313', 'instruction': 'Probe port 7890 with curl_get to check if it serves HTTP and to view response content.', 'tool': 'curl_get', 'params': {'url': 'http://localhost:7890'}, 'status': 'failed', 'dependencies': [], 'attempts': 1, 'result_summary': \"ToolResult(tool_name='curl_get', success=False, stdout='', stderr='', exit_code=-1, elapsed_ms=0, parsed_output={})\", '_version': 1}\n  - id=task-2: {'plan_id': 'plan-1779694313', 'instruction': 'Probe port 43771 (ssl/unknown) using HTTPS to check for a secure web service.', 'tool': 'curl_get', 'params': {'url': 'https://localhost:43771'}, 'status': 'done', 'dependencies': [], 'attempts': 1, 'result_summary': \"ToolResult(tool_name='curl_get', success=True, stdout='HTTP/1.1 403 Forbidden\\\\r\\\\ncontent-length: 46\\\\r\\\\ndate: Mon, 25 May 2026 07:34:03 GMT\\\\r\\\\n\\\\r\\\\nForbidden: missing or invalid connection token', stderr='', exit_code=0, elapsed_ms=0, parsed_output={})\", '_version': 1}\n  - id=task-3: {'plan_id': 'plan-1779694313', 'instruction': 'Probe port 59582 with curl_get to check for HTTP accessibility.', 'tool': 'curl_get', 'params': {'url': 'http://localhost:59582'}, 'status': 'failed', 'dependencies': [], 'attempts': 1, 'result_summary': \"ToolResult(tool_name='http_post', success=False, stdout='', stderr='HTTP Error 400: Bad Request', exit_code=1, elapsed_ms=0, parsed_output={})\", '_version': 1}\n  - id=task-5: {'plan_id': 'plan-1779694313', 'instruction': 'Fingerprint the HTTPS service on port 43771 with whatweb_scan to understand its technology.', 'tool': 'whatweb_scan', 'params': {'url': 'https://localhost:43771'}, 'status': 'failed', 'dependencies': ['task-2'], 'attempts': 1, 'result_summary': 'ToolResult(tool_name=\\'form_extract\\', success=True, stdout=\\'{\\\\n  \"url\": \"http://localhost:19432\",\\\\n  \"forms\": [],\\\\n  \"password_field_present\": false,\\\\n  \"links\": [\\\\n    \"/favicon.svg\",\\\\n    \"https://fonts.gstatic.com\",\\\\n    \"${d}\",\\\\n    \"https://fonts.googleapis.com\",\\\\n    \"https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap\"\\\\n  ]\\\\n}\\', stderr=\\'\\', exit_code=0, elapsed_ms=0, parsed_output={\\'url\\': \\'http://localhost:19432\\', \\'form', '_version': 1}",
+  "cteg_patterns_committed": 0
+}

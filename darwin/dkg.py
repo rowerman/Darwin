@@ -34,6 +34,7 @@ NODE_TYPES = [
     "Plan",           # plan_id, phase, goal, total_tasks, completed, failed, status
     "Task",           # plan_id, instruction, tool, params, status, dependencies, attempts
     "PlanSummary",    # source_plan_id, phase, completed_tasks, key_findings, failed_approaches
+    "Analysis",       # phase, type, content — application understanding from analyze phase
 ]
 
 # Edge types

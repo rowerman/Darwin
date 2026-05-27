@@ -1,0 +1,58 @@
+[
+  {
+    "id": "aws-20",
+    "type": "ExploitPattern",
+    "category": "AWS",
+    "title": "Cloud - AWS",
+    "description": ":warning: Content of this page has been moved to [InternalAllTheThings/cloud/aws](https://github.com/swisskyrepo/InternalAllTheThings/) - [Cloud - AWS](https://swisskyrepo.github.io/InternalAllTheThings/cloud/aws/AWS%20Pentest/) - [AWS - Access Token & Secrets](https://swisskyrepo.github.io/InternalAllTheThings/cloud/aws/aws-access-token/) - [AWS - Service - Cognito](https://swisskyrepo.github.io/InternalAllTheThings/cloud/aws/aws-cognito/) - [AWS - Service - DynamoDB](https://swisskyrepo.github.io/InternalAllTheThings/cloud/aws/aws-dynamodb/)",
+    "techniques": [],
+    "indicators": [],
+    "tags": [
+      "cloud",
+      "aws"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "azure-21",
+    "type": "ExploitPattern",
+    "category": "AZURE",
+    "title": "Cloud - Azure",
+    "description": ":warning: Content of this page has been moved to [InternalAllTheThings/cloud/azure](https://github.com/swisskyrepo/InternalAllTheThings/) - [Azure AD Connect](https://swisskyrepo.github.io/InternalAllTheThings/cloud/azure/azure-ad-connect/) - [Azure AD Enumerate](https://swisskyrepo.github.io/InternalAllTheThings/cloud/azure/azure-enumeration/) - [Azure AD IAM](https://swisskyrepo.github.io/InternalAllTheThings/cloud/azure/azure-devices-users-sp/) - [Azure AD Phishing](https://swisskyrepo.github.io/InternalAllTheThings/cloud/azure/azure-phishing/)",
+    "techniques": [],
+    "indicators": [],
+    "tags": [
+      "cloud",
+      "azure"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "container-23",
+    "type": "ExploitPattern",
+    "category": "CONTAINER",
+    "title": "Container - Docker",
+    "description": ":warning: Content of this page has been moved to [InternalAllTheThings/containers/docker](https://swisskyrepo.github.io/InternalAllTheThings/containers/docker/) - [Tools](https://swisskyrepo.github.io/InternalAllTheThings/containers/docker/#tools) - [Mounted Docker Socket](https://swisskyrepo.github.io/InternalAllTheThings/containers/docker/#mounted-docker-socket) - [Open Docker API Port](https://swisskyrepo.github.io/InternalAllTheThings/containers/docker/#open-docker-api-port) - [Insecure Docker Registry](https://swisskyrepo.github.io/InternalAllTheThings/containers/docker/#insecure-docker-registry)",
+    "techniques": [],
+    "indicators": [],
+    "tags": [
+      "cloud",
+      "container"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "k8s-24",
+    "type": "ExploitPattern",
+    "category": "K8S",
+    "title": "Container - Kubernetes",
+    "description": ":warning: Content of this page has been moved to [InternalAllTheThings/containers/kubernetes/](https://swisskyrepo.github.io/InternalAllTheThings/containers/kubernetes/) - [Tools](https://swisskyrepo.github.io/InternalAllTheThings/containers/kubernetes/#tools) - [Exploits](https://swisskyrepo.github.io/InternalAllTheThings/containers/kubernetes/#exploits) - [Accessible kubelet on 10250/TCP](https://swisskyrepo.github.io/InternalAllTheThings/containers/kubernetes/#accessible-kubelet-on-10250tcp) - [Obtaining Service Account Token](https://swisskyrepo.github.io/InternalAllTheThings/containers/kubernetes/#obtaining-service-account-token)",
+    "techniques": [],
+    "indicators": [],
+    "tags": [
+      "cloud",
+      "k8s"
+    ],
+    "confidence": 0.5
+  }
+]

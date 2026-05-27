@@ -1,0 +1,17 @@
+services:
+  waf:
+    build:
+      context: ../../../../../../../
+      dockerfile: benchmarks/cve_challenges/docker/_defense/WAF.Dockerfile
+    ports:
+      - "8081:8080"
+    environment:
+      BACKEND_HOST: tomcat
+    depends_on:
+      - tomcat
+
+  tomcat:
+    extends:
+      file: ../../docker-compose.yml
+      service: tomcat
+    ports: []

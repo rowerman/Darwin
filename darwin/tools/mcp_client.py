@@ -48,6 +48,7 @@ class MCPClient:
     def __init__(self, config: MCPServerConfig, connect_timeout: float = 30.0):
         self.config = config
         self.connect_timeout = connect_timeout
+        self.request_timeout = max(connect_timeout, 60.0)
         self._proc: Optional[asyncio.subprocess.Process] = None
         self._request_id = 0
         self._pending: Dict[int, asyncio.Future] = {}
@@ -159,7 +160,7 @@ class MCPClient:
         await self._send(msg)
 
         try:
-            return await asyncio.wait_for(future, timeout=self.connect_timeout)
+            return await asyncio.wait_for(future, timeout=self.request_timeout)
         except asyncio.TimeoutError:
             self._pending.pop(rid, None)
             raise
@@ -170,12 +171,11 @@ class MCPClient:
         await self._send(msg)
 
     async def _send(self, msg: Dict[str, Any]) -> None:
-        """Send a JSON-RPC message to the server's stdin."""
+        """Send a JSON-RPC message to the server's stdin (line-delimited)."""
         if not self._proc or not self._proc.stdin:
             raise RuntimeError(f"MCP server '{self.config.name}' not running")
         body = json.dumps(msg, ensure_ascii=False)
-        header = f"Content-Length: {len(body.encode('utf-8'))}\r\n\r\n"
-        self._proc.stdin.write((header + body).encode("utf-8"))
+        self._proc.stdin.write((body + "\n").encode("utf-8"))
         await self._proc.stdin.drain()
 
     async def _read_loop(self) -> None:
@@ -194,24 +194,45 @@ class MCPClient:
             log.warning("MCP reader for '%s' error: %s", self.config.name, e)
 
     async def _read_message(self) -> Optional[Dict[str, Any]]:
-        """Read one Content-Length framed JSON message."""
+        """Read one JSON-RPC message (supports both framed and line-delimited)."""
         if not self._proc or not self._proc.stdout:
             return None
 
-        # Read headers until empty line
-        content_length = 0
-        while True:
-            line = await self._proc.stdout.readline()
-            if not line:
+        # Read first line to determine transport format
+        first_line = await self._proc.stdout.readline()
+        if not first_line:
+            return None
+        first_str = first_line.decode("utf-8", errors="replace").rstrip("\r\n")
+
+        # Line-delimited JSON (raw JSON per line, no framing)
+        if first_str.startswith("{"):
+            try:
+                return json.loads(first_str)
+            except json.JSONDecodeError:
                 return None
-            line = line.decode("utf-8", errors="replace").rstrip("\r\n")
-            if line == "":
-                break
-            if line.lower().startswith("content-length:"):
-                try:
-                    content_length = int(line.split(":", 1)[1].strip())
-                except ValueError:
-                    pass
+
+        # Content-Length framed protocol
+        content_length = 0
+        if first_str.lower().startswith("content-length:"):
+            try:
+                content_length = int(first_str.split(":", 1)[1].strip())
+            except ValueError:
+                pass
+
+        if content_length > 0:
+            # Read remaining headers until empty line
+            while True:
+                line = await self._proc.stdout.readline()
+                if not line:
+                    return None
+                line = line.decode("utf-8", errors="replace").rstrip("\r\n")
+                if line == "":
+                    break
+                if line.lower().startswith("content-length:"):
+                    try:
+                        content_length = int(line.split(":", 1)[1].strip())
+                    except ValueError:
+                        pass
 
         if content_length <= 0:
             return None

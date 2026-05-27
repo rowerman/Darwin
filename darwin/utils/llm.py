@@ -103,6 +103,7 @@ class LLMSession:
         system_prompt: str | None = None,
         tools: List[Dict[str, Any]] | None = None,
         temperature: float | None = None,
+        timeout: float = 180.0,
     ) -> tuple[str, List[Dict[str, Any]] | None]:
         """Generate LLM response with optional tool calling.
 
@@ -111,6 +112,7 @@ class LLMSession:
             system_prompt: Optional system prompt.
             tools: Optional list of OpenAI tool definitions.
             temperature: Override the default temperature for this call.
+            timeout: LiteLLM request timeout in seconds (default 180s).
 
         Returns:
             (content, tool_calls) — tool_calls is None if no tools were called.
@@ -129,6 +131,7 @@ class LLMSession:
             messages=messages,
             temperature=temp,
             max_tokens=self.max_tokens,
+            timeout=timeout,
         )
 
         if tools:
@@ -170,6 +173,24 @@ class LLMSession:
         """Build message list, continuing conversation history if available."""
         if self.conversation_history:
             messages = self.conversation_history.copy()
+            # Update system message if caller provides a different one
+            if system_prompt and messages and messages[0].get("role") == "system":
+                if messages[0].get("content") != system_prompt:
+                    messages[0] = {"role": "system", "content": system_prompt}
+            # Strip unresolved tool_calls from last assistant message
+            # (DeepSeek requires every tool_call_id have a matching tool message)
+            for i in range(len(messages) - 1, -1, -1):
+                if messages[i].get("role") == "assistant" and messages[i].get("tool_calls"):
+                    # Check if any subsequent message responds to these tool calls
+                    tool_ids = {tc["id"] for tc in messages[i]["tool_calls"]}
+                    answered = any(
+                        m.get("role") == "tool" and m.get("tool_call_id") in tool_ids
+                        for m in messages[i+1:]
+                    )
+                    if not answered:
+                        messages[i] = {k: v for k, v in messages[i].items()
+                                       if k != "tool_calls"}
+                break  # only check the last assistant message
             # If last message was a tool result, don't add a user message —
             # the LLM should respond to tool results directly (API requirement)
             last_role = messages[-1].get("role", "") if messages else ""
@@ -217,11 +238,14 @@ class LLMSession:
 
     @property
     def token_count(self) -> int:
-        """Estimate current token usage."""
-        total = 0
-        for msg in self.conversation_history:
-            total += len(str(msg)) // 4  # rough estimate: ~4 chars per token
-        return total
+        """Estimate current token usage via litellm token counter."""
+        try:
+            return litellm.token_counter(
+                model=getattr(self, "model", "gpt-4o"),
+                messages=self.conversation_history,
+            )
+        except Exception:
+            return sum(len(str(msg)) for msg in self.conversation_history) // 4
 
     @property
     def context_load(self) -> float:

@@ -1,0 +1,36 @@
+# Chain: "Web to Domain Admin" (AD-Chain-1)
+# Steps: 6 | Domains: Web → Linux → AD
+name: "Web to Domain Admin"
+chain_id: AD-Chain-1
+steps: 6
+domains: [web, linux, ad]
+nodes:
+  - step: 1
+    scenario: web-03
+    description: "WordPress Simple File List RCE"
+    flag: "flag{chain1-step1-wp}"
+    next_hint: "Enumerate the compromised host for privilege escalation vectors"
+
+  - step: 2
+    scenario: lnx-01
+    description: "nftables Kernel Exploit → root"
+    flag: "flag{chain1-step2-privesc}"
+    next_hint: "From root, scan internal network 192.168.56.0/24 for Windows hosts"
+
+  - step: 3
+    scenario: ad-01
+    description: "Kerberoasting → crack service account"
+    flag: "flag{chain1-step3-kerberoast}"
+    next_hint: "Use cracked credentials to move laterally"
+
+  - step: 4
+    scenario: ad-05
+    description: "Pass-the-Hash lateral movement"
+    flag: "flag{chain1-step4-pth}"
+    next_hint: "With higher privileges on member server, target the DC"
+
+  - step: 5
+    scenario: ad-09
+    description: "DCSync → Domain Admin hashes"
+    flag: "flag{chain1-step5-dcsync-final}"
+    next_hint: null

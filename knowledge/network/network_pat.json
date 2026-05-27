@@ -1,0 +1,58 @@
+[
+  {
+    "id": "privesc-29",
+    "type": "ExploitPattern",
+    "category": "PRIVESC",
+    "title": "Linux - Evasion",
+    "description": ":warning: Content of this page has been moved to [InternalAllTheThings/redteam/access/initial-access](https://swisskyrepo.github.io/InternalAllTheThings/redteam/evasion/linux-evasion/) - [File names](https://swisskyrepo.github.io/InternalAllTheThings/redteam/evasion/linux-evasion/#file-names) - [Command history](https://swisskyrepo.github.io/InternalAllTheThings/redteam/evasion/linux-evasion/#command-history) - [Hiding text](https://swisskyrepo.github.io/InternalAllTheThings/redteam/evasion/linux-evasion/#hiding-text)",
+    "techniques": [],
+    "indicators": [],
+    "tags": [
+      "network",
+      "privesc"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "privesc-30",
+    "type": "ExploitPattern",
+    "category": "PRIVESC",
+    "title": "Linux - Persistence",
+    "description": ":warning: Content of this page has been moved to [InternalAllTheThings/redteam/persistence/linux-persistence](https://swisskyrepo.github.io/InternalAllTheThings/redteam/persistence/linux-persistence/) - [Basic reverse shell](https://swisskyrepo.github.io/InternalAllTheThings/redteam/persistence/linux-persistence/#basic-reverse-shell) - [Add a root user](https://swisskyrepo.github.io/InternalAllTheThings/redteam/persistence/linux-persistence/#add-a-root-user) - [Suid Binary](https://swisskyrepo.github.io/InternalAllTheThings/redteam/persistence/linux-persistence/#suid-binary)",
+    "techniques": [],
+    "indicators": [],
+    "tags": [
+      "network",
+      "privesc"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "privesc-31",
+    "type": "ExploitPattern",
+    "category": "PRIVESC",
+    "title": "Linux - Privilege Escalation",
+    "description": ":warning: Content of this page has been moved to [InternalAllTheThings/redteam/persistence/linux-persistence](https://swisskyrepo.github.io/InternalAllTheThings/redteam/escalation/linux-privilege-escalation/) - [Tools](https://swisskyrepo.github.io/InternalAllTheThings/redteam/escalation/linux-privilege-escalation/#tools) - [Checklist](https://swisskyrepo.github.io/InternalAllTheThings/redteam/escalation/linux-privilege-escalation/#checklists) - [Looting for passwords](https://swisskyrepo.github.io/InternalAllTheThings/redteam/escalation/linux-privilege-escalation/#looting-for-passwords)",
+    "techniques": [],
+    "indicators": [],
+    "tags": [
+      "network",
+      "privesc"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "lateral-36",
+    "type": "ExploitPattern",
+    "category": "LATERAL",
+    "title": "Network Pivoting Techniques",
+    "description": ":warning: Content of this page has been moved to [InternalAllTheThings/redteam/pivoting/network-pivoting-techniques](https://swisskyrepo.github.io/InternalAllTheThings/redteam/pivoting/network-pivoting-techniques/) - [SOCKS Compatibility Table](https://swisskyrepo.github.io/InternalAllTheThings/redteam/pivoting/network-pivoting-techniques/#socks-compatibility-table) - [Windows netsh Port Forwarding](https://swisskyrepo.github.io/InternalAllTheThings/redteam/pivoting/network-pivoting-techniques/#windows-netsh-port-forwarding)",
+    "techniques": [],
+    "indicators": [],
+    "tags": [
+      "network",
+      "lateral"
+    ],
+    "confidence": 0.5
+  }
+]

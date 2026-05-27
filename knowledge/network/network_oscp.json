@@ -1,0 +1,87 @@
+[
+  {
+    "id": "dns-6",
+    "type": "ExploitPattern",
+    "category": "DNS",
+    "title": "hw:hide responses",
+    "description": "[dnsx](https://github.com/projectdiscovery/dnsx) wfuzz -H 'Host: FUZZ.test.com' -u http://test.com -w /usr/share/seclists/Discovery/DNS/subdomains-top1million-5000.txt --hw 407",
+    "techniques": [
+      "dig axfr @",
+      "wfuzz -H 'Host: FUZZ.test.com' -u http://test.com -w /usr/share/seclists/Discovery/DNS/subdomains-top1million-5000.txt --hw 407",
+      "dig -x  @",
+      "sublist3r -d DOMAIN",
+      "https://crt.sh/"
+    ],
+    "indicators": [],
+    "tags": [
+      "network",
+      "dns"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "privesc-9",
+    "type": "ExploitPattern",
+    "category": "PRIVESC",
+    "title": "video(groups)",
+    "description": "open OUT, \"|pnmtopng\" or die \"Can't pipe pnmtopng: $!\\n\"; printf OUT \"P6%d %d\\n255\\n\", $w, $h; while ((read STDIN, $raw, 2) and $pixels--) { ($short & 0x1f)  /tmp/temp.raw #upload to Host cat /sys/class/graphics/fb0/virtual_size #1176,885 ./iraw2png.pl 1176 885  screen.png",
+    "techniques": [
+      "$w = shift || 240;",
+      "$h = shift || 320;",
+      "$pixels = $w * $h;",
+      "open OUT, \"|pnmtopng\" or die \"Can't pipe pnmtopng: $!\\n\";",
+      "printf OUT \"P6%d %d\\n255\\n\", $w, $h;",
+      "while ((read STDIN, $raw, 2) and $pixels--) {",
+      "$short = unpack('S', $raw);",
+      "print OUT pack(\"C3\",",
+      "($short & 0xf800) >> 8,",
+      "($short & 0x7e0) >> 3,",
+      "($short & 0x1f)  /tmp/temp.raw #upload to Host",
+      "cat /sys/class/graphics/fb0/virtual_size #1176,885",
+      "chmod +x iraw2png.pl",
+      "./iraw2png.pl 1176 885  screen.png"
+    ],
+    "indicators": [],
+    "tags": [
+      "network",
+      "privesc"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "snmp-50",
+    "type": "ExploitPattern",
+    "category": "SNMP",
+    "title": "-v 1|2c|3 SNMP version",
+    "description": "onesixtyone -c /usr/share/seclists/Discovery/SNMP/snmp.txt -p retrieve a subtree of management values SNMP ARBITARY COMMAND EXECUTION AND SHELL https://rioasmara.com/2021/02/05/snmp-arbitary-command-execution-and-shell/ https://mogwailabs.de/en/blog/2019/10/abusing-linux-snmp-for-rce/ snmpwalk -v -c   NET-SNMP-EXTEND-MIB::nsExtendObjects",
+    "techniques": [
+      "onesixtyone -c /usr/share/seclists/Discovery/SNMP/snmp.txt -p",
+      "snmpwalk -v1 -c public  .",
+      "snmp-check  -c"
+    ],
+    "indicators": [],
+    "tags": [
+      "network",
+      "snmp"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "smb-62",
+    "type": "ExploitPattern",
+    "category": "SMB",
+    "title": "smbmap -d test.local -H 10.10.10.10 -R shared --depth 10",
+    "description": "nmap -p 139,445 [--script-args=unsafe=1] --script /usr/share/nmap/scripts/smb-os-discovery from impacket [smbclient.py](https://github.com/fortra/impacket/blob/master/examples/smbclient.py) smbclient -L '///' -U brett --option='client min protocol=NT1' smbclient --no-pass -L '//' -p 445 smbclient -U \"\" --password=\"\" \\\\\\\\\\\\ smbclient -m SMB2 -U  -L //Client/ change password (STATUS_PASSWORD_MUST_CHANGE) smbmap -d test.local -H 10.10.10.10 --download \"shared\\test.txt\" smbclient '\\\\\\' -N -c 'prompt OFF;recurse ON; mget *' --user=[DOMAIN/]USERNAME[%PASSWORD]] [-N|--no-pass] [--password=STRING] [--pw-nt-hash]",
+    "techniques": [
+      "from impacket [smbclient.py](https://github.com/fortra/impacket/blob/master/examples/smbclient.py)",
+      "protocol negotiation failed",
+      "get permissions"
+    ],
+    "indicators": [],
+    "tags": [
+      "network",
+      "smb"
+    ],
+    "confidence": 0.5
+  }
+]

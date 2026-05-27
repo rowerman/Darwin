@@ -18,6 +18,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
+from darwin.dave import DAVE
 from darwin.dkg import DKG
 from darwin.tools.mcp_gateway import MCPGateway, ToolResult
 from darwin.utils.llm import LLMSession
@@ -31,8 +32,6 @@ class SubAgentState(str, Enum):
     SPAWNING = "spawning"
     INITIALIZING = "initializing"
     RUNNING = "running"
-    WAITING_DKG = "waiting_dkg"
-    TERMINATING = "terminating"
     DONE = "done"
     BUDGET_EXHAUSTED = "budget_exhausted"
     STALLED = "stalled"
@@ -131,6 +130,7 @@ class BaseSubAgent(ABC):
         self.plan: List[Dict[str, Any]] = []
         self.iteration = 0
         self.findings: List[Dict[str, Any]] = []
+        self._stale_iterations = 0
         self._start_time = time.time()
 
     # ── Main Loop ─────────────────────────────────────────────────
@@ -181,8 +181,7 @@ class BaseSubAgent(ABC):
                     self.plan = await self._replan_after_failure(task, command_result)
                 else:
                     self._mark_task_done(task)
-
-                self.plan = await self._update_plan(task, command_result)
+                    self.plan = await self._update_plan(task, command_result)
 
             # Determine end state
             if self._all_tasks_done():
@@ -285,6 +284,11 @@ class BaseSubAgent(ABC):
                         updated_plan.append({**t, "_done": True})
                     else:
                         updated_plan.append(t)
+                # Extend plan dynamically after success
+                self.plan = updated_plan
+                self._mark_task_done(task)
+                self.plan = await self._update_plan(task, result)
+                updated_plan = self.plan
 
             return {
                 "observations": state.get("observations", []),
@@ -384,10 +388,15 @@ class BaseSubAgent(ABC):
             (success, new_findings) — findings are dictionaries of discovered information.
         """
         if not result.success:
+            self._stale_iterations += 1
             return False, []
 
         findings = self._extract_findings(task, result)
         self.findings.extend(findings)
+        if findings:
+            self._stale_iterations = 0
+        else:
+            self._stale_iterations += 1
         return len(findings) > 0, findings
 
     def _extract_findings(
@@ -396,8 +405,7 @@ class BaseSubAgent(ABC):
         """Extract structured findings from tool output."""
         findings = []
         # Try to extract flags
-        import re
-        flags = re.findall(r"flag\{[a-zA-Z0-9_\-!@#$%^&*()+=]+\}", result.stdout, re.IGNORECASE)
+        flags = DAVE.FLAG_PATTERN.findall(result.stdout)
         for flag in flags:
             findings.append({"type": "flag", "value": flag, "source": result.tool_name})
         # Include parsed output
@@ -522,8 +530,7 @@ class BaseSubAgent(ABC):
 
     def _is_stalled(self) -> bool:
         """Detect if agent is stalled (3 consecutive iterations with no new findings)."""
-        recent = self.findings[-3:]
-        return len(recent) >= 3 and len(recent[-1]) == 0
+        return self._stale_iterations >= 3
 
     def _should_continue(self) -> bool:
         """Check if the agent should continue running."""

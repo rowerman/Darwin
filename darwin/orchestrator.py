@@ -22,6 +22,7 @@ from typing import Any, Dict, List, Optional
 log = logging.getLogger(__name__)
 
 from darwin.cteg import CTEG, TaskRecord
+from darwin.data_model import normalize_dkg_state, PipelineState, EndpointInfo
 from darwin.dkg import DKG
 from darwin.dpm import (
     DefenseCategory,
@@ -29,11 +30,11 @@ from darwin.dpm import (
     DefenseStateVector,
     SanitizationStrategy,
 )
-from darwin.dave import DAVE, ExploitAttempt, VerificationResult
+from darwin.dave import DAVE, ExploitAttempt, VerificationResult, parse_tool_stdout
 from darwin.dynamic_scaling import DynamicScalingEngine, ScalingLevel, compute_task_breadth
 from darwin.tools.mcp_client import MCPClientPool, load_mcp_config
 from darwin.tools.mcp_gateway import MCPGateway, ToolResult
-from darwin.tools.recon_server import create_recon_gateway
+from darwin.tools.recon_server import create_recon_gateway, parse_response
 from darwin.tools.attack_server import create_attack_gateway
 from darwin.utils.http_client import HTTPClient, ProbeClient, HTTPResponse
 from darwin.utils.llm import LLMSession
@@ -42,13 +43,15 @@ from darwin.sub_agents.base import SubAgentPool
 
 class OrchestratorPhase(str, Enum):
     INIT = "init"
-    RECON = "recon"
-    ANALYZE = "analyze"
-    EXPLOIT = "exploit"
-    BYPASS = "defense_bypass"
-    VERIFY = "verify"
+    BOOTSTRAP = "bootstrap"
+    EXPLOIT = "exploit"      # unified: LLM drives recon + analyze + exploit
     DONE = "done"
     FAILED = "failed"
+    # Legacy phases kept for backward compat
+    RECON = "recon"
+    ANALYZE = "analyze"
+    BYPASS = "defense_bypass"
+    VERIFY = "verify"
 
 
 @dataclass
@@ -95,6 +98,7 @@ class ExploitationPlan:
 # -- System Prompts (imported from darwin.prompts) --------------------------
 from darwin.prompts.orchestrator import (
     SYSTEM_PROMPT_ORCHESTRATOR,
+    SYSTEM_PROMPT_ORCHESTRATOR_UNIFIED,
     SYSTEM_PROMPT_ANALYZE,
     SYSTEM_PROMPT_LOGIN,
     SYSTEM_PROMPT_BYPASS,
@@ -141,6 +145,7 @@ class Orchestrator:
         max_context_tokens: int = 180000,
         compression_threshold: float = 0.4,
         browser_enabled: bool = False,
+        dkg: DKG | None = None,
     ):
         self.llm = llm_session or LLMSession.from_config("default")
         self.time_budget = time_budget
@@ -149,8 +154,8 @@ class Orchestrator:
         self.compression_threshold = compression_threshold
         self.browser_enabled = browser_enabled
 
-        # Core modules
-        self.dkg = DKG()
+        # Core modules — reuse external DKG for cross-run state persistence
+        self.dkg = dkg or DKG()
         self.dpm = DefensePerceptionModule(llm_session=self.llm)
         self.dave = DAVE(browser_enabled=browser_enabled)
         self.cteg = CTEG(storage_path="cteg_state.json")
@@ -177,6 +182,11 @@ class Orchestrator:
         self.step_count = 0
         self.start_time = 0.0
         self.flag_pattern = re.compile(r"flag\{[a-zA-Z0-9_\-!@#$%^&*()+=]+\}", re.IGNORECASE)
+        self._svc_research_done = False
+        self._analyze_done = False
+        self._research_done = False
+        self._solo_iterations = 0
+        self._multi_agent_iterations = 0
 
     async def run(
         self, task_description: str, target_url: str,
@@ -186,6 +196,8 @@ class Orchestrator:
         self.start_time = time.time()
         self._solo_cycle_context_injected = False
         self.target_url = target_url
+        self._provided_username = username
+        self._provided_password = password
 
         ts = time.strftime("%Y%m%d_%H%M%S", time.localtime())
         self._task_log_path = f"checkpoints/task_{ts}.json"
@@ -202,7 +214,7 @@ class Orchestrator:
             log.info("Connecting to %d MCP server(s) in parallel: %s",
                      len(enabled_mcp), ", ".join(c.name for c in enabled_mcp))
             connected = await self.mcp_pool.connect_all(
-                mcp_configs, per_server_timeout=15, total_timeout=10,
+                mcp_configs, per_server_timeout=30, total_timeout=90,
             )
             if connected > 0:
                 tools = self.mcp_pool.get_tool_names()
@@ -215,39 +227,30 @@ class Orchestrator:
         result: TaskResult | None = None
 
         try:
-            # ── Phase 1: Reconnaissance (tool-driven, not LLM) ────
-            await self._recon_phase(target_url)
-            self._task_log_event("info", "recon_done",
+            # ── Phase 1: Bootstrap scan (nmap + HTTP probe) ──
+            await self._bootstrap_scan(target_url)
+            self._task_log_event("info", "bootstrap_done",
                 dkg_summary=self.dkg.summary(), step=self.step_count)
-            self.dkg.save(self._checkpoint_path("recon"))
+            self.dkg.save(self._checkpoint_path("bootstrap"))
 
-            # Phase 1.5: Auto-login
-            await self._try_auto_login(target_url, username, password)
+            # ── Phase 1.5: Deep Recon (dirb, nikto, form_extract) ──
+            await self._deep_recon()
 
-            # ── Phase 2: Analyze (LLM researches services + identifies vulnerabilities) ──
-            await self._analyze_phase()
-            self._task_log_event("info", "analyze_done",
-                hypotheses=len(self.vulnerabilities),
-                dkg_summary=self.dkg.summary())
+            # ── Phase 1.6: Defense Detection (DPM) ──
+            await self._detect_defenses()
 
-            # Query CTEG for cross-task experience + RAG knowledge
+            # Query CTEG for cross-task experience
+            state = self._get_state()
             tech_query = " ".join(
-                s.get("version", "") or s.get("banner", "")
-                for s in self.dkg.query_nodes("Service")[:5]
+                s.version or s.banner
+                for s in state.services[:5]
+                if s.version or s.banner
             )
             cteg_hints = self.cteg.get_suggestions(
                 defense_type=self.defense_state.waf_type or "", vuln_type="",
             )
             if cteg_hints.get("bypass_strategies") or cteg_hints.get("exploit_strategies"):
                 self._task_log_event("info", "cteg_hints", hints=cteg_hints)
-
-            # ── Early flag check: scan discovered endpoints before main loop ──
-            early_flag = await self._check_response_for_flag(target_url)
-            if early_flag:
-                self._task_log_event("info", "early_flag_found",
-                    flag=early_flag.flag)
-                self.phase = OrchestratorPhase.DONE
-                return early_flag
 
             # ── Main Loop: B-driven mode switching ────────────────
             self._loop_count = 0
@@ -281,7 +284,31 @@ class Orchestrator:
                     loop=self._loop_count, b_value=B, mode=scaling_level.value)
 
                 if scaling_level == ScalingLevel.SOLO:
-                    result = await self._run_solo_cycle(target_url, cteg_hints)
+                    # Phase 1: Service research → known CVEs for each service (once)
+                    if not self._svc_research_done:
+                        await self._service_research()
+                        self._svc_research_done = True
+
+                    # Phase 2: Analyze recon data + service research → vuln hypotheses
+                    if not self._analyze_done:
+                        await self._analyze_phase()
+                        self._analyze_done = True
+
+                    # Phase 3: Research each vulnerability with tools
+                    if self.vulnerabilities and not self._research_done:
+                        await self._research_phase()
+                        self._research_done = True
+
+                    # Phase 4: Unified LLM loop (plan → exploit → replan)
+                    result = await self._unified_llm_loop(target_url, cteg_hints)
+
+                    # Allow up to 3 solo iterations before marking exhausted
+                    self._solo_iterations += 1
+                    if result is None or not result.success:
+                        if self._solo_iterations >= 3:
+                            self._surface_exhausted = True
+                    else:
+                        self._surface_exhausted = True
                 else:
                     # Coordinated or Distributed — dispatch to multi-agent cycle
                     # with scaling_level and CTEG hints for mode-differentiated behavior
@@ -292,7 +319,14 @@ class Orchestrator:
                         cteg_hints=cteg_hints,
                     )
                     if result is None:
-                        result = await self._run_solo_cycle(target_url, cteg_hints)
+                        result = await self._unified_llm_loop(target_url, cteg_hints)
+
+                    self._multi_agent_iterations += 1
+                    if result is None or not result.success:
+                        if self._multi_agent_iterations >= 3:
+                            self._surface_exhausted = True
+                    else:
+                        self._surface_exhausted = True
 
                 # Checkpoint DKG after each loop iteration
                 self.dkg.save(self._checkpoint_path(f"loop_{self._loop_count}"))
@@ -319,11 +353,16 @@ class Orchestrator:
                     result = flag_result
 
         except asyncio.TimeoutError:
+            elapsed = time.time() - self.start_time
+            if elapsed >= self.time_budget * 0.95:
+                error_msg = "Time budget exceeded"
+            else:
+                error_msg = f"Internal timeout at {elapsed:.0f}s (budget: {self.time_budget}s)"
             result = TaskResult(
                 success=False, steps=self.step_count,
                 tokens_used=self.llm.token_count,
-                time_elapsed=time.time() - self.start_time,
-                phase_at_end=self.phase, error="Time budget exceeded",
+                time_elapsed=elapsed,
+                phase_at_end=self.phase, error=error_msg,
             )
         except Exception as e:
             log.warning("Task failed with error: %s", e)
@@ -392,252 +431,517 @@ class Orchestrator:
 
         return result
 
-    # ── Phase 1: Reconnaissance ─────────────────────────────────────
+    # ── Phase 1: Bootstrap Scan (nmap only, then LLM takes over) ────
 
-    async def _recon_phase(self, target_url: str) -> None:
-        """Discover attack surface: ports, services, endpoints, parameters.
+    async def _bootstrap_scan(self, target_url: str) -> None:
+        """Minimal bootstrap: nmap port scan only. LLM drives all further recon.
 
-        Phase 1a: nmap port scan on the target host.
-        Phase 1b: for each HTTP service: fingerprint, enumerate, scan, extract endpoints.
+        Records discovered ports as Host/Service nodes in DKG.
+        Marks SSH ports as skip_exploit. Detects AD domain ports.
+        Does NOT probe HTTP services — the LLM decides which ports to probe.
         """
-        self.phase = OrchestratorPhase.RECON
+        self.phase = OrchestratorPhase.BOOTSTRAP
         from urllib.parse import urlparse as _up
         parsed = _up(target_url)
         host = parsed.hostname or target_url
         self.target_host = host
 
-        # ── Phase 1a: Network port scanning ───────────────────────
-        self._task_log_event("info", "recon_nmap_start", host=host)
-        nmap_result = await self.recon_gateway.call("nmap_scan", {"target": host})
+        self._task_log_event("info", "bootstrap_nmap", host=host)
+        nmap_result = await self.recon_gateway.call("nmap_full_scan", {"target": host})
+
         discovered_ports: list[dict] = []
         if nmap_result.success:
             discovered_ports = nmap_result.parsed_output.get("open_ports", [])
             log.info("nmap: %d open ports on %s", len(discovered_ports), host)
         else:
-            common_ports = [80, 443, 8080, 8443, 3000, 5000, 8000, 8888, 9090]
+            common_ports = [80, 443, 8080, 8443, 3000, 5000]
             default_port = parsed.port or (443 if parsed.scheme == "https" else 80)
             if default_port not in common_ports:
                 common_ports.insert(0, default_port)
             discovered_ports = [{"port": p, "state": "unknown", "service": "http"}
                                 for p in common_ports]
-            log.warning("nmap failed for %s, probing %d common HTTP ports", host, len(common_ports))
+            log.warning("nmap failed for %s, probing %d common HTTP ports",
+                       host, len(common_ports))
 
-        # Record host and services in DKG
         for p in discovered_ports:
-            port, svc_name = p["port"], p.get("service", "unknown")
             self.dkg.add_node("Host", f"host-{host}", {
                 "ip": host, "is_reachable": True, "is_internal": False,
             })
-            self.dkg.add_node("Service", f"svc-{host}-{port}", {
-                "port": port, "protocol": "tcp",
-                "version": p.get("version", "") or svc_name,
-                "banner": svc_name,
+            self.dkg.add_node("Service", f"svc-{host}-{p['port']}", {
+                "port": p["port"], "protocol": "tcp",
+                "version": p.get("version", "") or p.get("service", ""),
+                "banner": p.get("service", ""),
             })
 
-        # Detect AD domain environment from service ports
+        # AD detection
         _AD_PORTS = {445, 389, 636, 3268, 3269}
         if any(p["port"] in _AD_PORTS for p in discovered_ports):
             self.dkg.add_node("Domain", f"domain-{host}", {
                 "name": host, "dc_ip": host, "detected_by": "port_scan",
             })
 
-        # ── Phase 1b: HTTP-level recon on each TCP port ──────────
-        # Probe ALL open TCP ports for HTTP, not just nmap-identified ones.
-        # nmap often misidentifies non-standard HTTP ports (e.g. "rpc").
-        NON_HTTP_PORTS = {22}  # Skip SSH — infrastructure port, not attack surface
-        http_ports = [p["port"] for p in discovered_ports
-                      if p["port"] not in NON_HTTP_PORTS]
-        # Mark SSH services so exploit phases skip them
+        # SSH: always available for exploitation (LLM can brute-force or use provided creds)
+        _has_ssh_creds = bool(self._provided_username and self._provided_password)
         for p in discovered_ports:
-            if p["port"] in NON_HTTP_PORTS:
+            if p["port"] in {22}:
                 self.dkg.add_node("Service", f"svc-{host}-{p['port']}", {
                     "port": p["port"], "protocol": "tcp",
                     "version": p.get("version", "") or p.get("service", ""),
                     "banner": p.get("service", ""),
-                    "skip_exploit": True,  # never attempt exploitation
+                    "skip_exploit": False,
                 })
-        original_port = parsed.port or (443 if parsed.scheme == "https" else 80)
-        if original_port not in http_ports:
-            http_ports.insert(0, original_port)
-        self._discovered_http_ports = http_ports
 
-        self._http_ports_reachable: set[int] = set()  # track which ports responded to HTTP
-        for port in http_ports:
-            scheme = "https" if port == 443 else "http"
-            url = f"{scheme}://{host}" if port in (80, 443) else f"{scheme}://{host}:{port}"
-            await self._recon_http_service(url, port)
+        # Register SSH credentials in DKG when provided, and test connection
+        if _has_ssh_creds:
+            self.dkg.add_node("Credential", f"cred-ssh-{host}", {
+                "username": self._provided_username,
+                "password": self._provided_password,
+                "source_host": host,
+                "cred_type": "ssh",
+                "source": "user_provided",
+            })
+            # Test SSH connection to verify credentials work
+            try:
+                ssh_result = await self.attack_gateway.call("ssh_exec", {
+                    "host": host, "username": self._provided_username,
+                    "password": self._provided_password,
+                    "command": "id && uname -a",
+                })
+                if ssh_result.success and "uid=" in (ssh_result.stdout or ""):
+                    self.dkg.add_node("Session", f"session-ssh-{host}", {
+                        "host": host, "user": self._provided_username,
+                        "access_level": "user", "shell_type": "ssh",
+                        "established_by": "bootstrap-ssh",
+                    })
+                    self._task_log_event("info", "ssh_session_established",
+                        host=host, user=self._provided_username)
+            except Exception:
+                pass  # SSH test failure is non-fatal
 
-        # Mark nmap-discovered ports that failed HTTP as unreachable
-        for port in http_ports:
-            if port not in self._http_ports_reachable:
-                svc_id = f"svc-{host}-{port}"
+        # ── Non-HTTP service classification ─────────────────────────
+        # Map known ports to protocol types for database and cloud services.
+        # Creates Endpoint nodes so the LLM knows these services are reachable
+        # and can choose appropriate tools (mysql_query, redis_cmd, kubectl_*, etc.)
+        _DB_PORT_PROTO = {
+            3306: "mysql", 5432: "postgresql", 6379: "redis",
+            1433: "mssql", 1521: "oracle", 27017: "mongodb",
+        }
+        _K8S_PORTS = {6443, 10250, 10255}
+        _K8S_PROTO = "kubernetes"
+
+        for p in discovered_ports:
+            port = p["port"]
+            if port in _DB_PORT_PROTO:
+                proto = _DB_PORT_PROTO[port]
+                self.dkg.add_node("Endpoint", f"endpoint-{host}-{port}-{proto}", {
+                    "url": f"{proto}://{host}:{port}",
+                    "method": proto, "params": proto,
+                    "proto": proto,
+                    "discovered_by": "bootstrap-nmap",
+                })
+            elif port in _K8S_PORTS:
+                self.dkg.add_node("Endpoint", f"endpoint-{host}-{port}-k8s", {
+                    "url": f"https://{host}:{port}",
+                    "method": "GET", "params": _K8S_PROTO,
+                    "proto": _K8S_PROTO,
+                    "discovered_by": "bootstrap-nmap",
+                })
+
+        # Probe HTTP ports discovered by nmap (parallel)
+        http_ports = [p for p in discovered_ports
+                      if str(p.get("port")) not in {"22", "445", "389", "636", "3268", "3269"}]
+
+        async def _probe_one_port(port: int) -> tuple:
+            """Probe a single HTTP port, return (url, stdout, http_status, technologies, forms, api_paths)."""
+            scheme = "https" if port in {443, 8443} else "http"
+            url = f"{scheme}://{host}:{port}"
+            is_tls = scheme == "https"
+            try:
+                curl_result = await self.recon_gateway.call("curl_get",
+                    {"url": url, "follow_redirects": True,
+                     "insecure": True if is_tls else False})
+                if not curl_result.success and is_tls:
+                    url = f"http://{host}:{port}"
+                    curl_result = await self.recon_gateway.call("curl_get",
+                        {"url": url, "follow_redirects": True})
+                if not curl_result.success:
+                    return (url, "", 0, [], [], [])
+                stdout = getattr(curl_result, "stdout", "")
+                resp_len = len(stdout)
+                http_status = 200
+                first_line = stdout.split("\n")[0] if stdout else ""
+                if first_line.startswith("HTTP/"):
+                    parts = first_line.split()
+                    if len(parts) >= 2 and parts[1].isdigit():
+                        http_status = int(parts[1])
+                # Parse response
+                forms = []
+                api_paths = []
+                parse_sample = stdout[:50000]
+                if resp_len > 100000:
+                    parse_sample += stdout[-10000:]
                 try:
-                    if not self.dkg.update_node(svc_id, {"http_reachable": False}):
-                        log.warning("DKG update_node failed for %s", svc_id)
+                    parse_result = await self.recon_gateway.call("response_parse",
+                        {"content": parse_sample})
+                    if parse_result.success:
+                        parsed = getattr(parse_result, "parsed_output", {})
+                        forms = parsed.get("forms", [])
                 except Exception:
-                    pass  # node may not exist
+                    pass
+                # Extract API paths from large JS bundles
+                if resp_len > 100000:
+                    import re as _re
+                    for pattern in [r'["\x27](/api/[^"\x27]{2,60})["\x27]',
+                                   r'fetch\(["\x27](/[^"\x27]{2,60})["\x27]\)']:
+                        for m in _re.finditer(pattern, stdout[:200000]):
+                            path = m.group(1)
+                            if not path.endswith(('.js', '.css', '.png', '.ico')):
+                                api_paths.append(path)
+                # whatweb
+                technologies = []
+                try:
+                    ww = await self.recon_gateway.call("whatweb_scan",
+                        {"target_url": url})
+                    if ww.success:
+                        technologies = getattr(ww, "parsed_output", {}).get("technologies", [])
+                except Exception:
+                    pass
+                return (url, stdout, http_status, technologies, forms, api_paths)
+            except Exception:
+                return (url, "", 0, [], [], [])
+
+        # Run all port probes in parallel
+        probe_tasks = [asyncio.create_task(_probe_one_port(p["port"])) for p in http_ports]
+        probe_results = await asyncio.gather(*probe_tasks, return_exceptions=True)
+
+        # Collect API paths to probe in a second pass
+        api_endpoints_to_probe: list[str] = []
+        for result in probe_results:
+            if isinstance(result, Exception):
+                continue
+            url, stdout, http_status, technologies, forms, api_paths = result
+            if not stdout:
+                continue
+            resp_len = len(stdout)
+            self.dkg.add_node("Endpoint", f"ep-{url}", {
+                "url": url, "method": "GET", "params": "",
+                "sample_status": http_status,
+                "sample_response": stdout[:500],
+                "response_size": resp_len,
+                "discovered_by": "bootstrap",
+            })
+            for form in forms:
+                action = form.get("action", "")
+                form_url = (action if action.startswith("http")
+                            else f"{url.rstrip('/')}/{action.lstrip('/')}")
+                params = ",".join(i.get("name", "") for i in form.get("inputs", []))
+                self.dkg.add_node("Endpoint", f"ep-form-{form_url[:40]}", {
+                    "url": form_url, "method": form.get("method", "POST"),
+                    "params": params, "body_format": "form",
+                    "discovered_by": "bootstrap",
+                })
+            for tech in technologies:
+                self.dkg.add_node("Service", f"tech-{tech[:30]}", {
+                    "port": 0, "protocol": "HTTP",
+                    "version": tech, "banner": tech,
+                    "discovered_by": "bootstrap",
+                })
+            for path in api_paths[:20]:
+                api_endpoints_to_probe.append(f"{url.rstrip('/')}{path}")
+
+        # Second pass: probe discovered API paths (also parallel)
+        probed_apis: set[str] = set()
+        async def _probe_api_path(ep_url: str):
+            if ep_url in probed_apis:
+                return
+            probed_apis.add(ep_url)
+            try:
+                r = await self.recon_gateway.call("curl_get",
+                    {"url": ep_url, "follow_redirects": True})
+                if r.success:
+                    out = getattr(r, "stdout", "")
+                    st = 200
+                    fl = out.split("\n")[0] if out else ""
+                    if fl.startswith("HTTP/"):
+                        pts = fl.split()
+                        if len(pts) >= 2 and pts[1].isdigit():
+                            st = int(pts[1])
+                    self.dkg.add_node("Endpoint", f"ep-api-{ep_url[:50]}", {
+                        "url": ep_url, "method": "GET", "params": "",
+                        "sample_status": st, "sample_response": out[:500],
+                        "response_size": len(out),
+                        "discovered_by": "bootstrap-api-probe",
+                    })
+            except Exception:
+                pass
+
+        if api_endpoints_to_probe:
+            api_tasks = [asyncio.create_task(_probe_api_path(u))
+                         for u in api_endpoints_to_probe[:30]]
+            await asyncio.gather(*api_tasks, return_exceptions=True)
+
+        self._discovered_ports = discovered_ports
         self.step_count += 1
 
-    async def _recon_http_service(self, url: str, port: int) -> None:
-        """Recon a single HTTP service: fingerprint, enumerate, scan, extract endpoints."""
-        try:
-            baseline = await self.client.get_baseline(url)
-        except Exception:
-            log.info("HTTP recon skipped for %s (connection failed)", url)
+    # ── Deep Recon (after bootstrap, before service research) ───────
+
+    async def _deep_recon(self) -> None:
+        """Deep reconnaissance on discovered HTTP endpoints.
+
+        Runs after bootstrap (which only probes root URLs) and before
+        service_research/analyze. Uses dirb, nikto, and form_extract to
+        discover the full attack surface: directories, known vulns, forms.
+        """
+        endpoints = self.dkg.query_nodes("Endpoint")
+        if not endpoints:
             return
-        self._http_ports_reachable.add(port)  # mark port as HTTP-reachable
+        log.info("_deep_recon: scanning %d endpoints", len(endpoints))
 
-        # whatweb technology fingerprint
-        ww = await self.recon_gateway.call("whatweb_scan", {"target_url": url})
-        technologies = ww.parsed_output.get("technologies", []) if ww.success else []
-        for tech in technologies:
-            self.dkg.add_node("Service", f"tech-{url}-{tech}", {
-                "port": port, "protocol": "HTTP", "version": tech, "banner": tech,
-            })
-        if technologies:
-            log.info("whatweb %s: %s", url, ", ".join(technologies[:5]))
+        async def _probe_one(endpoint: dict):
+            url = endpoint.get("url", "")
+            ep_id = endpoint.get("id", "") or f"ep-{url[:50]}"
+            if not url or not url.startswith("http"):
+                return
+            resp_len = endpoint.get("response_size", 0)
+            sample = endpoint.get("sample_response", "")
+            if "403 Forbidden" in sample or "connection refused" in sample.lower():
+                return
 
-        # dirb directory enumeration
-        dirb = await self.recon_gateway.call("dirb_scan", {"target_url": url})
-        if dirb.success:
-            for p in dirb.parsed_output.get("discovered_paths", []):
-                self.dkg.add_node("Endpoint", f"endpoint-{url}{p['path']}", {
-                    "url": f"{url.rstrip('/')}{p['path']}", "method": "GET",
-                    "params": "", "auth_required": "401" in p.get("code", ""),
-                })
-            log.info("dirb %s: %d paths", url, len(dirb.parsed_output.get("discovered_paths", [])))
+            scanned = False
 
-        # nikto vulnerability scan
-        nikto = await self.recon_gateway.call("nikto_scan", {"target_url": url})
-        if nikto.success:
-            for f in nikto.parsed_output.get("findings", [])[:10]:
-                self.dkg.add_node("Vulnerability", f"nikto-{url}-{f['detail'][:40]}", {
-                    "vuln_type": f.get("type", "info"), "endpoint": url, "parameter": "",
-                    "severity": "low", "source": "nikto", "detail": f.get("detail", ""),
-                })
-            log.info("nikto %s: %d findings", url, len(nikto.parsed_output.get("findings", [])))
-
-        # nmap vulners scan — detect CVEs for discovered services
-        try:
-            from urllib.parse import urlparse as _up
-            target_host = _up(url).hostname or "localhost"
-            vulners = await self.recon_gateway.call("nmap_vulners_scan", {
-                "target": target_host, "ports": str(port),
-            })
-            if vulners.success:
-                vuln_count = 0
-                for line in vulners.stdout.split("\n"):
-                    if "CVE-" in line:
-                        vuln_count += 1
-                        cve_match = re.search(r"(CVE-\d{4}-\d+)", line)
-                        if cve_match:
-                            cve_id = cve_match.group(1)
-                            self.dkg.add_node("Vulnerability", f"cve-{url}-{cve_id}", {
-                                "vuln_type": cve_id, "endpoint": url, "parameter": "",
-                                "severity": "high", "source": "nmap_vulners",
-                                "detail": line.strip()[:200],
+            # Fork based on response type (from bootstrap response_parse)
+            if resp_len > 1000000:
+                # SPA / large JS bundle — dirb/nikto useless.
+                # Probe API paths already extracted by bootstrap.
+                api_eps = [e for e in self.dkg.query_nodes("Endpoint")
+                           if e.get("discovered_by", "").startswith("bootstrap-api-")
+                           and e.get("url", "").startswith(url)]
+                for api_ep in api_eps[:15]:
+                    api_url = api_ep.get("url", "")
+                    try:
+                        r = await self.recon_gateway.call("curl_get",
+                            {"url": api_url, "follow_redirects": True})
+                        if r.success:
+                            out = getattr(r, "stdout", "")
+                            st = 200
+                            fl = out.split("\n")[0] if out else ""
+                            if fl.startswith("HTTP/"):
+                                pts = fl.split()
+                                if len(pts) >= 2 and pts[1].isdigit():
+                                    st = int(pts[1])
+                            self.dkg.add_node("Endpoint", f"ep-probe-{api_url[:50]}", {
+                                "url": api_url, "method": "GET", "params": "",
+                                "sample_status": st, "sample_response": out[:500],
+                                "response_size": len(out),
+                                "discovered_by": "deep-recon-api-probe",
                             })
-                if vuln_count > 0:
-                    log.info("nmap_vulners %s:%d: %d CVEs found", target_host, port, vuln_count)
-                else:
-                    log.info("nmap_vulners %s:%d: scan completed, no CVEs detected", target_host, port)
-            else:
-                log.info("nmap_vulners %s:%d: scan failed — %s", target_host, port,
-                         vulners.stderr[:100] if vulners.stderr else "unknown error")
-        except Exception as e:
-            log.warning("nmap_vulners %s:%d: exception — %s", target_host, port, e)
+                            if 0 < len(out) < 100000:
+                                rp = await self.recon_gateway.call("response_parse",
+                                    {"content": out[:50000]})
+                                if rp.success:
+                                    parsed = getattr(rp, "parsed_output", {})
+                                    for form in parsed.get("forms", []):
+                                        self._add_form_endpoint(form, url)
+                    except Exception:
+                        pass
+                scanned = True
 
-        # Pull OpenAPI/Swagger spec to discover API endpoints + their HTTP methods
-        for doc_path in ["/openapi.json", "/docs", "/api/docs", "/swagger.json"]:
-            try:
-                import urllib.request as _ur, json as _js
-                spec_url = f"{url.rstrip('/')}{doc_path}"
-                req = _ur.Request(spec_url, headers={"Accept": "application/json"})
-                with _ur.urlopen(req, timeout=5) as resp:
-                    if "json" in resp.headers.get("content-type", ""):
-                        spec = _js.loads(resp.read())
-                        paths = spec.get("paths", {})
-                        for path, methods in paths.items():
-                            for method, details in methods.items():
-                                full_url = f"{url.rstrip('/')}{path}"
-                                # Extract params from OpenAPI spec
-                                spec_params = []
-                                body_format = ""
-                                if isinstance(details, dict):
-                                    for p in details.get("parameters", []):
-                                        if p.get("in") == "query":
-                                            spec_params.append(p.get("name", ""))
-                                    rb = details.get("requestBody", {})
-                                    if isinstance(rb, dict):
-                                        ct = rb.get("content", {})
-                                        if "application/json" in ct:
-                                            body_format = "json"
-                                param_str = ", ".join(spec_params) if spec_params else ""
-                                # Update or create DKG Endpoint
-                                existing = [ep for ep in self.dkg.query_nodes("Endpoint")
-                                           if ep.get("url", "") == full_url]
-                                if existing:
-                                    try:
-                                        update = {"method": method.upper()}
-                                        if param_str:
-                                            update["params"] = param_str
-                                        if body_format:
-                                            update["body_format"] = body_format
-                                        if not self.dkg.update_node(existing[0]["id"], update):
-                                            log.warning("DKG update_node failed for %s", full_url)
-                                    except Exception as e:
-                                        log.warning("DKG OpenAPI update error %s: %s", full_url, e)
-                                else:
-                                    self.dkg.add_node("Endpoint", f"endpoint-{full_url}", {
-                                        "url": full_url, "method": method.upper(),
-                                        "params": param_str, "body_format": body_format,
-                                        "auth_required": False,
+            elif resp_len < 200000:
+                # Small HTML page — full recon: gobuster + nikto + form_extract
+                try:
+                    bust_result = await self.recon_gateway.call("gobuster_dir",
+                        {"target_url": url})
+                    scanned = True
+                    if bust_result.success:
+                        paths = getattr(bust_result, "parsed_output", {}).get("discovered_paths", [])
+                        for pi in paths[:15]:
+                            path = pi.get("path", "")
+                            if path:
+                                ep_url = f"{url.rstrip('/')}{path}"
+                                self.dkg.add_node("Endpoint", f"ep-dirb-{path[:40]}", {
+                                    "url": ep_url, "method": "GET", "params": "",
+                                    "sample_status": pi.get("code", 200),
+                                    "discovered_by": "deep-recon-dirb",
+                                })
+                except Exception:
+                    pass
+                try:
+                    nikto_result = await self.recon_gateway.call("nikto_scan",
+                        {"target_url": url})
+                    if nikto_result.success:
+                        findings = getattr(nikto_result, "stdout", "")
+                        if findings and "0 items" not in findings:
+                            for line in findings.split("\n")[:10]:
+                                line = line.strip()
+                                if line and "OSVDB" not in line:
+                                    self.dkg.add_node("Vulnerability", f"vuln-nikto-{len(line[:20])}", {
+                                        "vuln_type": "XSS", "endpoint": url,
+                                        "parameter": "", "severity": "low",
+                                        "source": "nikto", "detail": line[:200],
                                     })
-                            if paths:
-                                log.info("OpenAPI: %d paths found via %s — DKG methods updated",
-                                        len(paths), doc_path)
-                        break  # success — stop trying other paths
+                except Exception:
+                    pass
+                try:
+                    form_result = await self.recon_gateway.call("form_extract",
+                        {"url": url})
+                    if form_result.success:
+                        parsed = getattr(form_result, "parsed_output", {})
+                        for form in parsed.get("forms", []):
+                            self._add_form_endpoint(form, url)
+                except Exception:
+                    pass
+
+            elif "json" in sample.lower() or sample.strip().startswith("{"):
+                # JSON/API response — curl + response_parse to extract structure
+                try:
+                    rp = await self.recon_gateway.call("response_parse",
+                        {"content": sample[:50000]})
+                    if rp.success:
+                        parsed = getattr(rp, "parsed_output", {})
+                        for key in parsed.get("keys", [])[:10]:
+                            probe_url = f"{url.rstrip('/')}/{key}"
+                            r2 = await self.recon_gateway.call("curl_get",
+                                {"url": probe_url, "follow_redirects": True})
+                            if r2.success:
+                                out = getattr(r2, "stdout", "")
+                                self.dkg.add_node("Endpoint", f"ep-api-{key[:40]}", {
+                                    "url": probe_url, "method": "GET", "params": "",
+                                    "sample_status": 200, "sample_response": out[:500],
+                                    "discovered_by": "deep-recon-json-probe",
+                                })
+                    scanned = True
+                except Exception:
+                    pass
+
+            # Mark scanned to prevent redundant agent work
+            if scanned:
+                self.dkg.add_node("Endpoint", ep_id, {
+                    "url": url, "deep_recon_done": True,
+                    "discovered_by": "deep-recon",
+                })
+
+        def _add_form_endpoint(form: dict, base_url: str):
+            action = form.get("action", "")
+            form_url = (action if action.startswith("http")
+                        else f"{base_url.rstrip('/')}/{action.lstrip('/')}")
+            params = ",".join(i.get("name", "") for i in form.get("inputs", []))
+            if params:
+                self.dkg.add_node("Endpoint", f"ep-form-{form_url[:40]}", {
+                    "url": form_url, "method": form.get("method", "POST"),
+                    "params": params, "body_format": "form",
+                    "discovered_by": "deep-recon-form",
+                })
+
+        # Run deep recon in parallel across endpoints (max 6 concurrent)
+        batch = [ep for ep in endpoints[:8] if ep.get("url","").startswith("http")]
+        if batch:
+            tasks = [asyncio.create_task(_probe_one(ep)) for ep in batch]
+            await asyncio.gather(*tasks, return_exceptions=True)
+        log.info("_deep_recon: complete")
+
+    async def _detect_defenses(self) -> None:
+        """Run DPM defense probes on discovered endpoints and update defense_state.
+
+        Sends filter probes (classes A-E) to up to 3 GET endpoints, then
+        runs the rule-based DPM detection pipeline (no LLM cost).
+        """
+        endpoints = self.dkg.query_nodes("Endpoint")
+        get_endpoints = [
+            e for e in endpoints
+            if e.get("url", "").startswith("http") and e.get("method", "GET") == "GET"
+        ][:3]
+        if not get_endpoints:
+            return
+
+        all_probe_results = []
+        all_responses = []
+        for ep in get_endpoints:
+            url = ep["url"]
+            param = (ep.get("params") or ["q"])[0] if ep.get("params") else "q"
+            try:
+                probe_results = await self.probe_client.send_all_probe_classes(url, param)
+                all_probe_results.extend(probe_results)
+                all_responses.extend(
+                    p.response for p in probe_results if hasattr(p, "response")
+                )
             except Exception:
                 continue
 
-        # Record HTTP service
-        v = technologies[0] if technologies else "unknown"
-        self.dkg.add_node("Service", f"svc-http-{port}", {
-            "port": port, "protocol": "HTTP", "version": v, "banner": "",
+        if all_probe_results:
+            self.defense_state = self.dpm.detect(
+                all_probe_results, all_responses, use_llm=False,
+            )
+            self._task_log_event("info", "defense_detected",
+                waf_type=self.defense_state.waf_type,
+                defense_category=self.defense_state.defense_category,
+                defense_complexity=self.defense_state.defense_complexity,
+            )
+
+    async def _verify_flag(
+        self, flag: str, stdout: str, tc_args: dict, elapsed_ms: int = 0,
+    ) -> tuple[bool, str]:
+        """Verify a flag with full DAVE L1+L4 when HTTP data is available.
+
+        Falls back to verify_basic for non-HTTP tools (sqlmap, ffuf, etc.).
+        """
+        parsed = parse_tool_stdout(stdout)
+        if parsed["status_code"] > 0:
+            http_resp = HTTPResponse(
+                url=str(tc_args.get("url", "")),
+                status_code=parsed["status_code"],
+                headers=parsed["headers"],
+                body=parsed["body"],
+                elapsed_ms=float(elapsed_ms),
+            )
+            attempt = ExploitAttempt(
+                target_url=str(tc_args.get("url", "")),
+                vuln_type=str(tc_args.get("tool", "")),
+                payload=str(tc_args.get("payload", "")),
+                http_response=http_resp,
+                tool_stdout=stdout,
+            )
+            v_result = await self.dave.verify(attempt)
+            if v_result.flag_found:
+                return True, f"DAVE L1+L4: {v_result.flag_value}"
+            return False, f"DAVE: {v_result.summary()}"
+        return DAVE.verify_basic(flag, stdout)
+
+    def _record_auth_protected_service(
+        self, url: str, port: int, version: str, error: str
+    ) -> None:
+        """Record a service that requires authentication in DKG.
+
+        Instead of silently skipping TLS/auth-protected services, create
+        DKG nodes so the LLM can discover and attempt authentication during
+        the analyze/plan phases.
+        """
+        host = url.replace("http://", "").replace("https://", "").split(":")[0]
+        err_short = error[:120]
+
+        # Record as a service that needs auth
+        self.dkg.add_node("Service", f"svc-auth-{host}-{port}", {
+            "port": port, "protocol": "tcp",
+            "version": version or "unknown service",
+            "banner": f"auth-protected: {err_short}",
+            "needs_auth": True,
         })
 
-        # Extract links and form inputs from HTML
-        body = baseline.body
-        from urllib.parse import urljoin as _uj, urlparse as _up2
-        for link in self._extract_links_from_html(body, url):
-            pq = _up2(link).query
-            self.dkg.add_node("Endpoint", f"endpoint-{link}", {
-                "url": link, "method": "GET", "params": pq, "auth_required": False,
-            })
-        # Extract parameter names from HTML: <input> names
-        for name in set(re.findall(r'<input[^>]+name=["\'](\w+)["\']', body, re.I)):
-            self.dkg.add_node("Endpoint", f"endpoint-{url}-param-{name}", {
-                "url": url, "method": "POST", "params": name, "auth_required": False,
-            })
-        # Extract <select> names/ids (often used for JSON params like job_type)
-        for sel_id in set(re.findall(r'<select[^>]+(?:id|name)=["\']([^"\']+)["\']', body, re.I)):
-            # Normalize: job-type → job_type
-            normalized = sel_id.replace("-", "_")
-            for variant in {sel_id, normalized}:
-                self.dkg.add_node("Endpoint", f"endpoint-{url}-param-{variant}", {
-                    "url": url, "method": "POST", "params": variant, "auth_required": False,
-                })
-        # Extract JSON keys from inline JavaScript (fetch body / JSON.stringify)
-        for js_key in set(re.findall(r'"(\w+)"\s*:', body)):
-            if js_key.lower() not in ('content-type', 'method', 'headers', 'body',
-                                        'type', 'id', 'name', 'status', 'url',
-                                        'true', 'false', 'null', 'title'):
-                self.dkg.add_node("Endpoint", f"endpoint-{url}-param-{js_key}", {
-                    "url": url, "method": "POST", "params": js_key, "auth_required": False,
-                })
+        # Create an Endpoint placeholder so the LLM sees it
+        ep_url = f"https://{host}:{port}" if port == 443 else f"https://{host}:{port}"
+        self.dkg.add_node("Endpoint", f"endpoint-auth-{host}-{port}", {
+            "url": ep_url, "method": "UNKNOWN",
+            "params": "", "body_format": "",
+            "auth_required": True,
+            "auth_note": f"Connection failed: {err_short}. "
+                        f"Use curl_get or http_post with appropriate auth headers "
+                        f"(Bearer token, client cert, or Basic auth). "
+                        f"If kubernetes, check ~/.kube/config or KUBECONFIG env var.",
+        })
+
+        log.info("Auth-protected service recorded: %s (port %d) — %s",
+                 url, port, err_short[:80])
 
     # ── Login ─────────────────────────────────────────────────────
-
     async def _try_auto_login(
         self, target_url: str, username: str | None, password: str | None,
     ) -> None:
@@ -696,10 +1000,68 @@ class Orchestrator:
             return True
         return False
 
+    # ── Unified State Access ──────────────────────────────────────
+
+    def _get_state(self) -> PipelineState:
+        """Return a typed snapshot of the current DKG state.
+
+        All phases call this instead of raw dkg.query_nodes() + dict access.
+        """
+        return normalize_dkg_state(self.dkg)
+
     # ── Tool Result Feedback ─────────────────────────────────────
 
     EXPLOIT_TOOLS = {"sqlmap_test", "send_payload", "command_injection_test",
                      "xss_reflection_test", "ffuf_fuzz", "http_post"}
+
+    @staticmethod
+    def _format_parse_summary(parsed: dict) -> str:
+        """Convert parse_response output to a compact (<800 char) string."""
+        lines = []
+        ct = parsed.get("type", "?")
+        size = parsed.get("size_bytes", 0)
+        if size > 1048576:
+            size_str = f"{size / 1048576:.1f}MB"
+        elif size > 1024:
+            size_str = f"{size / 1024:.1f}KB"
+        else:
+            size_str = f"{size}B"
+        lines.append(f"Type={ct}, Size={size_str}")
+
+        flags = parsed.get("flags", [])
+        if flags:
+            lines.append(f"FLAGS={flags}")
+
+        if ct == "html":
+            if parsed.get("title"):
+                lines.append(f"Title: {parsed['title'][:80]}")
+            lines.append(f"Forms={parsed.get('forms',0)} Inputs={parsed.get('inputs',0)} Links={parsed.get('links_count',0)}")
+            apis = parsed.get("api_paths", [])
+            if apis:
+                lines.append(f"API: {' '.join(apis[:8])[:180]}")
+            eps = parsed.get("endpoints", [])
+            if eps:
+                lines.append(f"EP: {' '.join(eps[:10])[:200]}")
+            sc = parsed.get("scripts", [])
+            if sc:
+                lines.append(f"JS: {' '.join(sc[:5])[:150]}")
+        elif ct == "json":
+            tlk = parsed.get("top_level_keys")
+            if tlk:
+                lines.append(f"Keys: {tlk}")
+            iv = parsed.get("interesting_values", [])
+            for item in iv[:5]:
+                lines.append(f"  [{item['path']}]: {item['value'][:80]}")
+        elif ct == "text":
+            urls = parsed.get("urls", [])
+            if urls:
+                lines.append(f"URLs: {' '.join(urls[:6])}")
+            jwts = parsed.get("jwt_tokens", [])
+            if jwts:
+                lines.append(f"JWT: {jwts[:3]}")
+
+        result = "\n".join(lines)
+        return result[:800]
 
     def _format_tool_feedback(
         self, tc_name: str, tc_args: dict, result, defence_probe: str = ""
@@ -732,12 +1094,36 @@ class Orchestrator:
         if defence_probe:
             parts.append(defence_probe)
 
+        # Auto-parse: for large or structured responses, append a compact summary.
+        # curl_get / http_post responses > 5000 bytes often contain HTML or JSON
+        # that gets truncated at 1500 chars — parse_response extracts the structure.
+        _PARSABLE_TOOLS = {"curl_get", "http_post"}
+        if (stdout and tc_name in _PARSABLE_TOOLS and len(stdout) > 5000
+                and status == "SUCCESS"):
+            try:
+                content_type = "auto"
+                # If the response includes HTTP headers, try Content-Type hint
+                if stdout.startswith("HTTP/"):
+                    ct_match = re.search(r'Content-Type:\s*(\S+)', stdout, re.I)
+                    if ct_match:
+                        ct_val = ct_match.group(1).lower()
+                        if "html" in ct_val:
+                            content_type = "html"
+                        elif "json" in ct_val:
+                            content_type = "json"
+                parsed = parse_response(stdout, content_type=content_type)
+                summary = self._format_parse_summary(parsed)
+                if summary:
+                    parts.append(f"PARSED SUMMARY:\n{summary}")
+            except Exception:
+                pass  # best-effort, never break feedback
+
         return "\n".join(parts)
 
     # Per-vuln-type probe payloads for defense detection
     _PROBE_PAYLOADS = {
         "sqlmap_test":           ("' OR '1'='1", "SQLi"),
-        "send_payload":          ("' OR '1'='1", "SQLi"),
+        "send_payload":          ("{{7*7}}", "injection"),
         "command_injection_test": ("; id", "CMDi"),
         "xss_reflection_test":   ("<script>alert(1)</script>", "XSS"),
         "ffuf_fuzz":             ("' OR '1'='1", "SQLi"),
@@ -783,12 +1169,15 @@ class Orchestrator:
                 reflected = probe_val in p_body
 
                 if p_status >= 500 and b_status < 400:
+                    # 500 with injection probe = backend is processing input.
+                    # For SSTI this is actually positive signal (template engine
+                    # tried to render {{7*7}} and crashed).
                     return (
                         f"\n[DEFENSE PROBE — {probe_type}] "
                         f"Probe caused HTTP {p_status} (baseline {b_status}). "
-                        f"Injection reached backend but failed — "
-                        f"keywords may have been filtered. "
-                        f"Try bypass: double-write, case variation, or encoding."
+                        f"Backend IS processing the input — crash/difference confirms "
+                        f"the parameter reaches server-side logic. "
+                        f"Try: different payload syntax or encodings."
                     )
                 elif p_status in (403, 406, 429):
                     return (
@@ -839,151 +1228,78 @@ class Orchestrator:
         except Exception:
             pass
 
-    # ── Unified LLM-Driven Loop ─────────────────────────────────────
+    # ── Unified LLM-Driven Loop (v2: LLM drives EVERYTHING) ──────────
 
-    async def _run_solo_cycle(self, target_url: str, cteg_hints: dict | None = None) -> TaskResult | None:
-        """LLM-driven post-recon loop: the LLM decides all actions.
+    async def _unified_llm_loop(
+        self, target_url: str, cteg_hints: dict | None = None
+    ) -> TaskResult | None:
+        """Unified LLM loop: from bootstrap onward, the LLM drives all actions.
 
-        The LLM receives DKG state, CTEG suggestions, and all tool definitions.
-        It iteratively chooses tools to call, sees results, and adapts.
-        Replaces the separate analyze → exploit → bypass phases.
+        No separate recon/analyze/systematic phases. The LLM receives bootstrap
+        nmap results + all tools, then plans and executes everything: HTTP probe,
+        fingerprint, enumerate, authenticate, data discovery, exploit.
+
+        Plan → execute → observe → replan, all in one loop.
         """
-        MAX_ITER = 10
+        MAX_ITER = 12
         if not self._solo_cycle_context_injected:
-            self.llm.replace_system_prompt(SYSTEM_PROMPT_ORCHESTRATOR)
+            self.llm.replace_system_prompt(SYSTEM_PROMPT_ORCHESTRATOR_UNIFIED)
             self._solo_cycle_context_injected = True
-            vuln_summary = self._format_vulnerability_summary()
-            if vuln_summary and vuln_summary != "(none)":
-                self.llm.add_context_message(
-                    f"[ANALYZE PHASE COMPLETE] {len(self.vulnerabilities)} "
-                    f"vulnerabilities identified:\n\n{vuln_summary}\n\n"
-                    f"Execute the suggested tools for each vulnerability above.",
-                    role="user",
-                )
+
+            # Build initial context from bootstrap DKG state
+            state = self._get_state()
+            services_lines = []
+            for s in state.services:
+                if s.port:
+                    skip = " [skip_exploit]" if s.skip_exploit else ""
+                    services_lines.append(
+                        f"  port {s.port}/{s.protocol}: {s.version or s.banner}{skip}"
+                    )
+            services_text = "\n".join(services_lines) if services_lines else "(none)"
+
+            initial_prompt = (
+                f"Target: {target_url}\n\n"
+                f"## Reconnaissance Complete\n"
+                f"All scanning, probing, enumeration, vulnerability analysis, and research done.\n"
+                f"- {len(state.services)} services, {len(state.endpoints)} endpoints\n"
+                f"- {len(self.vulnerabilities)} vulnerability hypotheses researched\n\n"
+                f"{services_text}\n"
+                f"## Your Mission\n"
+                f"Generate an EXPLOIT plan. For each vulnerability, use the appropriate "
+                f"exploit tool. Credential discovery (try_login, reading config files) is "
+                f"allowed but keep it to 1-2 tasks — the majority must be exploitation.\n"
+                f"If blocked, try bypass techniques or alternative tools.\n"
+                f"Adapt the plan after each task based on results.\n"
+            )
+            self.llm.add_context_message(initial_prompt, role="user")
         else:
-            # Preserve conversation history from prior cycles.
-            # Compress if needed to stay within token budget, then inject a
-            # lightweight transition marker so the LLM knows context changed.
             self._maybe_compress()
-            dkg_brief = self.dkg.summary()
-            flag_count = len(self.dkg.query_nodes("Flag"))
+            state = self._get_state()
+            flag_count = len(state.flags)
             self.llm.add_context_message(
-                f"[CYCLE TRANSITION] New solo cycle starting. "
-                f"Flags found so far: {flag_count}. "
-                f"DKG summary: {dkg_brief}",
+                f"[CYCLE TRANSITION] New loop cycle. "
+                f"Flags found: {flag_count}. "
+                f"Endpoints: {len(state.endpoints)}, Services: {len(state.services)}.",
                 role="user",
             )
-        self._exploit_chain: list[dict] = []  # track steps for CTEG learning
 
-        # ── Phase 3: Research (first cycle only) ──
+        self._exploit_chain: list[dict] = []
+
+        # Generate initial plan
         if not self.exploitation_plan or not self.exploitation_plan.tasks:
             self.exploitation_plan = await self._generate_exploitation_plan(target_url, cteg_hints)
 
-        # ── Phase 4: Systematic exploit pass (first cycle only) ──
-        if not getattr(self, '_systematic_done', False):
-            self._systematic_done = True
-            sys_result = await self._systematic_exploit_pass(target_url)
-            if sys_result:
-                return sys_result
-
-        # Inject systematic exploit summary (first cycle only)
-        if not getattr(self, '_systematic_done', False):
-            system_vulns = self.dkg.query_nodes("Vulnerability")
-        else:
-            system_vulns = []
-        if system_vulns:
-            mapped_types = {"sqli", "sql", "xss", "cmdi", "command injection",
-                           "ssti", "lfi", "idor", "idor-url-path", "auth", "csrf"}
-            tested = [v for v in system_vulns
-                     if v.get("vuln_type", "").lower() in mapped_types]
-            untested = [v for v in system_vulns
-                       if v.get("vuln_type", "").lower() not in mapped_types]
-            untested_types = sorted(set(v.get("vuln_type", "unknown") for v in untested))
-            msg = (
-                f"[SYSTEMATIC EXPLOIT PASS COMPLETE] "
-                f"Tested {len(tested)} mapped vulnerability nodes "
-                f"(sqlmap_test, xss_reflection_test, command_injection_test, curl_get). "
-                f"No flag found."
-            )
-            if untested:
-                msg += (
-                    f" {len(untested)} nodes with types {untested_types} "
-                    f"were NOT tested automatically. Try these manually."
-                )
-            # List what was tested so LLM doesn't repeat
-            tested_items = []
-            for v in tested[:8]:
-                tool = v.get("test_tool", v.get("suggested_tool", "tool"))
-                ep = v.get("endpoint", "")
-                if ep:
-                    tested_items.append(f"{tool} on {ep}")
-            if tested_items:
-                msg += f" Already tested: {'; '.join(tested_items)}."
-            # Highlight specific findings worth following up
-            highlights = []
-            for v in tested:
-                vt = (v.get("vuln_type") or "").lower()
-                ep = v.get("endpoint", "")
-                if vt == "xss" and ep:
-                    highlights.append(
-                        f"  XSS: systematic pass found script reflection on {ep}. "
-                        f"Try escalating to cookie theft or data exfiltration."
-                    )
-                elif vt in ("sqli", "sql") and ep:
-                    highlights.append(
-                        f"  SQLi: systematic sqlmap run on {ep}. "
-                        f"If errors were returned, try manual UNION or Boolean-based injection."
-                    )
-                elif vt in ("cmdi", "command injection") and ep:
-                    highlights.append(
-                        f"  CMDi: command injection test on {ep}. "
-                        f"If no result, try different shell metacharacters or encoding bypasses."
-                    )
-            if highlights:
-                msg += "\n\n## Worth Following Up:\n" + "\n".join(highlights)
-            self.llm.add_context_message(msg, role="user")
-
-        # Feed systematic findings to LLM for plan update
-        if self.exploitation_plan and self.exploitation_plan.tasks and system_vulns:
-            sys_findings = "; ".join(
-                f"{v.get('test_tool','tool')} on {v.get('endpoint','')}: "
-                f"{(v.get('test_result','') or '')[:80]}"
-                for v in system_vulns[:5] if v.get("tested_at")
-            )
-            if sys_findings:
-                self._maybe_compress()
-                plan_content, _ = self.llm.generate(
-                    prompt=(
-                        f"Systematic exploit pass results: {sys_findings}\n\n"
-                        f"Update the exploitation plan based on these findings. "
-                        f"Add follow-up tasks for promising findings (e.g., XSS reflection). "
-                        f"Deprioritize vulns that were tested and showed no evidence. "
-                        f"Output updated plan as JSON array."
-                    ),
-                    system_prompt=SYSTEM_PROMPT_ORCHESTRATOR,
-                )
-                if plan_content:
-                    try:
-                        new_tasks = json.loads(self._extract_json(plan_content))
-                        if isinstance(new_tasks, list) and new_tasks:
-                            done_tasks = [t for t in self.exploitation_plan.tasks
-                                         if t.get("status") == "done"]
-                            self.exploitation_plan.tasks = done_tasks
-                            for nt in new_tasks:
-                                nt.setdefault("status", "pending")
-                                nt.setdefault("dependent_task_ids", nt.pop("dependencies", []))
-                                if not any(t["id"] == nt["id"] for t in self.exploitation_plan.tasks):
-                                    self.exploitation_plan.tasks.append(nt)
-                            log.info("[PLAN] updated from systematic pass: %d tasks",
-                                     len(self.exploitation_plan.tasks))
-                    except Exception as e:
-                        log.warning("Systematic pass plan update failed: %s", e)
-
         # Plan already generated before systematic exploit — skip duplicate
 
-        # Build tool definitions from recon + attack gateways
+        # Build tool definitions from recon + attack gateways + MCP servers
         tool_defs = self.attack_gateway.get_tool_definitions()
         tool_defs += self.recon_gateway.get_tool_definitions()
+        try:
+            mcp_defs = self.mcp_pool.get_tool_definitions()
+            if mcp_defs:
+                tool_defs += mcp_defs
+        except Exception:
+            pass
 
         # Check if we have active session cookies from auto_login
         session_cookies = ""
@@ -1003,31 +1319,30 @@ class Orchestrator:
                     f"THEN: try IDOR — same cookie, different IDs in URL paths.\n"
                 )
 
-        # Build API endpoint list from DKG (methods already updated during recon)
+        # Build context from typed PipelineState
+        state = self._get_state()
+
         api_endpoints_text = ""
-        post_eps = [e for e in self.dkg.query_nodes("Endpoint")
-                    if e.get("method", "GET") == "POST"]
+        post_eps = [ep for ep in state.endpoints if ep.method == "POST"]
         if post_eps:
             api_endpoints_text = "\n## API Endpoints (from OpenAPI spec):\n"
-            for e in post_eps[:10]:
-                bf = e.get("body_format", "")
-                bf_hint = f" body_format={bf}" if bf else ""
+            for ep in post_eps[:10]:
+                params_str = ", ".join(ep.params)
+                bf_hint = f" body_format={ep.body_format}" if ep.body_format else ""
                 api_endpoints_text += (
-                    f"  POST {e.get('url','')} "
-                    f"[params: {e.get('params','')}{bf_hint}]\n"
+                    f"  POST {ep.url} [params: {params_str}{bf_hint}]\n"
                 )
 
-        # Build initial prompt with DKG context
-        dkg_summary = self.dkg.summary()
         endpoints_text = "\n".join(
-            f"- {e.get('url','')} [{e.get('method','GET')}]"
-            f" params={e.get('params','')}"
-            + (f" body_format={e.get('body_format','')}" if e.get('body_format') else "")
-            for e in self.dkg.query_nodes('Endpoint')[:12]
+            f"- {ep.url} [{ep.method}]"
+            + (f" params={', '.join(ep.params)}" if ep.params else "")
+            + (f" body_format={ep.body_format}" if ep.body_format else "")
+            for ep in state.endpoints[:12]
         )
         services_text = "\n".join(
-            f"- port {s.get('port','?')}/{s.get('protocol','?')}: {s.get('version','') or s.get('banner','')}"
-            for s in self.dkg.query_nodes('Service')[:10]
+            f"- port {s.port}/{s.protocol}: {s.version or s.banner}"
+            for s in state.services[:10]
+            if s.port
         )
 
         # Use CTEG hints passed from run() (dynamic patterns from prior tasks)
@@ -1137,15 +1452,37 @@ class Orchestrator:
               f"{len(self.exploitation_plan.tasks) if self.exploitation_plan else 0} tasks, "
               f"token_count={self.llm.token_count}")
 
-        # ── Plan-driven execution loop (VulnBot-style) ──────────
-        # LLM generated a plan. Now execute tasks ONE BY ONE.
-        # After each task: feed result to LLM → LLM updates plan → next task.
+        # ── Plan-driven execution loop (VulnBot-style, dynamic) ──
+        # LLM generated a plan. Execute tasks one by one.
+        # After EACH task: LLM reviews and updates the plan.
+        # When plan is exhausted: LLM can add more tasks or enter free-form.
         for iteration in range(1, MAX_ITER + 1):
             if self._time_exceeded() or self._tokens_exceeded():
                 break
 
             task = self._select_next_plan_task()
             if not task:
+                # Plan exhausted — ask LLM if it wants to add more tasks
+                if not getattr(self, '_plan_review_exhausted', False):
+                    self._plan_review_exhausted = True
+                    # Build a meaningful summary so the LLM can decide
+                    # whether to add new tasks or give up.
+                    state = self._get_state()
+                    ep_list = [f"{ep.method} {ep.url}" for ep in state.endpoints[-8:]]
+                    exhaustion_summary = (
+                        f"Plan exhausted. {len(self.exploitation_plan.tasks)} tasks completed/failed.\n"
+                        + (f"Known endpoints: {', '.join(ep_list)}" if ep_list else "No endpoints discovered.")
+                        + (f"\nCredentials: {len(state.credentials)} known" if state.credentials else "")
+                    )
+                    await self._review_and_update_plan(
+                        {"id": "plan-exhausted", "instruction": "Plan exhausted",
+                         "tool": "", "params": {}, "status": "done",
+                         "attempts": 0, "result_summary": exhaustion_summary},
+                        True, exhaustion_summary
+                    )
+                    # Try again — LLM may have added new tasks
+                    if self._select_next_plan_task():
+                        continue
                 log.info("Solo loop: plan exhausted after %d iterations — "
                          "entering free-form exploration", iteration - 1)
                 break
@@ -1153,13 +1490,27 @@ class Orchestrator:
             task_instruction = task.get("instruction", "unknown")
             task_tool = task.get("tool", "")
             task_params = task.get("params", {})
+            # LLM can produce params as a JSON string — normalize to dict
+            if isinstance(task_params, str):
+                try:
+                    task_params = json.loads(task_params)
+                except (json.JSONDecodeError, TypeError):
+                    task_params = {"url": str(task_params)}
 
             # Tell LLM to execute this specific task
             self._maybe_compress()
             if "-manual" in task.get("id", ""):
+                # Manual retry: force the LLM to use send_payload with the
+                # tested param. History shows it tends to wander to other
+                # endpoints otherwise.
+                tu_val = task_params.get("url", task_params.get("target_url", ""))
+                tp_val = task_params.get("param", task_params.get("parameter", "q"))
                 freedom_note = (
-                    f"You MUST use the specified URL and param above. "
-                    f"Do not target a different endpoint."
+                    f"You MUST call send_payload(url=\"{tu_val}\", param=\"{tp_val}\", "
+                    f"payload=..., method=\"GET\"). "
+                    f"Do NOT call curl_get or http_post instead. "
+                    f"Do NOT change the URL or param. "
+                    f"The instruction below contains specific payloads to try."
                 )
             else:
                 freedom_note = (
@@ -1197,8 +1548,10 @@ class Orchestrator:
             tc_names = [tc.get('name', '?') for tc in tool_calls]
             print(f"\n[solo:{iteration}] task={task.get('id','')} → "
                   f"{', '.join(tc_names)}")
-            task_success = True
+            task_success = False  # at least one tool must succeed
+            _any_success = False
             task_summary = ""
+            _all_task_stdouts: list[str] = []  # accumulate all tool outputs
             _auto_test_negative = False  # track "no evidence" / "no flag"
 
             for tc in tool_calls:
@@ -1211,11 +1564,32 @@ class Orchestrator:
                     continue
 
                 self.step_count += 1
+
+                # Auto-inject body_format for POST endpoints.
+                # send_payload defaults to form-encoded which fails on
+                # JSON-only endpoints. Any DKG endpoint with method=POST
+                # gets JSON body — modern APIs use JSON by default.
+                if tc_name == "send_payload" and tc_args.get("method", "GET").upper() == "POST":
+                    if not tc_args.get("body_format"):
+                        url = tc_args.get("url", "")
+                        dkg_eps = [e for e in self.dkg.query_nodes("Endpoint")
+                                   if e.get("url", "") == url]
+                        ep_method = dkg_eps[0].get("method", "GET") if dkg_eps else "GET"
+                        if ep_method == "POST":
+                            tc_args["body_format"] = "json"
+
                 try:
                     if tc_name in self.attack_gateway.get_tool_names():
                         result = await self.attack_gateway.call(tc_name, tc_args)
                     elif tc_name in self.recon_gateway.get_tool_names():
                         result = await self.recon_gateway.call(tc_name, tc_args)
+                    elif tc_name in self.mcp_pool.get_tool_names():
+                        mcp_raw = await self.mcp_pool.call_tool(tc_name, tc_args)
+                        mcp_text = json.dumps(mcp_raw, ensure_ascii=False)
+                        result = type('obj', (object,), {
+                            'success': True, 'stdout': mcp_text,
+                            'stderr': '', 'exit_code': 0, 'elapsed_ms': 0,
+                        })()
                     else:
                         result = type('obj', (object,), {
                             'success': False, 'stdout': f"Unknown tool: {tc_name}",
@@ -1227,7 +1601,7 @@ class Orchestrator:
                         'exit_code': 1, 'elapsed_ms': 0,
                     })()
 
-                # Defense probe
+                # Defense probe + bypass attempt
                 defence_probe = ""
                 if tc_name in self.EXPLOIT_TOOLS:
                     url = str(tc_args.get("url", tc_args.get("target_url", "")))
@@ -1237,6 +1611,36 @@ class Orchestrator:
                         getattr(result, 'stdout', '') or ''
                     ):
                         defence_probe = await self._probe_for_defense(url, param, method, tc_name)
+                    # Attempt bypass if blocked
+                    if defence_probe and "BLOCKED" in defence_probe:
+                        bypass_payloads = {
+                            "encoding_mutation": "<scr<script>ipt>alert(1)</scr</script>ipt>",
+                            "case_alternation": "<ScRiPt>alert(1)</sCrIpT>",
+                            "double_url": "%253Cscript%253Ealert(1)%253C%252Fscript%253E",
+                        }
+                        for strategy, payload in bypass_payloads.items():
+                            try:
+                                bp_result = await self.attack_gateway.call("send_payload", {
+                                    "url": url, "param": param, "payload": payload,
+                                    "method": method, "encode_type":
+                                        "double_url" if "url" in strategy else "none",
+                                })
+                                bp_stdout = getattr(bp_result, 'stdout', '') or ''
+                                bp_flags = self.flag_pattern.findall(bp_stdout)
+                                if bp_flags:
+                                    is_valid, reason = await self._verify_flag(
+                                        bp_flags[0], bp_stdout,
+                                        {"url": url, "param": param, "payload": payload},
+                                        getattr(bp_result, "elapsed_ms", 0),
+                                    )
+                                    if is_valid:
+                                        result = bp_result
+                                        defence_probe = f"\n[DEFENSE BYPASS — {strategy}] SUCCESS: flag={bp_flags[0]}"
+                                        break
+                                elif getattr(bp_result, 'success', False):
+                                    defence_probe += f"\n[DEFENSE BYPASS — {strategy}] Payload accepted, no flag"
+                            except Exception:
+                                pass
 
                 # Logging
                 result_stdout = getattr(result, 'stdout', '') or ''
@@ -1244,17 +1648,18 @@ class Orchestrator:
                 flags_found = self.flag_pattern.findall(result_stdout)
                 if flags_found:
                     log.info("[EXPLOIT] %s: FLAG FOUND %s", tc_name, flags_found[0])
+                    _any_success = True
                 elif defence_probe:
                     log.info("[EXPLOIT] %s: DEFENSE — %s", tc_name,
                              defence_probe[:120].replace('\n', ' '))
                 elif getattr(result, 'success', False):
                     log.info("[EXPLOIT] %s: OK (exit=%d, %d bytes) — no flag",
                              tc_name, result_exit, len(result_stdout))
+                    _any_success = True
                 else:
                     log.info("[EXPLOIT] %s: FAILED (exit=%d) — %s",
                              tc_name, result_exit,
                              (result_stdout[:100] or 'no output').replace('\n', ' '))
-                    task_success = False
 
                 # Format feedback for LLM
                 tool_stdout = self._format_tool_feedback(tc_name, tc_args, result, defence_probe)
@@ -1271,7 +1676,20 @@ class Orchestrator:
                 print(f"  [{tc_name}] {str(tc_args)[:120]} → "
                       f"{tool_stdout.split(chr(10))[0][:120]}")
                 self.llm.add_tool_result(tc_id, tool_stdout[:2500])
+
+                # Auto-persist technology discoveries to DKG (before compression loses them)
+                if tc_name in ("whatweb_scan",) and getattr(result, 'success', False):
+                    parsed = getattr(result, "parsed_output", {})
+                    for tech in parsed.get("technologies", [])[:5]:
+                        self.dkg.add_node("Service", f"tech-{tech[:30]}", {
+                            "port": 0, "protocol": "HTTP",
+                            "version": tech, "banner": tech,
+                            "discovered_by": "solo-unified",
+                        })
                 task_summary += f"{tc_name}: {'OK' if getattr(result,'success',False) else 'FAIL'}; "
+                # Accumulate each tool's output for plan review context
+                _out = getattr(result, 'stdout', '') or ''
+                _all_task_stdouts.append(f"[{tc_name}] {_out[:800]}")
                 # Track if automated test found nothing
                 rl = (getattr(result, 'stdout', '') or '').lower()
                 if "no evidence" in rl or "no flag" in rl:
@@ -1298,7 +1716,9 @@ class Orchestrator:
                 # Flag check
                 flags = self.flag_pattern.findall(result_stdout)
                 if flags:
-                    is_valid, reason = DAVE.verify_basic(flags[0], result_stdout)
+                    is_valid, reason = await self._verify_flag(
+                        flags[0], result_stdout, tc_args, getattr(result, "elapsed_ms", 0),
+                    )
                     if is_valid:
                         self.phase = OrchestratorPhase.DONE
                         return TaskResult(
@@ -1307,62 +1727,18 @@ class Orchestrator:
                             time_elapsed=time.time() - self.start_time,
                         )
 
-            # ── Update plan after task execution ──
-            await self._update_plan_after_task(task, task_success, result)
-            log.info("[PLAN] task %s → %s", task.get("id", ""),
-                     "done" if task_success else "failed")
+            # ── LLM reviews and updates plan after every task (VulnBot-style) ──
+            task_success = _any_success
+            task_result_text = self._summarize_task_result(
+                tc_names, task_success, _all_task_stdouts
+            )
+            await self._review_and_update_plan(
+                task, task_success, task_result_text
+            )
+            log.info("[PLAN REVIEW] task %s → %s, plan updated",
+                     task.get("id", ""), "done" if task_success else "failed")
 
-            # ── Auto-inject manual follow-up for automated tests ──
-            _AUTO_TEST_TOOLS = {"command_injection_test", "sqlmap_test",
-                                "xss_reflection_test"}
-            if task_tool in _AUTO_TEST_TOOLS and self.exploitation_plan:
-                    followup_id = f"{task.get('id','')}-manual"
-                    existing_ids = {t["id"] for t in self.exploitation_plan.tasks}
-                    if followup_id not in existing_ids:
-                        _tool_hints = {
-                            "command_injection_test": (
-                                f"The tested param is '{tp}' at {tu}. "
-                                f"Do NOT guess different param names — use exactly '{tp}'. "
-                                f"Try command separators the test missed: "
-                                f"%0a (URL-encoded newline), %0d%0a (CRLF), || (OR), && (AND). "
-                                f"Try with encoding: url, double_url. "
-                                f"Test payloads: %0aid, %0d%0aid, ||id, &&id. "
-                                f"The automated test only tried ;, |, backtick, $(), \\n."
-                            ),
-                            "sqlmap_test": (
-                                "Try manual SQL injection: UNION SELECT, Boolean blind, "
-                                "error-based extraction. Use different HTTP methods "
-                                "or content types. sqlmap only tested basic techniques."
-                            ),
-                            "xss_reflection_test": (
-                                "Try XSS escalation: cookie theft via <script>, "
-                                "DOM-based vectors, event handlers (onerror, onload). "
-                                "The automated test only checked for reflection."
-                            ),
-                        }
-                        tu = task_params.get("url", task_params.get("target_url", ""))
-                        tp = task_params.get("param", task_params.get("parameter", "q"))
-                        hint = _tool_hints.get(task_tool, (
-                            "Automated test may have missed the right approach. "
-                            "Try different payloads or methods manually."
-                        ))
-                        new_task = {
-                            "id": followup_id,
-                            "instruction": (
-                                f"RETRY: {task_instruction}. {hint}"
-                            ),
-                            "tool": "send_payload",
-                            "params": task_params,
-                            "dependent_task_ids": [],
-                            "status": "pending",
-                        }
-                        self.exploitation_plan.tasks.append(new_task)
-                        log.info("[PLAN] auto-injected manual follow-up: %s", followup_id)
-
-            # Plan already updated via _update_plan_after_task + auto-inject above.
-            # No separate LLM call needed — the next task prompt includes context.
-
-        log.info("_run_solo_cycle: %d iterations, flag not found", iteration)
+        log.info("_unified_llm_loop: %d iterations, flag not found", iteration)
 
         # ── Free-form exploration (plan exhausted but LLM can still try) ──
         # After plan tasks are done, let the LLM explore freely for a few
@@ -1375,17 +1751,30 @@ class Orchestrator:
                 if self._time_exceeded() or self._tokens_exceeded():
                     break
                 self._maybe_compress()
+
+                # Build a summary of what we learned from the plan phase
+                learnings = self._summarize_plan_learnings()
+                explore_prompt = (
+                    f"FREE EXPLORATION round {explore_iter}/{explore_rounds}.\n"
+                    f"All automated and planned tests completed. No flag found yet.\n\n"
+                    f"## What We Have Learned\n{learnings}\n\n"
+                    f"## Your Task\n"
+                    f"Based on the learnings above, try 2-4 manual approaches:\n"
+                    f"- If an API returned JSON data with resource listings, follow the "
+                    f"resource paths: enumerate individual items, check nested sub-resources, "
+                    f"look for fields containing secrets/tokens/keys.\n"
+                    f"- If an endpoint returned different response sizes for different "
+                    f"inputs, enumerate MORE input values to find hidden data.\n"
+                    f"- If you got JSON responses, inspect field values (description, name, "
+                    f"notes, data, secret, token, key, password) — flags are often hidden there.\n"
+                    f"- If you found an OpenAPI spec or API docs, use those paths directly.\n"
+                    f"- Use curl_get to access paths you haven't tried yet based on "
+                    f"patterns seen in responses (IDs, paths, resource types).\n"
+                    f"- Use http_post with JSON body for POST/JSON endpoints to query or mutate.\n"
+                    f"Do NOT repeat tests that already returned the same result."
+                )
                 content, tool_calls = self.llm.generate(
-                    prompt=(
-                        f"FREE EXPLORATION round {explore_iter}/{explore_rounds}. "
-                        f"All automated tests completed. Now you must try MANUAL approaches.\n"
-                        f"When automated tests report 'no evidence', the vulnerability may "
-                        f"still exist — the built-in payloads might just be wrong for this app. "
-                        f"Use send_payload or curl_get to try custom payloads.\n"
-                        f"Try different injection syntaxes, different encodings. "
-                        f"Try hidden paths where flags often reside. "
-                        f"Be creative and persistent — the flag IS here."
-                    ),
+                    prompt=explore_prompt,
                     system_prompt=SYSTEM_PROMPT_ORCHESTRATOR,
                     tools=tool_defs,
                 )
@@ -1413,6 +1802,12 @@ class Orchestrator:
                             result = await self.attack_gateway.call(tc_name, tc_args)
                         elif tc_name in self.recon_gateway.get_tool_names():
                             result = await self.recon_gateway.call(tc_name, tc_args)
+                        elif tc_name in self.mcp_pool.get_tool_names():
+                            mcp_raw = await self.mcp_pool.call_tool(tc_name, tc_args)
+                            mcp_text = json.dumps(mcp_raw, ensure_ascii=False)
+                            result = type('obj', (object,), {
+                                'success': True, 'stdout': mcp_text,
+                                'stderr': '', 'exit_code': 0, 'elapsed_ms': 0})()
                         else:
                             result = type('obj', (object,), {
                                 'success': False, 'stdout': f"Unknown tool: {tc_name}",
@@ -1427,7 +1822,10 @@ class Orchestrator:
                     print(f"  [{tc_name}] → {tool_stdout.split(chr(10))[0][:120]}")
                     flags = self.flag_pattern.findall(result_stdout)
                     if flags:
-                        is_valid, reason = DAVE.verify_basic(flags[0], result_stdout)
+                        is_valid, reason = await self._verify_flag(
+                            flags[0], result_stdout, tc_args,
+                            getattr(result, "elapsed_ms", 0),
+                        )
                         if is_valid:
                             self.phase = OrchestratorPhase.DONE
                             return TaskResult(
@@ -1435,15 +1833,10 @@ class Orchestrator:
                                 tokens_used=self.llm.token_count,
                                 time_elapsed=time.time() - self.start_time)
 
-        # ── Systematic post-loop checks ──
-        # Always run post_check as a last-resort flag scan, even if the LLM
-        # stopped finding new endpoints. Known endpoints may still yield a flag.
-        result = await self._systematic_post_check(target_url)
-        if result:
-            return result
-
         return None
 
+    # DEPRECATED: not currently wired into the main run() loop.
+    # Kept for potential future use in automated vuln-to-tool mapping.
     async def _systematic_exploit_pass(self, target_url: str) -> TaskResult | None:
         """Systematic exploit: iterate DKG Vulnerability nodes and run mapped tools.
 
@@ -1453,7 +1846,8 @@ class Orchestrator:
 
         Returns TaskResult if a flag is found, None otherwise.
         """
-        vulns = self.dkg.query_nodes("Vulnerability")
+        state = self._get_state()
+        vulns = self.dkg.query_nodes("Vulnerability")  # raw for toolkit fields
         if not vulns:
             print("[systematic] No Vulnerability nodes in DKG — skipping")
             return None
@@ -1590,7 +1984,8 @@ class Orchestrator:
                 if tool_name == llm_tool and llm_args:
                     args.update(llm_args)
                 # If endpoint is POST-only, ensure exploit tools use POST
-                if tool_name in ("sqlmap_test", "send_payload", "command_injection_test"):
+                if tool_name in ("sqlmap_test", "send_payload", "command_injection_test",
+                                 "xss_reflection_test"):
                     ep_nodes = [e for e in self.dkg.query_nodes("Endpoint")
                                if e.get("url", "") == endpoint]
                     ep_method = ep_nodes[0].get("method", "GET") if ep_nodes else "GET"
@@ -1734,23 +2129,41 @@ class Orchestrator:
         """Analyze reconnaissance data to identify potential vulnerabilities."""
         self.phase = OrchestratorPhase.ANALYZE
 
-        dkg_summary = self.dkg.summary()
+        # ── Probe endpoints: capture actual responses before analysis ──
+        app_context = await self._probe_endpoints()
+
+        # Build typed pipeline state from DKG (single source of truth)
+        state = normalize_dkg_state(self.dkg)
         self.llm.reset()
 
-        # Build unreachable services warning for the LLM
+        # Build unreachable services warning
         unreachable_warning = ""
-        all_services = self.dkg.query_nodes("Service")
-        unreachable = [s for s in all_services if s.get("http_reachable") is False]
+        unreachable = [s for s in state.services if s.http_reachable is False]
         if unreachable:
             unreachable_warning = (
                 "\n## WARNING — Ports found by nmap but NOT HTTP-reachable:\n"
-                + "\n".join(f"- {s.get('id', '?')}: port {s.get('port', '?')}/{s.get('protocol', '?')}"
-                           for s in unreachable[:10])
-                + "\nDo NOT generate hypotheses for these services — you cannot connect to them.\n"
+                + "\n".join(f"- port {s.port}/{s.protocol}" for s in unreachable[:10])
+                + "\nDo NOT generate hypotheses for these services.\n"
             )
 
-        # Query CTEG for patterns from prior tasks
-        prompt = f"Target information:\n{unreachable_warning}{dkg_summary}\n\nIdentify potential vulnerabilities."
+        # Use canonical prompt format from PipelineState
+        state_context = state.to_prompt_context()
+
+        prompt = (
+            f"Target information:\n"
+            f"{unreachable_warning}"
+            f"{app_context}"
+            f"{state_context}\n\n"
+            f"## Instructions\n"
+            f"1. First, understand what this application DOES based on the endpoint responses above.\n"
+            f"2. Identify what business logic each endpoint implements.\n"
+            f"3. THEN identify potential vulnerabilities based on your understanding.\n"
+            f"4. For each vulnerability, explain WHY you think it exists (not just pattern matching).\n"
+            f"5. If an endpoint returns static content regardless of input, note that it's "
+            f"likely NOT exploitable and skip it.\n"
+            f"6. CRITICAL: Use the EXACT parameter names from 'Known Parameter Names' above. "
+            f"Do NOT guess parameter names from response field names."
+        )
         cteg_suggestions = self.cteg.get_suggestions(
             defense_type=self.defense_state.waf_type or "",
             vuln_type="",
@@ -1780,9 +2193,9 @@ class Orchestrator:
 
         print(f"\n{'='*50}")
         print(f"[ANALYZE] Asking LLM to identify vulnerabilities...")
-        print(f"[ANALYZE] DKG summary: {len(dkg_summary.split(chr(10)))} lines, "
-              f"services={len(self.dkg.query_nodes('Service'))}, "
-              f"endpoints={len(self.dkg.query_nodes('Endpoint'))}")
+        print(f"[ANALYZE] State: {len(state.endpoints)} endpoints, "
+              f"{len(state.services)} services, "
+              f"{len(state.vulnerabilities)} vulns")
 
         # Build tool lists for the analyze prompt so LLM uses exact names
         attack_tool_names = sorted(self.attack_gateway.get_tool_names())
@@ -1811,9 +2224,50 @@ class Orchestrator:
 
         # Parse LLM's vulnerability hypotheses
         try:
-            vulns_json = self._extract_json(content)
+            parsed = self._extract_json(content)
+            # New format: {{"application_understanding": "...", "vulnerabilities": [...]}}
+            # Old format (backward compat): [...] flat array
+            if isinstance(parsed, dict):
+                app_understanding = parsed.get("application_understanding", "")
+                if app_understanding:
+                    print(f"\n[UNDERSTAND] {app_understanding}\n")
+                    # Persist to DKG for plan-generation and sub-agent access
+                    self.dkg.add_node("Analysis", f"analysis-{int(time.time())}", {
+                        "phase": "analyze",
+                        "type": "application_understanding",
+                        "content": app_understanding,
+                        "endpoint_count": len(self.dkg.query_nodes("Endpoint")),
+                    })
+                vulns_json = parsed.get("vulnerabilities", [])
+            else:
+                vulns_json = parsed if isinstance(parsed, list) else []
             print(f"[ANALYZE] Parsed {len(vulns_json)} vulnerability hypotheses from LLM")
+
+            # Collect all known params from typed PipelineState
+            all_known_params: set[str] = set()
+            for ep in state.endpoints:
+                for p in ep.params:
+                    all_known_params.add(p)
+
             for v in vulns_json:
+                vt = v.get("vuln_type", "")
+                # Correct guessed parameter names against known params
+                llm_param = v.get("param", "")
+                if llm_param and all_known_params and llm_param not in all_known_params:
+                    ep_url = v.get("endpoint", "")
+                    ep_params = state.get_params_for_url(ep_url)
+                    if ep_params:
+                        log.warning(
+                            "ANALYZE: LLM guessed param '%s' but DKG has %s for %s — correcting",
+                            llm_param, ep_params, ep_url,
+                        )
+                        v["param"] = ep_params[0]
+                    else:
+                        log.warning(
+                            "ANALYZE: LLM guessed param '%s' but no DKG params found for %s",
+                            llm_param, ep_url,
+                        )
+
                 vt = v.get("vuln_type", "")
                 hypothesis = VulnerabilityHypothesis(
                     vuln_type=vt,
@@ -1962,9 +2416,11 @@ class Orchestrator:
                     "parameter": "", "severity": "low",
                     "source": "nikto_keyword", "detail": detail,
                 })
-        # Every POST/GET endpoint with params → injection hypotheses
-        # Any endpoint accepting user input could be vulnerable to multiple
-        # injection types. The systematic pass will quickly rule out false positives.
+        # Every endpoint → at least one injection hypothesis
+        # Any endpoint could be vulnerable to multiple injection types.
+        # The exploit phase will quickly rule out false positives.
+        common_params = ["q", "id", "search", "query", "user", "input", "name", "file", "page"]
+        endpoints_with_params = False
         for ep in self.dkg.query_nodes("Endpoint"):
             url, params = ep.get("url", ""), ep.get("params", "")
             method = ep.get("method", "GET")
@@ -2035,23 +2491,116 @@ class Orchestrator:
                     "severity": "medium", "source": "path_heuristic",
                 })
 
-    # ── Phase 2.5: Research (LLM-driven vulnerability research) ──────
+        # Safety net: if too few vulns from LLM, supplement with heuristic hypotheses
+        if len(self.vulnerabilities) < 5:
+            for ep in self.dkg.query_nodes("Endpoint"):
+                url = ep.get("url", "")
+                if not url or not url.startswith("http"):
+                    continue
+                if any(v.endpoint == url for v in self.vulnerabilities):
+                    continue  # already has a hypothesis
+                resp = ep.get("sample_response", "")
+                params = ep.get("params", "")
+                method = ep.get("method", "GET")
+                resp_len = ep.get("response_size", 0)
+                # Pick the single most likely vuln type based on response characteristics
+                if params:
+                    vt, param = "SQLI", params.split(",")[0] if params else "id"
+                elif method == "POST":
+                    vt, param = "CMDI", "cmd"
+                elif resp_len > 100000:
+                    vt, param = "XSS", "q"  # large SPA → XSS
+                elif "json" in resp.lower() or resp.strip().startswith("{"):
+                    vt, param = "IDOR", "id"  # API response → IDOR
+                else:
+                    vt, param = "XSS", "q"
+                self.vulnerabilities.append(VulnerabilityHypothesis(
+                    vuln_type=vt, endpoint=url, param=param,
+                    confidence=0.30,
+                    evidence=f"Heuristic — {method} endpoint, {resp_len}b response, params={params or 'none'}",
+                ))
+                tool = self._guess_tool(vt)
+                self.dkg.add_node("Vulnerability", f"vuln-{len(self.vulnerabilities)}", {
+                    "vuln_type": vt, "endpoint": url, "parameter": param,
+                    "severity": "low", "source": "generic_fallback",
+                    "suggested_tool": tool,
+                })
+
+    # ── Phase 1.8: Service Research (before analyze) ────────────────
+
+    async def _service_research(self) -> None:
+        """Hardcoded service-port vulnerability lookup. Runs BEFORE analyze.
+
+        For each discovered service with a meaningful version, search local RAG
+        and MCP/NVD for known CVEs. Results are injected into the LLM context
+        so that _analyze_phase() can generate precise, evidence-based hypotheses.
+        Skips services marked skip_exploit (SSH, etc.).
+        """
+        services = self.dkg.query_nodes("Service")
+        if not services:
+            return
+
+        log.info("_service_research: searching %d services for known CVEs", len(services))
+        service_research_text = ""
+        try:
+            from darwin.rag import get_rag
+            rag = get_rag()
+            for s in services[:10]:
+                port = s.get("port", 0)
+                version = s.get("version", "") or s.get("banner", "")
+                if s.get("skip_exploit"):
+                    continue
+                if not version or version in ("unknown", "tcpwrapped", "http", "https", ""):
+                    continue
+                # Local RAG
+                rag_results = rag.search(f"{version} exploit vulnerability", top_k=2,
+                                         min_keyword_overlap=0.1)
+                for r in rag_results:
+                    service_research_text += (
+                        f"\n[port {port}] {version}: {r['title']} "
+                        f"({r.get('collection','')}) — {r['description'][:200]}\n"
+                    )
+                # MCP NVD CVE search
+                try:
+                    if "nvd_search_cves" in self.mcp_pool.get_tool_names():
+                        mcp_result = await self.mcp_pool.call_tool(
+                            "nvd_search_cves",
+                            {"keyword": version, "limit": 3},
+                        )
+                        content = mcp_result.get("content", [{}])
+                        text = content[0].get("text", "") if content else ""
+                        if text and "0 matching CVEs" not in text:
+                            service_research_text += f"  [NVD CVEs] {text[:400]}\n"
+                except Exception:
+                    pass
+            if service_research_text:
+                self.llm.add_context_message(
+                    f"[SERVICE RESEARCH] Known vulnerabilities for discovered services:\n"
+                    f"{service_research_text}",
+                    role="user",
+                )
+                log.info("_service_research: injected %d chars of CVE data",
+                         len(service_research_text))
+        except Exception as e:
+            log.warning("_service_research failed: %s", e)
+
+    # ── Phase 2.5: Research (vulnerability research, after analyze) ──
 
     async def _research_phase(self) -> None:
-        """LLM-driven vulnerability research phase.
+        """LLM-driven vulnerability research phase. Runs AFTER analyze.
 
         Gives the LLM research-only tools to investigate each identified
-        vulnerability BEFORE any exploitation attempt. The LLM can query
-        CVE databases, the knowledge base, and exploit databases to
-        gather intelligence that informs the exploitation plan.
+        vulnerability. The LLM can query CVE databases, the knowledge base,
+        and exploit databases to gather exploitation intelligence.
 
-        Results are recorded in DKG Vulnerability nodes.
+        Phase A (service CVE lookup) already ran before analyze — results are
+        in the LLM context.
         """
         if not self.vulnerabilities:
             return
 
         log.info("_research_phase: LLM researching %d vulnerabilities", len(self.vulnerabilities))
-        self.phase = OrchestratorPhase.ANALYZE  # sub-phase of analyze
+        self.phase = OrchestratorPhase.ANALYZE
 
         # Build research prompt with only research tools
         research_tools = []
@@ -2062,6 +2611,15 @@ class Orchestrator:
                             "metasploit_search", "searchsploit_search",
                             "go_exploitdb_search", "curl_get"):
                     research_tools.append(td)
+        # Add MCP research tools (search, code search, CVE lookup)
+        try:
+            for td in self.mcp_pool.get_tool_definitions():
+                name = td.get("function", {}).get("name", "")
+                if any(kw in name.lower() for kw in
+                       ("search", "cve", "vuln", "exploit", "code", "repo")):
+                    research_tools.append(td)
+        except Exception:
+            pass
 
         vuln_text = self._format_vulnerability_summary()
         research_prompt = (
@@ -2103,6 +2661,13 @@ class Orchestrator:
                     result = await self.attack_gateway.call(tc_name, tc_args)
                 elif tc_name in self.recon_gateway.get_tool_names():
                     result = await self.recon_gateway.call(tc_name, tc_args)
+                elif tc_name in self.mcp_pool.get_tool_names():
+                    import json as _json
+                    mcp_raw = await self.mcp_pool.call_tool(tc_name, tc_args)
+                    mcp_text = _json.dumps(mcp_raw, ensure_ascii=False)
+                    result = type('obj', (object,), {
+                        'success': True, 'stdout': mcp_text,
+                        'stderr': '', 'exit_code': 0, 'elapsed_ms': 0})()
                 else:
                     continue
                 tool_stdout = self._format_tool_feedback(tc_name, tc_args, result, "")
@@ -2115,8 +2680,36 @@ class Orchestrator:
                 tools=research_tools,
             )
 
-        # Parse research findings and update DKG
-        if content:
+        # Execute any remaining tool calls from the last round
+        if tool_calls:
+            for tc in tool_calls:
+                tc_name = tc.get("name", "")
+                tc_args = tc.get("arguments", {})
+                tc_id = tc.get("id", "")
+                try:
+                    if tc_name in self.attack_gateway.get_tool_names():
+                        result = await self.attack_gateway.call(tc_name, tc_args)
+                    elif tc_name in self.recon_gateway.get_tool_names():
+                        result = await self.recon_gateway.call(tc_name, tc_args)
+                    elif tc_name in self.mcp_pool.get_tool_names():
+                        import json as _json
+                        mcp_raw = await self.mcp_pool.call_tool(tc_name, tc_args)
+                        mcp_text = _json.dumps(mcp_raw, ensure_ascii=False)
+                        result = type('obj', (object,), {
+                            'success': True, 'stdout': mcp_text,
+                            'stderr': '', 'exit_code': 0, 'elapsed_ms': 0})()
+                    else:
+                        continue
+                    tool_stdout = self._format_tool_feedback(tc_name, tc_args, result, "")
+                    self.llm.add_tool_result(tc_id, tool_stdout[:2000])
+                except Exception:
+                    self.llm.add_tool_result(tc_id, "Tool execution failed")
+            # Final summary generation (no tools — closes the tool_call cycle)
+            self._maybe_compress()
+            content, tool_calls = self.llm.generate(
+                prompt="All research complete. Output final JSON summary of findings for each vulnerability.",
+                system_prompt=SYSTEM_PROMPT_ANALYZE,
+            )
             try:
                 findings = self._extract_json(content)
                 if isinstance(findings, list):
@@ -2170,13 +2763,21 @@ class Orchestrator:
 
         log.info("_active_service_research: LLM researching %d services", len(service_list))
 
-        # Give LLM exploit research tools
+        # Give LLM exploit research tools + MCP research tools
         research_tools = []
         for td in self.attack_gateway.get_tool_definitions():
             name = td.get("function", {}).get("name", "")
             if name in ("metasploit_search", "searchsploit_search",
                         "go_exploitdb_search", "cve_lookup"):
                 research_tools.append(td)
+        try:
+            for td in self.mcp_pool.get_tool_definitions():
+                name = td.get("function", {}).get("name", "")
+                if any(kw in name.lower() for kw in
+                       ("search", "cve", "vuln", "exploit", "code", "repo")):
+                    research_tools.append(td)
+        except Exception:
+            pass
 
         prompt = (
             f"Discovered services — research each one for known exploits:\n"
@@ -2321,6 +2922,142 @@ class Orchestrator:
         for m in _re.findall(r"""['"](/[\w/]*/\d{2,}/[\w/]*)['"]""", body):
             self._extract_ids_from_url(_uj(base_norm, m), patterns)
 
+    async def _probe_endpoints(self) -> str:
+        """Probe each known endpoint with sample requests and capture responses.
+
+        Returns a formatted string for the analyze prompt describing what each
+        endpoint actually does. Also writes sample_response to DKG Endpoint nodes.
+        Uses typed EndpointInfo for parameter normalisation.
+        """
+        import urllib.request as _ur, json as _js
+
+        endpoints = self.dkg.query_nodes("Endpoint")
+        if not endpoints:
+            return ""
+
+        lines = ["\n## Application Behavior (probed responses)\n"]
+        probed_urls: set[str] = set()
+
+        for ep in endpoints:
+            ep_info = EndpointInfo.from_dkg(ep)
+            url = ep_info.url
+            if not url or url in probed_urls:
+                continue
+            probed_urls.add(url)
+
+            method = ep_info.method
+            param_names = ep_info.params  # already normalised list
+            body_format = ep_info.body_format
+
+            result_parts = [f"**{method} {url}**"]
+            if param_names:
+                result_parts.append(f"  INPUT params: {', '.join(param_names)}")
+
+            try:
+                if method == "POST":
+                    # Build a sample JSON body from known params
+                    if not param_names:
+                        param_names = ["test"]
+                    sample_body = _js.dumps(
+                        {p: f"sample_{p}" for p in param_names}
+                    ).encode()
+                    req = _ur.Request(url, data=sample_body, method="POST",
+                                     headers={"Content-Type": "application/json"})
+                else:
+                    # GET: if endpoint has params, include a sample value
+                    if param_names:
+                        qs = "&".join(f"{p}=sample_{p}" for p in param_names)
+                        sep = "&" if "?" in url else "?"
+                        req_url = f"{url}{sep}{qs}"
+                    else:
+                        req_url = url
+                    req = _ur.Request(req_url)
+
+                with _ur.urlopen(req, timeout=8) as resp:
+                    body = resp.read().decode("utf-8", errors="replace")
+                    status = resp.status
+                    content_type = resp.headers.get("content-type", "")
+
+                resp_summary = body[:500]
+                if len(body) > 500:
+                    resp_summary += f"... (total {len(body)} bytes)"
+
+                result_parts.append(f"  HTTP {status} ({content_type[:40]})")
+                result_parts.append(f"  Response: {resp_summary}")
+
+                # Write sample response to DKG for sub-agent access
+                existing = [n for n in self.dkg.query_nodes("Endpoint")
+                           if n.get("url", "") == url]
+                if existing:
+                    self.dkg.update_node(existing[0]["id"], {
+                        "sample_status": status,
+                        "sample_response": resp_summary,
+                        "sample_content_type": content_type,
+                    })
+
+                # Detect interesting behavior
+                if status == 500:
+                    result_parts.append("  NOTE: endpoint returns 500 — backend IS processing input")
+                elif body_format == "json" or content_type.startswith("application/json"):
+                    try:
+                        parsed = _js.loads(body)
+                        if isinstance(parsed, list):
+                            result_parts.append(f"  NOTE: returns JSON array with {len(parsed)} items")
+                            if len(parsed) > 0 and isinstance(parsed[0], dict):
+                                out_fields = list(parsed[0].keys())[:6]
+                                result_parts.append(
+                                    f"  OUTPUT fields (NOT input params): {out_fields}"
+                                )
+                        elif isinstance(parsed, dict):
+                            keys = list(parsed.keys())[:5]
+                            result_parts.append(f"  NOTE: returns JSON object with OUTPUT keys: {keys}")
+                    except Exception:
+                        pass
+
+            except Exception as e:
+                result_parts.append(f"  ERROR: {str(e)[:150]}")
+
+            lines.append("  ".join(result_parts))
+
+        return "\n".join(lines) + "\n"
+
+    def _summarize_plan_learnings(self) -> str:
+        """Build a summary of what we learned from plan task execution.
+
+        Extracts response patterns, discovered endpoints, and anomalies from
+        the exploitation_plan and DKG to guide free-form exploration.
+        """
+        parts: list[str] = []
+
+        # Summarize plan task outcomes
+        plan = getattr(self, 'exploitation_plan', None)
+        if plan and plan.tasks:
+            done_tasks = [t for t in plan.tasks if t.get("status") == "done"]
+            failed_tasks = [t for t in plan.tasks if t.get("status") in ("failed", "skipped")]
+            for t in done_tasks[:5]:
+                summary = t.get("result_summary", "")[:200]
+                inst = t.get("instruction", "")[:120]
+                if summary:
+                    parts.append(f"- DONE: {inst} → {summary}")
+                else:
+                    parts.append(f"- DONE: {inst}")
+            for t in failed_tasks[:3]:
+                inst = t.get("instruction", "")[:120]
+                parts.append(f"- FAILED: {inst}")
+
+        # Summarize endpoints from typed state
+        state = self._get_state()
+        for ep in state.endpoints[:10]:
+            if ep.sample_response:
+                parts.append(
+                    f"- Endpoint {ep.url}: HTTP {ep.sample_status}, "
+                    f"response: {ep.sample_response[:200]}"
+                )
+            elif ep.sample_status:
+                parts.append(f"- Endpoint {ep.url}: HTTP {ep.sample_status}")
+
+        return "\n".join(parts) if parts else "(no learnings yet)"
+
     def _format_vulnerability_summary(self) -> str:
         """Format vulnerability hypotheses into a compact text block for LLM prompts."""
         if not self.vulnerabilities:
@@ -2340,86 +3077,162 @@ class Orchestrator:
             lines.append(line)
         return "\n".join(lines)
 
+    def _format_vulnerability_summary_short(self, max_items: int = 5) -> str:
+        """Short format for retry prompts — one line per vuln, no evidence."""
+        if not self.vulnerabilities:
+            return "(none)"
+        lines = []
+        for v in self.vulnerabilities[:max_items]:
+            line = f"- [{v.vuln_type}] {v.endpoint}"
+            if v.param:
+                line += f" param={v.param}"
+            line += f" (confidence={v.confidence:.2f})"
+            if v.suggested_tool:
+                line += f" → {v.suggested_tool}"
+            lines.append(line)
+        return "\n".join(lines)
+
     # ── Dynamic Planning System ────────────────────────────────────────
     # Inspired by VulnBot's Plan-Execute-Replan architecture.
     # Plans are LLM-generated, dynamically updated after each task,
     # and persisted in DKG for cross-phase/cross-agent visibility.
 
     async def _generate_exploitation_plan(self, target_url: str, cteg_hints: dict | None = None) -> ExploitationPlan:
-        """Generate a structured exploitation plan from LLM analysis.
+        """Generate a structured plan from bootstrap state (nmap results only).
 
-        Called once at the start of _run_solo_cycle(). The LLM receives
-        vulnerability hypotheses, DKG state, CTEG hints, and tool lists,
-        then produces a JSON task array with dependencies.
+        Called at the start of _unified_llm_loop(). The LLM receives bootstrap
+        nmap data, all tools (recon + attack), and decides what to do first.
         """
         plan_id = f"plan-{int(time.time())}"
         plan = ExploitationPlan(
-            plan_id=plan_id, phase="exploit", goal=f"Capture flag on {target_url}",
+            plan_id=plan_id, phase="explore", goal=f"Capture flag on {target_url}",
             status="in_progress", created_at=time.strftime("%Y-%m-%dT%H:%M:%S"),
         )
 
-        # Build planning prompt
-        vuln_text = self._format_vulnerability_summary()
-        tools = sorted(self.attack_gateway.get_tool_names())
+        state = self._get_state()
+        # All tools: recon + attack, since LLM drives everything
+        all_tools = sorted(set(
+            self.attack_gateway.get_tool_names() +
+            self.recon_gateway.get_tool_names()
+        ))
+
+        # Services context
+        services_lines = []
+        for s in state.services:
+            if s.port:
+                skip = " [skip]" if s.skip_exploit else ""
+                services_lines.append(
+                    f"  port {s.port}/{s.protocol}: {s.version or s.banner}{skip}"
+                )
+
+        # Phase summary from prior loops
         phase_summary = ""
         summaries = self.dkg.query_nodes("PlanSummary")
         if summaries:
-            phase_summary = "\n## Previous Phase Summary\n"
+            phase_summary = "\n## Previous Loop Summary\n"
             for s in summaries[-2:]:
                 phase_summary += f"- {s.get('phase','')}: {s.get('key_findings','')[:300]}\n"
 
-        # Enrich with DarwinRAG knowledge for each vulnerability type
+        # DarwinRAG knowledge from service versions
         knowledge_context = ""
         try:
             from darwin.rag import get_rag
             rag = get_rag()
             seen_titles = set()
-            for v in self.vulnerabilities[:5]:
-                results = rag.search(v.vuln_type, top_k=2, min_keyword_overlap=0.05)
-                for r in results:
-                    if r["title"] not in seen_titles:
-                        seen_titles.add(r["title"])
-                        knowledge_context += f"\n  - [{r.get('collection','')}/{r['category']}] {r['title']}: {r['description'][:200]}"
-                        if r.get("techniques"):
-                            knowledge_context += f"\n    Commands: {'; '.join(r['techniques'][:2])}"
+            for s in state.services[:5]:
+                if s.version and s.version not in ("unknown", "tcpwrapped"):
+                    results = rag.search(s.version, top_k=2, min_keyword_overlap=0.1)
+                    for r in results:
+                        if r["title"] not in seen_titles:
+                            seen_titles.add(r["title"])
+                            knowledge_context += f"\n  - [{r.get('collection','')}] {r['title']}: {r['description'][:200]}"
             if knowledge_context:
-                knowledge_context = "\n## Relevant Attack Techniques from Knowledge Base\n" + knowledge_context + "\n"
+                knowledge_context = "\n## Relevant Knowledge\n" + knowledge_context + "\n"
         except Exception:
             pass
 
-        prompt = f"""You are planning exploitation for target: {target_url}
+        prompt = f"""Target: {target_url}
+
+## Discovered Services (from nmap)
+{chr(10).join(services_lines) if services_lines else '(none)'}
 
 ## Current State
-- {len(self.vulnerabilities)} vulnerability hypotheses
-- {len(self.dkg.query_nodes('Endpoint'))} endpoints discovered
-- {len(self.dkg.query_nodes('Service'))} services detected
-- Credentials: {len(self.dkg.query_nodes('Credential'))} known
-
-## Vulnerabilities
-{vuln_text}
+- {len(state.endpoints)} endpoints discovered so far
+- {len(state.services)} services detected
+- Credentials: {len(state.credentials)} known
 {phase_summary}
 {knowledge_context}
-## Available Tools
-{', '.join(tools)}
+## Analyzed Vulnerabilities
+{self._format_vulnerability_summary()}
+## Available Tools (all recon + attack)
+{', '.join(all_tools)}
 
 ## Task
-Generate an exploitation plan as a JSON array. Each task:
+Generate a plan as a JSON array of EXPLOIT tasks. Reconnaissance and research
+have already been completed. Each task should test or exploit a vulnerability:
 - id: unique string (e.g. "task-1")
 - dependent_task_ids: list of task IDs that must complete first
-- instruction: what to do and why
-- tool: exact tool name from the list above
+- instruction: what to exploit and how
+- tool: exact exploit tool name (sqlmap_test, command_injection_test, etc.)
 - params: tool parameters dict
-- reason: why this task is important
+- reason: which vulnerability this targets
 
-Prioritize: 1) high-confidence vulns, 2) tasks with suggested tools, 3) credential-based access before blind injection.
+## Dependency Rules (use dependent_task_ids to build a DAG)
+Create meaningful task dependencies when:
+1. **Credential-first**: tasks that use credentials (e.g. ssh, login) MUST depend
+   on credential discovery/verification tasks.
+2. **Foothold-first**: lateral movement tasks MUST depend on initial compromise.
+3. **Parameter confirmation**: exploit tasks targeting a specific parameter SHOULD
+   depend on tasks that confirm that parameter is injectable.
+4. **Independent tasks**: exploit tasks targeting DIFFERENT endpoints/services with
+   no shared prerequisites SHOULD have empty dependent_task_ids (run in parallel).
 
-Output ONLY valid JSON array. 3-8 tasks."""
+Example DAG for a target with SQLi + CMDi + SSH pivot:
+```json
+[
+  {"id": "task-1", "dependent_task_ids": [],
+   "instruction": "Test SQLi on login endpoint", "tool": "sqlmap_test", ...},
+  {"id": "task-2", "dependent_task_ids": [],
+   "instruction": "Test CMDi on upload endpoint", "tool": "command_injection_test", ...},
+  {"id": "task-3", "dependent_task_ids": ["task-1", "task-2"],
+   "instruction": "Use obtained credentials for SSH pivot",
+   "tool": "ssh_execute", ...}
+]
+```
+task-1 and task-2 run first (parallel, independent). task-3 waits for both.
+
+## Strategy
+1. For each vulnerability listed above, create one exploit task using the
+   suggested tool. Prioritize high-confidence vulnerabilities first.
+2. If an exploit succeeds or reveals new information, the plan will be
+   updated after each task — new tasks can be added in replanning.
+3. Do NOT add curl_get/http_post probing tasks — services have already been
+   probed during reconnaissance.
+4. If a vulnerability's suggested tool is curl_get (for LFI/IDOR/SSRF), use
+   curl_get with the exact URL and parameter.
+
+Output ONLY valid JSON array. One task per vulnerability (3-8 tasks)."""
 
         self._maybe_compress()
-        content, _ = self.llm.generate(prompt=prompt)
         try:
-            match = re.search(r'\[.*\]', content, re.DOTALL)
-            tasks = json.loads(match.group(0)) if match else []
+            content, _ = self.llm.generate(prompt=prompt, timeout=120.0)
+        except Exception as e:
+            log.warning("Plan generation LLM call failed: %s — retrying with shorter prompt", e)
+            self._maybe_compress()
+            try:
+                # Retry with top-5 vulns only (shorter prompt)
+                short_prompt = prompt.split("## Analyzed Vulnerabilities")[0]
+                if self.vulnerabilities:
+                    short_vulns = self._format_vulnerability_summary_short(max_items=5)
+                    short_prompt += f"## Analyzed Vulnerabilities\n{short_vulns}\n"
+                short_prompt += prompt.split("## Available Tools")[1] if "## Available Tools" in prompt else ""
+                content, _ = self.llm.generate(prompt=short_prompt, timeout=120.0)
+            except Exception as e2:
+                log.warning("Plan generation retry also failed: %s — using hardcoded fallback", e2)
+                content = ""
+
+        try:
+            tasks = [t for t in (self._extract_json_array(content) or []) if isinstance(t, dict)]
             for t in tasks:
                 t.setdefault("status", "pending")
                 t.setdefault("dependent_task_ids", t.pop("dependencies", []))
@@ -2514,6 +3327,31 @@ Output ONLY valid JSON array. 3-8 tasks."""
                     ready_probe.append(task)
         return ready_exploit[0] if ready_exploit else (ready_probe[0] if ready_probe else None)
 
+    @staticmethod
+    def _summarize_task_result(
+        tc_names: list[str], success: bool, all_stdouts: list[str]
+    ) -> str:
+        """Build a summary of task execution result for plan review.
+
+        Includes ALL tool call outputs so the plan-review LLM (which runs
+        in a separate call and can't see conversation history) understands
+        everything that was discovered.
+        """
+        if not all_stdouts:
+            return "no output"
+        # Show up to 3 tool outputs (first, middle if 3+, last if different)
+        result_parts: list[str] = []
+        n = len(all_stdouts)
+        if n <= 2:
+            for i, s in enumerate(all_stdouts):
+                result_parts.append(s[:600])
+        else:
+            result_parts.append(all_stdouts[0][:600])
+            if n > 2:
+                result_parts.append(all_stdouts[n // 2][:400])
+            result_parts.append(all_stdouts[-1][:600])
+        return "\n---\n".join(result_parts)
+
     def _format_plan_status(self) -> str:
         """Format plan progress for LLM prompts."""
         plan = getattr(self, 'exploitation_plan', None)
@@ -2530,39 +3368,133 @@ Output ONLY valid JSON array. 3-8 tasks."""
             lines.append(f"  {t['id']}: [{status}] {t.get('instruction','')[:100]}{dep_str}")
         return "\n".join(lines)
 
+    async def _review_and_update_plan(
+        self, task: dict, success: bool, task_result: str = ""
+    ) -> None:
+        """LLM reviews and updates the plan after every task (VulnBot-style).
+
+        Called after each task completes, regardless of success or failure.
+        The LLM sees what was learned and can add/remove/reorder tasks.
+        """
+        if not getattr(self, 'exploitation_plan', None):
+            return
+
+        # Mark task status
+        task["status"] = "done" if success else "failed"
+        task["attempts"] = task.get("attempts", 0) + 1
+        task["result_summary"] = task_result[:500]
+
+        # Build prompt: what just happened + current plan + new DKG state
+        state = self._get_state()
+        new_discoveries = ""
+        if state.endpoints:
+            new_discoveries += "\n".join(
+                f"  - {ep.method} {ep.url}" + (f" params={ep.params}" if ep.params else "")
+                for ep in state.endpoints[-5:]
+            )
+            new_discoveries = f"\n## Latest Discoveries\n{new_discoveries}"
+        if state.credentials:
+            cred_text = "\n".join(
+                f"  - {c.username}@{c.source_host}" for c in state.credentials
+            )
+            new_discoveries += f"\n## Credentials\n{cred_text}"
+
+        # If the task was reading a config/credential file, flag it explicitly
+        cred_reminder = ""
+        api_reminder = ""
+        if success and task_result:
+            task_result_lower = task_result.lower()
+            if any(kw in task_result_lower for kw in
+                   ("token:", "client-certificate-data", "bearer",
+                    "password:", "apiVersion:", "server: https://")):
+                cred_reminder = (
+                    "\nIMPORTANT: The task output above CONTAINS CREDENTIALS. "
+                    "You MUST add tasks that USE these credentials now. "
+                    "If the output shows 'server: https://HOST:PORT', use that "
+                    "exact URL with the credentials from the same file. "
+                    "Send authenticated requests with curl_get: "
+                    'headers="Authorization: Bearer <token>", insecure=true.\n'
+                )
+            # Detect REST API / OpenAPI discovery
+            if any(kw in task_result_lower for kw in
+                   ("openapi", "swagger", "\"kind\"", "\"apiVersion\"",
+                    "\"paths\"", "\"items\"", "\"metadata\"", "namespaces")):
+                api_reminder = (
+                    "\nIMPORTANT: The output above contains a REST API response or "
+                    "OpenAPI spec. You MUST add tasks to explore these API paths: "
+                    "list resources, access individual items by ID from the response, "
+                    "check nested sub-resources. If there's an OpenAPI spec, read it "
+                    "fully and use the documented paths. The flag is likely in a data "
+                    "field returned by one of these API calls.\n"
+                )
+
+        prompt = (
+            f"Just completed: {task.get('instruction','')}\n"
+            f"Tool: {task.get('tool','')}\n"
+            f"Result: {success and 'SUCCESS' or 'FAILED'}\n"
+            f"Output: {task_result[:1500]}\n"
+            f"{cred_reminder}"
+            f"{api_reminder}\n"
+            f"{self._format_plan_status()}\n"
+            f"{new_discoveries}\n\n"
+            f"## Your Job: Update the Plan\n"
+            f"Review the plan and apply relevant changes from:\n"
+            f"- If credentials or tokens were obtained, ADD tasks that USE them immediately "
+            f"(e.g., send authenticated requests to the relevant API endpoint)\n"
+            f"- If a task discovered new endpoints/services, ADD exploration tasks for them\n"
+            f"- If a REST API or OpenAPI spec was discovered, ADD tasks to explore "
+            f"resource paths and individual items\n"
+            f"- If pending tasks target endpoints that returned errors, REMOVE or CHANGE them\n"
+            f"- If a task partially succeeded (some calls worked, some failed), SPLIT it\n"
+            f"- If progress has been made, REMOVE low-value pending tasks\n"
+            f"- If the plan is already optimal for the current state, it is OK to keep it unchanged\n\n"
+            f"Output the COMPLETE updated task list as a JSON array. "
+            f"Preserve done/failed tasks. Output ONLY valid JSON array."
+        )
+
+        try:
+            self._maybe_compress()
+            content, _ = self.llm.generate(
+                prompt=prompt,
+                system_prompt=SYSTEM_PROMPT_ORCHESTRATOR_UNIFIED,
+            )
+            new_tasks = self._extract_json_array(content) or []
+            if new_tasks and isinstance(new_tasks, list):
+                # Keep done/failed tasks, replace pending with LLM's updated list
+                preserved = [t for t in self.exploitation_plan.tasks
+                           if t.get("status") in ("done", "failed", "skipped")
+                           and t.get("id") != task.get("id")]
+                # Add the just-completed task with updated status
+                preserved.append(task)
+                # Merge in new tasks from LLM (avoid duplicate IDs)
+                existing_ids = {t["id"] for t in preserved}
+                for nt in new_tasks:
+                    if not isinstance(nt, dict):
+                        continue
+                    nt.setdefault("status", "pending")
+                    nt.setdefault("dependent_task_ids", nt.pop("dependencies", []))
+                    if nt["id"] not in existing_ids:
+                        preserved.append(nt)
+                        existing_ids.add(nt["id"])
+                self.exploitation_plan.tasks = preserved
+                self._sync_plan_to_dkg()
+                log.info("[PLAN REVIEW] plan updated: %d tasks (%d done, %d failed, %d pending)",
+                         len(preserved),
+                         sum(1 for t in preserved if t.get("status") == "done"),
+                         sum(1 for t in preserved if t.get("status") in ("failed", "skipped")),
+                         sum(1 for t in preserved if t.get("status") == "pending"))
+        except Exception as e:
+            log.warning("Plan review failed: %s — keeping current plan", e)
+            self._sync_plan_to_dkg()
+
     async def _update_plan_after_task(self, task: dict, success: bool, result: Any = None):
-        """Update plan state after task execution. Triggers replan on failure."""
+        """Legacy: kept for sub-agent compatibility. Use _review_and_update_plan instead."""
         if not getattr(self, 'exploitation_plan', None):
             return
         task["status"] = "done" if success else "failed"
         task["attempts"] = task.get("attempts", 0) + 1
         if result:
             task["result_summary"] = str(result)[:500]
-
-        # Update DKG Task node
-        self.dkg.add_node("Task", task["id"], {
-            "plan_id": self.exploitation_plan.plan_id,
-            "instruction": task.get("instruction", ""),
-            "tool": task.get("tool", ""),
-            "params": task.get("params", {}),
-            "status": task["status"],
-            "dependencies": task.get("dependent_task_ids", []) or task.get("dependencies", []),
-            "attempts": task.get("attempts", 0),
-            "result_summary": task.get("result_summary", ""),
-        })
-
-        # Replan on failure
-        if task["status"] == "failed" and task.get("attempts", 0) < task.get("max_attempts", 3):
-            await self._replan_after_failure(task, result)
-
-        # Check plan completion
-        pending = [t for t in self.exploitation_plan.tasks if t.get("status") == "pending"]
-        done = sum(1 for t in self.exploitation_plan.tasks if t.get("status") == "done")
-        if not pending:
-            self.exploitation_plan.status = "completed"
-
-        # Update DKG Plan node
-        self._sync_plan_to_dkg()
 
     async def _replan_after_failure(self, failed_task: dict, result: Any = None):
         """LLM generates replacement tasks when a task fails."""
@@ -2579,8 +3511,7 @@ Output ONLY valid JSON array."""
         try:
             self._maybe_compress()
             content, _ = self.llm.generate(prompt=prompt)
-            match = re.search(r'\[.*\]', content, re.DOTALL)
-            new_tasks = json.loads(match.group(0)) if match else []
+            new_tasks = self._extract_json_array(content) or []
             if new_tasks:
                 self.exploitation_plan.tasks = [
                     t for t in self.exploitation_plan.tasks if t["id"] != failed_task["id"]
@@ -3210,8 +4141,16 @@ Respond ONLY with a JSON array of next steps (max 5)."""
         we've learned and generates targeted checks for this specific target.
         """
         log.info("_systematic_post_check starting")
-        # Reset LLM session to clear any stale tool_calls from solo cycle
-        self.llm.reset()
+        # Mark context boundary but preserve conversation history.
+        # Prior tool_calls from the solo cycle are still valid conversation
+        # context — the LLM already saw their results.
+        self.llm.add_context_message(
+            "[SYSTEMATIC POST-CHECK] Running targeted checks on known endpoints. "
+            "Prior automated tests and plan tasks are complete. "
+            "Look for privilege escalation, IDOR, parameter tampering, and "
+            "hidden endpoints that the automated tools may have missed.",
+            role="user",
+        )
         await self._try_auto_login(target_url, None, None)
 
         # Gather what we know
@@ -3439,6 +4378,29 @@ Respond ONLY with a JSON array of next steps (max 5)."""
         return False
 
     @staticmethod
+    def _extract_json_array(text: str) -> list | None:
+        """Extract the first complete JSON array using bracket counting.
+
+        Handles nested brackets and trailing text — more robust than regex.
+        Returns the parsed list, or None if no valid array found.
+        """
+        start = text.find('[')
+        if start == -1:
+            return None
+        depth = 0
+        for i, c in enumerate(text[start:], start):
+            if c == '[':
+                depth += 1
+            elif c == ']':
+                depth -= 1
+                if depth == 0:
+                    try:
+                        return json.loads(text[start:i + 1])
+                    except json.JSONDecodeError:
+                        return None
+        return None
+
+    @staticmethod
     def _extract_json(text: str) -> Any:
         """Extract JSON from LLM response text."""
         # Try direct parse
@@ -3449,11 +4411,21 @@ Respond ONLY with a JSON array of next steps (max 5)."""
         # Try to find JSON array/object in markdown code blocks
         match = re.search(r"```(?:json)?\s*([\s\S]*?)```", text)
         if match:
-            return json.loads(match.group(1))
-        # Try to find any JSON-like structure
-        match = re.search(r"(\[.*\]|\{.*\})", text, re.DOTALL)
+            try:
+                return json.loads(match.group(1))
+            except json.JSONDecodeError:
+                pass
+        # Try bracket-counting for JSON arrays (handles nesting + trailing text)
+        result = Orchestrator._extract_json_array(text)
+        if result is not None:
+            return result
+        # Non-greedy match for JSON objects (no nesting issues with {})
+        match = re.search(r"\{.*?\}", text, re.DOTALL)
         if match:
-            return json.loads(match.group(1))
+            try:
+                return json.loads(match.group(0))
+            except json.JSONDecodeError:
+                pass
         return {}
 
     # ── Persistent Multi-Agent System ─────────────────────────────────
@@ -3474,7 +4446,7 @@ Respond ONLY with a JSON array of next steps (max 5)."""
           - Coordinated (B 0.3-0.6): max 1 ReconAgent + 1 ExploitAgent
           - Distributed (B >= 0.6): per-host ReconAgent + per-vuln ExploitAgent + PivotAgent
         """
-        from darwin.sub_agents.base import SubAgentPool, TaskScope, TokenBudget, AgentType
+        from darwin.sub_agents.base import SubAgentPool, TaskScope, TokenBudget, AgentType, SubAgentState
         from darwin.sub_agents.recon_agent import ReconAgent
         from darwin.sub_agents.exploit_agent import ExploitAgent
         from darwin.sub_agents.pivot_agent import PivotAgent
@@ -3485,18 +4457,11 @@ Respond ONLY with a JSON array of next steps (max 5)."""
 
         pool = self._persistent_pool
 
-        # Plan before spawning (first time only)
-        if not getattr(self, '_multi_research_done', False):
-            if not self.exploitation_plan or not self.exploitation_plan.tasks:
-                self.exploitation_plan = await self._generate_exploitation_plan(
-                    target_url, cteg_hints)
-            self._multi_research_done = True
-
-        # Determine which agents to spawn based on plan + DKG state
+        # Determine which agents to spawn based on DKG state
         spawned_any = await self._spawn_agents_from_dkg(target_url, pool, scaling_level, cteg_hints)
 
         if not spawned_any and pool.active_count() == 0:
-            return None  # Nothing to do, let solo handle it
+            return None
 
         # Run existing + new agents with DKG monitoring
         log.info("Multi-agent: %d active agents", pool.active_count())
@@ -3505,55 +4470,121 @@ Respond ONLY with a JSON array of next steps (max 5)."""
         flag_found = asyncio.Event()
 
         async def _flag_watcher():
-            """Background: watch DKG for flag nodes via asyncio.Event + poll.
-
-            Checks existing Flag nodes before waiting on the event to avoid
-            missing notifications due to DKG's set()/clear() race.
-            """
+            """Background: watch DKG for flag nodes via asyncio.Event + poll."""
             flag_event = self.dkg._events.get("Flag")
             if not flag_event:
                 return
             try:
                 while not flag_found.is_set():
-                    # Check existing flags first (handles pre-existing and
-                    # notifications that were cleared between set/clear).
                     flags = self.dkg.query_nodes("Flag")
                     for f in flags:
                         fv = f.get("value", "")
                         if fv and fv.startswith("flag{") and fv not in self._known_flags:
                             self._known_flags.add(fv)
+                            self.__dict__['_multi_agent_flag'] = fv
                             flag_found.set()
                             return
-                    # Wait for next Flag node to be added, then re-check.
                     try:
                         await asyncio.wait_for(flag_event.wait(), timeout=5.0)
                     except asyncio.TimeoutError:
-                        pass  # poll again
+                        pass
             except asyncio.CancelledError:
                 pass
 
         flag_task = asyncio.create_task(_flag_watcher())
 
         try:
-            # Run agents until flag found, all done, or timeout
-            agent_task = asyncio.create_task(pool.run_all())
+            # Partition agents. ExploitAgent deferred until after analyze+research.
+            recon_agents = [a for a in pool._agents.values()
+                            if getattr(a, 'agent_type', None) == AgentType.RECON
+                            and getattr(a, 'state', None) != SubAgentState.DONE]
+            exploit_agents = [a for a in pool._agents.values()
+                              if getattr(a, 'agent_type', None) == AgentType.EXPLOIT
+                              and getattr(a, 'state', None) != SubAgentState.DONE]
+            other_agents = [a for a in pool._agents.values()
+                            if getattr(a, 'agent_type', None) not in (AgentType.RECON, AgentType.EXPLOIT)
+                            and getattr(a, 'state', None) != SubAgentState.DONE]
 
-            done, _ = await asyncio.wait(
-                [agent_task, asyncio.ensure_future(flag_found.wait())],
-                timeout=30.0,  # 30s per monitoring window
-                return_when=asyncio.FIRST_COMPLETED,
-            )
+            # Save ExploitAgent specs (deferred until after analyze+research)
+            saved_exploit_specs = [
+                (a.agent_id, a.task_scope, a.dkg, a.dpm, a.dave, a.cteg, a.cteg_hints, a.budget)
+                for a in exploit_agents
+            ]
+            for aid in [s[0] for s in saved_exploit_specs]:
+                if aid in pool._agents:
+                    del pool._agents[aid]
+
+            # Phase 1: Recon agents first
+            if recon_agents and not flag_found.is_set():
+                await asyncio.wait_for(
+                    asyncio.gather(*[a.run() for a in recon_agents], return_exceptions=True),
+                    timeout=120.0,
+                )
+
+            # Phase 2: Service research → Analyze → Vuln research → Plan
+            if not flag_found.is_set():
+                if not self._svc_research_done:
+                    await self._service_research()
+                    self._svc_research_done = True
+                if not self._analyze_done:
+                    await self._analyze_phase()
+                    self._analyze_done = True
+                if self.vulnerabilities and not self._research_done:
+                    await self._research_phase()
+                    self._research_done = True
+                self.exploitation_plan = await self._generate_exploitation_plan(
+                    target_url, cteg_hints)
+
+            # Phase 3: Re-create ExploitAgent (now DKG has Vulnerability nodes)
+            if not flag_found.is_set() and saved_exploit_specs:
+                for agent_id, scope, dkg, dpm, dave, cteg, cteg_hints, budget in saved_exploit_specs:
+                    if agent_id not in pool._agents:
+                        exploit = ExploitAgent(
+                            agent_id=agent_id, task_scope=scope,
+                            dkg=dkg, dpm=dpm, dave=dave,
+                            cteg=cteg, cteg_hints=cteg_hints,
+                            budget=budget,
+                        )
+                        pool.spawn(exploit)
+                exploit_agents = [a for a in pool._agents.values()
+                                  if getattr(a, 'agent_type', None) == AgentType.EXPLOIT
+                                  and getattr(a, 'state', None) != SubAgentState.DONE]
+
+            # Phase 4: Run Exploit agents
+            if exploit_agents and not flag_found.is_set():
+                await asyncio.wait_for(
+                    asyncio.gather(*[a.run() for a in exploit_agents], return_exceptions=True),
+                    timeout=120.0,
+                )
+
+            # Phase 5: Other agents (AD, Cloud, Pivot)
+            if other_agents and not flag_found.is_set():
+                await asyncio.wait_for(
+                    asyncio.gather(*[a.run() for a in other_agents], return_exceptions=True),
+                    timeout=120.0,
+                )
 
             if flag_found.is_set():
                 pool.terminate()
-                await asyncio.wait_for(agent_task, timeout=5.0)
-                agent_task.cancel()
 
             # Check results
             results = getattr(pool, '_results', {})
             self.step_count += len(results)
 
-            # Query DKG for flags
+            # Check for flag found by watcher (avoids _known_flags dedup skip)
+            watcher_flag = self.__dict__.pop('_multi_agent_flag', None)
+            if watcher_flag:
+                total_tokens = self.llm.token_count + sum(
+                    getattr(r, 'tokens_used', 0) for r in results.values()
+                )
+                self.phase = OrchestratorPhase.DONE
+                return TaskResult(
+                    success=True, flag=watcher_flag, steps=self.step_count,
+                    tokens_used=total_tokens,
+                    time_elapsed=time.time() - self.start_time,
+                )
+
+            # Query DKG for flags (fallback if watcher didn't catch it)
             flags = self.dkg.query_nodes("Flag")
             for flag in flags:
                 fv = flag.get("value", "")
@@ -3625,9 +4656,30 @@ Respond ONLY with a JSON array of next steps (max 5)."""
                                              len(self.exploitation_plan.tasks))
                             except Exception as e:
                                 log.warning("Multi-agent plan update failed: %s", e)
+                                # Fallback: create plan tasks directly from DKG findings
+                                try:
+                                    vulns = self.dkg.query_nodes("Vulnerability")
+                                    for v in vulns[-5:]:
+                                        vt = v.get("vuln_type", "")
+                                        ep = v.get("endpoint", "")
+                                        param = v.get("parameter", "")
+                                        if vt and ep:
+                                            tool = {"SQLI": "sqlmap_test", "XSS": "xss_reflection_test",
+                                                    "CMDI": "command_injection_test"}.get(
+                                                    vt.upper(), "send_payload")
+                                            self.exploitation_plan.tasks.append({
+                                                "id": f"fallback-{len(self.exploitation_plan.tasks)}",
+                                                "instruction": f"Exploit {vt} at {ep}",
+                                                "tool": tool,
+                                                "params": {"url": ep, "param": param or "q"},
+                                                "vuln_type": vt, "status": "pending",
+                                                "dependent_task_ids": [],
+                                            })
+                                except Exception:
+                                    pass
 
             # Spawn follow-up agents based on new DKG data
-            await self._spawn_followup_agents(target_url, pool)
+            await self._spawn_followup_agents(target_url, pool, cteg_hints)
 
             # Clean up done agents
             pool.cleanup()
@@ -3640,6 +4692,67 @@ Respond ONLY with a JSON array of next steps (max 5)."""
                 await flag_task
             except (asyncio.CancelledError, Exception):
                 pass
+
+    async def _analyze_from_recon_findings(self) -> None:
+        """Analyze DKG recon discoveries and create Vulnerability hypotheses.
+
+        Called after ReconAgent completes in multi-agent mode.
+        Reads Endpoint/Service nodes, asks LLM to hypothesize vulnerabilities,
+        and writes Vulnerability nodes to DKG for ExploitAgent to use.
+        """
+        endpoints = self.dkg.query_nodes("Endpoint")
+        services = self.dkg.query_nodes("Service")
+        if not endpoints and not services:
+            return
+
+        ep_lines = []
+        for ep in endpoints[:20]:
+            url = ep.get("url", "")
+            method = ep.get("method", "GET")
+            params = ep.get("params", "")
+            ep_lines.append(f"  {method} {url}" + (f" params={params}" if params else ""))
+        svc_lines = []
+        for s in services[:10]:
+            version = s.get("version", "") or s.get("banner", "")
+            port = s.get("port", 0)
+            if version and version not in ("http", "https", ""):
+                svc_lines.append(f"  port {port}: {version}")
+
+        self._maybe_compress()
+        try:
+            content, _ = self.llm.generate(
+                prompt=(
+                    f"## Discovered Endpoints\n" + "\n".join(ep_lines or ["(none)"]) + "\n\n"
+                    f"## Discovered Technologies\n" + "\n".join(svc_lines or ["(none)"]) + "\n\n"
+                    f"Analyze these findings and identify potential vulnerabilities.\n"
+                    f"For each vulnerability, specify: vuln_type (SQLI/XSS/CMDI/SSTI/LFI/IDOR), "
+                    f"endpoint URL, parameter name, severity (low/medium/high/critical), "
+                    f"and a brief reason.\n"
+                    f"Output as JSON array:\n"
+                    f'[{{"vuln_type": "SQLI", "endpoint": "...", "parameter": "...", '
+                    f'"severity": "high", "reason": "..."}}]'
+                ),
+                system_prompt=SYSTEM_PROMPT_ANALYZE,
+            )
+        except Exception as e:
+            log.warning("_analyze_from_recon_findings LLM call failed: %s", e)
+            return
+        try:
+            vulns = self._extract_json(content)
+            if isinstance(vulns, list):
+                for v in vulns:
+                    if isinstance(v, dict) and v.get("vuln_type"):
+                        self.dkg.add_node("Vulnerability",
+                            f"vuln-ma-{v.get('vuln_type','')}-{v.get('endpoint','')[:20]}", {
+                                "vuln_type": v.get("vuln_type", ""),
+                                "endpoint": v.get("endpoint", ""),
+                                "parameter": v.get("parameter", ""),
+                                "severity": v.get("severity", "medium"),
+                                "evidence": v.get("reason", ""),
+                                "discovered_by": "multi-agent-analyze",
+                            })
+        except Exception as e:
+            log.warning("_analyze_from_recon_findings parse failed: %s", e)
 
     async def _spawn_agents_from_dkg(
         self, target_url: str, pool,
@@ -3792,7 +4905,7 @@ Respond ONLY with a JSON array of next steps (max 5)."""
         return spawned
 
     async def _spawn_followup_agents(
-        self, target_url: str, pool,
+        self, target_url: str, pool, cteg_hints: dict | None = None,
     ) -> None:
         """Scan DKG for collaboration opportunities and spawn follow-up agents."""
         from darwin.sub_agents.base import TaskScope, TokenBudget
@@ -3857,6 +4970,7 @@ Respond ONLY with a JSON array of next steps (max 5)."""
                     agent_id=agent_id, task_scope=scope,
                     dkg=self.dkg, dpm=self.dpm, dave=self.dave,
                     cteg=self.cteg,
+                    cteg_hints=cteg_hints,
                     budget=TokenBudget(max_tokens=48000, max_iterations=12),
                 )
                 pool.spawn(exploit)

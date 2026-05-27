@@ -1,0 +1,21 @@
+scenario:
+  id: AD-07
+  name: "Kerberos Reflection Privilege Escalation"
+  technique: "CVE-2025-33073 (CVSS 8.8)"
+  difficulty: L3
+  cve: "CVE-2025-33073"
+network:
+  dc_ip: 192.168.56.10
+  target_smb: "192.168.56.10:445"
+  domain: north.sevenkingdoms.local
+attacker:
+  credentials:
+    username: lowpriv
+    password: "Password123!"
+    domain: north
+target:
+  smb_signing: "DISABLED"
+  prerequisite: "Domain user can create DNS A records"
+  exploit: "DNS poisoning → SMB coercion → Kerberos reflection relay → forged AP-REQ → SYSTEM token"
+flag:
+  location: "C:\\Users\\Public\\flag.txt on DC (after SYSTEM escalation)"

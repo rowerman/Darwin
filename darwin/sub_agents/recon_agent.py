@@ -56,7 +56,19 @@ class ReconAgent(BaseSubAgent):
         tools = self.tools.get_tool_names() if self.tools else ["whatweb_scan", "dirb_scan", "curl_get", "nmap_vulners_scan"]
         from darwin.prompts.recon_agent import SYSTEM_PROMPT_RECON
 
+        # Check already-scanned endpoints from DKG
+        ep_nodes = self.dkg.query_nodes("Endpoint")
+        already_scanned = [e.get("url", "") for e in ep_nodes if e.get("deep_recon_done")]
+        already_found = [e.get("url", "") for e in ep_nodes
+                         if e.get("discovered_by", "").startswith("deep-recon-")]
+        context = ""
+        if already_scanned:
+            context += f"\nAlready deep-scanned (skip whatweb/dirb on these): {', '.join(already_scanned[:5])}"
+        if already_found:
+            context += f"\nAlready discovered sub-paths (probe these): {', '.join(already_found[:8])}"
+
         prompt = f"""Target: {target}
+{context}
 
 Available recon tools: {', '.join(sorted(tools))}
 
@@ -65,6 +77,12 @@ Create a reconnaissance plan with 3-5 steps. Each step should specify:
 - instruction: what to do
 - tool: which tool to use
 - params: tool parameters
+- dependent_task_ids: list of task IDs that must complete first
+- Do NOT re-run whatweb or dirb on already-scanned URLs. Focus on probing discovered sub-paths.
+
+## Dependency rules
+- Sub-path probing tasks SHOULD depend on the dirb_scan that discovers them.
+- Independent scans (different hosts/services): empty dependent_task_ids (run in parallel).
 
 Output as JSON array:
 [{{"id": "recon-1", "instruction": "...", "tool": "tool_name", "params": {{...}}, "dependent_task_ids": []}}]"""
@@ -82,15 +100,36 @@ Output as JSON array:
         except Exception:
             pass
 
-        # Fallback: hardcoded plan if LLM fails
-        return [
-            {"id": "recon-1", "instruction": f"Identify web technologies on {target}",
-             "tool": "whatweb_scan", "params": {"target_url": target}, "dependent_task_ids": []},
-            {"id": "recon-2", "instruction": f"Enumerate directories on {target}",
-             "tool": "dirb_scan", "params": {"target_url": target}, "dependent_task_ids": ["recon-1"]},
-            {"id": "recon-3", "instruction": "Probe endpoints",
-             "tool": "curl_get", "params": {"url": target, "follow_redirects": True}, "dependent_task_ids": ["recon-2"]},
-        ]
+        # Fallback: hardcoded plan — skip steps already done by _deep_recon()
+        plan = []
+        # Check if this target was already deep-recon-scanned
+        ep_nodes = self.dkg.query_nodes("Endpoint")
+        target_scanned = any(
+            e.get("url", "").rstrip("/") == target.rstrip("/") and e.get("deep_recon_done")
+            for e in ep_nodes
+        )
+        if not target_scanned:
+            plan.extend([
+                {"id": "recon-1", "instruction": f"Identify web technologies on {target}",
+                 "tool": "whatweb_scan", "params": {"target_url": target}, "dependent_task_ids": []},
+                {"id": "recon-2", "instruction": f"Enumerate directories on {target}",
+                 "tool": "dirb_scan", "params": {"target_url": target}, "dependent_task_ids": ["recon-1"]},
+            ])
+        # Always probe discovered sub-paths
+        sub_paths = [e.get("url", "") for e in ep_nodes
+                     if e.get("discovered_by", "").startswith("deep-recon-") and e.get("url", "")]
+        for i, path_url in enumerate(sub_paths[:5]):
+            plan.append({
+                "id": f"recon-probe-{i+1}",
+                "instruction": f"Probe discovered path {path_url}",
+                "tool": "curl_get", "params": {"url": path_url, "follow_redirects": True},
+                "dependent_task_ids": [],
+            })
+        if not plan:
+            plan.append({"id": "recon-1", "instruction": f"Probe {target} for hidden endpoints",
+                         "tool": "curl_get", "params": {"url": target, "follow_redirects": True},
+                         "dependent_task_ids": []})
+        return plan
 
     async def _execute_task(self, task: Dict[str, Any]) -> Any:
         """Execute a recon task — LLM decides which tool and parameters to use.

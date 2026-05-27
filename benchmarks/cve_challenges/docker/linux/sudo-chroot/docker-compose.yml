@@ -1,0 +1,5 @@
+services:
+  sudo-chroot:
+    build: .
+    ports:
+      - "2222:22"

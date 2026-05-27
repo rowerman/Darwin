@@ -1,0 +1,342 @@
+scenarios:
+  db-05:
+    id: DB-05
+    name: Redis Unauthorized Access
+    type: docker
+    difficulty: L1
+    cve: N/A (misconfiguration)
+    path: docker/db/redis-unauth
+    port: 6379
+  web-03:
+    id: WEB-03
+    name: WordPress Simple File List RCE
+    type: docker
+    difficulty: L1
+    cve: CVE-2025-34085
+    path: docker/web/wordpress-simple-file-list
+    port: 8080
+  lnx-05:
+    id: LNX-05
+    name: Sudo Chroot Privilege Escalation
+    type: docker
+    difficulty: L2
+    cve: CVE-2025-32463
+    path: docker/linux/sudo-chroot
+    ssh_user: attacker
+    ssh_password: password123
+    ssh_port: 2222
+  lnx-01:
+    id: LNX-01
+    name: nftables Use-After-Free LPE
+    type: vagrant
+    difficulty: L2
+    cve: CVE-2024-1086
+    path: docker/linux/nftables-cve-2024-1086
+    ssh_user: attacker
+    ssh_password: password123
+    ssh_host: 192.168.57.101
+  lnx-02:
+    id: LNX-02
+    name: nftables pipapo Double-Free LPE
+    type: vagrant
+    difficulty: L2
+    cve: CVE-2024-26809
+    path: docker/linux/nftables-cve-2024-26809
+    ssh_user: attacker
+    ssh_password: password123
+    ssh_host: 192.168.57.102
+  lnx-03:
+    id: LNX-03
+    name: Kernel cgroup PrivEsc
+    type: vagrant
+    difficulty: L3
+    cve: CVE-2024-50264
+    path: docker/linux/kernel-cve-2024-50264
+    ssh_user: attacker
+    ssh_password: password123
+    ssh_host: 192.168.57.103
+  lnx-04:
+    id: LNX-04
+    name: vsock UAF PrivEsc
+    type: vagrant
+    difficulty: L2
+    cve: CVE-2025-21756
+    path: docker/linux/kernel-cve-2025-21756
+    ssh_user: attacker
+    ssh_password: password123
+    ssh_host: 192.168.57.104
+  k8s-01:
+    id: K8S-01
+    name: runC WORKDIR Container Escape
+    type: k8s
+    difficulty: L2
+    cve: CVE-2024-21626
+    path: k8s/runc-cve-2024-21626
+  k8s-02:
+    id: K8S-02
+    name: runC /dev/null Symlink Escape
+    type: k8s
+    difficulty: L2
+    cve: CVE-2025-31133
+    path: k8s/runc-cve-2025-31133
+  k8s-03:
+    id: K8S-03
+    name: runC LSM Bypass Escape
+    type: k8s
+    difficulty: L3
+    cve: CVE-2025-52881
+    path: k8s/runc-cve-2025-52881
+  k8s-05:
+    id: K8S-05
+    name: K8s gitRepo Volume Escape
+    type: k8s
+    difficulty: L2
+    cve: CVE-2024-10220
+    path: k8s/gitrepo-cve-2024-10220
+  k8s-06:
+    id: K8S-06
+    name: K8s RBAC Secrets Abuse
+    type: k8s
+    difficulty: L1
+    cve: N/A (misconfiguration)
+    path: k8s/rbac-secrets
+  k8s-07:
+    id: K8S-07
+    name: Kubelet API Anonymous Access
+    type: k8s
+    difficulty: L2
+    cve: N/A (misconfiguration)
+    path: k8s/kubelet-unauth
+  k8s-08:
+    id: K8S-08
+    name: etcd Unauthorized Access
+    type: k8s
+    difficulty: L3
+    cve: N/A (misconfiguration)
+    path: k8s/etcd-unauth
+  k8s-09:
+    id: K8S-09
+    name: Private Registry Poisoning
+    type: k8s
+    difficulty: L2
+    cve: N/A (misconfiguration)
+    path: k8s/registry-poison
+  k8s-10:
+    id: K8S-10
+    name: Helm v2 Tiller Unauthenticated
+    type: k8s
+    difficulty: L1
+    cve: N/A (misconfiguration)
+    path: k8s/helm-tiller
+  ad-01:
+    id: AD-01
+    name: Kerberoasting
+    type: samba-ad
+    difficulty: L1
+    cve: ATT&CK T1558.003
+    path: ad/scenarios/ad-01-kerberoasting
+    dc_ip: 192.168.100.10
+  ad-02:
+    id: AD-02
+    name: AS-REP Roasting
+    type: samba-ad
+    difficulty: L1
+    cve: ATT&CK T1558.004
+    path: ad/scenarios/ad-02-asrep
+    dc_ip: 192.168.100.10
+  ad-03:
+    id: AD-03
+    name: LDAPNightmare RCE
+    type: ad
+    difficulty: L2
+    cve: CVE-2024-49112
+    path: ad/scenarios/ad-03-ldapnightmare
+    platform: windows-only
+  ad-04:
+    id: AD-04
+    name: AD CS ESC3 Template Attack
+    type: ad
+    difficulty: L2
+    cve: ESC3
+    path: ad/scenarios/ad-04-esc3
+    platform: windows-only
+  ad-05:
+    id: AD-05
+    name: Pass-the-Hash Lateral Movement
+    type: samba-ad
+    difficulty: L2
+    cve: ATT&CK T1550.002
+    path: ad/scenarios/ad-05-pth
+    dc_ip: 192.168.100.10
+  ad-06:
+    id: AD-06
+    name: SMB Relay to AD CS (ESC8)
+    type: ad
+    difficulty: L2
+    cve: ESC8 + CVE-2025-53778
+    path: ad/scenarios/ad-06-esc8
+    platform: windows-only
+  ad-07:
+    id: AD-07
+    name: Kerberos Reflection Privilege Escalation
+    type: ad
+    difficulty: L3
+    cve: CVE-2025-33073
+    path: ad/scenarios/ad-07-kerbreflect
+    platform: windows-only
+  ad-08:
+    id: AD-08
+    name: Ghost SPN Kerberos Reflection
+    type: ad
+    difficulty: L3
+    cve: CVE-2025-58726
+    path: ad/scenarios/ad-08-ghostspn
+    platform: windows-only
+  ad-09:
+    id: AD-09
+    name: DCSync Attack
+    type: samba-ad
+    difficulty: L2
+    cve: ATT&CK T1003.006
+    path: ad/scenarios/ad-09-dcsync
+    dc_ip: 192.168.100.10
+  ad-10:
+    id: AD-10
+    name: Golden Ticket Attack
+    type: samba-ad
+    difficulty: L3
+    cve: ATT&CK T1558.001
+    path: ad/scenarios/ad-10-golden
+    dc_ip: 192.168.100.10
+  ad-11:
+    id: AD-11
+    name: BadSuccessor dMSA PrivEsc
+    type: ad
+    difficulty: L3
+    cve: BadSuccessor
+    path: ad/scenarios/ad-11-badsuccessor
+    platform: windows-only
+  ad-12:
+    id: AD-12
+    name: Network Config Operators to SYSTEM
+    type: ad
+    difficulty: L2
+    cve: CVE-2025-21293
+    path: ad/scenarios/ad-12-netconfig
+    platform: windows-only
+  web-01:
+    id: WEB-01
+    name: Apache Tomcat Deserialization RCE
+    type: docker
+    difficulty: L2
+    cve: CVE-2025-24813
+    path: docker/web/tomcat-deserialization
+    port: 8081
+  web-02:
+    id: WEB-02
+    name: Apache Tomcat Race Condition RCE
+    type: docker
+    difficulty: L2
+    cve: CVE-2024-50379
+    path: docker/web/tomcat-race-condition
+    port: 8082
+  web-04:
+    id: WEB-04
+    name: WordPress WPBookit RCE
+    type: docker
+    difficulty: L1
+    cve: CVE-2025-6058
+    path: docker/web/wordpress-wpbookit
+    port: 8083
+  web-05:
+    id: WEB-05
+    name: WordPress Copypress JWT RCE
+    type: docker
+    difficulty: L2
+    cve: CVE-2025-8625
+    path: docker/web/wordpress-jwt-copypress
+    port: 8084
+  web-06:
+    id: WEB-06
+    name: PHP LFI to RCE (Jupiter X Core)
+    type: docker
+    difficulty: L2
+    cve: CVE-2025-0366
+    path: docker/web/wordpress-jupiterx-lfi
+    port: 8085
+  web-07:
+    id: WEB-07
+    name: PostgreSQL Encoding Bypass SQLi
+    type: docker
+    difficulty: L2
+    cve: CVE-2025-1094
+    path: docker/web/postgres-sqli
+    port: 3001
+  web-08:
+    id: WEB-08
+    name: MySQL UDF Privilege Escalation
+    type: docker
+    difficulty: L3
+    cve: MySQL UDF Abuse
+    path: docker/web/mysql-udf
+    port: 3002
+  web-09:
+    id: WEB-09
+    name: MSSQL xp_cmdshell Command Execution
+    type: docker
+    difficulty: L2
+    cve: MSSQL xp_cmdshell
+    path: docker/web/mssql-xp-cmdshell
+    port: 3003
+  db-01:
+    id: DB-01
+    name: PostgreSQL Weak Auth RCE
+    type: docker
+    difficulty: L2
+    cve: N/A (misconfiguration)
+    path: docker/db/postgres-weak-auth
+    port: 5432
+  db-02:
+    id: DB-02
+    name: MySQL Weak Auth UDF
+    type: docker
+    difficulty: L2
+    cve: MySQL UDF Abuse
+    path: docker/db/mysql-udf-direct
+    port: 3306
+  db-03:
+    id: DB-03
+    name: Oracle TNS Poisoning
+    type: docker
+    difficulty: L3
+    cve: TNS Poisoning
+    path: docker/db/oracle-tns
+    port: 1521
+  db-04:
+    id: DB-04
+    name: MSSQL Linked Server Lateral Movement
+    type: docker
+    difficulty: L3
+    cve: MSSQL Linked Server
+    path: docker/db/mssql-linked-server
+    port: 1433
+  web-03-waf:
+    id: WEB-03-WAF
+    name: WordPress Simple File List + WAF
+    type: docker
+    difficulty: L2
+    cve: CVE-2025-34085 + WAF
+    path: docker/web/wordpress-simple-file-list/defense/waf
+    base_scenario: web-03
+    defense: waf
+    port: 8080
+  web-01-waf:
+    id: WEB-01-WAF
+    name: Tomcat Deserialization + WAF
+    type: docker
+    difficulty: L3
+    cve: CVE-2025-24813 + WAF
+    path: docker/web/tomcat-deserialization/defense/waf
+    base_scenario: web-01
+    defense: waf
+    port: 8081

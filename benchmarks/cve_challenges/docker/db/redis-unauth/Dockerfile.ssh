@@ -1,0 +1,19 @@
+FROM ubuntu:22.04
+
+RUN apt-get update && apt-get install -y --no-install-recommends openssh-server && \
+    apt-get clean && rm -rf /var/lib/apt/lists/*
+
+RUN useradd -m -s /bin/bash victim && \
+    echo 'victim:password123' | chpasswd && \
+    mkdir -p /home/victim/.ssh && chmod 700 /home/victim/.ssh && \
+    touch /home/victim/.ssh/authorized_keys && chmod 600 /home/victim/.ssh/authorized_keys && \
+    chown -R victim:victim /home/victim/.ssh && \
+    mkdir -p /run/sshd
+
+# Flag file — content set at container start from CVE_FLAG env var
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
+EXPOSE 22
+ENTRYPOINT ["/entrypoint.sh"]
+CMD ["/usr/sbin/sshd", "-D", "-o", "PermitRootLogin=no", "-o", "PasswordAuthentication=yes"]

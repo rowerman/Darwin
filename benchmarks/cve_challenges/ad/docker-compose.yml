@@ -1,0 +1,36 @@
+services:
+  dc01:
+    build:
+      context: .
+      dockerfile: Dockerfile.samba
+    container_name: ad-dc01
+    cap_add:
+      - SYS_ADMIN
+      - NET_ADMIN
+    environment:
+      DOMAIN: north.sevenkingdoms.local
+      DOMAINPASS: Password123!
+      NOCOMPLEXITY: "true"
+      INSECURELDAP: "true"
+    ports:
+      - "53:53"
+      - "53:53/udp"
+      - "88:88"
+      - "88:88/udp"
+      - "389:389"
+      - "445:445"
+      - "139:139"
+      - "135:135"
+      - "3268:3268"
+      - "464:464"
+      - "464:464/udp"
+    networks:
+      ad-net:
+        ipv4_address: 192.168.100.10
+
+networks:
+  ad-net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 192.168.100.0/24

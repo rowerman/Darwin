@@ -1,0 +1,100 @@
+---
+# CVE Benchmark — GOAD AD Scenario Setup Playbook
+# Run: ansible-playbook -i inventory cve_benchmark_ad_setup.yml
+# Prerequisite: GOAD deployed and running (vagrant up from ~/benchmark/GOAD)
+
+- name: AD-01 Kerberoasting — Create service account with SPN
+  hosts: winterfell
+  tasks:
+    - name: Create svc_sql with weak password and SPN
+      win_shell: |
+        Import-Module ActiveDirectory
+        $pass = ConvertTo-SecureString "Summer2024!" -AsPlainText -Force
+        New-ADUser -Name "svc_sql" -SamAccountName "svc_sql" `
+          -AccountPassword $pass -Enabled $true -PasswordNeverExpires $true `
+          -Description "flag{ad-01-kerberoast}" `
+          -UserPrincipalName "svc_sql@north.sevenkingdoms.local"
+        setspn -S MSSQLSvc/castelblack.north.sevenkingdoms.local:1433 north\svc_sql
+
+- name: AD-02 AS-REP Roasting — Create account without pre-auth
+  hosts: winterfell
+  tasks:
+    - name: Create no_preauth account
+      win_shell: |
+        Import-Module ActiveDirectory
+        $pass = ConvertTo-SecureString "WeakPass123!" -AsPlainText -Force
+        New-ADUser -Name "no_preauth" -SamAccountName "no_preauth" `
+          -AccountPassword $pass -Enabled $true `
+          -Description "flag{ad-02-asrep}"
+        Set-ADAccountControl -Identity no_preauth -DoesNotRequirePreAuth $true
+
+- name: AD-03 LDAPNightmare — Enable LDAP over UDP
+  hosts: winterfell
+  tasks:
+    - name: Enable LDAP UDP for CVE-2024-49112
+      win_shell: |
+        Set-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Services\NTDS\Parameters" `
+          -Name "LdapSrvUdpAllowed" -Value 1 -Type DWord
+        echo 'flag{ad-03-ldapnightmare}' > C:\Users\Public\flag.txt
+
+- name: AD-04 ESC3 — Configure vulnerable certificate template
+  hosts: winterfell
+  tasks:
+    - name: Create vulnerable AD CS certificate template (ESC3)
+      win_shell: |
+        # Requires AD CS role installed
+        # Template with enrollment agent + SAN specification allowed
+        echo "ESC3 template: Grant enrollment + SAN to authenticated users"
+
+- name: AD-05 Pass-the-Hash — Enable NTLM on member server
+  hosts: castelblack
+  tasks:
+    - name: Place flag on member server for PTH
+      win_shell: |
+        echo 'flag{ad-05-pth}' > C:\Users\Public\flag.txt
+        Set-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\Lsa" `
+          -Name "LmCompatibilityLevel" -Value 3 -Type DWord
+
+- name: AD-06/07/08 — Disable SMB signing
+  hosts: all
+  tasks:
+    - name: Disable SMB signing (required for relay/reflection attacks)
+      win_shell: |
+        Set-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Services\LanmanServer\Parameters" `
+          -Name "RequireSecuritySignature" -Value 0 -Type DWord
+        Set-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Services\LanmanServer\Parameters" `
+          -Name "EnableSecuritySignature" -Value 0 -Type DWord
+
+- name: AD-09 DCSync — Grant replication privilege
+  hosts: winterfell
+  tasks:
+    - name: Create dcsync_user with Replication-Get-Changes-All
+      win_shell: |
+        Import-Module ActiveDirectory
+        $pass = ConvertTo-SecureString "DCSyncUser123!" -AsPlainText -Force
+        New-ADUser -Name "dcsync_user" -SamAccountName "dcsync_user" `
+          -AccountPassword $pass -Enabled $true `
+          -Description "flag{ad-09-dcsync}"
+        Add-ADGroupMember -Identity "Domain Admins" -Members "dcsync_user"
+
+- name: AD-12 Network Config — Create user in vulnerable group
+  hosts: winterfell
+  tasks:
+    - name: Create netcfg_user in Network Configuration Operators
+      win_shell: |
+        Import-Module ActiveDirectory
+        $pass = ConvertTo-SecureString "NetConfig123!" -AsPlainText -Force
+        New-ADUser -Name "netcfg_user" -SamAccountName "netcfg_user" `
+          -AccountPassword $pass -Enabled $true `
+          -Description "flag{ad-12-netconfig}"
+        Add-ADGroupMember -Identity "Network Configuration Operators" -Members "netcfg_user"
+
+- name: Common — Create low-privilege domain user for all scenarios
+  hosts: winterfell
+  tasks:
+    - name: Create lowpriv attacker user
+      win_shell: |
+        Import-Module ActiveDirectory
+        $pass = ConvertTo-SecureString "Password123!" -AsPlainText -Force
+        New-ADUser -Name "lowpriv" -SamAccountName "lowpriv" `
+          -AccountPassword $pass -Enabled $true -PasswordNeverExpires $true

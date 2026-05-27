@@ -112,6 +112,162 @@ def _parse_whatweb_output(stdout: str) -> Dict[str, Any]:
     return {"technologies": techs}
 
 
+# ── Response Parsing ──────────────────────────────────────────────────
+# Synchronous, regex-only, no external deps. Fast enough for 17MB input.
+# Used by the response_parse tool AND auto-parse in _format_tool_feedback.
+
+_FLAG_RE = re.compile(r'flag\{[a-zA-Z0-9_\-!@#$%^&*()+=]+}', re.I)
+_URL_RE = re.compile(r'https?://[^\s<>"\')\]]+', re.I)
+_JWT_RE = re.compile(r'eyJ[A-Za-z0-9_-]+\.eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+')
+_API_PATH_RE = re.compile(r'["\'](/api/[^"\'\s]{1,80})["\']')
+_ENDPOINT_RE = re.compile(
+    r'["\'](/(?:login|logout|dashboard|admin|config|users?|'
+    r'auth|token|session|upload|download|search|flag|'
+    r'secret|key|notes?|data|items?|docs?|'
+    r'proxy|metrics?|healthz?|readyz?|livez?|'
+    r'graphql|rest|v[0-9]+(?:/[^\s"\']{1,60})?))["\']'
+)
+_SCRIPT_SRC_RE = re.compile(r'<script[^>]+src=["\']([^"\']+)["\']', re.I)
+_LINK_HREF_RE = re.compile(r'<link[^>]+href=["\']([^"\']+)["\']', re.I)
+_A_HREF_RE = re.compile(r'href=["\']([^"\']+)["\']', re.I)
+_FORM_COUNT_RE = re.compile(r'<form\b', re.I)
+_INPUT_COUNT_RE = re.compile(r'<input\b', re.I)
+_TITLE_RE = re.compile(r'<title[^>]*>(.*?)</title>', re.I | re.DOTALL)
+
+
+def _detect_content_type(data: str) -> str:
+    """Detect content type from first 1000 chars."""
+    stripped = data[:1000].strip()
+    if not stripped:
+        return "empty"
+    if stripped.startswith("{") or stripped.startswith("["):
+        return "json"
+    if stripped.lower().startswith(("<!doctype", "<html")):
+        return "html"
+    non_printable = sum(1 for c in data[:1000] if ord(c) < 9 or (ord(c) > 13 and ord(c) < 32))
+    if non_printable > 100:
+        return "binary"
+    return "text"
+
+
+def _parse_html(data: str) -> Dict[str, Any]:
+    """Regex-only HTML structure extractor. Fast on 17MB input."""
+    result: Dict[str, Any] = {}
+    m = _TITLE_RE.search(data)
+    result["title"] = m.group(1).strip()[:120] if m else ""
+    result["forms"] = len(_FORM_COUNT_RE.findall(data))
+    result["inputs"] = len(_INPUT_COUNT_RE.findall(data))
+    links = _A_HREF_RE.findall(data)
+    result["links_count"] = len(links)
+    result["links"] = links[:30]
+    result["scripts"] = _SCRIPT_SRC_RE.findall(data)[:10]
+    result["css"] = _LINK_HREF_RE.findall(data)[:10]
+    api_paths = list(dict.fromkeys(_API_PATH_RE.findall(data)))[:20]
+    result["api_paths"] = api_paths
+    endpoints = list(dict.fromkeys(_ENDPOINT_RE.findall(data)))[:20]
+    result["endpoints"] = [e for e in endpoints if e not in api_paths][:15]
+    result["flags"] = _FLAG_RE.findall(data)
+    return result
+
+
+def _parse_json(data: str) -> Dict[str, Any]:
+    """JSON structure summariser. Walks depth 1, finds interesting strings."""
+    import json as _json
+    try:
+        obj = _json.loads(data)
+    except (_json.JSONDecodeError, ValueError):
+        return {"error": "Invalid JSON", "snippet": data[:300]}
+
+    interesting: list[dict] = []
+
+    def _walk(val, path: str = "$", depth: int = 0):
+        if depth > 2:
+            return
+        if isinstance(val, dict):
+            for k, v in val.items():
+                _walk(v, f"{path}.{k}", depth + 1)
+        elif isinstance(val, list):
+            for i, v in enumerate(val[:20]):
+                _walk(v, f"{path}[{i}]", depth + 1)
+        elif isinstance(val, str) and len(val) > 3 and len(val) < 500:
+            vl = val.lower()
+            if any(kw in vl for kw in ("flag{", "token", "secret", "password",
+                                         "api_key", "apikey", "bearer",
+                                         "http://", "https://", "eyJ",
+                                         "admin", "root")):
+                interesting.append({"path": path, "value": val[:100]})
+
+    _walk(obj)
+    structure: Any
+    if isinstance(obj, dict):
+        structure = {"_type": "object", "keys": list(obj.keys())[:30],
+                     "_count": len(obj.keys())}
+        top_keys = list(obj.keys())[:30]
+    elif isinstance(obj, list):
+        structure = {"_type": "array", "length": len(obj),
+                     "first_type": type(obj[0]).__name__ if obj else "empty"}
+        top_keys = None
+    else:
+        structure = str(obj)[:200]
+        top_keys = None
+
+    return {
+        "structure": structure,
+        "top_level_keys": top_keys,
+        "interesting_values": interesting[:20],
+        "flags": _FLAG_RE.findall(data),
+    }
+
+
+def _parse_text(data: str) -> Dict[str, Any]:
+    """Plain-text analyser: flags, URLs, JWT tokens."""
+    return {
+        "flags": _FLAG_RE.findall(data),
+        "urls": _URL_RE.findall(data)[:20],
+        "jwt_tokens": _JWT_RE.findall(data)[:5],
+        "preview": data[:500],
+    }
+
+
+def parse_response(data: str, content_type: str = "auto") -> Dict[str, Any]:
+    """Analyse raw HTTP response content, return structured summary.
+
+    Args:
+        data: Raw response body (or headers+body).
+        content_type: "html", "json", "text", "binary", or "auto" (default).
+
+    Returns:
+        Dict with keys: type, size_bytes, flags, + type-specific fields.
+    """
+    if not data:
+        return {"type": "empty", "size_bytes": 0, "flags": []}
+
+    size = len(data)
+
+    if content_type == "auto":
+        content_type = _detect_content_type(data)
+
+    if content_type == "binary":
+        return {"type": "binary", "size_bytes": size,
+                "flags": _FLAG_RE.findall(data),
+                "note": "Binary data — no structural analysis"}
+
+    if content_type == "html":
+        result = _parse_html(data)
+    elif content_type == "json":
+        result = _parse_json(data)
+    else:
+        result = _parse_text(data)
+
+    result["type"] = content_type
+    result["size_bytes"] = size
+    result.setdefault("flags", [])
+    # Deduplicate while preserving order
+    flags = result["flags"]
+    result["flags"] = list(dict.fromkeys(flags))
+    return result
+
+
 def register_recon_tools(gateway: MCPGateway) -> MCPGateway:
     """Register all reconnaissance tools on the gateway.
 
@@ -130,12 +286,13 @@ def register_recon_tools(gateway: MCPGateway) -> MCPGateway:
 
     gateway.register_shell_tool(
         name="nmap_full_scan",
-        command_template="nmap -sV -T4 -p- {target}",
+        command_template="nmap -sV -p- {target}",
         description="Full port scan (all 65535 ports) of target",
         parameters={
             "target": {"type": "string", "description": "Target IP or hostname"},
         },
         parser=_parse_nmap_output,
+        timeout=150,
     )
 
     # ── nmap vulners: CVE detection for services ─────────────────
@@ -176,7 +333,7 @@ def register_recon_tools(gateway: MCPGateway) -> MCPGateway:
     # ── gobuster: Fast directory enumeration ─────────────────────
     gateway.register_shell_tool(
         name="gobuster_dir",
-        command_template="gobuster dir -u {target_url} -w /usr/share/dirb/wordlists/common.txt -q 2>&1",
+        command_template="gobuster -u {target_url} -w /usr/share/dirb/wordlists/common.txt -q 2>&1",
         description="Fast directory brute-force using gobuster (Go-based, faster than dirb)",
         parameters={
             "target_url": {"type": "string", "description": "Target URL to scan"},
@@ -194,14 +351,23 @@ def register_recon_tools(gateway: MCPGateway) -> MCPGateway:
             "target_url": {"type": "string", "description": "Target URL with optional port (e.g. http://host:8080)"},
         },
         parser=_parse_nikto_output,
-        timeout=180,
+        timeout=30,
     )
 
     # ── curl: HTTP probing ──────────────────────────────────────
-    async def curl_get(url: str, headers: str = "", cookie: str = "", follow_redirects: bool = True) -> ToolResult:
-        """Make HTTP GET request with curl."""
+    async def curl_get(url: str, headers: str = "", cookie: str = "",
+                      follow_redirects: bool = True,
+                      insecure: bool = False,
+                      cert: str = "", key: str = "") -> ToolResult:
+        """Make HTTP GET request with curl. Supports file:// URLs, TLS client certs."""
         import asyncio
         cmd = f"curl -s -i {'-L' if follow_redirects else ''}"
+        if insecure:
+            cmd += " -k"  # skip TLS verification for self-signed certs
+        if cert:
+            cmd += f" --cert '{cert}'"
+        if key:
+            cmd += f" --key '{key}'"
         if cookie:
             _ck = cookie.strip().rstrip(";")
             cmd += f" -H 'Cookie: {_ck}'"
@@ -228,31 +394,41 @@ def register_recon_tools(gateway: MCPGateway) -> MCPGateway:
     gateway.register(
         name="curl_get",
         func=curl_get,
-        description="Make HTTP GET request. Use cookie param to maintain session from try_login.",
+        description="Make HTTP GET request. Use insecure=true for self-signed TLS. Supports file:// URLs and client certs (cert/key).",
         parameters={
-            "url": {"type": "string", "description": "Target URL"},
+            "url": {"type": "string", "description": "Target URL (also file:// for local files)"},
             "headers": {"type": "string", "description": "Optional comma-separated headers"},
             "cookie": {"type": "string", "description": "Session cookie string from try_login"},
+            "insecure": {"type": "boolean", "description": "Skip TLS verification (set true for self-signed certs)"},
             "follow_redirects": {"type": "boolean", "description": "Follow HTTP redirects"},
+            "cert": {"type": "string", "description": "Path to TLS client certificate file (for mutual TLS)"},
+            "key": {"type": "string", "description": "Path to TLS client key file (for mutual TLS)"},
         },
     )
 
     # ── whatweb: Technology fingerprinting ──────────────────────
     gateway.register_shell_tool(
         name="whatweb_scan",
-        command_template="whatweb -q {target_url}",
-        description="Identify web technologies used by a target",
+        command_template="timeout 30 whatweb -q -a 1 {target_url}",
+        description="Identify web technologies used by a target (lightweight, max 30s)",
         parameters={
             "target_url": {"type": "string", "description": "Target URL"},
         },
         parser=_parse_whatweb_output,
+        timeout=35,
     )
 
     # ── HTTP POST tool ──────────────────────────────────────────
     async def _http_post(url: str, data: str = "", headers: str = "",
-                        cookie: str = "", content_type: str = "application/x-www-form-urlencoded") -> ToolResult:
+                        cookie: str = "", content_type: str = "application/x-www-form-urlencoded",
+                        insecure: bool = False) -> ToolResult:
         import urllib.request as _ur
+        import ssl
         try:
+            ctx = ssl.create_default_context()
+            if insecure:
+                ctx.check_hostname = False
+                ctx.verify_mode = ssl.CERT_NONE
             hdrs = {"Content-Type": content_type}
             if cookie:
                 hdrs["Cookie"] = cookie.strip().rstrip(";")
@@ -263,7 +439,7 @@ def register_recon_tools(gateway: MCPGateway) -> MCPGateway:
                         hdrs[k.strip()] = v.strip()
             body = data.encode() if isinstance(data, str) else data
             req = _ur.Request(url, data=body, headers=hdrs, method="POST")
-            with _ur.urlopen(req, timeout=30) as resp:
+            with _ur.urlopen(req, timeout=30, context=ctx) as resp:
                 rbody = resp.read().decode(errors="replace")
                 rhdrs = dict(resp.headers)
                 return ToolResult(tool_name="http_post",
@@ -278,21 +454,30 @@ def register_recon_tools(gateway: MCPGateway) -> MCPGateway:
 
     gateway.register(
         name="http_post", func=_http_post,
-        description="Send HTTP POST request. Use cookie parameter to maintain session from try_login.",
+        description="Send HTTP POST request. Use insecure=true for self-signed TLS. Use cookie parameter for session.",
         parameters={
             "url": {"type": "string", "description": "Target URL"},
             "data": {"type": "string", "description": "POST body data (key=value&key=value format)"},
             "headers": {"type": "string", "description": "Optional headers"},
             "cookie": {"type": "string", "description": "Session cookie string from try_login"},
+            "insecure": {"type": "boolean", "description": "Skip TLS verification for self-signed certs"},
         },
     )
 
     # ── Form extraction tool ────────────────────────────────────
-    async def _form_extract(url: str) -> ToolResult:
-        import urllib.request as _ur, re as _re, json as _json
+    async def _form_extract(url: str, insecure: bool = False) -> ToolResult:
+        import urllib.request as _ur, re as _re, json as _json, ssl
         try:
+            ctx = None
+            if insecure:
+                ctx = ssl.create_default_context()
+                ctx.check_hostname = False
+                ctx.verify_mode = ssl.CERT_NONE
             req = _ur.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-            with _ur.urlopen(req, timeout=15) as resp:
+            kwargs = {"timeout": 15}
+            if ctx is not None:
+                kwargs["context"] = ctx
+            with _ur.urlopen(req, **kwargs) as resp:
                 html = resp.read().decode(errors="replace")
         except Exception as e:
             return ToolResult(tool_name="form_extract", success=False, stdout="", stderr=str(e), exit_code=1, elapsed_ms=0)
@@ -322,7 +507,10 @@ def register_recon_tools(gateway: MCPGateway) -> MCPGateway:
     gateway.register(
         name="form_extract", func=_form_extract,
         description="Extract all HTML forms, inputs, and links from a URL. Returns structured JSON.",
-        parameters={"url": {"type": "string", "description": "URL to extract forms from"}},
+        parameters={
+            "url": {"type": "string", "description": "URL to extract forms from"},
+            "insecure": {"type": "boolean", "description": "Skip TLS verification for self-signed certs"},
+        },
     )
 
     # ── try_login tool ─────────────────────────────────────────
@@ -406,10 +594,16 @@ def register_recon_tools(gateway: MCPGateway) -> MCPGateway:
             return ToolResult(tool_name="try_login", success=False, stdout="", stderr=str(e), exit_code=1, elapsed_ms=0)
 
     # ── IDOR header test tool ───────────────────────────────────
-    async def _idor_header_test(url: str, cookie: str = "", user_ids: str = "") -> ToolResult:
+    async def _idor_header_test(url: str, cookie: str = "", user_ids: str = "",
+                                 insecure: bool = False) -> ToolResult:
         """Test for IDOR via HTTP headers. Tries common IDOR headers
         (X-UserId, X-User-Id) with various user IDs. Returns all responses."""
-        import urllib.request as _ur, re as _re2
+        import urllib.request as _ur, re as _re2, ssl
+        ctx = None
+        if insecure:
+            ctx = ssl.create_default_context()
+            ctx.check_hostname = False
+            ctx.verify_mode = ssl.CERT_NONE
         headers_to_try = ["X-UserId", "X-User-Id"]
         ids_to_try = ["10052", "10032", "10033", "10053", "0", "1", "2", "3", "10", "100", "1000", "10000", "50000"]
         if user_ids:
@@ -422,7 +616,10 @@ def register_recon_tools(gateway: MCPGateway) -> MCPGateway:
                     if cookie:
                         hdrs["Cookie"] = cookie.strip().rstrip(";")
                     req = _ur.Request(url, headers=hdrs)
-                    with _ur.urlopen(req, timeout=10) as resp:
+                    kwargs = {"timeout": 10}
+                    if ctx is not None:
+                        kwargs["context"] = ctx
+                    with _ur.urlopen(req, **kwargs) as resp:
                         body = resp.read().decode(errors="replace")
                         flags = _re2.findall(r'flag\{[^}]+\}', body, re.I)
                         results.append({
@@ -450,6 +647,7 @@ def register_recon_tools(gateway: MCPGateway) -> MCPGateway:
             "url": {"type": "string", "description": "Target URL (e.g. dashboard endpoint)"},
             "cookie": {"type": "string", "description": "Session cookie from try_login"},
             "user_ids": {"type": "string", "description": "Comma-separated user IDs to try (default: 0,1,2,3,10032,10033)"},
+            "insecure": {"type": "boolean", "description": "Skip TLS verification for self-signed certs"},
         },
     )
 
@@ -460,6 +658,53 @@ def register_recon_tools(gateway: MCPGateway) -> MCPGateway:
             "url": {"type": "string", "description": "Base URL of the web application"},
             "username": {"type": "string", "description": "Username to try"},
             "password": {"type": "string", "description": "Password to try"},
+        },
+    )
+
+    # ── response_parse: heterogeneous response analysis ──────────
+
+    async def _response_parse_tool(data: str, content_type: str = "auto") -> ToolResult:
+        """Wrap parse_response for LLM tool calling."""
+        try:
+            result = parse_response(data, content_type)
+            return ToolResult(
+                tool_name="response_parse",
+                success=True,
+                stdout=json.dumps(result, indent=2, ensure_ascii=False),
+                stderr="",
+                exit_code=0,
+                elapsed_ms=0,
+                parsed_output=result,
+            )
+        except Exception as e:
+            return ToolResult(
+                tool_name="response_parse",
+                success=False,
+                stdout="",
+                stderr=str(e),
+                exit_code=1,
+                elapsed_ms=0,
+            )
+
+    gateway.register(
+        name="response_parse",
+        func=_response_parse_tool,
+        description=(
+            "Analyze raw HTTP response content and return a structured summary. "
+            "Detects HTML structure (title, links, forms, scripts, API paths), "
+            "JSON keys and interesting values (tokens, secrets, flags), "
+            "and extracts flag patterns. Use when curl_get or http_post returns "
+            "a response too large to read directly."
+        ),
+        parameters={
+            "data": {
+                "type": "string",
+                "description": "Raw response data to analyze",
+            },
+            "content_type": {
+                "type": "string",
+                "description": "Content type hint: 'html', 'json', or 'auto' (default)",
+            },
         },
     )
 

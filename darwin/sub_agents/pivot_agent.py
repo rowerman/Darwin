@@ -14,7 +14,7 @@ from darwin.dkg import DKG
 from darwin.sub_agents.base import (
     AgentType, BaseSubAgent, SubAgentResult, TaskScope, TokenBudget,
 )
-from darwin.tools.mcp_gateway import MCPGateway
+from darwin.tools.attack_server import create_attack_gateway
 from darwin.utils.llm import LLMSession
 
 
@@ -36,40 +36,7 @@ class PivotAgent(BaseSubAgent):
         llm_session: LLMSession | None = None,
         budget: TokenBudget | None = None,
     ):
-        tools = MCPGateway()
-        # Register pivot-specific shell tools
-        tools.register_shell_tool(
-            name="ssh_exec",
-            command_template="ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 {user}@{host} '{command}'",
-            description="Execute command on remote host via SSH using captured credentials",
-            parameters={
-                "user": {"type": "string", "description": "Username for SSH login"},
-                "host": {"type": "string", "description": "Target host IP or hostname"},
-                "command": {"type": "string", "description": "Command to execute on remote host"},
-            },
-        )
-        tools.register_shell_tool(
-            name="ssh_key_exec",
-            command_template="ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 -i {key_path} {user}@{host} '{command}'",
-            description="Execute command on remote host using SSH key authentication",
-            parameters={
-                "key_path": {"type": "string", "description": "Path to SSH private key"},
-                "user": {"type": "string", "description": "Username for SSH login"},
-                "host": {"type": "string", "description": "Target host IP or hostname"},
-                "command": {"type": "string", "description": "Command to execute on remote host"},
-            },
-        )
-        tools.register_shell_tool(
-            name="test_credential",
-            command_template="sshpass -p '{password}' ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 {user}@{host} 'id' 2>&1",
-            description="Test if a username/password combination works on a remote host",
-            parameters={
-                "user": {"type": "string", "description": "Username"},
-                "password": {"type": "string", "description": "Password to test"},
-                "host": {"type": "string", "description": "Target host IP or hostname"},
-            },
-        )
-
+        tools = create_attack_gateway()
         super().__init__(
             agent_id=agent_id,
             agent_type=AgentType.PIVOT,

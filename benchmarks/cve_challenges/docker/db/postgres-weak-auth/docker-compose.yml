@@ -1,0 +1,10 @@
+services:
+  postgres:
+    image: postgres:16.6
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: password123
+    volumes:
+      - ./flag.txt:/flag.txt:ro

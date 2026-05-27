@@ -1,0 +1,142 @@
+[
+  {
+    "id": "ad_enum-18",
+    "type": "ExploitPattern",
+    "category": "AD_ENUM",
+    "title": "Active Directory Attacks",
+    "description": ":warning: Content of this page has been moved to [InternalAllTheThings/active-directory](https://github.com/swisskyrepo/InternalAllTheThings/) - [Active Directory - Certificate Services](https://swisskyrepo.github.io/InternalAllTheThings/active-directory/ad-adcs-certificate-services/) - [Active Directory - Access Controls ACL/ACE](https://swisskyrepo.github.io/InternalAllTheThings/active-directory/ad-adds-acl-ace/) - [Active Directory - Enumeration](https://swisskyrepo.github.io/InternalAllTheThings/active-directory/ad-adds-enumerate/)",
+    "techniques": [],
+    "indicators": [],
+    "tags": [
+      "windows_ad",
+      "ad_enum"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "execution-38",
+    "type": "ExploitPattern",
+    "category": "EXECUTION",
+    "title": "Powershell",
+    "description": ":warning: Content of this page has been moved to [InternalAllTheThings/cheatsheets/powershell](https://swisskyrepo.github.io/InternalAllTheThings/cheatsheets/powershell-cheatsheet/) - [Execution Policy](https://swisskyrepo.github.io/InternalAllTheThings/cheatsheets/powershell-cheatsheet/#execution-policy) - [Encoded Commands](https://swisskyrepo.github.io/InternalAllTheThings/cheatsheets/powershell-cheatsheet/#encoded-commands) - [Constrained Mode](https://swisskyrepo.github.io/InternalAllTheThings/cheatsheets/powershell-cheatsheet/#constrained-mode)",
+    "techniques": [],
+    "indicators": [],
+    "tags": [
+      "windows_ad",
+      "execution"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "privesc-43",
+    "type": "ExploitPattern",
+    "category": "PRIVESC",
+    "title": "Windows - AMSI Bypass",
+    "description": ":warning: Content of this page has been moved to [InternalAllTheThings/redteam/evasion/windows-amsi-bypass](https://swisskyrepo.github.io/InternalAllTheThings/redteam/evasion/windows-amsi-bypass/) - [List AMSI Providers](https://swisskyrepo.github.io/InternalAllTheThings/redteam/evasion/windows-amsi-bypass/#list-amsi-providers) - [Which Endpoint Protection is Using AMSI](https://swisskyrepo.github.io/InternalAllTheThings/redteam/evasion/windows-amsi-bypass/#which-endpoint-protection-is-using-amsi)",
+    "techniques": [],
+    "indicators": [],
+    "tags": [
+      "windows_ad",
+      "privesc"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "privesc-44",
+    "type": "ExploitPattern",
+    "category": "PRIVESC",
+    "title": "Windows - DPAPI",
+    "description": ":warning: Content of this page has been moved to [InternalAllTheThings/redteam/evasion/windows-dpapi](https://swisskyrepo.github.io/InternalAllTheThings/redteam/evasion/windows-dpapi/) - [List Credential Files](https://swisskyrepo.github.io/InternalAllTheThings/redteam/evasion/windows-dpapi/#list-credential-files) - [DPAPI LocalMachine Context](https://swisskyrepo.github.io/InternalAllTheThings/redteam/evasion/windows-dpapi/#dpapi-localmachine-context) - [Mimikatz - Credential Manager & DPAPI](https://swisskyrepo.github.io/InternalAllTheThings/redteam/evasion/windows-dpapi/#mimikatz---credential-manager--dpapi)",
+    "techniques": [],
+    "indicators": [],
+    "tags": [
+      "windows_ad",
+      "privesc"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "privesc-45",
+    "type": "ExploitPattern",
+    "category": "PRIVESC",
+    "title": "Windows - Defenses",
+    "description": ":warning: Content of this page has been moved to [InternalAllTheThings/redteam/evasion/windows-defenses](https://swisskyrepo.github.io/InternalAllTheThings/redteam/evasion/windows-defenses/) - [AppLocker](https://swisskyrepo.github.io/InternalAllTheThings/redteam/evasion/windows-defenses/#applocker) - [User Account Control](https://swisskyrepo.github.io/InternalAllTheThings/redteam/evasion/windows-defenses/#user-account-control) - [DPAPI](https://swisskyrepo.github.io/InternalAllTheThings/redteam/evasion/windows-defenses/#dpapi)",
+    "techniques": [],
+    "indicators": [],
+    "tags": [
+      "windows_ad",
+      "privesc"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "privesc-46",
+    "type": "ExploitPattern",
+    "category": "PRIVESC",
+    "title": "Windows - Download and execute methods",
+    "description": ":warning: Content of this page has been moved to [InternalAllTheThings/redteam/access/windows-download-execute](https://swisskyrepo.github.io/InternalAllTheThings/redteam/access/windows-download-execute/) - [Downloaded files location](https://swisskyrepo.github.io/InternalAllTheThings/redteam/access/windows-download-execute/#downloaded-files-location) - [Powershell](https://swisskyrepo.github.io/InternalAllTheThings/redteam/access/windows-download-execute/#powershell) - [Cmd](https://swisskyrepo.github.io/InternalAllTheThings/redteam/access/windows-download-execute/#cmd)",
+    "techniques": [],
+    "indicators": [],
+    "tags": [
+      "windows_ad",
+      "privesc"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "privesc-47",
+    "type": "ExploitPattern",
+    "category": "PRIVESC",
+    "title": "Windows - Mimikatz",
+    "description": ":warning: Content of this page has been moved to [InternalAllTheThings/cheatsheets/mimikatz](https://swisskyrepo.github.io/InternalAllTheThings/cheatsheets/mimikatz-cheatsheet/) - [Execute commands](https://swisskyrepo.github.io/InternalAllTheThings/cheatsheets/mimikatz-cheatsheet/#execute-commands) - [Extract passwords](https://swisskyrepo.github.io/InternalAllTheThings/cheatsheets/mimikatz-cheatsheet/#extract-passwords) - [LSA Protection Workaround](https://swisskyrepo.github.io/InternalAllTheThings/cheatsheets/mimikatz-cheatsheet/#lsa-protection-workaround)",
+    "techniques": [],
+    "indicators": [],
+    "tags": [
+      "windows_ad",
+      "privesc"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "privesc-48",
+    "type": "ExploitPattern",
+    "category": "PRIVESC",
+    "title": "Windows - Persistence",
+    "description": ":warning: Content of this page has been moved to [InternalAllTheThings/redteam/persistence/windows](https://swisskyrepo.github.io/InternalAllTheThings/redteam/persistence/windows-persistence/) - [Tools](https://swisskyrepo.github.io/InternalAllTheThings/redteam/persistence/windows-persistence/#tools) - [Hide Your Binary](https://swisskyrepo.github.io/InternalAllTheThings/redteam/persistence/windows-persistence/#hide-your-binary) - [Disable Antivirus and Security](https://swisskyrepo.github.io/InternalAllTheThings/redteam/persistence/windows-persistence/#disable-antivirus-and-security)",
+    "techniques": [],
+    "indicators": [],
+    "tags": [
+      "windows_ad",
+      "privesc"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "privesc-49",
+    "type": "ExploitPattern",
+    "category": "PRIVESC",
+    "title": "Windows - Privilege Escalation",
+    "description": ":warning: Content of this page has been moved to [InternalAllTheThings/redteam/escalation/windows-privilege-escalation](https://swisskyrepo.github.io/InternalAllTheThings/redteam/escalation/windows-privilege-escalation/) - [Tools](https://swisskyrepo.github.io/InternalAllTheThings/redteam/escalation/windows-privilege-escalation/#tools) - [Windows Version and Configuration](https://swisskyrepo.github.io/InternalAllTheThings/redteam/escalation/windows-privilege-escalation/#windows-version-and-configuration)",
+    "techniques": [],
+    "indicators": [],
+    "tags": [
+      "windows_ad",
+      "privesc"
+    ],
+    "confidence": 0.5
+  },
+  {
+    "id": "privesc-50",
+    "type": "ExploitPattern",
+    "category": "PRIVESC",
+    "title": "Windows - Using credentials",
+    "description": ":warning: Content of this page has been moved to [InternalAllTheThings/redteam/access/windows-using-credentials](https://swisskyrepo.github.io/InternalAllTheThings/redteam/access/windows-using-credentials/) - [Get credentials](https://swisskyrepo.github.io/InternalAllTheThings/redteam/access/windows-using-credentials/#get-credentials) - [Create your credential](https://swisskyrepo.github.io/InternalAllTheThings/redteam/access/windows-using-credentials/#create-your-credential) - [Guest Credential](https://swisskyrepo.github.io/InternalAllTheThings/redteam/access/windows-using-credentials/#guest-credential)",
+    "techniques": [],
+    "indicators": [],
+    "tags": [
+      "windows_ad",
+      "privesc"
+    ],
+    "confidence": 0.5
+  }
+]

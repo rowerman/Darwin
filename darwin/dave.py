@@ -373,3 +373,24 @@ class ExploitAttempt:
     tool_stdout: str = ""
     tool_stderr: str = ""
     steps: List[Dict] = field(default_factory=list)
+
+
+def parse_tool_stdout(stdout: str) -> dict:
+    """Parse ToolResult.stdout into {status_code, headers, body, elapsed_ms}.
+
+    Extracts structured HTTP response data from the STATUS:/HEADER:/BODY_START
+    format emitted by _python_request in attack_server.py.
+    Returns a dict that can be passed as http_response to ExploitAttempt.
+    """
+    result: dict = {"status_code": 0, "headers": {}, "body": stdout, "elapsed_ms": 0}
+    if not stdout:
+        return result
+    m = re.search(r"STATUS:(\d+)", stdout)
+    if m:
+        result["status_code"] = int(m.group(1))
+    for m in re.finditer(r"HEADER:([^:]+):(.+)", stdout):
+        result["headers"][m.group(1).strip()] = m.group(2).strip()
+    m = re.search(r"BODY_START\n?(.*)", stdout, re.DOTALL)
+    if m:
+        result["body"] = m.group(1)
+    return result
