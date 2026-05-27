@@ -6,7 +6,7 @@ scenarios:
     difficulty: L1
     cve: N/A (misconfiguration)
     path: docker/db/redis-unauth
-    port: 6379
+    port: 10205
   web-03:
     id: WEB-03
     name: WordPress Simple File List RCE
@@ -14,7 +14,7 @@ scenarios:
     difficulty: L1
     cve: CVE-2025-34085
     path: docker/web/wordpress-simple-file-list
-    port: 8080
+    port: 10103
   lnx-05:
     id: LNX-05
     name: Sudo Chroot Privilege Escalation
@@ -24,7 +24,7 @@ scenarios:
     path: docker/linux/sudo-chroot
     ssh_user: attacker
     ssh_password: password123
-    ssh_port: 2222
+    ssh_port: 10322
   lnx-01:
     id: LNX-01
     name: nftables Use-After-Free LPE
@@ -231,7 +231,7 @@ scenarios:
     difficulty: L2
     cve: CVE-2025-24813
     path: docker/web/tomcat-deserialization
-    port: 8081
+    port: 10101
   web-02:
     id: WEB-02
     name: Apache Tomcat Race Condition RCE
@@ -239,7 +239,7 @@ scenarios:
     difficulty: L2
     cve: CVE-2024-50379
     path: docker/web/tomcat-race-condition
-    port: 8082
+    port: 10102
   web-04:
     id: WEB-04
     name: WordPress WPBookit RCE
@@ -247,7 +247,7 @@ scenarios:
     difficulty: L1
     cve: CVE-2025-6058
     path: docker/web/wordpress-wpbookit
-    port: 8083
+    port: 10104
   web-05:
     id: WEB-05
     name: WordPress Copypress JWT RCE
@@ -255,7 +255,7 @@ scenarios:
     difficulty: L2
     cve: CVE-2025-8625
     path: docker/web/wordpress-jwt-copypress
-    port: 8084
+    port: 10105
   web-06:
     id: WEB-06
     name: PHP LFI to RCE (Jupiter X Core)
@@ -263,7 +263,7 @@ scenarios:
     difficulty: L2
     cve: CVE-2025-0366
     path: docker/web/wordpress-jupiterx-lfi
-    port: 8085
+    port: 10106
   web-07:
     id: WEB-07
     name: PostgreSQL Encoding Bypass SQLi
@@ -271,7 +271,7 @@ scenarios:
     difficulty: L2
     cve: CVE-2025-1094
     path: docker/web/postgres-sqli
-    port: 3001
+    port: 10107
   web-08:
     id: WEB-08
     name: MySQL UDF Privilege Escalation
@@ -279,7 +279,7 @@ scenarios:
     difficulty: L3
     cve: MySQL UDF Abuse
     path: docker/web/mysql-udf
-    port: 3002
+    port: 10108
   web-09:
     id: WEB-09
     name: MSSQL xp_cmdshell Command Execution
@@ -287,7 +287,7 @@ scenarios:
     difficulty: L2
     cve: MSSQL xp_cmdshell
     path: docker/web/mssql-xp-cmdshell
-    port: 3003
+    port: 10109
   db-01:
     id: DB-01
     name: PostgreSQL Weak Auth RCE
@@ -295,7 +295,7 @@ scenarios:
     difficulty: L2
     cve: N/A (misconfiguration)
     path: docker/db/postgres-weak-auth
-    port: 5432
+    port: 10201
   db-02:
     id: DB-02
     name: MySQL Weak Auth UDF
@@ -303,7 +303,7 @@ scenarios:
     difficulty: L2
     cve: MySQL UDF Abuse
     path: docker/db/mysql-udf-direct
-    port: 3306
+    port: 10202
   db-03:
     id: DB-03
     name: Oracle TNS Poisoning
@@ -311,7 +311,7 @@ scenarios:
     difficulty: L3
     cve: TNS Poisoning
     path: docker/db/oracle-tns
-    port: 1521
+    port: 10203
   db-04:
     id: DB-04
     name: MSSQL Linked Server Lateral Movement
@@ -319,7 +319,7 @@ scenarios:
     difficulty: L3
     cve: MSSQL Linked Server
     path: docker/db/mssql-linked-server
-    port: 1433
+    port: 10204
   web-03-waf:
     id: WEB-03-WAF
     name: WordPress Simple File List + WAF
@@ -329,7 +329,7 @@ scenarios:
     path: docker/web/wordpress-simple-file-list/defense/waf
     base_scenario: web-03
     defense: waf
-    port: 8080
+    port: 10103
   web-01-waf:
     id: WEB-01-WAF
     name: Tomcat Deserialization + WAF
@@ -339,4 +339,4 @@ scenarios:
     path: docker/web/tomcat-deserialization/defense/waf
     base_scenario: web-01
     defense: waf
-    port: 8081
+    port: 10101

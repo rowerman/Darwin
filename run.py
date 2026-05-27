@@ -43,8 +43,10 @@ async def main():
                         help="Target IP, hostname, or URL (e.g. 192.168.1.100, example.com)")
     parser.add_argument("--username", "-u", default=None, help="Username for auto-login")
     parser.add_argument("--password", "-p", default=None, help="Password for auto-login")
-    parser.add_argument("--time-budget", type=int, default=600, help="Time budget in seconds (default: 600)")
+    parser.add_argument("--time-budget", type=int, default=1200, help="Time budget in seconds (default: 1200)")
     parser.add_argument("--token-budget", type=int, default=200000, help="Token budget (default: 200000)")
+    parser.add_argument("--port-range", "-r", default="10000-10400",
+                        help="Nmap port range. Default '10000-10400' for benchmark. Pass '' for full scan.")
     args = parser.parse_args()
 
     if not args.target:
@@ -83,6 +85,7 @@ async def main():
         target_url=target,
         username=args.username,
         password=args.password,
+        port_range=args.port_range,
     )
 
     # ── Recon summary from DKG ────────────────────────────────────

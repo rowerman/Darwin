@@ -72,7 +72,14 @@ class MCPGateway:
         _log = logging.getLogger(__name__)
 
         async def _execute(**kwargs) -> ToolResult:
-            cmd = command_template.format(**kwargs)
+            try:
+                cmd = command_template.format(**kwargs)
+            except (ValueError, KeyError) as e:
+                return ToolResult(
+                    tool_name=name, success=False,
+                    stdout="", stderr=f"Template format error: {e} | template={command_template[:200]} | kwargs={kwargs}",
+                    exit_code=1, elapsed_ms=0,
+                )
             start = time.perf_counter()
             last_stderr = ""
 

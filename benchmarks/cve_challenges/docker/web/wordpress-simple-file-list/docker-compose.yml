@@ -2,7 +2,7 @@ services:
   wordpress:
     build: .
     ports:
-      - "8080:80"
+      - "10103:80"
     environment:
       WORDPRESS_DB_HOST: db
       WORDPRESS_DB_USER: wordpress

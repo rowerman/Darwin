@@ -162,7 +162,16 @@
       "Bash(timeout 5 whatweb http://localhost:35577)",
       "Bash(grep *)",
       "Bash(awk '/async def _recon_phase/,/^    async def |^    def |^    # ──/' /home/kianabin/Darwin/darwin/orchestrator.py)",
-      "Bash(awk 'NR>=884 && /^    async def |^    def |^    # ──/{if\\(NR>884\\) exit} NR>=884' /home/kianabin/Darwin/darwin/orchestrator.py)"
+      "Bash(awk 'NR>=884 && /^    async def |^    def |^    # ──/{if\\(NR>884\\) exit} NR>=884' /home/kianabin/Darwin/darwin/orchestrator.py)",
+      "Bash(./scripts/start-scenario.sh web-03 *)",
+      "Bash(docker stop *)",
+      "Bash(docker rm *)",
+      "Bash(xargs -r docker stop)",
+      "Bash(xargs -r docker rm)",
+      "Bash(/home/kianabin/Darwin/benchmarks/cve_challenges/scripts/start-scenario.sh web-03 *)",
+      "Bash(nmap -sV -T4 --top-ports 1000 127.0.0.1)",
+      "Bash(nmap -sV -p- 127.0.0.1)",
+      "Bash(/home/kianabin/Darwin/benchmarks/cve_challenges/scripts/stop-scenario.sh web-03 *)"
     ]
   }
 }

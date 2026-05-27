@@ -143,15 +143,9 @@ class DAVE:
             l3 = self._verify_defense_integrity(exploit_attempt, probe_results)
             layer_results.append(l3)
             if l3.status == VerifyStatus.MODIFIED:
-                notes.append("L3: Payload modified by defense")
-                return VerificationResult(
-                    passed=False, status=VerifyStatus.MODIFIED,
-                    confidence=l3.confidence, layer_results=layer_results,
-                    defense_detected=True, defense_type="waf_or_filter",
-                    notes=notes,
-                )
+                notes.append("L3: Payload modified by defense — still checking for flag")
 
-        # L4: Impact Confirmation (flag extraction)
+        # L4: Impact Confirmation (flag extraction) — runs even if L3 detected modification
         l4 = self._verify_impact(exploit_attempt)
         layer_results.append(l4)
 

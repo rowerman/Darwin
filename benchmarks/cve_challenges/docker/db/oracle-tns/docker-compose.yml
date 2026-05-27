@@ -2,7 +2,7 @@ services:
   oracle:
     image: gvenzl/oracle-xe:21.3.0-slim
     ports:
-      - "1521:1521"
+      - "10203:1521"
     environment:
       ORACLE_PASSWORD: password123
       APP_USER: app

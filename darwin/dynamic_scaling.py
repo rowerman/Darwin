@@ -207,9 +207,11 @@ class DynamicScalingEngine:
         self.tda = TDAState()
         self._level_votes: List[ScalingLevel] = []
         self.hysteresis = hysteresis
+        self._dkg: DKG | None = None
 
     def decide(self, dkg: DKG, defense_state: DefenseStateVector | None = None) -> ScalingLevel:
         """Decide scaling level based on current state."""
+        self._dkg = dkg
         # Compute B from DKG (now includes vuln diversity + defense presence)
         B = compute_task_breadth(dkg, defense_state)
         self.tda.B = B
@@ -267,8 +269,11 @@ class DynamicScalingEngine:
             return len(agent_types), agent_types
 
     def _get_host_count(self) -> int:
-        """Get current host count (placeholder — actual count from DKG)."""
-        return 1  # Will be overridden with actual DKG query
+        """Get current host count from the attached DKG."""
+        if self._dkg is not None:
+            hosts = self._dkg.query_nodes("Host")
+            return max(len(hosts), 1)
+        return 1
 
     def reset(self):
         """Reset scaling engine state for a new task."""

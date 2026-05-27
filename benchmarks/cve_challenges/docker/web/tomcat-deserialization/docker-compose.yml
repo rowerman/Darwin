@@ -2,4 +2,4 @@ services:
   tomcat:
     build: .
     ports:
-      - "8081:8080"
+      - "10101:8080"

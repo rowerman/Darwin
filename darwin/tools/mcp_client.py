@@ -48,7 +48,7 @@ class MCPClient:
     def __init__(self, config: MCPServerConfig, connect_timeout: float = 30.0):
         self.config = config
         self.connect_timeout = connect_timeout
-        self.request_timeout = max(connect_timeout, 60.0)
+        self.request_timeout = max(connect_timeout, 120.0)
         self._proc: Optional[asyncio.subprocess.Process] = None
         self._request_id = 0
         self._pending: Dict[int, asyncio.Future] = {}

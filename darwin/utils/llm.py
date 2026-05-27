@@ -45,6 +45,8 @@ class LLMSession:
         self.max_tokens = max_tokens
         self.conversation_history: List[Dict[str, Any]] = []
         self._compressed_count = 0  # number of times compression has been applied
+        self._pending_compressed_context = ""  # consumed once in next _build_messages
+        self._max_compressions = 3  # prevent cascading telephone-game degradation
 
         if api_key:
             import os
@@ -165,23 +167,32 @@ class LLMSession:
         else:
             self.conversation_history.append(assistant_msg)
             return content, None
-            return content, None
 
     def _build_messages(
         self, prompt: str, system_prompt: str | None
     ) -> List[Dict[str, str]]:
         """Build message list, continuing conversation history if available."""
+        # Consume pending compressed context exactly once
+        if self._pending_compressed_context:
+            prompt = f"{self._pending_compressed_context}\n\n---\n\n{prompt}"
+            self._pending_compressed_context = ""
+
         if self.conversation_history:
             messages = self.conversation_history.copy()
-            # Update system message if caller provides a different one
-            if system_prompt and messages and messages[0].get("role") == "system":
-                if messages[0].get("content") != system_prompt:
-                    messages[0] = {"role": "system", "content": system_prompt}
-            # Strip unresolved tool_calls from last assistant message
-            # (DeepSeek requires every tool_call_id have a matching tool message)
+            # Update system message if caller provides a different one —
+            # but never overwrite a compressed context message
+            if system_prompt:
+                for i, msg in enumerate(messages):
+                    if msg.get("role") == "system" and "[COMPRESSED CONTEXT" not in str(msg.get("content", "")):
+                        if msg.get("content") != system_prompt:
+                            messages[i] = {"role": "system", "content": system_prompt}
+                        break
+                else:
+                    # No non-compressed system message found — insert at 0
+                    messages.insert(0, {"role": "system", "content": system_prompt})
+            # Strip ALL unresolved tool_calls (not just the last assistant message)
             for i in range(len(messages) - 1, -1, -1):
                 if messages[i].get("role") == "assistant" and messages[i].get("tool_calls"):
-                    # Check if any subsequent message responds to these tool calls
                     tool_ids = {tc["id"] for tc in messages[i]["tool_calls"]}
                     answered = any(
                         m.get("role") == "tool" and m.get("tool_call_id") in tool_ids
@@ -190,9 +201,6 @@ class LLMSession:
                     if not answered:
                         messages[i] = {k: v for k, v in messages[i].items()
                                        if k != "tool_calls"}
-                break  # only check the last assistant message
-            # If last message was a tool result, don't add a user message —
-            # the LLM should respond to tool results directly (API requirement)
             last_role = messages[-1].get("role", "") if messages else ""
             if last_role != "tool":
                 messages.append({"role": "user", "content": prompt})
@@ -222,12 +230,11 @@ class LLMSession:
         })
 
     def replace_system_prompt(self, new_system_prompt: str) -> None:
-        """Replace the first system message, preserving all other messages.
-        Enables phase transitions (e.g. ANALYZE -> ORCHESTRATOR) without
-        destroying user/assistant/tool context.
+        """Replace the first non-compressed system message.
+        Preserves compressed context summaries and all other messages.
         """
         for i, msg in enumerate(self.conversation_history):
-            if msg.get("role") == "system":
+            if msg.get("role") == "system" and "[COMPRESSED CONTEXT" not in str(msg.get("content", "")):
                 self.conversation_history[i] = {"role": "system", "content": new_system_prompt}
                 return
         self.conversation_history.insert(0, {"role": "system", "content": new_system_prompt})
@@ -235,6 +242,7 @@ class LLMSession:
     def reset(self) -> None:
         """Clear conversation history."""
         self.conversation_history = []
+        self._pending_compressed_context = ""
 
     @property
     def token_count(self) -> int:
@@ -260,33 +268,29 @@ class LLMSession:
     ) -> int:
         """Compress conversation history by summarizing older messages.
 
-        Reference: Cochise planner.py — persistent dialogue + history compression.
-        Keeps the most recent *keep_recent* messages intact. Compresses all older
-        messages into a single compact summary injected as a system message.
+        Stores the compressed summary in _pending_compressed_context, which is
+        consumed exactly once by the next _build_messages call — avoiding the
+        system-message-slot conflict with _build_messages/replace_system_prompt.
 
         Only compresses if context_load exceeds compression_threshold.
-
-        Args:
-            keep_recent: Number of most recent messages to preserve intact.
-            max_context_tokens: Token count considered 100% context load.
-            compression_threshold: Fraction of max_context_tokens that triggers
-                                   compression (e.g. 0.4 = 40%).
-
-        Returns:
-            Number of tokens saved (positive = compression succeeded,
-            0 = below threshold, nothing done, -1 = compression failed).
+        Limits cascading re-compression to _max_compressions passes.
         """
         if self.context_load < compression_threshold:
             return 0
 
         if len(self.conversation_history) <= keep_recent + 2:
-            return 0  # not enough messages to warrant compression
+            return 0
 
-        # Split: preserve system prompt + recent messages, compress the rest
+        if self._compressed_count >= self._max_compressions:
+            # Already compressed too many times — truncate oldest messages instead
+            overflow = len(self.conversation_history) - keep_recent - 2
+            if overflow > 0:
+                self.conversation_history = self.conversation_history[overflow:]
+            return 0
+
         old_messages = self.conversation_history[:-keep_recent]
         recent = self.conversation_history[-keep_recent:]
 
-        # Serialize old messages for the compression prompt
         serialized = self._serialize_messages(old_messages)
         tokens_before = self.token_count
 
@@ -302,15 +306,15 @@ class LLMSession:
                 system_prompt=SYSTEM_PROMPT_COMPRESS,
             )
         except Exception:
-            # If compression LLM call fails, fall back to truncation
             summary = self._fallback_truncate(old_messages)
             if not summary:
                 return -1
 
-        # Replace old messages with compressed summary
-        self.conversation_history = [
-            {"role": "system", "content": f"[COMPRESSED CONTEXT — {len(old_messages)} messages summarized]\n\n{summary}"}
-        ] + recent
+        # Store compressed context for one-time consumption, keep recent messages
+        self._pending_compressed_context = (
+            f"[COMPRESSED CONTEXT — {len(old_messages)} messages summarized]\n\n{summary}"
+        )
+        self.conversation_history = recent
         self._compressed_count += 1
 
         tokens_saved = tokens_before - self.token_count

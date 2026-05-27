@@ -1,0 +1,256 @@
+{
+  "nodes": [
+    {
+      "id": "host-127.0.0.1",
+      "ip": "127.0.0.1",
+      "is_reachable": true,
+      "is_internal": false,
+      "type": "Host",
+      "created_at": "2026-05-27T18:26:08.589179",
+      "updated_at": "2026-05-27T18:26:08.589198",
+      "_version": 1
+    },
+    {
+      "id": "svc-127.0.0.1-10103",
+      "port": 10103,
+      "protocol": "tcp",
+      "version": "Apache httpd 2.4.62 ((Debian))",
+      "banner": "http",
+      "type": "Service",
+      "created_at": "2026-05-27T18:26:08.589260",
+      "updated_at": "2026-05-27T18:26:08.589267",
+      "_version": 1
+    },
+    {
+      "id": "ep-http://127.0.0.1:10103",
+      "url": "http://127.0.0.1:10103",
+      "method": "GET",
+      "params": "",
+      "sample_status": 200,
+      "sample_response": "<!DOCTYPE html>\n<html lang=\"en-US\">\n<head>\n\t<meta charset=\"UTF-8\" />\n\t<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\" />\n<meta name='robots' content='noindex, nofollow' />\n\t<style>img:is([sizes=\"auto\" i], [sizes^=\"auto,\" i]) { contain-intrinsic-size: 3000px 1500px }</style>\n\t<title>Test</title>\n<link rel='dns-prefetch' href='//localhost' />\n<link rel=\"alternate\" type=\"application/rss+xml\" title=\"Test &raquo; Feed\" href=\"http://localhost:10103/?feed=rss2\" />\n<link rel=\"alterna... (total 49726 bytes)",
+      "response_size": 50012,
+      "discovered_by": "deep-recon",
+      "type": "Endpoint",
+      "created_at": "2026-05-27T18:26:14.853183",
+      "updated_at": "2026-05-27T18:26:56.542362",
+      "_version": 3,
+      "deep_recon_done": true,
+      "sample_content_type": "text/html; charset=UTF-8"
+    },
+    {
+      "id": "ep-cms--wp-admin-",
+      "url": "http://127.0.0.1:10103/wp-admin/",
+      "method": "GET",
+      "params": "",
+      "sample_status": 200,
+      "sample_response": "<!DOCTYPE html>\n\t<html lang=\"en-US\">\n\t<head>\n\t<meta http-equiv=\"Content-Type\" content=\"text/html; charset=UTF-8\" />\n\t<title>Log In &lsaquo; Test &#8212; WordPress</title>\n\t<meta name='robots' content='noindex, nofollow, noarchive' />\n<link rel='stylesheet' href='http://localhost:10103/wp-admin/load-styles.php?c=0&amp;dir=ltr&amp;load%5Bchunk_0%5D=dashicons,buttons,forms,l10n,login&amp;ver=6.7.2' media='all' />\n\t<meta name='referrer' content='strict-origin-when-cross-origin' />\n\t\t<meta name=\"view... (total 4400 bytes)",
+      "response_size": 7251,
+      "discovered_by": "cms-probe",
+      "type": "Endpoint",
+      "created_at": "2026-05-27T18:26:12.688054",
+      "updated_at": "2026-05-27T18:26:56.592841",
+      "_version": 2,
+      "sample_content_type": "text/html; charset=UTF-8"
+    },
+    {
+      "id": "ep-cms--wp-login.php",
+      "url": "http://127.0.0.1:10103/wp-login.php",
+      "method": "GET",
+      "params": "",
+      "sample_status": 200,
+      "sample_response": "<!DOCTYPE html>\n\t<html lang=\"en-US\">\n\t<head>\n\t<meta http-equiv=\"Content-Type\" content=\"text/html; charset=UTF-8\" />\n\t<title>Log In &lsaquo; Test &#8212; WordPress</title>\n\t<meta name='robots' content='noindex, nofollow, noarchive' />\n<link rel='stylesheet' href='http://localhost:10103/wp-admin/load-styles.php?c=0&amp;dir=ltr&amp;load%5Bchunk_0%5D=dashicons,buttons,forms,l10n,login&amp;ver=6.7.2' media='all' />\n\t<meta name='referrer' content='strict-origin-when-cross-origin' />\n\t\t<meta name=\"view... (total 4400 bytes)",
+      "response_size": 4784,
+      "discovered_by": "cms-probe",
+      "type": "Endpoint",
+      "created_at": "2026-05-27T18:26:12.737794",
+      "updated_at": "2026-05-27T18:26:56.620972",
+      "_version": 2,
+      "sample_content_type": "text/html; charset=UTF-8"
+    },
+    {
+      "id": "ep-cms--wp-content-",
+      "url": "http://127.0.0.1:10103/wp-content/",
+      "method": "GET",
+      "params": "",
+      "sample_status": 200,
+      "sample_response": "",
+      "response_size": 173,
+      "discovered_by": "cms-probe",
+      "type": "Endpoint",
+      "created_at": "2026-05-27T18:26:12.750845",
+      "updated_at": "2026-05-27T18:26:56.623973",
+      "_version": 2,
+      "sample_content_type": "text/html; charset=UTF-8"
+    },
+    {
+      "id": "ep-cms--wp-content-plugins-",
+      "url": "http://127.0.0.1:10103/wp-content/plugins/",
+      "method": "GET",
+      "params": "",
+      "sample_status": 200,
+      "sample_response": "",
+      "response_size": 173,
+      "discovered_by": "cms-probe",
+      "type": "Endpoint",
+      "created_at": "2026-05-27T18:26:12.773535",
+      "updated_at": "2026-05-27T18:26:56.626769",
+      "_version": 2,
+      "sample_content_type": "text/html; charset=UTF-8"
+    },
+    {
+      "id": "vuln-nikto-14",
+      "vuln_type": "XSS",
+      "endpoint": "http://127.0.0.1:10103",
+      "parameter": "",
+      "severity": "low",
+      "source": "nikto",
+      "detail": "- Nikto v2.1.5",
+      "type": "Vulnerability",
+      "created_at": "2026-05-27T18:28:45.969796",
+      "updated_at": "2026-05-27T18:28:45.969805",
+      "_version": 4,
+      "tested_at": "18:28:45",
+      "test_result": "PARTIAL: <script>alert(1)</script>... (<script> found)\nPARTIAL: <img src=x onerror=alert(1)>... (<script> found)\nPARTIAL: \"><script>alert(1)</script>... (<script> found)\nPARTIAL: '><img src=x onerror=",
+      "test_tool": "xss_reflection_test"
+    },
+    {
+      "id": "vuln-nikto-20",
+      "vuln_type": "XSS",
+      "endpoint": "http://127.0.0.1:10103",
+      "parameter": "",
+      "severity": "low",
+      "source": "nikto",
+      "detail": "+ The anti-clickjacking X-Frame-Options header is not present.",
+      "type": "Vulnerability",
+      "created_at": "2026-05-27T18:26:14.780013",
+      "updated_at": "2026-05-27T18:26:14.780019",
+      "_version": 9
+    },
+    {
+      "id": "svc-research-1779877616",
+      "phase": "service_research",
+      "type": "Analysis",
+      "content": "\n[port 10103] Apache httpd 2.4.62 ((Debian)): Search Exploits (web) \u2014 Always search in \"google\" or others: **\\ \\[version] exploit** You should also try the **shodan** **exploit search** from [https://exploits.shodan.io/](https://exploits.shodan.io). Useful to search exp\n\n[port 10103] Apache httpd 2.4.62 ((Debian)): CVE-2021-44228 Log4Shell (web) \u2014 > Apache Log4j2 <=2.14.1 JNDI features used in configuration, log messages, and parameters do not protect against attacker controlled LDAP and other JNDI related endpoints. An attacker who can control\n",
+      "created_at": "2026-05-27T18:26:56.455054",
+      "updated_at": "2026-05-27T18:26:56.455088",
+      "_version": 1
+    },
+    {
+      "id": "analysis-1779877630",
+      "phase": "analyze",
+      "type": "Analysis",
+      "content": "This is a WordPress website. The homepage and login page serve static content; no dynamic parameters were observed in the probed responses. The login endpoint accepts user credentials, making it a candidate for brute force attacks and authentication bypass.",
+      "endpoint_count": 5,
+      "created_at": "2026-05-27T18:27:10.853712",
+      "updated_at": "2026-05-27T18:27:10.853721",
+      "_version": 1
+    },
+    {
+      "id": "vuln-1",
+      "vuln_type": "AuthBypass",
+      "endpoint": "http://127.0.0.1:10103/wp-login.php",
+      "parameter": "log",
+      "severity": "unknown",
+      "source": "llm_analysis",
+      "suggested_tool": "hydra_http_brute",
+      "tool_args": {
+        "url": "http://127.0.0.1:10103/wp-login.php",
+        "method": "POST",
+        "form": "log=^USER^&pwd=^PASS^&wp-submit=Log In",
+        "fail_condition": "ERROR: Invalid username"
+      },
+      "type": "Vulnerability",
+      "created_at": "2026-05-27T18:28:46.015951",
+      "updated_at": "2026-05-27T18:28:46.015968",
+      "_version": 4,
+      "tested_at": "18:28:46",
+      "test_result": "HTTP/1.1 200 OK\r\nDate: Wed, 27 May 2026 10:28:45 GMT\r\nServer: Apache/2.4.62 (Debian)\r\nX-Powered-By: PHP/8.2.28\r\nExpires: Wed, 11 Jan 1984 05:00:00 GMT\r\nCache-Control: no-cache, must-revalidate, max-ag",
+      "test_tool": "curl_get"
+    },
+    {
+      "id": "vuln-2",
+      "vuln_type": "CSRF",
+      "endpoint": "http://127.0.0.1:10103",
+      "parameter": "",
+      "severity": "low",
+      "source": "llm_classified",
+      "detail": "- Nikto v2.1.5",
+      "suggested_tool": "curl_get",
+      "type": "Vulnerability",
+      "created_at": "2026-05-27T18:28:46.100266",
+      "updated_at": "2026-05-27T18:28:46.100283",
+      "_version": 4,
+      "tested_at": "18:28:46",
+      "test_result": "HTTP/1.1 200 OK\r\nDate: Wed, 27 May 2026 10:28:46 GMT\r\nServer: Apache/2.4.62 (Debian)\r\nX-Powered-By: PHP/8.2.28\r\nLink: <http://localhost:10103/index.php?rest_route=/>; rel=\"https://api.w.org/\"\r\nVary: A",
+      "test_tool": "curl_get"
+    },
+    {
+      "id": "vuln-3",
+      "vuln_type": "XSS",
+      "endpoint": "http://127.0.0.1:10103",
+      "parameter": "",
+      "severity": "low",
+      "source": "llm_classified",
+      "detail": "+ The anti-clickjacking X-Frame-Options header is not present.",
+      "type": "Vulnerability",
+      "created_at": "2026-05-27T18:27:17.686973",
+      "updated_at": "2026-05-27T18:27:17.686980",
+      "_version": 1
+    },
+    {
+      "id": "summary-exploit-plan-1779877667",
+      "summary_id": "summary-exploit-plan-1779877667",
+      "source_plan_id": "plan-1779877667",
+      "phase": "exploit",
+      "completed_tasks": "[\"Brute force WordPress login at wp-login.php using common credentials (admin/admin, admin/password, test/test, etc.) with fail_condition set to match login failure message\"]",
+      "key_findings": "{\"flags_found\": [], \"endpoints\": 5}",
+      "failed_approaches": "[]",
+      "created_at": "2026-05-27T18:28:52",
+      "type": "PlanSummary",
+      "updated_at": "2026-05-27T18:28:52.974107",
+      "_version": 6
+    },
+    {
+      "id": "plan-1779877667"
+    }
+  ],
+  "edges": [
+    {
+      "from": "plan-1779877667",
+      "to": "summary-exploit-plan-1779877667",
+      "type": "plan_successor",
+      "created_at": "2026-05-27T18:28:10.475123"
+    },
+    {
+      "from": "plan-1779877667",
+      "to": "summary-exploit-plan-1779877667",
+      "type": "plan_successor",
+      "created_at": "2026-05-27T18:28:10.475708"
+    },
+    {
+      "from": "plan-1779877667",
+      "to": "summary-exploit-plan-1779877667",
+      "type": "plan_successor",
+      "created_at": "2026-05-27T18:28:31.427024"
+    },
+    {
+      "from": "plan-1779877667",
+      "to": "summary-exploit-plan-1779877667",
+      "type": "plan_successor",
+      "created_at": "2026-05-27T18:28:31.427619"
+    },
+    {
+      "from": "plan-1779877667",
+      "to": "summary-exploit-plan-1779877667",
+      "type": "plan_successor",
+      "created_at": "2026-05-27T18:28:52.973570"
+    },
+    {
+      "from": "plan-1779877667",
+      "to": "summary-exploit-plan-1779877667",
+      "type": "plan_successor",
+      "created_at": "2026-05-27T18:28:52.974134"
+    }
+  ],
+  "created_at": "2026-05-27T18:25:56.036323"
+}

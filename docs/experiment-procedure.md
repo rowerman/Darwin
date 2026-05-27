@@ -18,79 +18,102 @@ grep -c "api_key" config/llm.yaml
 
 ## 第一阶段：Web 场景（9 场景，置信度最高）
 
-这些场景全部是 Docker Compose 部署的 HTTP 应用，与 DARWIN 的 HTTP pipeline 完全匹配。
+**核心原则：一次只启动一个场景，测试完立即停止。** 这样可以避免 nmap 扫到其他容器的端口，也避免磁盘空间不足。
 
-### 1.1 启动场景
+### 1.1 单个场景完整流程
 
-```bash
-cd benchmarks/cve_challenges
-
-# 列出所有 Web 场景
-./scripts/list-scenarios.sh | grep -i "web-"
-
-# 逐个启动测试
-for sid in web-03 web-04 web-06 web-07 web-08 web-09 web-01 web-02 web-05; do
-    echo "=== Starting $sid ==="
-    ./scripts/start-scenario.sh $sid
-    sleep 10  # 等容器完全启动
-done
-```
-
-### 1.2 确认场景可访问
+以 `web-03`（WordPress Simple File List RCE）为例：
 
 ```bash
-# 查看运行的 Docker 容器和端口
-docker ps --format "table {{.Names}}\t{{.Ports}}"
+cd /home/kianabin/Darwin/benchmarks/cve_challenges
 
-# 验证每个场景的 HTTP 端口有响应
-curl -s -o /dev/null -w "%{http_code}" http://localhost:<port>
+# Step 1: 启动场景
+./scripts/start-scenario.sh web-03
+# 记下输出的 Flag 值
+
+# Step 2: 确认端口（docker ps 查看映射端口）
+docker ps --format "table {{.Names}}\t{{.Ports}}" | grep web-03
+
+# Step 3: 等待 WordPress 初始化完成
+sleep 15
 ```
-
-### 1.3 运行 DARWIN 单场景测试
 
 ```bash
 cd /home/kianabin/Darwin
+source venv/bin/activate
 
-python3 << 'PYEOF'
+# run.py 默认扫描 10000-10400 端口范围
+python run.py http://127.0.0.1:10103
+
+# Step 4: 停止场景
+cd benchmarks/cve_challenges
+./scripts/stop-scenario.sh web-03
+```
+
+### 1.2 逐个测试所有 Web 场景
+
+```bash
+#!/bin/bash
+# 保存为 run_web_experiments.sh
+cd /home/kianabin/Darwin
+source venv/bin/activate
+
+WEB_SCENARIOS=(
+  "web-03:10103:WordPress Simple File List RCE:Upload PHP webshell via ee-upload-engine.php, read /flag.txt"
+  "web-04:10104:WordPress WPBookit RCE:Unauthenticated file upload via image_upload_handle(), access uploaded PHP"
+  "web-06:10106:WordPress JupiterX LFI:SVG upload with LFI path traversal, PHP filter chain to RCE"
+  "web-07:10107:PostgreSQL SQLi:SQL injection via search parameter, extract data from PostgreSQL"
+  "web-08:10108:MySQL UDF RCE:PHP app with SQLi, escalate to UDF library load and command execution"
+  "web-09:10109:MSSQL xp_cmdshell:SQL injection to xp_cmdshell, execute system commands"
+  "web-01:10101:Tomcat Deserialization RCE:Craft malicious serialized session, PUT upload, trigger deserialization"
+  "web-02:10102:Tomcat Race Condition RCE:PUT JSP file with race condition, access before cleanup"
+  "web-05:10105:WordPress JWT Copypress RCE:Hardcoded JWT secret, forge admin token, upload plugin"
+)
+
+for entry in "${WEB_SCENARIOS[@]}"; do
+  IFS=':' read -r sid port desc <<< "$entry"
+  echo "=========================================="
+  echo "Testing $sid on port $port"
+  echo "=========================================="
+
+  # Start scenario
+  cd /home/kianabin/Darwin/benchmarks/cve_challenges
+  ./scripts/start-scenario.sh "$sid"
+  sleep 15
+
+  # Run DARWIN
+  cd /home/kianabin/Darwin
+  python3 << PYEOF
 import asyncio
-from experiments.runner import ExperimentRunner
+from darwin.orchestrator import Orchestrator
+from darwin.utils.llm import LLMSession
 
 async def main():
-    runner = ExperimentRunner(
-        config_name="DARWIN",
-        time_budget=600,
-        token_budget=200000,
-        pass_at_k=3,
+    llm = LLMSession.from_config(profile="default", config_path="config/llm.yaml")
+    orch = Orchestrator(llm_session=llm, time_budget=600, token_budget=200000)
+    result = await orch.run(
+        task_description="$desc. Find and exploit the vulnerability to capture the flag.",
+        target_url="http://127.0.0.1:$port",
     )
-
-    web_challenges = [
-        {"id": "web-03", "url": "http://localhost:<port>",
-         "description": "WordPress site with Simple File List plugin. Find and exploit the unauthenticated file upload vulnerability to capture the flag.",
-         "expected_flag": "", "category": "web"},
-        # ... 添加更多场景
-    ]
-
-    metrics = await runner.run(web_challenges, benchmark_name="cve_web")
-    print(metrics.summary())
+    print(f"RESULT: {result.success}|{result.flag}|{result.steps}|{result.tokens_used}|{result.time_elapsed:.0f}s")
+    if result.error:
+        print(f"ERROR: {result.error}")
 
 asyncio.run(main())
 PYEOF
-```
 
-### 1.4 查看结果
-
-```bash
-ls -lt experiment_results/ | head -5
-cat experiment_results/DARWIN_cve_web_results.json | python3 -m json.tool | head -50
-```
-
-### 1.5 停止场景
-
-```bash
-cd benchmarks/cve_challenges
-for sid in web-03 web-04 web-06 web-07 web-08 web-09 web-01 web-02 web-05; do
-    ./scripts/stop-scenario.sh $sid
+  # Stop scenario
+  cd /home/kianabin/Darwin/benchmarks/cve_challenges
+  ./scripts/stop-scenario.sh "$sid"
+  sleep 5
 done
+```
+
+### 1.3 查看结果
+
+```bash
+ls -lt checkpoints/ | head -10
+cat experiment_results/DARWIN_*_results.json 2>/dev/null | python3 -m json.tool | head -50
 ```
 
 ---

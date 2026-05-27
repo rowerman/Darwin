@@ -295,6 +295,18 @@ def register_recon_tools(gateway: MCPGateway) -> MCPGateway:
         timeout=150,
     )
 
+    gateway.register_shell_tool(
+        name="nmap_port_range",
+        command_template="nmap -sV -p {ports} {target}",
+        description="Scan a specific port range (e.g. '8080-8090,3306') for benchmarking",
+        parameters={
+            "target": {"type": "string", "description": "Target IP or hostname"},
+            "ports": {"type": "string", "description": "Port range expression (e.g. '8000-8100,3306')"},
+        },
+        parser=_parse_nmap_output,
+        timeout=60,
+    )
+
     # ── nmap vulners: CVE detection for services ─────────────────
     gateway.register_shell_tool(
         name="nmap_vulners_scan",

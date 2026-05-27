@@ -5,11 +5,11 @@ services:
       ACCEPT_EULA: "Y"
       MSSQL_SA_PASSWORD: "Password123!"
     ports:
-      - "1433:1433"
+      - "10119:1433"
 
   web:
     build: .
     ports:
-      - "3003:80"
+      - "10109:80"
     environment:
       DB_CONNECTION: "Server=db,1433;Database=vulndb;User Id=sa;Password=Password123!;TrustServerCertificate=true"

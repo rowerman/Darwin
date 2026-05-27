@@ -13,7 +13,7 @@ services:
   web:
     build: .
     ports:
-      - "3002:80"
+      - "10108:80"
     volumes:
       - ./app:/var/www/html
     environment:

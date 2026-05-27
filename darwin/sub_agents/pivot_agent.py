@@ -69,6 +69,15 @@ class PivotAgent(BaseSubAgent):
 
         from darwin.prompts.pivot_agent import SYSTEM_PROMPT_PIVOT
 
+        # Include AD/Windows lateral movement tools alongside SSH
+        pivot_tools = sorted(set(
+            self.tools.get_tool_names()
+        ).intersection({
+            "test_credential", "ssh_exec", "ssh_key_exec",
+            "impacket_pth", "impacket_psexec", "impacket_wmiexec",
+            "netexec_enum", "hydra_ssh_brute",
+        }))
+
         prompt = f"""Credentials available:
 {cred_text}
 
@@ -79,6 +88,8 @@ Active sessions:
 {session_text or '(none)'}
 
 Create a lateral movement plan with 2-5 steps. Test credentials on unreached hosts.
+For SSH credentials, use test_credential/ssh_exec/ssh_key_exec.
+For NTLM hashes or Windows targets, use impacket_pth/impacket_psexec/impacket_wmiexec.
 Output as JSON array:
 [{{"id": "pivot-1", "instruction": "...", "tool": "test_credential", "params": {{...}}, "dependent_task_ids": []}}]"""
 
@@ -89,7 +100,7 @@ Output as JSON array:
                 credentials=cred_text,
                 hosts=host_text,
                 sessions=session_text or "(none)",
-                tools="test_credential, ssh_exec, ssh_key_exec",
+                tools=", ".join(pivot_tools),
             ),
         )
         try:
@@ -107,20 +118,42 @@ Output as JSON array:
         for i, cred in enumerate(credentials):
             target_hosts = [h["id"] for h in hosts
                            if h["id"] not in sessioned_hosts and h["id"] != cred.get("source_host","")]
+            cred_type = cred.get("cred_type", "") or ""
+            has_hash = bool(cred.get("hash") or cred.get("ntlm_hash"))
             for target in target_hosts[:3]:
-                cred_user = cred.get("user", "")
+                cred_user = cred.get("user", cred.get("username", ""))
                 cred_pass = cred.get("password", "")
-                plan.append({
-                    "id": f"pivot-{i}-{target}",
-                    "instruction": f"Test credential {cred_user} on {target}",
-                    "action": "credential_test",
-                    "tool": "test_credential" if cred_pass else "ssh_exec",
-                    "params": {
+                # Choose tool based on credential type
+                if has_hash and ("ntlm" in cred_type.lower() or "ad" in cred_type.lower()):
+                    tool = "impacket_pth"
+                    params = {
+                        "target": target, "username": cred_user,
+                        "ntlm_hash": cred.get("hash", cred.get("ntlm_hash", "")),
+                        "command": "whoami && ipconfig /all",
+                    }
+                elif "ssh" in cred_type.lower() or not cred_type:
+                    tool = "test_credential" if cred_pass else "ssh_exec"
+                    params = {
                         "user": cred_user,
                         "host": target,
                         "password": cred_pass,
                         "command": "id; hostname; ifconfig 2>/dev/null || ip addr 2>/dev/null",
-                    },
+                    }
+                else:
+                    # DB credentials or generic — try test_credential
+                    tool = "test_credential"
+                    params = {
+                        "user": cred_user,
+                        "host": target,
+                        "password": cred_pass,
+                        "command": "whoami",
+                    }
+                plan.append({
+                    "id": f"pivot-{i}-{target}",
+                    "instruction": f"Test credential {cred_user} on {target}",
+                    "action": "credential_test",
+                    "tool": tool,
+                    "params": params,
                     "credential_id": cred.get("id", ""),
                     "dependent_task_ids": [],
                 })
@@ -279,9 +312,12 @@ Output as JSON array:
 
         # Fallback: basic regex-based checks if LLM produced nothing
         if not findings:
-            shell_indicators = ["uid=", "gid=", "Linux", "Windows", "$ ", "# "]
-            got_shell = any(ind in stdout for ind in shell_indicators)
+            ssh_indicators = ["uid=", "gid=", "Linux", "$ ", "# "]
+            win_indicators = ["Windows", "Microsoft", "C:\\", "Administrator",
+                            "NT AUTHORITY", "cmd.exe", "\\>"]
+            got_shell = any(ind in stdout for ind in ssh_indicators + win_indicators)
             if got_shell:
+                is_windows = any(ind in stdout for ind in win_indicators)
                 findings.append({
                     "type": "new_session",
                     "host": host,
@@ -295,7 +331,8 @@ Output as JSON array:
                 # Record session in DKG
                 self.dkg.add_node("Session", f"session-{host}-{user}", {
                     "host": host, "user": user,
-                    "access_level": "shell", "shell_type": "ssh",
+                    "access_level": "shell",
+                    "shell_type": "cmd" if is_windows else "ssh",
                     "established_by": self.agent_id,
                 })
 

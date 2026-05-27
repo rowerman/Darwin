@@ -4,6 +4,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Overview
 
+**When debugging experiment failures or modifying DARWIN core modules, load the darwin-experiment-driven-dev skill first.**
+
 DARWIN is an LLM-driven adaptive penetration testing agent framework. Two core innovations:
 
 - **Defense Perception (DPM)**: Detects WAF/Cloak/Honey/Trap and triggers bypass strategies. All SOTA frameworks score 0% on PACEBench D-CVE (WAF scenarios).
@@ -63,6 +65,9 @@ python tools/ingest_knowledge.py --file <path> --collection <c> # explicit colle
 python tools/ingest_knowledge.py --stats                        # show collection sizes
 python tools/ingest_knowledge.py --rebuild                      # rebuild all indices
 python tools/ingest_knowledge.py --model-dir <path>             # custom model path
+
+# Convert external knowledge sources to DARWIN format
+python tools/convert_knowledge.py --source <path> --output <path> --category <c>
 ```
 
 **External tool dependencies**: The reconnaissance and attack tools wrap CLI commands. These must be installed on the host for the corresponding tools to work:
@@ -105,15 +110,21 @@ The `run()` method (orchestrator.py:180) follows this linear phase pipeline for 
 | `sub_agents/pivot_agent.py` | Credential reuse, SSH key testing, internal host discovery. |
 | `sub_agents/ad_agent.py` | Active Directory pentesting: domain enumeration, Kerberoasting, Pass-the-Hash, DCSync, Golden/Silver Ticket. Spawned by orchestrator when domain infrastructure detected. |
 | `sub_agents/cloud_agent.py` | Cloud/K8s pentesting: pod enumeration, RBAC abuse, container escape, cloud metadata (IMDS) access. Spawned by orchestrator when K8s/cloud environments detected. |
-| `tools/mcp_gateway.py` | Tool registry with OpenAI function-calling format export. Supports both Python functions and shell command templates. |
-| `tools/mcp_client.py` | MCP client for connecting to external MCP servers (configured in `config/mcp_servers.yaml`). |
-| `tools/recon_server.py` | nmap (standard + full + vulners), masscan, whatweb, dirb, gobuster, nikto, curl GET/POST, form_extract, try_login, idor_header_test tool registrations with output parsers. |
-| `tools/attack_server.py` | sqlmap (with JSON body support), ffuf, send_payload, xss_reflection_test, command_injection_test, hydra (HTTP + SSH), searchsploit, smbmap, cve_lookup, metasploit_search. Also registers `knowledge_search` tool backed by DarwinRAG. |
-| `tools/ingest_knowledge.py` | CLI tool for importing knowledge files (.json/.md) into DarwinRAG. Mirrors container-pentester-agent's `cmd/ingest`. Supports `--file`, `--dir`, `--collection`, `--stats`, `--rebuild`. |
+| `data_model.py` | Typed dataclasses (`EndpointInfo`, `ServiceInfo`, `VulnerabilityInfo`, `HostInfo`, `CredentialInfo`) for normalizing data exchange between phases. Every phase reads/writes through these types — no raw dicts cross phase boundaries. `normalize_dkg_state(dkg)` reads all DKG nodes and returns typed objects; `to_prompt_context()` produces consistent LLM prompt format. |
+| `darwin/tools/mcp_gateway.py` | Tool registry with OpenAI function-calling format export. Supports both Python functions and shell command templates. |
+| `darwin/tools/mcp_client.py` | MCP client for connecting to external MCP servers (configured in `config/mcp_servers.yaml`). |
+| `darwin/tools/recon_server.py` | nmap (standard + full + vulners), masscan, whatweb, dirb, gobuster, nikto, curl GET/POST, form_extract, try_login, idor_header_test tool registrations with output parsers. |
+| `darwin/tools/attack_server.py` | sqlmap (with JSON body support), ffuf, send_payload, xss_reflection_test, command_injection_test, hydra (HTTP + SSH), searchsploit, smbmap, cve_lookup, metasploit_search. Also registers `knowledge_search` tool backed by DarwinRAG. |
 | `darwin/prompts/` | System prompt templates for Orchestrator (all 5 phases), ReconAgent, ExploitAgent, PivotAgent, ADAgent, CloudAgent, and DPM classifier. Templates use `.format()` substitution for dynamic context injection. Prompts are in separate files per agent: `orchestrator.py`, `exploit_agent.py`, `recon_agent.py`, `pivot_agent.py`, `ad_agent.py`, `cloud_agent.py`, `dpm_classifier.py`. `__init__.py` is archived reference only. |
 | `knowledge/` | 108 curated knowledge entries across 4 domain collections: `web/` (17 JSON), `windows_ad/` (11 JSON), `cloud/` (7 JSON + 70 .md from container-pentester-agent), `network/` (6 JSON). All loaded by DarwinRAG at startup. |
 | `utils/llm.py` | LiteLLM wrapper with conversation history, token counting, context compression (`compress()` method), and `LLMFunctionMapping` for auto-converting Python functions to tool definitions. |
 | `utils/http_client.py` | Async HTTP client (aiohttp) with A-E WAF probe classes and baseline comparison. `ProbeClient` extends `HTTPClient`. |
+| `tools/ingest_knowledge.py` | CLI tool for importing knowledge files (.json/.md) into DarwinRAG. Supports `--file`, `--dir`, `--collection`, `--stats`, `--rebuild`. |
+| `tools/convert_knowledge.py` | CLI tool for converting external sources (PayloadsAllTheThings, HackTricks) into DARWIN knowledge JSON format for batch ingestion. |
+| `experiments/runner.py` | Pilot experiment runner — executes a single PACEBench D-CVE challenge and computes metrics. |
+| `experiments/metrics.py` | `ExperimentMetrics` dataclass — TSR, Pass@k, token efficiency, defense detection rates. |
+| `experiments/analysis.py` | Statistical analysis: McNemar's test, Cohen's g, Friedman test + Nemenyi post-hoc, paired t-test, bootstrap CI, Cohen's κ. |
+| `experiments/chain_runner.py` | Multi-step attack chain runner — reads chain.yaml, executes steps sequentially reusing DKG across steps. |
 
 ### Three operating modes
 
@@ -172,8 +183,9 @@ Where:
 - XBOW adapter at `benchmarks/xbow_adapter.py`
 - Custom Defense benchmark runner at `benchmarks/custom_defense/runner.py` with 20 local challenges (no Docker needed)
 - Local WAF server at `benchmarks/local_waf/waf_server.py`
-- Experiment runner with metrics computation
-- Statistical analysis (McNemar, paired t-test, Friedman, bootstrap, Cohen's κ)
+- Experiment runner (`experiments/runner.py`) with metrics computation (`experiments/metrics.py`)
+- Statistical analysis (`experiments/analysis.py`): McNemar, paired t-test, Friedman, bootstrap, Cohen's κ
+- Attack chain runner (`experiments/chain_runner.py`) for multi-step benchmark chains reusing DKG across steps
 - PentestAgent baseline adapter in `experiments/baselines/pentest_agent.py`
 - CTEG state persistence to `cteg_state.json`
 - Context compression: `LLMSession.compress()` summarizes older conversation history via a dedicated LLM call when `context_load` exceeds `compression_threshold` (default 0.4). Orchestrator calls `_maybe_compress()` before each LLM interaction and in the exploit loop; SubAgents call it before plan generation and replanning. Falls back to keyword-based truncation if the compression LLM call fails.

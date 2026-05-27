@@ -14,7 +14,7 @@ services:
     container_name: db05-redis
     command: redis-server --save "" --appendonly no
     ports:
-      - "6379:6379"
+      - "10205:6379"
     networks:
       - redis-net
 

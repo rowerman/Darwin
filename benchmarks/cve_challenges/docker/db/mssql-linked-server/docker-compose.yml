@@ -2,7 +2,7 @@ services:
   mssql-low:
     image: mcr.microsoft.com/mssql/server:2022-latest
     ports:
-      - "1433:1433"
+      - "10204:1433"
     environment:
       ACCEPT_EULA: "Y"
       MSSQL_SA_PASSWORD: "Password123!"
@@ -10,7 +10,7 @@ services:
   mssql-target:
     image: mcr.microsoft.com/mssql/server:2022-latest
     ports:
-      - "1434:1433"
+      - "10214:1433"
     environment:
       ACCEPT_EULA: "Y"
       MSSQL_SA_PASSWORD: "Password123!"

