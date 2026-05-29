@@ -12,11 +12,14 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Dict, List, Optional
+
+_sub_log = logging.getLogger(__name__)
 
 from darwin.dave import DAVE
 from darwin.dkg import DKG
@@ -157,6 +160,7 @@ class BaseSubAgent(ABC):
                 }]
             self.state = SubAgentState.RUNNING
             self._persist_plan_to_dkg()
+            _sub_log.info("[%s] Plan: %d tasks", self.agent_type.value, len(self.plan))
 
             # Phase 2: Execute plan
             while self._should_continue():
@@ -167,10 +171,17 @@ class BaseSubAgent(ABC):
                 self.iteration += 1
 
                 # Act
+                tid = task.get("id", "?")
+                tool = task.get("tool", task.get("action", "?"))
+                _sub_log.info("[%s] Executing task %s: %s", self.agent_type.value, tid, tool)
                 command_result = await self._execute_task(task)
 
                 # Observe
                 success, new_findings = await self._evaluate_result(task, command_result)
+                _sub_log.info("[%s] Task %s: %s (%d findings)",
+                              self.agent_type.value, tid,
+                              "SUCCESS" if success else "FAILED",
+                              len(new_findings) if new_findings else 0)
 
                 # Write findings to DKG
                 self._write_findings_to_dkg(task, command_result, new_findings)
@@ -192,14 +203,21 @@ class BaseSubAgent(ABC):
                 self.state = SubAgentState.DONE
             elif self._is_stalled():
                 self.state = SubAgentState.STALLED
+            elif self.iteration == 0:
+                self.state = SubAgentState.STALLED  # No tasks executed
             else:
                 self.state = SubAgentState.DONE
 
         except Exception as e:
             self.state = SubAgentState.CANCELLED
             self.findings.append({"error": str(e)})
+            _sub_log.error("[%s] Crashed: %s", self.agent_type.value, e)
 
-        return self._build_result()
+        result = self._build_result()
+        _sub_log.info("[%s] Done: state=%s, findings=%d, tokens=%d",
+                      self.agent_type.value, self.state.value,
+                      len(self.findings), self.budget.tokens_used)
+        return result
 
     async def run_with_langgraph(self) -> SubAgentResult:
         """Run the ReAct loop using LangGraph StateGraph for structured state management.
@@ -419,8 +437,21 @@ class BaseSubAgent(ABC):
         self, failed_task: Dict[str, Any], result: ToolResult
     ) -> List[Dict[str, Any]]:
         """Replan after a task failure. Override for agent-specific logic."""
-        # Default: remove failed task if it's blocking and continue with remaining
-        self._mark_task_done(failed_task)
+        # Default: mark failed task as failed (not done) and continue
+        failed_task["done"] = True
+        failed_task["status"] = "failed"
+        failed_task["completed_at"] = time.time()
+        if self.dkg:
+            try:
+                self.dkg.add_node("Task", failed_task.get("id", ""), {
+                    "plan_id": getattr(self, '_plan_id', ''),
+                    "instruction": failed_task.get("instruction", ""),
+                    "tool": failed_task.get("tool", ""),
+                    "status": "failed",
+                    "completed_at": failed_task.get("completed_at"),
+                })
+            except Exception:
+                pass
         return self.plan
 
     async def _update_plan(

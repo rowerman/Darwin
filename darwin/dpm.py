@@ -103,6 +103,8 @@ class DefenseStateVector:
     bypass_successes: int = 0
     attempted_strategies: List[str] = field(default_factory=list)
     observation_count: int = 0
+    honeypot_count: int = 0
+    cloak_detected: bool = False
     waf_match: Optional[WAFMatch] = None
     filter_profile: Optional[FilterProfile] = None
 

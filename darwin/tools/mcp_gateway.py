@@ -192,7 +192,8 @@ class MCPGateway:
                     "parameters": {
                         "type": "object",
                         "properties": entry.parameters,
-                        "required": list(entry.parameters.keys()),
+                        "required": [k for k, v in entry.parameters.items()
+                                    if isinstance(v, dict) and "default" not in v],
                     },
                 },
             })

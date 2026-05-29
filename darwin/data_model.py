@@ -161,6 +161,9 @@ class PipelineState:
     credentials: List[CredentialInfo] = field(default_factory=list)
     flags: List[str] = field(default_factory=list)
     analysis_notes: List[str] = field(default_factory=list)
+    hosts: List[dict] = field(default_factory=list)
+    sessions: List[dict] = field(default_factory=list)
+    domains: List[dict] = field(default_factory=list)
 
     def get_endpoint(self, url: str) -> Optional[EndpointInfo]:
         """Find an endpoint by URL (loose match)."""
@@ -222,6 +225,29 @@ class PipelineState:
             for c in self.credentials:
                 parts.append(f"- {c.username}@{c.source_host}"
                              + (f" (hash: {c.hash_value[:20]}...)" if c.hash_value else ""))
+            parts.append("")
+
+        if self.hosts:
+            parts.append("## Hosts")
+            for h in self.hosts:
+                parts.append(f"- {h.get('ip','')}"
+                             + (f" [{h.get('os','')}]" if h.get('os') else "")
+                             + (" (internal)" if h.get('is_internal') else ""))
+            parts.append("")
+
+        if self.sessions:
+            parts.append("## Active Sessions")
+            for s in self.sessions:
+                parts.append(f"- {s.get('user','')}@{s.get('host','')}"
+                             + f" [{s.get('access_level','user')}]")
+            parts.append("")
+
+        if self.domains:
+            parts.append("## Domains")
+            for d in self.domains:
+                parts.append(f"- {d.get('name','')} (DC: {d.get('dc_ip','')})"
+                             + (f" FL: {d.get('functional_level','')}"
+                                if d.get('functional_level') else ""))
             parts.append("")
 
         return "\n".join(parts)
@@ -334,5 +360,32 @@ def normalize_dkg_state(dkg: Any) -> PipelineState:
         content = raw.get("content", "")
         if content and raw.get("type") == "application_understanding":
             state.analysis_notes.append(str(content))
+
+    # Hosts
+    for raw in dkg.query_nodes("Host"):
+        try:
+            state.hosts.append({"ip": raw.get("ip", ""),
+                                "os": raw.get("os", ""),
+                                "is_internal": raw.get("is_internal", False)})
+        except Exception:
+            pass
+
+    # Sessions
+    for raw in dkg.query_nodes("Session"):
+        try:
+            state.sessions.append({"host": raw.get("host", ""),
+                                   "user": raw.get("user", ""),
+                                   "access_level": raw.get("access_level", "user")})
+        except Exception:
+            pass
+
+    # Domains
+    for raw in dkg.query_nodes("Domain"):
+        try:
+            state.domains.append({"name": raw.get("name", ""),
+                                  "dc_ip": raw.get("dc_ip", ""),
+                                  "functional_level": raw.get("functional_level", "")})
+        except Exception:
+            pass
 
     return state

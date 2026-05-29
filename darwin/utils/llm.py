@@ -190,6 +190,12 @@ class LLMSession:
                 else:
                     # No non-compressed system message found — insert at 0
                     messages.insert(0, {"role": "system", "content": system_prompt})
+            # Strip reasoning_content from all messages — DeepSeek's
+            # thinking mode continuity requirement breaks agent workflows
+            # where multiple independent LLM calls share conversation history.
+            for msg in messages:
+                msg.pop("reasoning_content", None)
+
             # Strip ALL unresolved tool_calls (not just the last assistant message)
             for i in range(len(messages) - 1, -1, -1):
                 if messages[i].get("role") == "assistant" and messages[i].get("tool_calls"):
@@ -282,10 +288,19 @@ class LLMSession:
             return 0
 
         if self._compressed_count >= self._max_compressions:
-            # Already compressed too many times — truncate oldest messages instead
+            # Already compressed too many times — truncate oldest messages instead.
+            # Inject a minimal summary so the LLM knows context was dropped.
             overflow = len(self.conversation_history) - keep_recent - 2
             if overflow > 0:
+                truncated_count = overflow
                 self.conversation_history = self.conversation_history[overflow:]
+                # Inject a brief truncation notice
+                notice = (
+                    f"[CONTEXT TRUNCATED] {truncated_count} oldest messages were dropped "
+                    f"to stay within context limits. Earlier actions and discoveries "
+                    f"may no longer be visible. Current DKG state has the structured facts."
+                )
+                self.conversation_history.insert(0, {"role": "user", "content": notice})
             return 0
 
         old_messages = self.conversation_history[:-keep_recent]
@@ -310,9 +325,13 @@ class LLMSession:
             if not summary:
                 return -1
 
-        # Store compressed context for one-time consumption, keep recent messages
+        # Store compressed context for one-time consumption, keep recent messages.
+        # If previous compressed context was not consumed (no generate() between
+        # compress calls), merge it by prepending.
+        prev = getattr(self, '_pending_compressed_context', "")
+        context_text = f"[COMPRESSED CONTEXT — {len(old_messages)} messages summarized]\n\n{summary}"
         self._pending_compressed_context = (
-            f"[COMPRESSED CONTEXT — {len(old_messages)} messages summarized]\n\n{summary}"
+            f"{prev}\n\n{context_text}" if prev else context_text
         )
         self.conversation_history = recent
         self._compressed_count += 1

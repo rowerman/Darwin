@@ -24,16 +24,11 @@ log = logging.getLogger(__name__)
 from darwin.cteg import CTEG, TaskRecord
 from darwin.data_model import normalize_dkg_state, PipelineState, EndpointInfo
 from darwin.dkg import DKG
-from darwin.dpm import (
-    DefenseCategory,
-    DefensePerceptionModule,
-    DefenseStateVector,
-    SanitizationStrategy,
-)
-from darwin.dave import DAVE, ExploitAttempt, VerificationResult, parse_tool_stdout
+from darwin.dpm import DefensePerceptionModule, DefenseStateVector
+from darwin.dave import DAVE, ExploitAttempt, parse_tool_stdout
 from darwin.dynamic_scaling import DynamicScalingEngine, ScalingLevel, compute_task_breadth
 from darwin.tools.mcp_client import MCPClientPool, load_mcp_config
-from darwin.tools.mcp_gateway import MCPGateway, ToolResult
+from darwin.tools.mcp_gateway import MCPGateway
 from darwin.tools.recon_server import create_recon_gateway, parse_response
 from darwin.tools.attack_server import create_attack_gateway
 from darwin.utils.http_client import HTTPClient, ProbeClient, HTTPResponse
@@ -81,6 +76,8 @@ class VulnerabilityHypothesis:
     evidence: str
     suggested_tool: str = ""
     tool_args: dict = field(default_factory=dict)
+    research_techniques: list = field(default_factory=list)
+    research_cves: list = field(default_factory=list)
 
 
 @dataclass
@@ -115,6 +112,12 @@ class Orchestrator:
 
     Reference: Cochise planner.py — Planner + temporary Executor
     """
+
+    # Tools that must never appear in exploitation plans (time-wasters with
+    # near-zero success rate).  Mapped to viable alternatives.
+    _BLACKLISTED_TOOLS: dict[str, str] = {
+        "hydra_ssh_brute": "ssh_exec",
+    }
 
     REQUIRED_TOOLS = [
         "nmap", "dirb", "whatweb", "curl",
@@ -173,6 +176,8 @@ class Orchestrator:
         self._research_done = False
         self._solo_iterations = 0
         self._multi_agent_iterations = 0
+        self._solo_exhausted = False
+        self._multi_exhausted = False
         self._task_attempt_limit = 3
         self._exhausted_task_ids: set[str] = set()
         self._prev_endpoint_count = 0
@@ -221,6 +226,14 @@ class Orchestrator:
                          connected, len(tools), ", ".join(sorted(tools)[:15]))
         else:
             log.info("No MCP servers enabled in config/mcp_servers.yaml")
+
+        # Preload RAG in background (takes ~45s — run in parallel with bootstrap)
+        _rag_task: asyncio.Task | None = None
+        try:
+            from darwin.rag import get_rag
+            _rag_task = asyncio.create_task(asyncio.to_thread(get_rag))
+        except Exception:
+            pass
 
         self.phase = OrchestratorPhase.RECON
         result: TaskResult | None = None
@@ -283,6 +296,11 @@ class Orchestrator:
                     loop=self._loop_count, b_value=B, mode=scaling_level.value)
 
                 if scaling_level == ScalingLevel.SOLO:
+                    # Skip if solo already exhausted — avoid wasted iterations
+                    if self._solo_exhausted:
+                        log.info("Solo mode exhausted, skipping loop %d", self._loop_count)
+                        continue
+
                     # Phase 1: Service research → known CVEs for each service (once)
                     if not self._svc_research_done:
                         await self._service_research()
@@ -307,9 +325,9 @@ class Orchestrator:
                     self._solo_iterations += 1
                     if result is None or not result.success:
                         if self._solo_iterations >= 3:
-                            self._surface_exhausted = True
+                            self._solo_exhausted = True
                     else:
-                        self._surface_exhausted = True
+                        self._solo_exhausted = True
                 else:
                     # Coordinated or Distributed — dispatch to multi-agent cycle
                     # with scaling_level and CTEG hints for mode-differentiated behavior
@@ -325,9 +343,9 @@ class Orchestrator:
                     self._multi_agent_iterations += 1
                     if result is None or not result.success:
                         if self._multi_agent_iterations >= 3:
-                            self._surface_exhausted = True
+                            self._multi_exhausted = True
                     else:
-                        self._surface_exhausted = True
+                        self._multi_exhausted = True
 
                 # Checkpoint DKG after each loop iteration
                 self.dkg.save(self._checkpoint_path(f"loop_{self._loop_count}"))
@@ -580,8 +598,19 @@ class Orchestrator:
         # Exclude SSH, AD, and DB ports (not HTTP)
         _NON_HTTP_PORTS = {"22", "445", "389", "636", "3268", "3269",
                            "3306", "5432", "6379", "1433", "1521", "27017"}
-        http_ports = [p for p in discovered_ports
-                      if str(p.get("port")) not in _NON_HTTP_PORTS]
+        # Also exclude by service name to catch non-standard ports
+        _NON_HTTP_SVC_NAMES = {"ssh", "redis", "mysql", "mariadb", "postgresql",
+                               "mssql", "oracle", "mongodb", "memcached",
+                               "ldap", "kerberos", "smb", "rdp", "vnc"}
+        http_ports = []
+        for p in discovered_ports:
+            p_str = str(p.get("port"))
+            if p_str in _NON_HTTP_PORTS:
+                continue
+            svc = (p.get("service", "") or p.get("version", "")).lower()
+            if any(name in svc for name in _NON_HTTP_SVC_NAMES):
+                continue
+            http_ports.append(p)
 
         async def _probe_one_port(port: int) -> tuple:
             """Probe a single HTTP port, return (url, stdout, http_status, technologies, forms, api_paths)."""
@@ -713,6 +742,38 @@ class Orchestrator:
             await asyncio.gather(*api_tasks, return_exceptions=True)
 
         self._discovered_ports = discovered_ports
+
+        # ── Bootstrap summary ─────────────────────────────────────────
+        services = self.dkg.query_nodes("Service")
+        hosts = self.dkg.query_nodes("Host")
+        domains = self.dkg.query_nodes("Domain")
+        db_ports = {3306: "MySQL", 5432: "PostgreSQL", 6379: "Redis",
+                    1433: "MSSQL", 1521: "Oracle", 27017: "MongoDB"}
+        db_found = []
+        for s in services:
+            p = s.get("port")
+            if p in db_ports:
+                db_found.append(f"port {p} ({db_ports[p]})")
+
+        print(f"\n[BOOTSTRAP] {len(hosts)} host(s), {len(services)} service(s)")
+        for s in services:
+            ver = s.get("version", "") or s.get("banner", "")
+            print(f"  port {s.get('port'):>5}/{s.get('protocol','tcp'):<6} {ver[:55]}")
+        if db_found:
+            print(f"  Non-HTTP services: {', '.join(db_found)}")
+        if domains:
+            print(f"  Domain detected: {domains[0].get('name', '?')} (ports 389/445/636)")
+        ssh_ok = any(s.get("port") == 22 and not s.get("skip_exploit", True)
+                     for s in services)
+        if ssh_ok:
+            print(f"  SSH: credentials active")
+        if self._provided_username and not ssh_ok:
+            db_creds = [c for c in self.dkg.query_nodes("Credential")
+                       if c.get("source") == "user_provided" and c.get("cred_type") != "ssh"]
+            if db_creds:
+                cred_parts = [f"{c.get('cred_type','?')}:{c.get('port','?')}" for c in db_creds]
+                print(f"  DB credentials provided for: {', '.join(cred_parts)}")
+
         self.step_count += 1
 
     # ── Deep Recon (after bootstrap, before service research) ───────
@@ -905,6 +966,25 @@ class Orchestrator:
             await asyncio.gather(*tasks, return_exceptions=True)
         log.info("_deep_recon: complete")
 
+        # ── Deep recon summary ──────────────────────────────────────
+        endpoints = self.dkg.query_nodes("Endpoint")
+        vulns = self.dkg.query_nodes("Vulnerability")
+        dirb_endpoints = [e for e in endpoints if "dirb" in str(e.get("discovered_by", ""))]
+        nikto_vulns = [v for v in vulns if "nikto" in str(v.get("source", ""))]
+        forms = [e for e in endpoints if e.get("params") and len(str(e.get("params", ""))) > 5]
+        print(f"[DEEP RECON] {len(endpoints)} total endpoints")
+        if dirb_endpoints:
+            print(f"  dirb paths discovered: {len(dirb_endpoints)}")
+        if nikto_vulns:
+            print(f"  nikto findings: {len(nikto_vulns)}")
+        if forms:
+            print(f"  forms with parameters: {len(forms)}")
+            for f in forms[:4]:
+                pstr = str(f.get("params", ""))[:80]
+                print(f"    {f.get('url','?')[:60]} params={pstr}")
+            if len(forms) > 4:
+                print(f"    ... and {len(forms) - 4} more forms")
+
     async def _detect_defenses(self) -> None:
         """Run DPM defense probes on discovered endpoints and update defense_state.
 
@@ -924,6 +1004,8 @@ class Orchestrator:
                 if e.get("url", "").startswith("http") and e.get("method", "GET") == "GET"
             ][:6]
         if not get_endpoints:
+            print("[DEFENSE] No HTTP endpoints to probe — skipping defense detection "
+                  f"({len(endpoints)} non-HTTP endpoints)")
             return
 
         all_probe_results = []
@@ -949,6 +1031,19 @@ class Orchestrator:
                 defense_category=self.defense_state.defense_category,
                 defense_complexity=self.defense_state.defense_complexity,
             )
+
+        # ── Defense summary ─────────────────────────────────────────
+        ds = self.defense_state
+        if ds.waf_type and ds.waf_type != "unknown":
+            print(f"\n[DEFENSE] WAF: {ds.waf_type} | "
+                  f"Category: {ds.defense_category} | "
+                  f"Complexity: {ds.defense_complexity:.2f}")
+        else:
+            print(f"\n[DEFENSE] No active WAF detected (complexity: {ds.defense_complexity:.2f})")
+        if ds.honeypot_count > 0:
+            print(f"  Honeypots detected: {ds.honeypot_count}")
+        if ds.cloak_detected:
+            print(f"  Cloaking detected: True")
 
     async def _verify_flag(
         self, flag: str, stdout: str, tc_args: dict, elapsed_ms: int = 0,
@@ -1068,8 +1163,8 @@ class Orchestrator:
         if self._loop_count >= max_loops:
             log.info("Max loops (%d) reached", max_loops)
             return True
-        if getattr(self, '_surface_exhausted', False):
-            log.info("Attack surface exhausted — terminating main loop")
+        if getattr(self, '_solo_exhausted', False) and getattr(self, '_multi_exhausted', False):
+            log.info("All modes exhausted — terminating main loop")
             return True
         return False
 
@@ -1085,7 +1180,13 @@ class Orchestrator:
     # ── Tool Result Feedback ─────────────────────────────────────
 
     EXPLOIT_TOOLS = {"sqlmap_test", "send_payload", "command_injection_test",
-                     "xss_reflection_test", "ffuf_fuzz", "http_post"}
+                     "xss_reflection_test", "ffuf_fuzz", "http_post",
+                     "redis_cmd", "mysql_query", "psql_query", "mssql_query",
+                     "oracle_query", "tomcat_exploit", "php_filter_chain",
+                     "jwt_forge", "impacket_psexec", "impacket_wmiexec",
+                     "impacket_pth", "impacket_ticketer", "impacket_silver_ticket",
+                     "impacket_secretsdump", "impacket_secretsdump_dcsync",
+                     "impacket_GetUserSPNs", "impacket_GetNPUsers", "wpscan_enum"}
 
     @staticmethod
     def _format_parse_summary(parsed: dict) -> str:
@@ -1324,7 +1425,8 @@ class Orchestrator:
             cycle_summary = self._build_cycle_summary()
             self.llm.add_context_message(cycle_summary.to_prompt_block(), role="user")
 
-        self._exploit_chain: list[dict] = []
+        if not hasattr(self, '_exploit_chain'):
+            self._exploit_chain: list[dict] = []
 
         # Generate initial plan
         if not self.exploitation_plan or not self.exploitation_plan.tasks:
@@ -1333,7 +1435,11 @@ class Orchestrator:
         # Plan already generated before systematic exploit — skip duplicate
 
         # Build tool definitions from recon + attack gateways + MCP servers
-        tool_defs = self.attack_gateway.get_tool_definitions()
+        # Filter blacklisted tools so the LLM never sees them as callable functions.
+        tool_defs = [
+            d for d in self.attack_gateway.get_tool_definitions()
+            if d.get("function", {}).get("name") not in self._BLACKLISTED_TOOLS
+        ]
         tool_defs += self.recon_gateway.get_tool_definitions()
         try:
             mcp_defs = self.mcp_pool.get_tool_definitions()
@@ -1485,14 +1591,37 @@ class Orchestrator:
                 # Plan exhausted — ask LLM if it wants to add more tasks
                 if not getattr(self, '_plan_review_exhausted', False):
                     self._plan_review_exhausted = True
-                    # Build a meaningful summary so the LLM can decide
-                    # whether to add new tasks or give up.
                     state = self._get_state()
-                    ep_list = [f"{ep.method} {ep.url}" for ep in state.endpoints[-8:]]
+                    plan = self.exploitation_plan
+                    n_tasks = len(plan.tasks) if plan else 0
+                    n_endpoints = len(state.endpoints)
+                    n_services = len(state.services)
+                    n_done = sum(1 for t in (plan.tasks or []) if t.get("status") == "done")
+
+                    ep_list = [f"{ep.method} {ep.url}" for ep in state.endpoints[-10:]]
+                    svc_list = [f"{s.port}/{s.protocol} {s.version or s.banner}"
+                               for s in state.services[-5:] if s.port]
+
+                    # Thin-plan detection: many endpoints but few exploitation tasks
+                    thin_warning = ""
+                    if n_endpoints >= 5 and n_tasks <= 3 and n_done <= 2:
+                        thin_warning = (
+                            f"\nWARNING: Only {n_tasks} tasks for {n_endpoints} endpoints + "
+                            f"{n_services} services. The plan was far too thin. "
+                            f"You MUST add substantive exploitation tasks now — "
+                            f"look at EVERY endpoint listed below and ask: could this "
+                            f"be vulnerable to SQLi, LFI, command injection, auth bypass, "
+                            f"credential stuffing, or configuration takeover? "
+                            f"For each likely vulnerability, add a SPECIFIC exploitation task. "
+                            f"Aim for 5-10 tasks minimum for a target this large.\n"
+                        )
+
                     exhaustion_summary = (
-                        f"Plan exhausted. {len(self.exploitation_plan.tasks)} tasks completed/failed.\n"
-                        + (f"Known endpoints: {', '.join(ep_list)}" if ep_list else "No endpoints discovered.")
+                        f"Plan exhausted. {n_tasks} tasks ({n_done} completed).\n"
+                        + (f"Known endpoints ({n_endpoints}): {', '.join(ep_list)}" if ep_list else "No endpoints discovered.")
+                        + (f"\nKnown services ({n_services}): {', '.join(svc_list)}" if svc_list else "")
                         + (f"\nCredentials: {len(state.credentials)} known" if state.credentials else "")
+                        + thin_warning
                     )
                     await self._review_and_update_plan(
                         {"id": "plan-exhausted", "instruction": "Plan exhausted",
@@ -1518,64 +1647,99 @@ class Orchestrator:
                 except (json.JSONDecodeError, TypeError):
                     task_params = {"url": str(task_params)}
 
-            # Tell LLM to execute this specific task
-            self._maybe_compress()
-            if "-manual" in task.get("id", ""):
-                # Manual retry: force the LLM to use send_payload with the
-                # tested param. History shows it tends to wander to other
-                # endpoints otherwise.
-                tu_val = task_params.get("url", task_params.get("target_url", ""))
-                tp_val = task_params.get("param", task_params.get("parameter", "q"))
-                freedom_note = (
-                    f"You MUST call send_payload(url=\"{tu_val}\", param=\"{tp_val}\", "
-                    f"payload=..., method=\"GET\"). "
-                    f"Do NOT call curl_get or http_post instead. "
-                    f"Do NOT change the URL or param. "
-                    f"The instruction below contains specific payloads to try."
-                )
+            # ── Direct execution for concrete tasks ──────────────────────
+            # When the plan specifies exact tool + params, execute directly
+            # instead of going through the LLM (which may silently change params).
+            # Tasks without concrete params (e.g. exploratory curl_get) still
+            # go through the LLM for creative decision-making.
+            _direct_tools = {
+                "shell_exec", "redis_cmd", "mysql_query", "psql_query",
+                "mssql_query", "oracle_query", "ssh_exec", "ssh_key_exec",
+                "impacket_psexec", "impacket_wmiexec", "impacket_pth",
+                "impacket_secretsdump", "impacket_secretsdump_dcsync",
+                "impacket_ticketer", "impacket_silver_ticket",
+                "impacket_GetUserSPNs", "impacket_GetNPUsers",
+                "nmap_port_range", "nmap_full_scan", "nmap_vulners_scan",
+                "whatweb_scan", "dirb_scan", "gobuster_dir", "nikto_scan",
+                "hydra_http_brute", "ffuf_fuzz", "tomcat_exploit",
+                "php_filter_chain", "jwt_forge", "searchsploit_copy",
+                "impacket_ntlmrelayx",
+            }
+            if task_tool and task_params and task_tool in _direct_tools:
+                # Execute directly — plan params are authoritative
+                task_tool_calls = [{
+                    "name": task_tool, "arguments": task_params,
+                    "id": f"direct-{task.get('id')}",
+                }]
+                print(f"\n[solo:{iteration}] task={task.get('id','')} → {task_tool} [direct]")
             else:
-                freedom_note = (
-                    f"You may use a different tool if you have a better approach, "
-                    f"but you MUST target this task's objective."
+                # LLM-driven execution for flexible/exploratory tasks
+                self._maybe_compress()
+                if "-manual" in task.get("id", ""):
+                    # Manual retry: force the LLM to use send_payload with the
+                    # tested param. History shows it tends to wander to other
+                    # endpoints otherwise.
+                    tu_val = task_params.get("url", task_params.get("target_url", ""))
+                    tp_val = task_params.get("param", task_params.get("parameter", "q"))
+                    freedom_note = (
+                        f"You MUST call send_payload(url=\"{tu_val}\", param=\"{tp_val}\", "
+                        f"payload=..., method=\"GET\"). "
+                        f"Do NOT call curl_get or http_post instead. "
+                        f"Do NOT change the URL or param. "
+                        f"The instruction below contains specific payloads to try."
+                    )
+                else:
+                    if task_tool and task_tool != "curl_get":
+                        freedom_note = (
+                            f"You MUST call the tool '{task_tool}' now. "
+                            f"Do not substitute another tool. "
+                            f"Use the exact params listed below. "
+                            f"The instruction describes what to do with this tool."
+                        )
+                    else:
+                        freedom_note = (
+                            f"You may use a different tool if you have a better approach, "
+                            f"but you MUST target this task's objective."
+                        )
+                task_prompt = (
+                    f"Execute plan task {iteration}/{MAX_ITER}:\n"
+                    f"  Instruction: {task_instruction}\n"
+                    f"  Required tool: {task_tool if task_tool else '(choose the best tool)'}\n"
+                    f"  Params: {json.dumps(task_params)}\n\n"
+                    f"{freedom_note}"
                 )
-            task_prompt = (
-                f"Execute plan task {iteration}/{MAX_ITER}:\n"
-                f"  Instruction: {task_instruction}\n"
-                f"  Suggested tool: {task_tool}\n"
-                f"  Params: {json.dumps(task_params)}\n\n"
-                f"{freedom_note}"
-            )
-            content, tool_calls = self.llm.generate(
-                prompt=task_prompt,
-                system_prompt=SYSTEM_PROMPT_ORCHESTRATOR,
-                tools=tool_defs,
-            )
-
-            if not tool_calls:
-                # Retry once with more explicit instruction
-                content2, tool_calls = self.llm.generate(
-                    prompt=f"You MUST call the tool '{task_tool}' now. "
-                           f"Do not explain. Just execute the function call.",
+                content, task_tool_calls = self.llm.generate(
+                    prompt=task_prompt,
                     system_prompt=SYSTEM_PROMPT_ORCHESTRATOR,
                     tools=tool_defs,
                 )
-            if not tool_calls:
-                log.info("[PLAN] task %s: LLM produced no tool calls — skipping",
-                         task.get("id", ""))
-                task["status"] = "skipped"
-                continue
+
+                if not task_tool_calls:
+                    # Retry once with more explicit instruction
+                    content2, task_tool_calls = self.llm.generate(
+                        prompt=f"You MUST call the tool '{task_tool}' now. "
+                               f"Do not explain. Just execute the function call.",
+                        system_prompt=SYSTEM_PROMPT_ORCHESTRATOR,
+                        tools=tool_defs,
+                    )
+                if not task_tool_calls:
+                    log.info("[PLAN] task %s: LLM produced no tool calls — skipping",
+                             task.get("id", ""))
+                    task["status"] = "skipped"
+                    continue
+                tc_names = [tc.get('name', '?') for tc in task_tool_calls]
+                print(f"\n[solo:{iteration}] task={task.get('id','')} → "
+                      f"{', '.join(tc_names)}")
 
             # Execute tool calls for this task
-            tc_names = [tc.get('name', '?') for tc in tool_calls]
-            print(f"\n[solo:{iteration}] task={task.get('id','')} → "
-                  f"{', '.join(tc_names)}")
+            tc_names = [tc.get('name', '?') for tc in task_tool_calls]
             task_success = False  # at least one tool must succeed
             _any_success = False
             task_summary = ""
             _all_task_stdouts: list[str] = []  # accumulate all tool outputs
             _auto_test_negative = False  # track "no evidence" / "no flag"
 
-            for tc in tool_calls:
+            for tc in task_tool_calls:
                 tc_name = tc.get("name", "")
                 tc_args = tc.get("arguments", {})
                 tc_id = tc.get("id", "")
@@ -1699,7 +1863,12 @@ class Orchestrator:
 
                 print(f"  [{tc_name}] {str(tc_args)[:120]} → "
                       f"{tool_stdout.split(chr(10))[0][:120]}")
-                self.llm.add_tool_result(tc_id, tool_stdout[:2500])
+                # Direct execution tasks skip LLM history — no preceding
+                # assistant tool_calls message exists, so adding a tool
+                # result here would break DeepSeek's API requirement.
+                # Plan review receives everything it needs via task_result_text.
+                if not tc_id.startswith("direct-"):
+                    self.llm.add_tool_result(tc_id, tool_stdout[:2500])
 
                 # Auto-persist technology discoveries to DKG (before compression loses them)
                 if tc_name in ("whatweb_scan",) and getattr(result, 'success', False):
@@ -1756,11 +1925,60 @@ class Orchestrator:
             task_result_text = self._summarize_task_result(
                 tc_names, task_success, _all_task_stdouts
             )
+
+            # ── Fix-and-retry: LLM analyzes failures, fixes param errors ──
+            _fix_attempts = 0
+            _task_tool = task.get("tool", "")
+            while not task_success and _fix_attempts < 2 and _task_tool:
+                fix = await self._analyze_and_fix_task(task, task_result_text)
+                if not fix:
+                    break
+
+                task["params"] = fix["corrected_params"]
+                reason = fix.get("reason", "corrected params")
+                print(f"  [FIX] {task.get('id')}: {reason[:120]}")
+                self.step_count += 1
+
+                retry_result = await self._execute_single_tool(
+                    _task_tool, task["params"]
+                )
+                retry_stdout = retry_result.stdout or ""
+                retry_stderr = retry_result.stderr or ""
+
+                if retry_result.success:
+                    task_success = True
+                    task_result_text = (
+                        f"[FIXED — {reason[:100]}] "
+                        f"{retry_stdout[:1200] or 'OK'}"
+                    )
+                    # Check for flag
+                    flags = self.flag_pattern.findall(retry_stdout)
+                    if flags:
+                        is_valid, reason_flag = await self._verify_flag(
+                            flags[0], retry_stdout, task.get("params", {}),
+                            retry_result.elapsed_ms,
+                        )
+                        if is_valid:
+                            self.phase = OrchestratorPhase.DONE
+                            return TaskResult(
+                                success=True, flag=flags[0],
+                                steps=self.step_count,
+                                tokens_used=self.llm.token_count,
+                                time_elapsed=time.time() - self.start_time,
+                            )
+                else:
+                    task_result_text = (
+                        f"Fix attempt {_fix_attempts + 1} failed "
+                        f"[{reason[:80]}]: {retry_stderr or retry_stdout or 'no output'}"
+                    )
+                _fix_attempts += 1
+
             await self._review_and_update_plan(
                 task, task_success, task_result_text
             )
             log.info("[PLAN REVIEW] task %s → %s, plan updated",
                      task.get("id", ""), "done" if task_success else "failed")
+            self._print_plan_status()
 
         log.info("_unified_llm_loop: %d iterations, flag not found", iteration)
         self._generate_phase_summary("exploit")
@@ -1768,7 +1986,7 @@ class Orchestrator:
         # ── Free-form exploration (plan exhausted but LLM can still try) ──
         # After plan tasks are done, let the LLM explore freely for a few
         # more rounds — it may try creative approaches the plan missed.
-        if getattr(self, '_surface_exhausted', False):
+        if getattr(self, '_solo_exhausted', False):
             pass  # skip if already exhausted
         else:
             explore_rounds = min(3, MAX_ITER - iteration)
@@ -1891,6 +2109,10 @@ class Orchestrator:
             "idor-url-path": ["curl_get"],
             "auth": ["curl_get"],
             "csrf": ["curl_get"],
+            "authbypass": ["redis_cmd", "mysql_query", "psql_query", "mssql_query",
+                          "oracle_query", "ssh_exec", "shell_exec"],
+            "weakauth": ["test_credential", "ssh_exec",
+                        "mysql_query", "psql_query", "mssql_query", "oracle_query"],
         }
         # Fuzzy match: if a vuln type CONTAINS one of these substrings, it maps
         FUZZY_MAP: dict[str, list[str]] = {
@@ -1944,7 +2166,9 @@ class Orchestrator:
         if session_cookies:
             print(f"[systematic]   session cookies: {session_cookies[:80]}...")
 
-        tried: set[tuple[str, str, str]] = set()  # (tool, url, param) dedup
+        if not hasattr(self, '_tried_systematic'):
+            self._tried_systematic: set[tuple] = set()
+        tried = self._tried_systematic  # (tool, url, param) dedup, cross-cycle
         tested_count = 0
         MAX_TESTS = 20
         for v in vulns_sorted:
@@ -1963,13 +2187,32 @@ class Orchestrator:
                 continue
 
             tools = _resolve_tools(vt)
-            # For non-HTTP endpoints, filter out HTTP-only tools
+            # For non-HTTP endpoints, filter to protocol-matching tools only
             if not endpoint.startswith("http://") and not endpoint.startswith("https://"):
-                _PROTOCOL_TOOLS = {"redis_cmd", "ssh_exec", "ssh_key_exec",
-                                   "mysql_query", "psql_query", "mssql_query",
-                                   "oracle_query", "test_credential", "hydra_ssh_brute",
-                                   "shell_exec"}
-                tools = [t for t in tools if t in _PROTOCOL_TOOLS]
+                # Map endpoint proto to matching tools
+                _ALL_PROTOCOL_TOOLS = {"redis_cmd", "ssh_exec", "ssh_key_exec",
+                                       "mysql_query", "psql_query", "mssql_query",
+                                       "oracle_query", "test_credential", "shell_exec"}
+                _PROTO_TOOLS = {
+                    "redis://": {"redis_cmd", "shell_exec"},
+                    "ssh://": {"ssh_exec", "ssh_key_exec", "test_credential"},
+                    "mysql://": {"mysql_query", "shell_exec"},
+                    "postgresql://": {"psql_query", "shell_exec"},
+                    "mssql://": {"mssql_query", "shell_exec"},
+                    "oracle://": {"oracle_query", "shell_exec"},
+                    "mongodb://": {"shell_exec"},
+                    "memcached://": {"shell_exec"},
+                }
+                # Find matching proto-specific tools, fall back to all protocol tools
+                matched = None
+                for proto_prefix, proto_tools in _PROTO_TOOLS.items():
+                    if endpoint.startswith(proto_prefix):
+                        matched = proto_tools
+                        break
+                if matched is not None:
+                    tools = [t for t in tools if t in matched]
+                else:
+                    tools = [t for t in tools if t in _ALL_PROTOCOL_TOOLS]
                 if not tools:
                     continue
 
@@ -2175,6 +2418,7 @@ class Orchestrator:
             attack_tools=", ".join(attack_tool_names),
             recon_tools=", ".join(recon_tool_names),
         )
+        self._analyze_prompt_formatted = analyze_system_prompt
 
         # Transition to analyze phase (preserve history, swap system prompt)
         self.llm.replace_system_prompt(analyze_system_prompt)
@@ -2351,6 +2595,24 @@ class Orchestrator:
                 log.info("_analyze_phase: augmented %d LLM hypotheses with %d from DKG",
                          before, len(self.vulnerabilities) - before)
 
+        # ── Vulnerability summary ────────────────────────────────────
+        if self.vulnerabilities:
+            print(f"\n[ANALYZE] {len(self.vulnerabilities)} vulnerability hypotheses:")
+            _MAX_SHOW = 15
+            for i, v in enumerate(self.vulnerabilities[:_MAX_SHOW], 1):
+                vt_padded = f"[{v.vuln_type:<12}]"
+                ep_short = v.endpoint[:55] if v.endpoint else "?"
+                param_str = f"param={v.param}" if v.param else "param=(none)"
+                print(f"  {i:2d}. {vt_padded} {ep_short:<56} {param_str:<20} conf={v.confidence:.0%}")
+                if v.evidence:
+                    print(f"      Evidence: {v.evidence[:130]}")
+                if v.suggested_tool and v.suggested_tool != "curl_get":
+                    print(f"      Tool: {v.suggested_tool}")
+            if len(self.vulnerabilities) > _MAX_SHOW:
+                print(f"  ... and {len(self.vulnerabilities) - _MAX_SHOW} more")
+        else:
+            print("[ANALYZE] No vulnerability hypotheses generated.")
+
         self.step_count += 1
 
     def _augment_from_dkg(self) -> None:
@@ -2496,7 +2758,7 @@ class Orchestrator:
         # Endpoints with numeric path segments → IDOR + SQLI
         for ep in self.dkg.query_nodes("Endpoint"):
             url = ep.get("url", "")
-            if not url or any(v.endpoint == url for v in self.vulnerabilities):
+            if not url or not url.startswith("http") or any(v.endpoint == url for v in self.vulnerabilities):
                 continue
             if re.search(r'/\d+', url):
                 self.vulnerabilities.append(VulnerabilityHypothesis(
@@ -2551,6 +2813,85 @@ class Orchestrator:
                     "suggested_tool": tool,
                 })
 
+        # ── Non-HTTP service vulnerability detection ─────────────────
+        _NON_HTTP_VULN_MAP = {
+            6379: ("AuthBypass", "Redis may be accessible without authentication",
+                   "redis_cmd", "redis"),
+            27017: ("AuthBypass", "MongoDB may be accessible without authentication",
+                    "shell_exec", "mongodb"),
+            11211: ("AuthBypass", "Memcached may be accessible without authentication",
+                    "shell_exec", "memcached"),
+            3306: ("WeakAuth", "MySQL may use weak/default credentials",
+                   "mysql_query", "mysql"),
+            5432: ("WeakAuth", "PostgreSQL may use weak/default credentials",
+                   "psql_query", "postgresql"),
+            1433: ("WeakAuth", "MSSQL may use weak/default credentials",
+                   "mssql_query", "mssql"),
+            1521: ("WeakAuth", "Oracle may use weak/default credentials",
+                   "oracle_query", "oracle"),
+            22: ("WeakAuth", "SSH may be accessible with weak credentials or key-based auth",
+                 "ssh_exec", "ssh"),
+        }
+        # Service name → vuln mapping (for non-standard ports)
+        _SVC_NAME_MAP = {
+            "redis": (6379,), "mysql": (3306,), "postgresql": (5432,),
+            "mssql": (1433,), "oracle": (1521,), "mongodb": (27017,),
+            "memcached": (11211,), "ssh": (22,), "openssh": (22,),
+        }
+        for svc in self.dkg.query_nodes("Service"):
+            port = svc.get("port")
+            # Match by port first, then by service name for non-standard ports
+            target_port = None
+            if port in _NON_HTTP_VULN_MAP:
+                target_port = port
+            else:
+                version = (svc.get("version", "") or svc.get("banner", "")).lower()
+                for name, ports in _SVC_NAME_MAP.items():
+                    if name in version:
+                        target_port = ports[0]
+                        break
+            if target_port is None:
+                continue
+            if svc.get("skip_exploit") and target_port != 22:
+                continue
+            vt, evidence, tool, proto = _NON_HTTP_VULN_MAP[target_port]
+            host = svc.get("ip", self.target_host)
+            endpoint = f"{proto}://{host}:{port}"
+            if not any(v.endpoint == endpoint for v in self.vulnerabilities):
+                self.vulnerabilities.append(VulnerabilityHypothesis(
+                    vuln_type=vt, endpoint=endpoint, param="",
+                    confidence=0.70, evidence=evidence,
+                    suggested_tool=tool,
+                    tool_args={"host": host, "port": port},
+                ))
+                self.dkg.add_node("Vulnerability", f"vuln-svc-{host}-{port}", {
+                    "vuln_type": vt, "endpoint": endpoint, "parameter": "",
+                    "severity": "high" if vt == "AuthBypass" else "medium",
+                    "source": "non_http_service_heuristic",
+                    "suggested_tool": tool,
+                })
+
+        # ── Post-filter: remove web-only vuln types from non-HTTP services ─
+        _WEB_ONLY_TYPES = {"XSS", "SQLI", "IDOR", "CSRF", "SSTI", "LFI", "RFI", "SSRF", "XXE"}
+        _NON_HTTP_PROTOS = {"redis", "mysql", "postgresql", "mssql", "oracle",
+                            "ssh", "mongodb", "memcached", "ldap", "smb"}
+        _dropped = []
+        _kept = []
+        for v in self.vulnerabilities:
+            if (v.vuln_type in _WEB_ONLY_TYPES
+                    and any(v.endpoint.startswith(f"{p}://") for p in _NON_HTTP_PROTOS)):
+                _dropped.append(v)
+            else:
+                _kept.append(v)
+        self.vulnerabilities = _kept
+        # Also remove from DKG (systematic pass reads DKG directly)
+        for v in _dropped:
+            for n in self.dkg.query_nodes("Vulnerability"):
+                if n.get("endpoint") == v.endpoint and n.get("vuln_type") in _WEB_ONLY_TYPES:
+                    nid = n.get("id", "")
+                    if nid:
+                        self.dkg.graph.remove_node(nid)
+
     # ── Phase 1.8: Service Research (before analyze) ────────────────
 
     async def _service_research(self) -> None:
@@ -2588,6 +2929,26 @@ class Orchestrator:
                             service_research_text += f"  [NVD CVEs] {text[:400]}\n"
                 except Exception:
                     pass
+
+                # RAG knowledge_search for non-HTTP database services
+                _NON_HTTP_RAG_PORTS = {22, 6379, 3306, 5432, 1433, 1521, 27017, 11211, 9200, 8086, 5984, 9042, 9092, 4444}
+                if port in _NON_HTTP_RAG_PORTS:
+                    try:
+                        svc_name = version or f"port {port}"
+                        rag_result = await self.attack_gateway.call(
+                            "knowledge_search",
+                            {"query": f"{svc_name} exploitation unauthorized access weak credentials",
+                             "category": ""},
+                        )
+                        if rag_result and getattr(rag_result, 'success', False):
+                            rag_text = (rag_result.stdout or rag_result.stderr or "")[:800]
+                            if rag_text and "no results" not in rag_text.lower():
+                                service_research_text += (
+                                    f"\n  [RAG Knowledge for {svc_name}]: {rag_text}\n"
+                                )
+                    except Exception:
+                        pass
+
             if service_research_text:
                 self.llm.add_context_message(
                     f"[SERVICE RESEARCH] Known vulnerabilities for discovered services:\n"
@@ -2604,6 +2965,22 @@ class Orchestrator:
                          len(service_research_text))
         except Exception as e:
             log.warning("_service_research failed: %s", e)
+
+        # ── Service research summary ─────────────────────────────────
+        services = self.dkg.query_nodes("Service")
+        cve_notes = [a for a in self.dkg.query_nodes("Analysis")
+                     if a.get("type") == "cve_findings"]
+        if cve_notes:
+            cve_preview = cve_notes[0].get("content", "")[:300]
+            # Extract CVE IDs from content
+            import re as _re
+            cve_ids = _re.findall(r'CVE-\d{4}-\d{4,}', cve_preview)
+            if cve_ids:
+                print(f"[RESEARCH] Found CVEs: {', '.join(cve_ids[:8])}")
+            else:
+                print(f"[RESEARCH] CVE data injected ({len(cve_preview)} chars)")
+        else:
+            print(f"[RESEARCH] No known CVEs found for {len(services)} services")
 
     # ── Phase 2.5: Research (vulnerability research, after analyze) ──
 
@@ -2666,7 +3043,7 @@ class Orchestrator:
         self._maybe_compress()
         content, tool_calls = self.llm.generate(
             prompt=research_prompt,
-            system_prompt=SYSTEM_PROMPT_ANALYZE,
+            system_prompt=getattr(self, '_analyze_prompt_formatted', SYSTEM_PROMPT_ANALYZE),
             tools=research_tools,
         )
 
@@ -2697,7 +3074,7 @@ class Orchestrator:
             self._maybe_compress()
             content, tool_calls = self.llm.generate(
                 prompt="Continue researching. Output JSON summary when done.",
-                system_prompt=SYSTEM_PROMPT_ANALYZE,
+                system_prompt=getattr(self, '_analyze_prompt_formatted', SYSTEM_PROMPT_ANALYZE),
                 tools=research_tools,
             )
 
@@ -2729,7 +3106,7 @@ class Orchestrator:
             self._maybe_compress()
             content, tool_calls = self.llm.generate(
                 prompt="All research complete. Output final JSON summary of findings for each vulnerability.",
-                system_prompt=SYSTEM_PROMPT_ANALYZE,
+                system_prompt=getattr(self, '_analyze_prompt_formatted', SYSTEM_PROMPT_ANALYZE),
             )
             try:
                 findings = self._extract_json(content)
@@ -2741,8 +3118,10 @@ class Orchestrator:
                                 if v.vuln_type.lower() == vt:
                                     if f.get("cve_ids"):
                                         v.evidence = (v.evidence or "") + f" CVEs: {f['cve_ids']}"
+                                        v.research_cves = list(f["cve_ids"])
                                     if f.get("key_techniques"):
                                         v.evidence = (v.evidence or "") + f" Techniques: {f['key_techniques']}"
+                                        v.research_techniques = list(f["key_techniques"])
                                     # Update DKG
                                     for vn in self.dkg.query_nodes("Vulnerability"):
                                         if (vn.get("vuln_type") or "").lower() == vt:
@@ -2814,7 +3193,7 @@ class Orchestrator:
         self._maybe_compress()
         content, tool_calls = self.llm.generate(
             prompt=prompt,
-            system_prompt=SYSTEM_PROMPT_ANALYZE,
+            system_prompt=getattr(self, '_analyze_prompt_formatted', SYSTEM_PROMPT_ANALYZE),
             tools=research_tools,
         )
 
@@ -2836,7 +3215,7 @@ class Orchestrator:
             self._maybe_compress()
             content, tool_calls = self.llm.generate(
                 prompt="Continue researching. Output JSON summary when done.",
-                system_prompt=SYSTEM_PROMPT_ANALYZE,
+                system_prompt=getattr(self, '_analyze_prompt_formatted', SYSTEM_PROMPT_ANALYZE),
                 tools=research_tools,
             )
 
@@ -3091,6 +3470,10 @@ class Orchestrator:
             line += f" confidence={v.confidence:.2f}"
             if v.evidence:
                 line += f"\n     Evidence: {v.evidence[:200]}"
+            if v.research_techniques:
+                line += f"\n     Research: {'; '.join(str(t) for t in v.research_techniques[:5])}"
+            if v.research_cves:
+                line += f"\n     CVEs: {', '.join(str(c) for c in v.research_cves[:5])}"
             if v.suggested_tool:
                 line += f"\n     Tool: {v.suggested_tool}"
                 if v.tool_args:
@@ -3118,6 +3501,27 @@ class Orchestrator:
     # Plans are LLM-generated, dynamically updated after each task,
     # and persisted in DKG for cross-phase/cross-agent visibility.
 
+    def _sanitize_plan_tools(self, tasks: list[dict]) -> None:
+        """Replace blacklisted tools in-place across ALL plan tasks.
+
+        Called after every plan generation / review / replan to ensure
+        time-wasting tools (e.g. hydra_ssh_brute) never reach execution,
+        regardless of which code path injected them.
+        """
+        for t in tasks:
+            if not isinstance(t, dict):
+                continue
+            tool = str(t.get("tool", "")).strip()
+            if tool in self._BLACKLISTED_TOOLS:
+                replacement = self._BLACKLISTED_TOOLS[tool]
+                t["tool"] = replacement
+                t["instruction"] = (
+                    t.get("instruction", "")
+                    .replace("brute force", "authenticate")
+                    .replace("brute-force", "authenticate")
+                    .replace("Brute force", "Authenticate")
+                )
+
     async def _generate_exploitation_plan(self, target_url: str, cteg_hints: dict | None = None) -> ExploitationPlan:
         """Generate a structured plan from bootstrap state (nmap results only).
 
@@ -3131,11 +3535,13 @@ class Orchestrator:
         )
 
         state = self._get_state()
-        # All tools: recon + attack, since LLM drives everything
+        # All tools: recon + attack, since LLM drives everything.
+        # Filter blacklisted tools so the LLM never generates plans using them.
         all_tools = sorted(set(
             self.attack_gateway.get_tool_names() +
             self.recon_gateway.get_tool_names()
         ))
+        all_tools = [t for t in all_tools if t not in self._BLACKLISTED_TOOLS]
 
         # Services context
         services_lines = []
@@ -3154,6 +3560,40 @@ class Orchestrator:
             for s in summaries[-2:]:
                 phase_summary += f"- {s.get('phase','')}: {s.get('key_findings','')[:300]}\n"
 
+        # ── RAG knowledge injection ────────────────────────────────
+        # Search RAG for attack patterns matching discovered services.
+        # This gives the LLM concrete exploitation steps instead of
+        # relying solely on technique names from the research phase.
+        rag_context = ""
+        try:
+            from darwin.rag import get_rag
+            rag = get_rag()
+            if rag and rag.loaded:
+                # Build search query from service names and vuln types
+                svc_terms = []
+                for s in state.services[:3]:
+                    if s.version:
+                        svc_terms.append(s.version[:60])
+                    elif s.banner:
+                        svc_terms.append(s.banner[:60])
+                vuln_terms = list({v.vuln_type for v in self.vulnerabilities[:4]})
+                query = " ".join(svc_terms + vuln_terms)
+                if query.strip():
+                    results = rag.search(query, top_k=5)
+                    if results:
+                        lines = ["\n## Attack Pattern Knowledge (from RAG)\n"]
+                        for r in results[:4]:
+                            title = r.get("title", "") or ""
+                            desc = (r.get("description", "") or "")
+                            techniques = r.get("techniques", []) or []
+                            tech_str = (" Techniques: " + "; ".join(str(t) for t in techniques[:3])) if techniques else ""
+                            snippet = (desc[:250] + "...") if len(desc) > 250 else desc
+                            lines.append(f"- **{title}**: {snippet}{tech_str}")
+                            lines.append("")
+                        rag_context = "\n".join(lines)
+        except Exception:
+            pass
+
         prompt = f"""Target: {target_url}
 
 ## Discovered Services (from nmap)
@@ -3166,6 +3606,7 @@ class Orchestrator:
 {phase_summary}
 ## Analyzed Vulnerabilities
 {self._format_vulnerability_summary()}
+{rag_context}
 ## Available Tools (all recon + attack)
 {', '.join(all_tools)}
 
@@ -3204,16 +3645,24 @@ Example DAG for a target with SQLi + CMDi + SSH pivot:
 task-1 and task-2 run first (parallel, independent). task-3 waits for both.
 
 ## Strategy
-1. For each vulnerability listed above, create one exploit task using the
-   suggested tool. Prioritize high-confidence vulnerabilities first.
-2. If an exploit succeeds or reveals new information, the plan will be
+1. CRITICAL: Create at least one EXPLOITATION task for EVERY vulnerability.
+   Recon-only tasks (INFO, KEYS *, CONFIG GET) are NOT sufficient — you MUST
+   include the actual exploit steps: CONFIG SET, SET key, SAVE, ssh_exec, etc.
+   A plan with only recon tasks will FAIL.
+2. Simple exploits needing one tool call (SQLi, XSS, CMDi) need 1 task. Complex
+   multi-step exploits (SSH key injection via Redis CONFIG SET→dbfilename→
+   SET→SAVE, container escape via check_caps→mount→release_agent, multi-stage
+   lateral movement) require a SEPARATE task for EACH atomic step.
+   dependencies. Consult the Research/CVEs fields above for technique guidance.
+2. Prioritize high-confidence vulnerabilities first.
+3. If an exploit succeeds or reveals new information, the plan will be
    updated after each task — new tasks can be added in replanning.
-3. Do NOT add curl_get/http_post probing tasks — services have already been
+4. Do NOT add curl_get/http_post probing tasks — services have already been
    probed during reconnaissance.
-4. If a vulnerability's suggested tool is curl_get (for LFI/IDOR/SSRF), use
+5. If a vulnerability's suggested tool is curl_get (for LFI/IDOR/SSRF), use
    curl_get with the exact URL and parameter.
 
-Output ONLY valid JSON array. One task per vulnerability (3-8 tasks)."""
+Output ONLY valid JSON array (3-20 tasks depending on complexity. More tasks =\= better — prefer focused, high-impact exploitation tasks over exhaustive probing)."""
 
         self._maybe_compress()
         try:
@@ -3271,6 +3720,22 @@ Output ONLY valid JSON array. One task per vulnerability (3-8 tasks)."""
                 plan.tasks.append(task)
 
         plan.updated_at = time.strftime("%Y-%m-%dT%H:%M:%S")
+
+        # Sanitize: replace blacklisted tools (e.g. hydra_ssh_brute → ssh_exec)
+        self._sanitize_plan_tools(plan.tasks)
+
+        # ── Plan generation summary ─────────────────────────────────
+        done = sum(1 for t in plan.tasks if t.get("status") == "done")
+        pending = sum(1 for t in plan.tasks if t.get("status") == "pending")
+        print(f"\n[PLAN] Generated {len(plan.tasks)} tasks ({done} done, {pending} pending)")
+        for t in plan.tasks[:12]:
+            status = t.get("status", "pending").upper()
+            deps = t.get("dependent_task_ids", []) or t.get("dependencies", [])
+            dep_str = f" (depends on: {', '.join(deps)})" if deps else ""
+            print(f"  [{status:<8}] {t.get('instruction','')[:100]}{dep_str}")
+        if len(plan.tasks) > 12:
+            print(f"  ... and {len(plan.tasks) - 12} more tasks")
+
         return plan
 
     def _guess_tool(self, vuln_type: str) -> str:
@@ -3382,11 +3847,20 @@ Output ONLY valid JSON array. One task per vulnerability (3-8 tasks)."""
             return None
         _EXPLOIT_PRIORITY = {
             "command_injection_test", "sqlmap_test", "send_payload",
-            "xss_reflection_test", "ffuf_fuzz", "hydra_http_brute",
-            "hydra_ssh_brute",
+            "xss_reflection_test", "ffuf_fuzz",
+            "redis_cmd", "mysql_query", "psql_query", "mssql_query",
+            "oracle_query", "tomcat_exploit", "php_filter_chain",
+            "jwt_forge", "impacket_psexec", "impacket_wmiexec",
+            "impacket_pth", "impacket_ticketer", "impacket_silver_ticket",
+            "impacket_secretsdump", "impacket_secretsdump_dcsync",
+            "impacket_GetUserSPNs", "impacket_GetNPUsers",
+        }
+        _LOW_PRIORITY = {
+            "hydra_http_brute", "hydra_ssh_brute",
         }
         ready_exploit = []
         ready_probe = []
+        ready_low = []
         for task in self._topological_sort(plan.tasks):
             if task.get("status") == "exhausted" or task.get("id") in self._exhausted_task_ids:
                 continue
@@ -3402,9 +3876,13 @@ Output ONLY valid JSON array. One task per vulnerability (3-8 tasks)."""
                 tool = task.get("tool", "")
                 if tool in _EXPLOIT_PRIORITY:
                     ready_exploit.append(task)
+                elif tool in _LOW_PRIORITY:
+                    ready_low.append(task)
                 else:
                     ready_probe.append(task)
-        return ready_exploit[0] if ready_exploit else (ready_probe[0] if ready_probe else None)
+        return (ready_exploit[0] if ready_exploit
+                else (ready_probe[0] if ready_probe
+                      else (ready_low[0] if ready_low else None)))
 
     @staticmethod
     def _summarize_task_result(
@@ -3511,6 +3989,108 @@ Output ONLY valid JSON array. One task per vulnerability (3-8 tasks)."""
             highest_confidence_vuln=highest_vuln,
         )
 
+    async def _execute_single_tool(
+        self, tool_name: str, params: dict
+    ) -> "ToolResult":
+        """Execute one tool via the appropriate gateway.
+
+        Returns a ToolResult-compatible object with .success, .stdout, .stderr, .exit_code.
+        """
+        from darwin.tools.mcp_gateway import ToolResult
+        try:
+            if tool_name in self.attack_gateway.get_tool_names():
+                return await self.attack_gateway.call(tool_name, params)
+            elif tool_name in self.recon_gateway.get_tool_names():
+                return await self.recon_gateway.call(tool_name, params)
+            elif tool_name in self.mcp_pool.get_tool_names():
+                mcp_raw = await self.mcp_pool.call_tool(tool_name, params)
+                mcp_text = json.dumps(mcp_raw, ensure_ascii=False)
+                return ToolResult(
+                    tool_name=tool_name, success=True, stdout=mcp_text,
+                    stderr="", exit_code=0, elapsed_ms=0,
+                )
+            else:
+                return ToolResult(
+                    tool_name=tool_name, success=False,
+                    stdout=f"Unknown tool: {tool_name}", stderr="",
+                    exit_code=1, elapsed_ms=0,
+                )
+        except Exception as e:
+            return ToolResult(
+                tool_name=tool_name, success=False,
+                stdout="", stderr=str(e), exit_code=1, elapsed_ms=0,
+            )
+
+    async def _analyze_and_fix_task(
+        self, task: dict, output: str
+    ) -> dict | None:
+        """Ask LLM whether task failure is fixable (wrong params) or not.
+
+        Returns dict with corrected_params + reason if fixable, None otherwise.
+        """
+        instruction = task.get("instruction", "")[:200]
+        tool = task.get("tool", "")
+        params = task.get("params", {})
+        params_str = json.dumps(params)
+        output_trunc = output[:1500]
+
+        # Detect timeout/hang failures and add targeted hints
+        timeout_hint = ""
+        output_lower = output.lower()
+        if ("timed out" in output_lower or "no output" in output_lower
+                or "exit=-1" in output or "timeout" in output_lower):
+            timeout_hint = (
+                "\nThis task TIMED OUT or produced no output. "
+                "Common causes for shell_exec timeouts:\n"
+                "- An interactive prompt waiting for user input (e.g. ssh-keygen "
+                "asking to overwrite an existing file, or asking for a passphrase)\n"
+                "- A command that hangs waiting for network/input\n"
+                "Fix by: adding flags to skip prompts (ssh-keygen: use -N '' for "
+                "empty passphrase + rm -f the output file first to avoid overwrite "
+                "prompt), or adding a timeout prefix.\n"
+            )
+
+        prompt = f"""A task failed during execution. Analyze whether the failure
+is due to incorrect tool parameters (fixable) or because the target
+is genuinely not vulnerable to this attack (not fixable).
+
+Task instruction: {instruction}
+Tool called: {tool}
+Parameters used: {params_str}
+Tool output:
+{output_trunc}
+{timeout_hint}
+Classify:
+- "fixable" if the tool was called with wrong/malformed parameters
+  (e.g. wrong command syntax, non-existent file path, missing required
+  args, using a read command when a generation command was intended,
+  command would cause an interactive prompt)
+- "not_fixable" if the tool executed correctly but the attack didn't
+  work (e.g. target not vulnerable, authentication failed, credential
+  rejected, service not available, connection refused)
+
+If fixable, provide the CORRECTED params dict that would make the task
+succeed, matching the task instruction's intent.
+
+Output ONLY valid JSON:
+{{"fixable": true/false, "corrected_params": {{...}}, "reason": "..."}}"""
+
+        try:
+            content, _ = self.llm.generate(prompt=prompt)
+            # Extract JSON from response
+            match = re.search(r"\{[\s\S]*\}", content)
+            if not match:
+                return None
+            result = json.loads(match.group(0))
+            if result.get("fixable") and result.get("corrected_params"):
+                return {
+                    "corrected_params": result["corrected_params"],
+                    "reason": result.get("reason", ""),
+                }
+        except Exception:
+            pass
+        return None
+
     async def _review_and_update_plan(
         self, task: dict, success: bool, task_result: str = ""
     ) -> None:
@@ -3593,13 +4173,14 @@ Output ONLY valid JSON array. One task per vulnerability (3-8 tasks)."""
             f"- If credentials or tokens were obtained, ADD tasks that USE them immediately "
             f"(e.g., send authenticated requests to the relevant API endpoint)\n"
             f"- If a task discovered new endpoints/services, ADD exploration tasks for them\n"
-            f"- If a REST API or OpenAPI spec was discovered, ADD tasks to explore "
-            f"resource paths and individual items\n"
             f"- If pending tasks target endpoints that returned errors, REMOVE or CHANGE them\n"
             f"- If a task partially succeeded (some calls worked, some failed), SPLIT it\n"
-            f"- If progress has been made, REMOVE low-value pending tasks\n"
+            f"- REMOVE duplicate tasks that test the same thing with slightly different params\n"
+            f"- If 5+ enumeration tasks all returned empty/nothing, STOP adding more "
+            f"enumeration tasks — switch to exploitation or credential testing instead\n"
             f"{'- This task FAILED — generate alternative approaches using different tools, parameters, or endpoints. Do NOT retry the same approach.' if not success else ''}\n"
-            f"- If the plan is already optimal for the current state, it is OK to keep it unchanged\n\n"
+            f"- If the plan has >40 tasks, aggressively CULL low-value/redundant pending "
+            f"tasks. Prefer 10-20 high-quality exploitation tasks over 50+ probe tasks.\n\n"
             f"Output the COMPLETE updated task list as a JSON array. "
             f"Preserve done/failed tasks. Output ONLY valid JSON array."
         )
@@ -3614,7 +4195,7 @@ Output ONLY valid JSON array. One task per vulnerability (3-8 tasks)."""
             if new_tasks and isinstance(new_tasks, list) and len(new_tasks) > 0:
                 # Keep done/failed tasks, replace pending with LLM's updated list
                 preserved = [t for t in self.exploitation_plan.tasks
-                           if t.get("status") in ("done", "failed", "skipped", "exhausted")
+                           if t.get("status") in ("done", "failed", "skipped", "exhausted", "pending")
                            and t.get("id") != task.get("id")]
                 # Add the just-completed task with updated status
                 preserved.append(task)
@@ -3629,6 +4210,9 @@ Output ONLY valid JSON array. One task per vulnerability (3-8 tasks)."""
                         preserved.append(nt)
                         existing_ids.add(nt["id"])
                 self.exploitation_plan.tasks = preserved
+
+                # Sanitize: replace blacklisted tools in any LLM-generated tasks
+                self._sanitize_plan_tools(self.exploitation_plan.tasks)
 
                 # Cycle detection after plan mutation
                 cycle = self._detect_cycle(self.exploitation_plan.tasks)
@@ -3665,6 +4249,11 @@ Output ONLY valid JSON array. One task per vulnerability (3-8 tasks)."""
 
     async def _replan_after_failure(self, failed_task: dict, result: Any = None):
         """LLM generates replacement tasks when a task fails."""
+        tid = failed_task.get("id", "?")
+        instr = failed_task.get("instruction", "")[:80]
+        print(f"\n[REPLAN] Task '{tid}' failed: {instr}")
+        print(f"  Generating alternative approaches...")
+
         prompt = f"""Task failed: {failed_task.get('instruction','')}
 Tool: {failed_task.get('tool','')}
 Params: {json.dumps(failed_task.get('params',{}))}
@@ -3688,6 +4277,11 @@ Output ONLY valid JSON array."""
                     if nt.get("id") not in existing_ids:
                         self.exploitation_plan.tasks.append(nt)
                         existing_ids.add(nt.get("id"))
+                # Sanitize: replace blacklisted tools in replanned tasks
+                self._sanitize_plan_tools(self.exploitation_plan.tasks)
+                print(f"[REPLAN] Added {len(new_tasks)} replacement task(s):")
+                for nt in new_tasks[:5]:
+                    print(f"  + {nt.get('id','?')}: {nt.get('instruction','')[:100]}")
                 self._sync_plan_to_dkg()
         except Exception:
             failed_task["status"] = "skipped"
@@ -4489,6 +5083,56 @@ Respond ONLY with a JSON array of next steps (max 5)."""
 
     # ── Helpers ──────────────────────────────────────────────────────
 
+    def _print_phase(self, name: str) -> None:
+        """Print a phase transition banner."""
+        line = "=" * 56
+        print(f"\n{line}\n  PHASE: {name}\n{line}")
+
+    def _print_discovery(self, category: str, items: list[str], max_show: int = 8) -> None:
+        """Print discovered items with count. Skips if empty."""
+        if not items:
+            return
+        print(f"\n[{category}] {len(items)} discovered:")
+        for item in items[:max_show]:
+            print(f"  - {item}")
+        if len(items) > max_show:
+            print(f"  ... and {len(items) - max_show} more")
+
+    def _print_plan_status(self) -> None:
+        """Print current exploitation plan status to console."""
+        status = self._format_plan_status()
+        if status and status != "(no plan)":
+            print(f"\n{status}")
+
+    def _print_task_execution(self, task: dict, tool_names: list[str], iteration: int) -> None:
+        """Print task execution header."""
+        tid = task.get("id", "?")
+        instr = task.get("instruction", "")[:100]
+        print(f"\n[{self.phase.value.upper()}:{iteration}] Task {tid}: {instr}")
+        if tool_names:
+            print(f"  Tools: {', '.join(tool_names[:3])}")
+
+    def _print_task_result(self, task: dict, success: bool, result_summary: str) -> None:
+        """Print task result summary."""
+        status_icon = "  [OK]" if success else "  [FAIL]"
+        print(f"{status_icon} {result_summary[:250]}")
+
+    def _print_progress(self, scaling_level: Any, B: float) -> None:
+        """Print loop progress indicator."""
+        elapsed = time.time() - self.start_time
+        flag_count = len(getattr(self, '_known_flags', set()))
+        print(
+            f"\n{'─' * 48}\n"
+            f"Loop {self._loop_count}/{getattr(self, 'MAX_LOOPS', 10)} | "
+            f"Phase: {self.phase.value.upper()} | "
+            f"Mode: {scaling_level.value if hasattr(scaling_level, 'value') else scaling_level}"
+            f" (B={B:.2f}) | "
+            f"Flags: {flag_count} | "
+            f"Tokens: {self.llm.token_count} | "
+            f"Elapsed: {elapsed:.0f}s/{self.time_budget}s\n"
+            f"{'─' * 48}"
+        )
+
     def _task_log_event(self, level: str, event: str, **data: Any) -> None:
         """Record a structured event in the task log."""
         self._task_log.append({
@@ -4542,7 +5186,8 @@ Respond ONLY with a JSON array of next steps (max 5)."""
             "svc_research_done": self._svc_research_done,
             "research_done": self._research_done,
             "known_flags": list(self._known_flags) if hasattr(self, '_known_flags') else [],
-            "surface_exhausted": getattr(self, '_surface_exhausted', False),
+            "solo_exhausted": getattr(self, '_solo_exhausted', False),
+            "multi_exhausted": getattr(self, '_multi_exhausted', False),
             "vulnerabilities": [
                 {"vuln_type": v.vuln_type, "endpoint": v.endpoint,
                  "param": v.param, "confidence": v.confidence,
@@ -4608,7 +5253,8 @@ Respond ONLY with a JSON array of next steps (max 5)."""
             self._svc_research_done = checkpoint.get("svc_research_done", False)
             self._research_done = checkpoint.get("research_done", False)
             self._known_flags = set(checkpoint.get("known_flags", []))
-            self._surface_exhausted = checkpoint.get("surface_exhausted", False)
+            self._solo_exhausted = checkpoint.get("solo_exhausted", False)
+            self._multi_exhausted = checkpoint.get("multi_exhausted", False)
             self._exhausted_task_ids = set(checkpoint.get("exhausted_task_ids", []))
 
             # Restore vulnerabilities
@@ -4766,7 +5412,7 @@ Respond ONLY with a JSON array of next steps (max 5)."""
           - Coordinated (B 0.3-0.6): max 1 ReconAgent + 1 ExploitAgent
           - Distributed (B >= 0.6): per-host ReconAgent + per-vuln ExploitAgent + PivotAgent
         """
-        from darwin.sub_agents.base import SubAgentPool, TaskScope, TokenBudget, AgentType, SubAgentState
+        from darwin.sub_agents.base import SubAgentPool, SubAgentResult, TaskScope, TokenBudget, AgentType, SubAgentState
         from darwin.sub_agents.recon_agent import ReconAgent
         from darwin.sub_agents.exploit_agent import ExploitAgent
         from darwin.sub_agents.pivot_agent import PivotAgent
@@ -4791,7 +5437,7 @@ Respond ONLY with a JSON array of next steps (max 5)."""
 
         async def _flag_watcher():
             """Background: watch DKG for flag nodes via asyncio.Event + poll."""
-            flag_event = self.dkg._events.get("Flag")
+            flag_event = self.dkg.subscribe("Flag")
             if not flag_event:
                 return
             try:
@@ -4836,10 +5482,18 @@ Respond ONLY with a JSON array of next steps (max 5)."""
 
             # Phase 1: Recon agents first
             if recon_agents and not flag_found.is_set():
-                await asyncio.wait_for(
-                    asyncio.gather(*[a.run() for a in recon_agents], return_exceptions=True),
-                    timeout=120.0,
-                )
+                try:
+                    recon_results = await asyncio.wait_for(
+                        asyncio.gather(*[a.run() for a in recon_agents], return_exceptions=True),
+                        timeout=120.0,
+                    )
+                except asyncio.TimeoutError:
+                    # Preserve whatever completed before timeout
+                    recon_results = [a._build_result() for a in recon_agents
+                                     if getattr(a, 'state', None) == SubAgentState.DONE]
+                for i, r in enumerate(recon_results):
+                    if isinstance(r, SubAgentResult):
+                        pool._results[recon_agents[i].agent_id] = r
 
             # Phase 2: Service research → Analyze → Vuln research → Plan
             if not flag_found.is_set():
@@ -4872,20 +5526,35 @@ Respond ONLY with a JSON array of next steps (max 5)."""
 
             # Phase 4: Run Exploit agents
             if exploit_agents and not flag_found.is_set():
-                await asyncio.wait_for(
-                    asyncio.gather(*[a.run() for a in exploit_agents], return_exceptions=True),
-                    timeout=120.0,
-                )
+                try:
+                    exploit_results = await asyncio.wait_for(
+                        asyncio.gather(*[a.run() for a in exploit_agents], return_exceptions=True),
+                        timeout=120.0,
+                    )
+                except asyncio.TimeoutError:
+                    exploit_results = [a._build_result() for a in exploit_agents
+                                       if getattr(a, 'state', None) == SubAgentState.DONE]
+                for i, r in enumerate(exploit_results):
+                    if isinstance(r, SubAgentResult):
+                        pool._results[exploit_agents[i].agent_id] = r
 
             # Phase 5: Other agents (AD, Cloud, Pivot)
             if other_agents and not flag_found.is_set():
-                await asyncio.wait_for(
-                    asyncio.gather(*[a.run() for a in other_agents], return_exceptions=True),
-                    timeout=120.0,
-                )
+                try:
+                    other_results = await asyncio.wait_for(
+                        asyncio.gather(*[a.run() for a in other_agents], return_exceptions=True),
+                        timeout=120.0,
+                    )
+                except asyncio.TimeoutError:
+                    other_results = [a._build_result() for a in other_agents
+                                     if getattr(a, 'state', None) == SubAgentState.DONE]
+                for i, r in enumerate(other_results):
+                    if isinstance(r, SubAgentResult):
+                        pool._results[other_agents[i].agent_id] = r
 
             if flag_found.is_set():
-                pool.terminate()
+                for aid in list(getattr(pool, '_agents', {}).keys()):
+                    pool.terminate(agent_id=aid)
 
             # Check results
             results = getattr(pool, '_results', {})
@@ -5075,7 +5744,7 @@ Respond ONLY with a JSON array of next steps (max 5)."""
                     f'[{{"vuln_type": "SQLI", "endpoint": "...", "parameter": "...", '
                     f'"severity": "high", "reason": "..."}}]'
                 ),
-                system_prompt=SYSTEM_PROMPT_ANALYZE,
+                system_prompt=getattr(self, '_analyze_prompt_formatted', SYSTEM_PROMPT_ANALYZE),
             )
         except Exception as e:
             log.warning("_analyze_from_recon_findings LLM call failed: %s", e)

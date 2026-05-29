@@ -6,8 +6,11 @@ Reference: VulnBot roles/collector.py — Collector agent tool list and workflow
 from __future__ import annotations
 
 import json
+import logging
 import re
 from typing import Any, Dict, List
+
+_rec_log = logging.getLogger(__name__)
 
 from darwin.dkg import DKG
 from darwin.sub_agents.base import (

@@ -38,6 +38,14 @@ description: Use when debugging DARWIN experiment failures, modifying orchestrat
 3. **Surgical Changes** — 只动必须动的代码。不改旁边的、不重构不相干的、不顺手"优化"。匹配已有代码风格。
 4. **Goal-Driven Execution** — 每个修改必须有可验证的成功标准。多步骤任务先陈述计划再执行。
 
+### 原则 4：修改必记录
+
+**所有对代码的修改结束后，必须将修改摘要写入项目根目录 `CHANGES.md`。** 格式要求：
+- 在文件顶部添加日期标题（如 `## 2026-05-30`）
+- 每条修改一行：`- **文件**: 变更描述。原因/效果`
+- 如果修改涉及多个文件，按模块分组
+- 不要求冗长——每条 1-2 行即可，重点是让后续 session 能快速了解改动历史
+
 ---
 
 ## 核心工作流
@@ -146,6 +154,13 @@ for m in messages[-5:]:
 
 遵循 Karpathy 纪律 + 模块依赖地图。修改前查地图判断影响面，修改后至少用 2 个不同类型的靶机验证。
 
+**修改完成后，必须将修改摘要写入 `CHANGES.md`：**
+```markdown
+## YYYY-MM-DD
+- **文件**: 变更描述。原因/效果
+```
+不要求冗长，每条 1-2 行即可——重点是让后续 session 能快速了解改动历史。
+
 ### 阶段 6：验证修复 & 换靶机
 
 **修复验证检查**：
@@ -191,7 +206,7 @@ run.py / experiments/runner.py
     ▼       ▼        ▼        ▼                  ┌─────┴─────┐
  ReconAgent Exploit  Pivot   AD/Cloud             │           │
             Agent    Agent   Agent          recon_server  attack_server
-                                           (12 tools)    (30 tools)
+                                           (12 tools)    (35 tools)
 ```
 
 ### 每个模块的详细依赖
@@ -204,6 +219,9 @@ run.py / experiments/runner.py
 | **被谁依赖** | run.py, experiments/runner.py, experiments/chain_runner.py |
 | **修改影响面** | 全部。修改 run() 循环逻辑影响三个模式。修改 phase 顺序影响数据流。`_bootstrap_scan` 是三个模式的共同入口，端口遗漏是阻塞性故障。 |
 | **关键参数** | time_budget=1200, token_budget=200000, port_range (benchmark 模式) |
+| **模式耗尽** | `_solo_exhausted` 和 `_multi_exhausted` 独立标志，替代旧的共享 `_surface_exhausted`。Solo 3 次迭代或成功后标记耗尽；Multi-agent 同理。`_should_terminate()` 只在两者均耗尽时才终止。Solo 耗尽后空转会直接 `continue` 跳过。 |
+| **非 HTTP 过滤** | `_bootstrap_scan` 使用 `_NON_HTTP_PORTS`（端口号）和 `_NON_HTTP_SVC_NAMES`（服务名称，如 ssh/redis/mysql/ldap/smb）双重过滤，防止为非 HTTP 服务创建 HTTP 端点（避免后续生成 XSS/SQLi 假阳性）。 |
+| **RAG 预加载** | `run()` 中通过 `asyncio.create_task(asyncio.to_thread(get_rag))` 后台加载 RAG，与 bootstrap 扫描并行，节省 ~45s 启动时间。 |
 
 #### DKG (`darwin/dkg.py`)
 | 维度 | 详情 |
@@ -255,8 +273,8 @@ run.py / experiments/runner.py
 | **写入** | Faiss 索引, TF-IDF 索引 |
 | **被谁依赖** | Orchestrator (plan injection), attack_server (knowledge_search tool) |
 | **修改影响面** | embedding 模型路径改动影响索引加载。collection 增删影响 search 路由。 |
-| **集成路径** | 仅两种：`knowledge_search` tool（LLM 主动调用）+ plan injection（plan 生成时注入）。auto-enrich 已从 orchestrator 的 `_solo_llm_loop`、`_unified_llm_loop`、`_service_research`、`_run_multi_agent_cycle` 中移除。RAG 是 CVE 导向的，对非 HTTP 数据库服务覆盖不足——此时应使用 `ddg_search` 作为补充。 |
-| **最佳实践** | `knowledge_search` 查询应使用空 category（`category=""`），让语义搜索自行过滤。category 过滤容易导致假阴性——正确答案因 category 不匹配而被隐藏。 |
+| **集成路径** | 仅两种：`knowledge_search` tool（LLM 主动调用）+ plan injection（plan 生成时注入）。auto-enrich 已从 orchestrator 中移除。RAG 在 `run()` 启动时通过 `asyncio.create_task(asyncio.to_thread(get_rag))` 后台预加载（~45s），与 bootstrap 扫描并行。 |
+| **最佳实践** | `knowledge_search` 查询应使用空 category（`category=""`），让语义搜索自行过滤。先尝试 knowledge_search，无结果时用 ddg_search 补充。prompt 中已更新为非 CVE-only 表述，包含 unauth service 和 exploitation technique 条目。 |
 
 #### SubAgentPool & SubAgents (`darwin/sub_agents/`)
 | 维度 | 详情 |
@@ -275,8 +293,8 @@ run.py / experiments/runner.py
 | **写入** | 工具输出解析 → 传给调用者 (orchestrator 或 sub_agent) |
 | **被谁依赖** | Orchestrator (Solo 直接调用), 所有 SubAgent (通过 MCP Gateway) |
 | **修改影响面** | 新增工具：需要同时在 server 注册 + prompt 模板中告知 LLM。修改输出解析：影响下游所有依赖该工具输出的逻辑。 |
-| **近期新增** | nmap_port_range, searchsploit_copy, php_filter_chain, impacket_ntlmrelayx, ddg_search |
-| **近期改进** | gobuster_dir 支持自定义 wordlist + 默认值 (`/home/kianabin/Darwin/wordlists/raft-large-directories.txt`)；ssh_key_exec 添加 BatchMode；mcp_gateway 自动填充参数默认值 |
+| **近期新增** | impacket_silver_ticket, tomcat_exploit, wpscan_enum, wp_xmlrpc_brute, oracle_tns_poison, nmap_port_range, searchsploit_copy, php_filter_chain, impacket_ntlmrelayx, ddg_search |
+| **近期改进** | oracle_query: heredoc→printf（单引号修复）；jwt_forge: claims→claims_b64（base64 编码防单引号破坏）；wp_xmlrpc_brute: 用户列表字符串分割；oracle_tns_poison: PORT 模板变量 + 包长度含 header；gobuster_dir: 自定义 wordlist；ssh_key_exec: BatchMode；mcp_gateway: 自动填充参数默认值 |
 
 #### LLM Session (`darwin/utils/llm.py`)
 | 维度 | 详情 |
@@ -344,9 +362,12 @@ nmap 结果为空或缺少关键端口
     │   ├── nmap_full_scan — 全端口扫描 (65535 ports, timeout 150s)
     │   └── nmap_port_range — 范围扫描 (benchmark 必备, timeout 60s)
     │
-    └── _bootstrap_scan 中的 _NON_HTTP_PORTS 集合是否错误排除了目标端口？
-        └── 检查 orchestrator.py _NON_HTTP_PORTS: 22, 445, 389, 636, 3268, 3269,
-            3306, 5432, 6379, 1433, 1521, 27017
+    └── _bootstrap_scan 中的非 HTTP 过滤是否错误排除了目标端口？
+        ├── 端口号过滤：_NON_HTTP_PORTS = {22, 445, 389, 636, 3268, 3269,
+        │   3306, 5432, 6379, 1433, 1521, 27017}
+        └── 服务名称过滤：_NON_HTTP_SVC_NAMES = {ssh, redis, mysql, mariadb,
+            postgresql, mssql, oracle, mongodb, memcached, ldap, kerberos,
+            smb, rdp, vnc} — 即使非标准端口，服务名匹配也会跳过 HTTP probe
 ```
 
 **架构提示**：`_bootstrap_scan` 是 Solo/Coordinated/Distributed 三个模式的共同入口。端口遗漏是阻塞性故障——这里出错，后续所有阶段都没有数据可操作。
@@ -404,7 +425,9 @@ _analyze_phase 正确识别了漏洞，但 exploit 阶段失败
     ├── 第一步：检查工具是否充分（最常见原因）
     │   ├── 这个 CVE 需要什么利用工具？当前 attack_server 有吗？
     │   ├── 不需要一次性补全，但至少要有 1 个可达路径的工具
-    │   └── 例：需要 PHP filter chain 但只有 sqlmap → 缺工具，注册 php_filter_chain
+    │   ├── 例：需要 PHP filter chain 但只有 sqlmap → 缺工具，注册 php_filter_chain
+    │   └── 非 HTTP 服务（Redis/MySQL/SSH）→ 检查 VULN_TOOL_MAP 是否有 authbypass/weakauth
+    │       映射（redis_cmd, mysql_query, psql_query, mssql_query, oracle_query, ssh_exec）
     │
     ├── 第二步：检查 exploit agent 是否能访问必要参数
     │   ├── DKG 中有目标的端口/服务/版本信息吗？
@@ -432,6 +455,12 @@ Solo 模式能成功但 Multi-agent 失败（或反之）
     │   ├── B < 0.3 → Solo, 0.3≤B<0.6 → Coordinated, B≥0.6 → Distributed
     │   └── 模式选择是否符合预期？hysteresis voting (2 票) 是否导致切换滞后？
     │
+    ├── 检查模式耗尽逻辑
+    │   ├── _solo_exhausted / _multi_exhausted 独立标志（非共享 _surface_exhausted）
+    │   ├── Solo 3 次迭代或成功后耗尽；Multi-agent 同理
+    │   ├── _should_terminate() 仅在两者均耗尽时才终止
+    │   └── Solo 耗尽后空转会被 continue 跳过（防止 7 次无效循环）
+    │
     ├── 检查子代理的 spawn 条件
     │   ├── _spawn_followup_agents 是否正确重评估了 AD/cloud 环境？
     │   ├── AD 端口 (389, 445, 88) 被检测到了吗？
@@ -452,18 +481,22 @@ Solo 模式能成功但 Multi-agent 失败（或反之）
 子代理被 spawn 后没有产生结果
     │
     ├── SubAgentPool 的 lifecycle 状态
-    │   └── 子代理卡在哪个 state？（base.py 中 10 种 lifecycle state）
+    │   ├── 子代理卡在哪个 state？（base.py 中 10 种 lifecycle state）
+    │   └── iteration==0 且无任务执行 → STALLED（防止环形依赖导致假 DONE）
     │
     ├── 子代理的 LLM session 是否独立？
     │   └── 每个子代理有自己的 LLMSession 实例
-    │   └── 子代理是否会触发自己的 context compression？
+    │
+    ├── 子代理的任务失败后被正确标记了吗？
+    │   ├── _replan_after_failure 现在标记 status: "failed"（不是 done）
+    │   └── 失败的 task 写入 DKG Task 节点供后续查询
     │
     ├── 子代理的工具调用是否超时？
-    │   └── 检查 MCP gateway 的 timeout 设置
     │   └── 某些工具（nmap_full_scan 150s, sqlmap 120s）需要更长时间
     │
     └── Multi-agent summary 是否包含了必要信息？
-        └── summary 现在包含 flags, credentials, vulnerabilities
+        ├── summary 现在包含 flags, credentials, vulnerabilities
+        └── asyncio.gather() 返回值通过 pool._results 收集，防止结果丢弃
 ```
 
 ### D7：Flag 验证失败（L4 未通过）
@@ -499,7 +532,10 @@ checkpoint 中 DKG 节点/边不完整
     ├── 读取侧
     │   ├── 哪个模块读取时没找到需要的节点？
     │   ├── _get_state() → data_model.normalize_dkg_state()
-    │   └── 检查 data_model 中对应类型的转换逻辑
+    │   ├── PipelineState 现在包含：endpoints, services, vulnerabilities, credentials,
+    │   │   flags, analysis_notes, hosts, sessions, domains（共 9 种类型）
+    │   └── 如果 Host/Session/Domain 节点在 DKG 中存在但未出现在 prompt context 中，
+    │       检查 normalize_dkg_state 是否有对应的提取逻辑
     │
     └── 持久化
         └── checkpoint JSON 是否正确序列化了 MultiDiGraph？
@@ -517,10 +553,14 @@ checkpoint 中 DKG 节点/边不完整
     │
     ├── 检查压缩次数
     │   ├── _compressed_count ≥ 3 → 达到 _max_compressions 上限
-    │   └── 此时旧消息被直接截断，不再压缩（telephone-game 防护）
+    │   └── 此时旧消息被直接截断，注入 `[CONTEXT TRUNCATED]` 通知消息
+    │       └── 通知 LLM "earlier actions and discoveries may no longer be visible,
+    │           current DKG state has the structured facts"
     │
     ├── 检查压缩后的上下文注入
     │   ├── _pending_compressed_context 是否被 _build_messages 正确消费？
+    │   ├── 多次压缩时上下文是否被合并（merge）而非覆盖？
+    │   │   └── 修复前：第二次压缩覆盖第一次；修复后：prev + new_text 合并
     │   ├── compressed system message 是否被 replace_system_prompt 保护？
     │   └── 压缩摘要是否保留了 5 类关键信息？
     │       └── 已执行的命令、已获取的信息、当前状态、活跃凭据、待完成任务
@@ -563,11 +603,10 @@ CTEG get_suggestions() 返回空或无关结果
         ├── Faiss 索引是否过期需要 rebuild？
         │   └── python tools/ingest_knowledge.py --rebuild
         ├── LLM 调用 knowledge_search 时是否用了 category="" ？
-        │   └── 非空 category 过滤会导致假阴性，正确答案因 category 不匹配被隐藏
-        └── RAG 对非 HTTP 数据库服务（Redis、MySQL、PostgreSQL 等）覆盖不足
-            └── 此时应使用 ddg_search（互联网搜索）作为补充：
-                "Redis unauthorized access exploitation SSH key write"
-            └── 检查 ddg_search 工具是否在 prompt 的 Research 工具列表中
+        │   └── 非空 category 过滤会导致假阴性
+        ├── 对非 HTTP 服务：先尝试 knowledge_search（RAG 已包含 unauth 服务和利用技术条目）
+        │   └── 无结果时用 ddg_search 补充
+        └── RAG 是否已后台预加载完成？（bootstrap 阶段 asyncio.create_task 并行加载）
 ```
 
 **架构变更**：RAG 的 auto-enrich 路径已从 orchestrator 中移除（`_solo_llm_loop`、`_unified_llm_loop`、`_service_research`、`_run_multi_agent_cycle`）。现在 RAG 只通过 `knowledge_search` tool（LLM 主动调用）和 plan injection 两种路径生效。这意味着 LLM 必须**主动**调用 knowledge_search——如果它不知道某服务有利用方法，它不会去搜索。监控 checkpoint 中 knowledge_search 的调用频率是判断 RAG 是否有效的关键指标。
@@ -658,6 +697,7 @@ DARWIN 特化：
 - [ ] 至少再跑 1 个不同类型的靶机确认无回归？
 - [ ] 相关测试通过：`pytest tests/ -v`？
 - [ ] `python -c "from darwin.orchestrator import Orchestrator; print('OK')"` 无 import 错误？
+- [ ] 修改摘要已写入 `CHANGES.md`？
 
 ### 跨模式验证
 - [ ] Solo 模式修复 → 也跑一个 Multi-agent 场景确认正常？

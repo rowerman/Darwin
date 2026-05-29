@@ -6,33 +6,36 @@
       "is_reachable": true,
       "is_internal": false,
       "type": "Host",
-      "created_at": "2026-05-28T14:37:59.429743",
-      "updated_at": "2026-05-28T14:37:59.429749",
-      "_version": 2
-    },
-    {
-      "id": "svc-localhost-10205",
-      "port": 10205,
-      "protocol": "tcp",
-      "version": "Redis key-value store",
-      "banner": "redis",
-      "type": "Service",
-      "created_at": "2026-05-28T14:37:59.429700",
-      "updated_at": "2026-05-28T14:37:59.429708",
+      "created_at": "2026-05-29T18:04:55.212553",
+      "updated_at": "2026-05-29T18:04:55.212566",
       "_version": 1
     },
     {
-      "id": "svc-localhost-10222",
-      "port": 10222,
+      "id": "svc-localhost-10103",
+      "port": 10103,
       "protocol": "tcp",
-      "version": "OpenSSH 8.9p1 Ubuntu 3ubuntu0.15 (Ubuntu Linux; protocol 2.0)",
-      "banner": "ssh",
+      "version": "Apache httpd 2.4.62 ((Debian))",
+      "banner": "http",
       "type": "Service",
-      "created_at": "2026-05-28T14:37:59.429796",
-      "updated_at": "2026-05-28T14:37:59.429801",
+      "created_at": "2026-05-29T18:04:55.212599",
+      "updated_at": "2026-05-29T18:04:55.212603",
+      "_version": 1
+    },
+    {
+      "id": "ep-http://localhost:10103",
+      "url": "http://localhost:10103",
+      "method": "GET",
+      "params": "",
+      "sample_status": 200,
+      "sample_response": "HTTP/1.1 200 OK\r\nDate: Fri, 29 May 2026 10:04:55 GMT\r\nServer: Apache/2.4.62 (Debian)\r\nX-Powered-By: PHP/8.2.28\r\nLink: <http://localhost:10103/index.php?rest_route=/>; rel=\"https://api.w.org/\"\r\nVary: Accept-Encoding\r\nTransfer-Encoding: chunked\r\nContent-Type: text/html; charset=UTF-8\r\n\r\n<!DOCTYPE html>\n<html lang=\"en-US\">\n<head>\n\t<meta charset=\"UTF-8\" />\n\t<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\" />\n<meta name='robots' content='noindex, nofollow' />\n\t<style>img:is([sizes=\"auto\" i], [sizes^=\"auto,\" i]) { contain-intrinsic-size: 3000px 1500px }</style>\n\t<title>Test Site</title>\n<link rel=\"alternate\" type=\"application/rss+xml\" title=\"Test Site &raquo; Feed\" href=\"http://localhost:10103/?feed=rss2\" />\n<link rel=\"alternate\" type=\"application/rss+xml\" title=\"Test Site &raquo; Comments Feed\" href=\"http://localhost:10103/?feed=comments-rss2\" />\n<script>\nwindow._wpemojiSettings = {\"baseUrl\":\"https:\\/\\/s.w.org\\/images\\/core\\/emoji\\/15.0.3\\/72x72\\/\",\"ext\":\".png\",\"svgUrl\":\"https:\\/\\/s.w.org\\/images\\/core\\/emoji\\/15.0.3\\/svg\\/\",\"svgExt\":\".svg\",\"source\":{\"concatemoji\":\"http:\\/\\/localhost:10103\\/wp-includes\\/js\\/wp-emoji-release.min.js?ver=6.7.2\"}};\n/*! This file is auto-generated */\n!function(i,n){var o,s,e;function c(e){try{var t={supportTests:e,timestamp:(new Date).valueOf()};sessionStorage.setItem(o,JSON.stringify(t))}catch(e){}}function p(e,t,n){e.clearRect(0,0,e.canvas.width,e.canvas.height),e.fillText(t,0,0);var t=new Uint32Array(e.getImageData(0,0,e.canvas.width,e.canvas.height).data),r=(e.clearRect(0,0,e.canvas.width,e.canvas.height),e.fillText(n,0,0),new Uint32Array(e.getImageData(0,0,e.canvas.width,e.canvas.height).data));return t.every(function(e,t){return e===r[t]})}function u(e,t,n){switch(t){case\"flag\":return n(e,\"\\ud83c\\udff3\\ufe0f\\u200d\\u26a7\\ufe0f\",\"\\ud83c\\udff3\\ufe0f\\u200b\\u26a7\\ufe0f\")?!1:!n(e,\"\\ud83c\\uddfa\\ud83c\\uddf3\",\"\\ud83c\\uddfa\\u200b\\ud83c\\uddf3\")&&!n(e,\"\\ud83c\\udff4\\udb40\\udc67\\udb40\\udc62\\udb40\\udc65\\udb40\\udc6e\\udb40\\udc67\\udb40\\udc7f\",\"\\ud83c\\udff4\\u200b\\udb40\\udc67\\u200b\\udb40\\udc62\\u200b\\udb40\\udc65\\u200b\\udb40\\udc6e\\u200b\\udb40\\udc67\\u200b\\udb40\\udc7f\");case\"emoji\":return!n(e,\"\\ud83d\\udc26\\u200d\\u2b1b\",\"\\ud83d\\udc26\\u200b\\u2b1b\")}return!1}function f(e,t,n){var r=\"undefined\"!=typeof WorkerGlobalScope&&self instanceof WorkerGlobalScope?new OffscreenCanvas(300,150):i.createElement(\"canvas\"),a=r.getContext(\"2d\",{willReadFrequently:!0}),o=(a.textBaseline=\"top\",a.font=\"600 32px Arial\",{});return e.forEach(function(e){o[e]=t(a,e,n)}),o}function t(e){var t=i.createElement(\"script\");t.src=e,t.defer=!0,i.head.appendChild(t)}\"undefined\"!=typeof Promise&&(o=\"wpEmojiSettingsSupports\",s=[\"flag\",\"emoji\"],n.supports={everything:!0,everythingExceptFlag:!0},e=new Promise(function(e){i.addEventListener(\"DOMContentLoaded\",e,{once:!0})}),new Promise(function(t){var n=function(){try{var e=JSON.parse(sessionStorage.getItem(o));if(\"object\"==typeof e&&\"number\"==typeof e.timestamp&&(new Date).valueOf()<e.timestamp+604800&&\"object\"==typeof e.supportTests)return e.supportTests}catch(e){}return null}();if(!n){if(\"undefined\"!=typeof Worker&&\"undefined\"!=typeof OffscreenCanvas&&\"undefined\"!=typeof URL&&URL.createObjectURL&&\"undefined\"!=typeof Blob)try{var e=\"postMessage(\"+f.toString()+\"(\"+[JSON.stringify(s),u.toString(),p.toString()].join(\",\")+\"));\",r=new Blob([e],{type:\"text/javascript\"}),a=new Worker(URL.createObjectURL(r),{name:\"wpTestEmojiSupports\"});return void(a.onmessage=function(e){c(n=e.data),a.terminate(),t(n)})}catch(e){}c(n=f(s,u,p))}t(n)}).then(function(e){for(var t in e)n.supports[t]=e[t],n.supports.everything=n.supports.everything&&n.supports[t],\"flag\"!==t&&(n.supports.everythingExceptFlag=n.supports.everythingExceptFlag&&n.supports[t]);n.supports.everythingExceptFlag=n.supports.everythingExceptFlag&&!n.supports.flag,n.DOMReady=!1,n.readyCallback=function(){n.DOMReady=!0}}).then(function(){return e}).then(function(){var e;n.supports.everything||(n.readyCallback(),(e=n.source||{}).concatemoji?t(e.concatemoji):e.wpemoji&&e.twemoji&&(t(e.twemoji),t(e.wpemoji)))}))}((window,document),window._wpemojiSettings);\n</script>\n<style id='wp-block-site-title-inline-css'>\n.wp-block-site-title{box-sizing:border-box}.wp-block-site-title :where(a){color:inherit;font-family:inherit;font-size:inherit;font-style:inherit;font-weight:inherit;letter-spacing:inherit;line-height:inherit;text-decoration:inherit}\n</style>\n<style id='wp-block-page-list-inline-css'>\n.wp-block-navigation .wp-block-page-list{align-items:var(--navigation-layout-align,initial);background-color:inherit;display:flex;flex-direction:var(--navigation-layout-direction,initial);flex-wrap:var(--navigation-layout-wrap,wrap);justify-content:var(--navigation-layout-justify,initial)}.wp-block-navigation .wp-block-navigation-item{background-color:inherit}\n</style>\n<link rel='stylesheet' id='wp-block-navigation-css' href='http://localhost:10103/wp-includes/blocks/navigation/style.min.css?ver=6.7.2' media='all' />\n<style id='wp-block-group-inlin",
+      "response_size": 49990,
+      "discovered_by": "bootstrap",
+      "type": "Endpoint",
+      "created_at": "2026-05-29T18:04:58.263447",
+      "updated_at": "2026-05-29T18:04:58.263466",
       "_version": 1
     }
   ],
   "edges": [],
-  "created_at": "2026-05-28T14:37:47.241094"
+  "created_at": "2026-05-29T18:04:42.612034"
 }

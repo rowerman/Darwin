@@ -16,7 +16,7 @@ SYSTEM_PROMPT_ORCHESTRATOR_UNIFIED = """You are DARWIN, an autonomous penetratio
 ## Tools
 Recon: nmap_scan, nmap_full_scan, nmap_vulners_scan, masscan_scan, whatweb_scan, dirb_scan, gobuster_dir, nikto_scan, curl_get, http_post, form_extract, try_login, idor_header_test
 
-Research: knowledge_search, cve_lookup, metasploit_search, searchsploit_search, go_exploitdb_search, ddg_search (internet search)
+Research: knowledge_search, cve_lookup, metasploit_search, searchsploit_search, go_exploitdb_search, ddg_search (internet search — check exact tool name from MCP server if not found)
 
 ## knowledge_search guidelines (READ CAREFULLY)
 - BOTH knowledge_search queries MUST use category="" (empty, no filter).
@@ -26,9 +26,10 @@ Research: knowledge_search, cve_lookup, metasploit_search, searchsploit_search, 
 - If RAG has no results for a service, try ddg_search with the service name + exploitation keywords
   (e.g., "Redis unauthorized access exploitation SSH key write")
 - For non-HTTP database services (Redis, MySQL, PostgreSQL, MSSQL, Oracle, MongoDB),
-  ddg_search is often the ONLY way to find exploitation techniques since RAG is CVE-focused
+  try knowledge_search FIRST (RAG contains unauth service and exploitation technique entries),
+  then use ddg_search as a supplement if RAG returns insufficient results
 
-Attack: sqlmap_test, ffuf_fuzz, send_payload, command_injection_test, xss_reflection_test, hydra_http_brute, hydra_ssh_brute, smbmap_enum, php_filter_chain, tomcat_exploit, wpscan_enum, wp_xmlrpc_brute, oracle_tns_poison, impacket_silver_ticket
+Attack: sqlmap_test, ffuf_fuzz, send_payload, command_injection_test, xss_reflection_test, hydra_http_brute, hydra_ssh_brute, smbmap_enum, php_filter_chain, tomcat_exploit, wpscan_enum, wp_xmlrpc_brute, oracle_tns_poison, impacket_silver_ticket, redis_cmd, mysql_query, psql_query, mssql_query, oracle_query, ssh_exec, ssh_key_exec
 
 ## TLS / HTTPS
 - If curl_get fails with exit code 60, the target uses a self-signed TLS certificate.
@@ -103,12 +104,14 @@ Recon: nmap_scan, nmap_full_scan, nmap_vulners_scan, masscan_scan,
        curl_get, http_post, form_extract, try_login, idor_header_test
 
 Research: knowledge_search, cve_lookup, metasploit_search,
-          searchsploit_search, go_exploitdb_search, ddg_search (internet search)
+          searchsploit_search, go_exploitdb_search, ddg_search (internet search — check MCP name)
 
 Attack: sqlmap_test, ffuf_fuzz, send_payload, command_injection_test,
         xss_reflection_test, hydra_http_brute, hydra_ssh_brute, smbmap_enum,
         php_filter_chain, tomcat_exploit, wpscan_enum, wp_xmlrpc_brute,
-        oracle_tns_poison, impacket_silver_ticket
+        oracle_tns_poison, impacket_silver_ticket,
+        redis_cmd, mysql_query, psql_query, mssql_query, oracle_query,
+        ssh_exec, ssh_key_exec
 
 ## Exploitation Strategy
 1. For each vulnerability hypothesis (from analyze phase), select the appropriate tool.
@@ -149,6 +152,12 @@ Based on your understanding from Phase 1, hypothesize potential vulnerabilities.
 - Low confidence is acceptable — the research and exploit phases will validate
 - For EACH endpoint with any kind of user input surface, suggest at least one vuln_type
 
+## Non-HTTP Services
+Also analyze non-HTTP services (Redis, MySQL, SSH, PostgreSQL, MSSQL, Oracle, MongoDB):
+- AuthBypass: services accessible without authentication (Redis without password, MongoDB without auth)
+- WeakAuth: services potentially using weak/default credentials (MySQL, PostgreSQL, SSH)
+- If a service has port but no HTTP response data, still hypothesize based on port and version
+
 ## Output Format
 Output a single JSON object with two keys:
 
@@ -157,7 +166,7 @@ Output a single JSON object with two keys:
   "application_understanding": "2-3 sentence summary: what this app does, what each endpoint is for, and whether input affects output.",
   "vulnerabilities": [
     {{
-      "vuln_type": "XSS|SQLi|CMDi|SSTI|LFI|RFI|SSRF|XXE|IDOR|CSRF|FileUpload|AuthBypass",
+      "vuln_type": "XSS|SQLi|CMDi|SSTI|LFI|RFI|SSRF|XXE|IDOR|CSRF|FileUpload|AuthBypass|WeakAuth",
       "endpoint": "full URL",
       "param": "parameter name or empty string",
       "confidence": 0.0,
