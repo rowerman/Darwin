@@ -227,6 +227,58 @@ class PipelineState:
         return "\n".join(parts)
 
 
+# ── Cycle Transition Summary ──────────────────────────────────────────────
+
+@dataclass
+class CycleTransitionSummary:
+    """Structured summary of what happened in a cycle iteration.
+
+    Injected into LLM context between main loop cycles to maintain awareness
+    of what has been tried, what succeeded, and what failed.
+    """
+    cycle_number: int = 0
+    flags_found: List[str] = field(default_factory=list)
+    tasks_completed: int = 0
+    tasks_failed: int = 0
+    tasks_exhausted: int = 0
+    new_endpoints: int = 0
+    new_credentials: int = 0
+    new_vulnerabilities: int = 0
+    defense_changed: bool = False
+    waf_type: str = ""
+    failed_approaches: List[str] = field(default_factory=list)
+    successful_approaches: List[str] = field(default_factory=list)
+    active_sessions: List[str] = field(default_factory=list)
+    highest_confidence_vuln: str = ""
+
+    def to_prompt_block(self) -> str:
+        """Render as a structured block for LLM context injection."""
+        lines = [
+            f"[CYCLE {self.cycle_number} COMPLETE]",
+            f"Flags: {len(self.flags_found)} found"
+            + (f" ({', '.join(self.flags_found[:3])})" if self.flags_found else ""),
+            f"Tasks: {self.tasks_completed} done, {self.tasks_failed} failed, "
+            f"{self.tasks_exhausted} exhausted",
+            f"Discoveries: {self.new_endpoints} endpoints, "
+            f"{self.new_credentials} credentials, "
+            f"{self.new_vulnerabilities} vulnerabilities",
+        ]
+        if self.defense_changed and self.waf_type:
+            lines.append(f"Defense: {self.waf_type} active")
+        if self.failed_approaches:
+            lines.append("Approaches that FAILED (do NOT retry):")
+            for i, fa in enumerate(self.failed_approaches[:5], 1):
+                lines.append(f"  {i}. {fa[:150]}")
+        if self.successful_approaches:
+            lines.append("Successful approaches (build on these):")
+            for i, sa in enumerate(self.successful_approaches[:3], 1):
+                lines.append(f"  {i}. {sa[:150]}")
+        if self.highest_confidence_vuln:
+            lines.append(f"Highest-confidence vuln: {self.highest_confidence_vuln}")
+        lines.append("Continue exploitation. Build on successes, avoid failed approaches.\n")
+        return "\n".join(lines)
+
+
 # ── Normalisation ────────────────────────────────────────────────────────
 
 def normalize_dkg_state(dkg: Any) -> PipelineState:

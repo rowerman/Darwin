@@ -353,7 +353,7 @@ class BaseSubAgent(ABC):
         for task in plan:
             if task.get("_done"):
                 continue
-            deps = task.get("dependent_task_ids", [])
+            deps = task.get("dependent_task_ids", []) or task.get("dependencies", [])
             if all(
                 any(t.get("id") == d and t.get("_done") for t in plan)
                 for d in deps
@@ -468,14 +468,54 @@ class BaseSubAgent(ABC):
     # ── Helpers ─────────────────────────────────────────────────
 
     def _select_next_task(self) -> Dict[str, Any] | None:
-        """Select the next pending task from the plan.
+        """Select the next pending task using topological order (Kahn's algorithm).
 
         Reference: VulnBot PlanModel.topological_sort() (db/models/plan_model.py:34-71)
         """
+        if not self.plan:
+            return None
+
+        from collections import deque
+
+        # Stable task keys: use "id" field, fall back to content-based hash
+        def _task_key(t: dict) -> str:
+            return t.get("id") or t.get("_task_key") or f"task_{hash(t.get('instruction',''))}"
+
+        task_map: dict[str, dict] = {_task_key(t): t for t in self.plan}
+
+        in_degree: dict[str, int] = {tid: 0 for tid in task_map}
+        adj: dict[str, list[str]] = {tid: [] for tid in task_map}
+
+        for t in self.plan:
+            tid = _task_key(t)
+            for dep_id in t.get("dependent_task_ids", []) or t.get("dependencies", []):
+                if dep_id in task_map:
+                    adj[dep_id].append(tid)
+                    in_degree[tid] = in_degree.get(tid, 0) + 1
+
+        queue = deque([tid for tid, deg in in_degree.items() if deg == 0])
+        while queue:
+            tid = queue.popleft()
+            task = task_map[tid]
+            if task.get("done", False):
+                # Completed task unblocks its dependents
+                for neighbor in adj.get(tid, []):
+                    in_degree[neighbor] -= 1
+                    if in_degree[neighbor] == 0:
+                        queue.append(neighbor)
+                continue
+            deps = task.get("dependent_task_ids", []) or task.get("dependencies", [])
+            if all(
+                task_map[dep].get("done", False)
+                for dep in deps if dep in task_map
+            ):
+                return task
+            # Task not ready — leave it in graph, do not touch its neighbors
+
+        # Fallback: linear scan for tasks with satisfied dependencies
         for task in self.plan:
             if not task.get("done", False):
-                # Check dependencies
-                deps = task.get("dependent_task_ids", [])
+                deps = task.get("dependent_task_ids", []) or task.get("dependencies", [])
                 if all(
                     any(t.get("id") == dep and t.get("done") for t in self.plan)
                     for dep in deps

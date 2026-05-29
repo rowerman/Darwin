@@ -23,7 +23,7 @@ Discovered Hosts: {hosts}
 2. OBTAIN CREDENTIALS: Kerberoasting, AS-REP roasting, password spraying
 3. MOVE LATERALLY: Pass-the-Hash, PsExec, WMI, WinRM
 4. ESCALATE: DCSync, ACL abuse, GPO abuse
-5. PERSIST: Golden Ticket, Silver Ticket, Skeleton Key
+5. PERSIST: Golden Ticket (impacket_ticketer), Silver Ticket (impacket_silver_ticket), Skeleton Key
 
 ## Tool Conventions
 - netexec for SMB enumeration and credential testing

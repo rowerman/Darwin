@@ -9,6 +9,7 @@ services:
     command: --secure-file-priv=""
     volumes:
       - ./init.sql:/docker-entrypoint-initdb.d/init.sql
+      - ./flag.txt:/flag.txt:ro
 
   web:
     build: .

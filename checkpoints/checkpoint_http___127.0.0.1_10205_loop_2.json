@@ -1,0 +1,124 @@
+{
+  "nodes": [
+    {
+      "id": "host-127.0.0.1",
+      "ip": "127.0.0.1",
+      "is_reachable": true,
+      "is_internal": false,
+      "type": "Host",
+      "created_at": "2026-05-28T12:11:14.429429",
+      "updated_at": "2026-05-28T12:11:14.429444",
+      "_version": 1
+    },
+    {
+      "id": "svc-127.0.0.1-10205",
+      "port": 10205,
+      "protocol": "tcp",
+      "version": "Redis key-value store",
+      "banner": "redis",
+      "type": "Service",
+      "created_at": "2026-05-28T12:11:14.429480",
+      "updated_at": "2026-05-28T12:11:14.429484",
+      "_version": 1
+    },
+    {
+      "id": "svc-research-1779941475",
+      "phase": "service_research",
+      "type": "Analysis",
+      "content": "  [NVD CVEs] **Total:** 2 matching CVEs | **Showing:** 2 (offset 0)\n\n### CVE-2018-0181\n**Status:** Modified | **Published:** 2019-01-10T00:29:00.250\n**Severity:** CRITICAL (9.8) from CVSS 3.0\n\n### CVE-2025-48493\n**Status:** Analyzed | **Published:** 2025-06-05T17:15:29.377\n**Severity:** MEDIUM (6.5) from CVSS 3.1\n\n",
+      "created_at": "2026-05-28T12:11:15.693508",
+      "updated_at": "2026-05-28T12:11:15.693534",
+      "_version": 1
+    },
+    {
+      "id": "analysis-1779941484",
+      "phase": "analyze",
+      "type": "Analysis",
+      "content": "The application appears to be a Redis key-value store exposed on port 10205. No HTTP endpoints were provided, suggesting the primary attack surface is direct Redis access. This service may allow unauthorized access without authentication, potentially leading to data leakage or remote command execution.",
+      "endpoint_count": 0,
+      "created_at": "2026-05-28T12:11:24.956153",
+      "updated_at": "2026-05-28T12:11:24.956164",
+      "_version": 1
+    },
+    {
+      "id": "vuln-1",
+      "vuln_type": "AuthBypass",
+      "endpoint": "redis://target:10205",
+      "parameter": "",
+      "severity": "unknown",
+      "source": "llm_analysis",
+      "suggested_tool": "redis_cmd",
+      "tool_args": {
+        "host": "target",
+        "port": 10205,
+        "command": "INFO"
+      },
+      "type": "Vulnerability",
+      "created_at": "2026-05-28T12:13:21.557740",
+      "updated_at": "2026-05-28T12:13:21.557750",
+      "_version": 3,
+      "tested_at": "12:13:21",
+      "test_result": "",
+      "test_tool": "curl_get"
+    },
+    {
+      "id": "vuln-2",
+      "vuln_type": "XSS",
+      "endpoint": "redis://target:10205",
+      "parameter": "",
+      "severity": "low",
+      "source": "nikto_keyword",
+      "detail": "",
+      "type": "Vulnerability",
+      "created_at": "2026-05-28T12:13:21.558229",
+      "updated_at": "2026-05-28T12:13:21.558236",
+      "_version": 3,
+      "tested_at": "12:13:21",
+      "test_result": "ERROR: <script>alert(1)</script>... - <urlopen error unknown url type: redis>\nERROR: <img src=x onerror=alert(1)>... - <urlopen error unknown url type: redis>\nERROR: \"><script>alert(1)</script>... - <",
+      "test_tool": "xss_reflection_test"
+    },
+    {
+      "id": "summary-exploit-plan-1779941549",
+      "summary_id": "summary-exploit-plan-1779941549",
+      "source_plan_id": "plan-1779941549",
+      "phase": "exploit",
+      "completed_tasks": "[\"Connect to unauthenticated Redis on port 10205 and enumerate server info, keys, and data. Run INFO, CONFIG GET, KEYS *, and then GET on each key found.\", \"Retrieve all keys from Redis using KEYS * and dump values for each key. Check for flag patterns in key names and values.\", \"Retrieve all key-value pairs from Redis. For each key discovered in task-redis-keys, use GET <key> to retrieve its value. If GET fails (e.g. non-string type), use TYPE <key> then the appropriate command (LRANGE, SMEMBERS, HGETALL, etc.).\", \"Read Redis configuration using CONFIG GET * to check for dangerous settings (protected-mode, bind, requirepass, rename-command) and identify if further exploitation (RCE) is possible.\"]",
+      "key_findings": "{\"flags_found\": [], \"endpoints\": 0}",
+      "failed_approaches": "[]",
+      "created_at": "2026-05-28T12:13:28",
+      "type": "PlanSummary",
+      "updated_at": "2026-05-28T12:13:28.854919",
+      "_version": 4
+    },
+    {
+      "id": "plan-1779941549"
+    }
+  ],
+  "edges": [
+    {
+      "from": "plan-1779941549",
+      "to": "summary-exploit-plan-1779941549",
+      "type": "plan_successor",
+      "created_at": "2026-05-28T12:13:09.326643"
+    },
+    {
+      "from": "plan-1779941549",
+      "to": "summary-exploit-plan-1779941549",
+      "type": "plan_successor",
+      "created_at": "2026-05-28T12:13:09.327218"
+    },
+    {
+      "from": "plan-1779941549",
+      "to": "summary-exploit-plan-1779941549",
+      "type": "plan_successor",
+      "created_at": "2026-05-28T12:13:28.854368"
+    },
+    {
+      "from": "plan-1779941549",
+      "to": "summary-exploit-plan-1779941549",
+      "type": "plan_successor",
+      "created_at": "2026-05-28T12:13:28.854947"
+    }
+  ],
+  "created_at": "2026-05-28T12:11:02.258417"
+}

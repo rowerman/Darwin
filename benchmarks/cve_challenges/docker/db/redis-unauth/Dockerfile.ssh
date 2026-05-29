@@ -1,19 +1,28 @@
 FROM ubuntu:22.04
 
-RUN apt-get update && apt-get install -y --no-install-recommends openssh-server && \
+# Install Redis + SSH in the same container so Redis can write SSH authorized_keys
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    redis-server openssh-server && \
     apt-get clean && rm -rf /var/lib/apt/lists/*
 
+# Configure Redis for external access: no auth, no protected mode, bind all
+RUN sed -i 's/^bind 127.0.0.1/bind 0.0.0.0/' /etc/redis/redis.conf; \
+    sed -i 's/^protected-mode yes/protected-mode no/' /etc/redis/redis.conf; \
+    sed -i 's/^# requirepass.*/requirepass ""/' /etc/redis/redis.conf
+
+# Create victim user for SSH login
 RUN useradd -m -s /bin/bash victim && \
     echo 'victim:password123' | chpasswd && \
     mkdir -p /home/victim/.ssh && chmod 700 /home/victim/.ssh && \
-    touch /home/victim/.ssh/authorized_keys && chmod 600 /home/victim/.ssh/authorized_keys && \
     chown -R victim:victim /home/victim/.ssh && \
     mkdir -p /run/sshd
 
-# Flag file — content set at container start from CVE_FLAG env var
+# Flag — requires either SSH login or Redis RCE to read
+RUN echo 'flag{db-05-default}' > /flag.txt && chmod 644 /flag.txt
+
+# Startup: Redis + SSH
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
-EXPOSE 22
+EXPOSE 22 6379
 ENTRYPOINT ["/entrypoint.sh"]
-CMD ["/usr/sbin/sshd", "-D", "-o", "PermitRootLogin=no", "-o", "PasswordAuthentication=yes"]

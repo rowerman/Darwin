@@ -1,6 +1,6 @@
 ---
 name: darwin-experiment-driven-dev
-description: Use when debugging DARWIN experiment failures, modifying orchestrator/DKG/CTEG/RAG/DPMPrompt/sub-agent code, analyzing why an LLM-driven pentest didn't capture a flag, adding tools to recon_server or attack_server, or changing Solo/Multi-agent mode behavior in the DARWIN penetration testing framework
+description: Use when debugging DARWIN experiment failures, modifying orchestrator/DKG/CTEG/RAG/DPM/prompt/sub-agent code, analyzing why an LLM-driven pentest didn't capture a flag, adding tools to recon_server or attack_server, using ddg_search for exploitation research, or changing Solo/Multi-agent mode behavior in the DARWIN penetration testing framework
 ---
 
 # DARWIN Experiment-Driven Development
@@ -80,9 +80,9 @@ docker ps --format "table {{.Names}}\t{{.Ports}}" | grep <scenario-id>
 3. L1 DB 场景（db-05）→ 验证非 HTTP 目标处理
 4. Defense 变体（def-waf）→ 验证 DPM 检测和 bypass
 5. L2 DB 场景 → 验证数据库提权链路
-6. K8s 场景 → 验证 CloudAgent 和 multi-agent 模式
+6. K8s 场景（14 个场景：RBAC、容器逃逸、hostPath、privileged、CAP_SYS_ADMIN 等）→ 验证 CloudAgent 和 multi-agent 模式
 7. AD 场景 → 验证 ADAgent
-8. 攻击链 → 验证跨域和 DKG 跨步骤复用
+8. 攻击链（18 条链）→ 验证跨域和 DKG 跨步骤复用
 
 ### 阶段 2：运行实验
 
@@ -191,7 +191,7 @@ run.py / experiments/runner.py
     ▼       ▼        ▼        ▼                  ┌─────┴─────┐
  ReconAgent Exploit  Pivot   AD/Cloud             │           │
             Agent    Agent   Agent          recon_server  attack_server
-                                           (11 tools)    (29 tools)
+                                           (12 tools)    (30 tools)
 ```
 
 ### 每个模块的详细依赖
@@ -253,8 +253,10 @@ run.py / experiments/runner.py
 |------|------|
 | **读取** | SentenceTransformer 模型 (`/home/kianabin/utils/all-MiniLM-L6-v2`), knowledge/ 目录 |
 | **写入** | Faiss 索引, TF-IDF 索引 |
-| **被谁依赖** | Orchestrator (auto-enrich, plan injection), attack_server (knowledge_search tool) |
+| **被谁依赖** | Orchestrator (plan injection), attack_server (knowledge_search tool) |
 | **修改影响面** | embedding 模型路径改动影响索引加载。collection 增删影响 search 路由。 |
+| **集成路径** | 仅两种：`knowledge_search` tool（LLM 主动调用）+ plan injection（plan 生成时注入）。auto-enrich 已从 orchestrator 的 `_solo_llm_loop`、`_unified_llm_loop`、`_service_research`、`_run_multi_agent_cycle` 中移除。RAG 是 CVE 导向的，对非 HTTP 数据库服务覆盖不足——此时应使用 `ddg_search` 作为补充。 |
+| **最佳实践** | `knowledge_search` 查询应使用空 category（`category=""`），让语义搜索自行过滤。category 过滤容易导致假阴性——正确答案因 category 不匹配而被隐藏。 |
 
 #### SubAgentPool & SubAgents (`darwin/sub_agents/`)
 | 维度 | 详情 |
@@ -273,7 +275,8 @@ run.py / experiments/runner.py
 | **写入** | 工具输出解析 → 传给调用者 (orchestrator 或 sub_agent) |
 | **被谁依赖** | Orchestrator (Solo 直接调用), 所有 SubAgent (通过 MCP Gateway) |
 | **修改影响面** | 新增工具：需要同时在 server 注册 + prompt 模板中告知 LLM。修改输出解析：影响下游所有依赖该工具输出的逻辑。 |
-| **近期新增** | nmap_port_range, searchsploit_copy, php_filter_chain, impacket_ntlmrelayx |
+| **近期新增** | nmap_port_range, searchsploit_copy, php_filter_chain, impacket_ntlmrelayx, ddg_search |
+| **近期改进** | gobuster_dir 支持自定义 wordlist + 默认值 (`/home/kianabin/Darwin/wordlists/raft-large-directories.txt`)；ssh_key_exec 添加 BatchMode；mcp_gateway 自动填充参数默认值 |
 
 #### LLM Session (`darwin/utils/llm.py`)
 | 维度 | 详情 |
@@ -554,13 +557,20 @@ CTEG get_suggestions() 返回空或无关结果
     │   ├── BypassPattern/ExploitPattern 的衰减函数是否过快淘汰了经验？
     │   └── commit_task / commit_attempt 是否在正确的时机被调用？
     │
-    └── RAG
+    └── RAG (knowledge_search tool)
         ├── knowledge/ 中对应 collection 是否有相关内容？
         ├── SentenceTransformer 模型加载成功？（/home/kianabin/utils/all-MiniLM-L6-v2）
         ├── Faiss 索引是否过期需要 rebuild？
         │   └── python tools/ingest_knowledge.py --rebuild
-        └── search 结果是否被正确注入到 LLM context？
-            └── 三种注入路径：auto-enrich, knowledge_search tool, plan injection
+        ├── LLM 调用 knowledge_search 时是否用了 category="" ？
+        │   └── 非空 category 过滤会导致假阴性，正确答案因 category 不匹配被隐藏
+        └── RAG 对非 HTTP 数据库服务（Redis、MySQL、PostgreSQL 等）覆盖不足
+            └── 此时应使用 ddg_search（互联网搜索）作为补充：
+                "Redis unauthorized access exploitation SSH key write"
+            └── 检查 ddg_search 工具是否在 prompt 的 Research 工具列表中
+```
+
+**架构变更**：RAG 的 auto-enrich 路径已从 orchestrator 中移除（`_solo_llm_loop`、`_unified_llm_loop`、`_service_research`、`_run_multi_agent_cycle`）。现在 RAG 只通过 `knowledge_search` tool（LLM 主动调用）和 plan injection 两种路径生效。这意味着 LLM 必须**主动**调用 knowledge_search——如果它不知道某服务有利用方法，它不会去搜索。监控 checkpoint 中 knowledge_search 的调用频率是判断 RAG 是否有效的关键指标。
 ```
 
 ### 诊断快速参考卡

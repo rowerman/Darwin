@@ -107,20 +107,6 @@ from darwin.prompts.orchestrator import (
 
 # Version strings that carry no useful information for RAG lookup.
 # Filtering them avoids polluting LLM context with irrelevant matches.
-_NOISE_VERSIONS = {"unknown", "tcpwrapped", "http", "https", "ssh", "tcp", "udp"}
-
-
-def _is_meaningful_version(version: str) -> bool:
-    """Check if a service version string is worth querying RAG with."""
-    v = version.strip().lower()
-    if not v or v in _NOISE_VERSIONS:
-        return False
-    # Pure version numbers like "2.0" or "1" are not useful RAG queries
-    if all(c in "0123456789.+-_ " for c in v) and len(v) < 8:
-        return False
-    return True
-
-
 class Orchestrator:
     """Main Orchestrator Agent — Solo Mode.
 
@@ -187,6 +173,11 @@ class Orchestrator:
         self._research_done = False
         self._solo_iterations = 0
         self._multi_agent_iterations = 0
+        self._task_attempt_limit = 3
+        self._exhausted_task_ids: set[str] = set()
+        self._prev_endpoint_count = 0
+        self._prev_credential_count = 0
+        self._prev_vulnerability_count = 0
 
     async def run(
         self, task_description: str, target_url: str,
@@ -1330,14 +1321,8 @@ class Orchestrator:
             self._solo_cycle_context_injected = True
         else:
             self._maybe_compress()
-            state = self._get_state()
-            flag_count = len(state.flags)
-            self.llm.add_context_message(
-                f"[CYCLE TRANSITION] New loop cycle. "
-                f"Flags found: {flag_count}. "
-                f"Endpoints: {len(state.endpoints)}, Services: {len(state.services)}.",
-                role="user",
-            )
+            cycle_summary = self._build_cycle_summary()
+            self.llm.add_context_message(cycle_summary.to_prompt_block(), role="user")
 
         self._exploit_chain: list[dict] = []
 
@@ -1414,31 +1399,6 @@ class Orchestrator:
             if parts:
                 cteg_text = "\n## Prior Experience (CTEG):\n" + "\n".join(parts) + "\n"
 
-        # Query DarwinRAG for relevant static knowledge patterns
-        knowledge_text = ""
-        try:
-            tech_hints = " ".join(
-                s.get("version", "") or s.get("banner", "")
-                for s in self.dkg.query_nodes("Service")[:5]
-                if _is_meaningful_version(s.get("version", "") or s.get("banner", ""))
-            )
-            from darwin.rag import get_rag
-            rag = get_rag()
-            kb_results = rag.search(
-                f"exploitation techniques for {tech_hints} web application", top_k=4,
-                min_keyword_overlap=0.1,
-            )
-            if kb_results:
-                knowledge_text = "\n## Relevant Knowledge Base Patterns:\n"
-                for r in kb_results[:3]:
-                    knowledge_text += (f"- **{r['title']}** ({r.get('collection','')}/{r['category']}): "
-                                       f"{r['description'][:200]}\n")
-                    for t in r.get("techniques", [])[:3]:
-                        knowledge_text += f"  - {t}\n"
-                knowledge_text += "\n"
-        except Exception:
-            pass
-
         vuln_text = ""
         if self.vulnerabilities:
             vuln_parts = ["\n## Vulnerability Hypotheses (from analysis):\n"]
@@ -1486,7 +1446,6 @@ class Orchestrator:
 {api_endpoints_text}
 {session_cookies}
 {cteg_text}
-{knowledge_text}
 
 ## Guidance:
 - Endpoints with params: {param_endpoints}
@@ -2004,6 +1963,15 @@ class Orchestrator:
                 continue
 
             tools = _resolve_tools(vt)
+            # For non-HTTP endpoints, filter out HTTP-only tools
+            if not endpoint.startswith("http://") and not endpoint.startswith("https://"):
+                _PROTOCOL_TOOLS = {"redis_cmd", "ssh_exec", "ssh_key_exec",
+                                   "mysql_query", "psql_query", "mssql_query",
+                                   "oracle_query", "test_credential", "hydra_ssh_brute",
+                                   "shell_exec"}
+                tools = [t for t in tools if t in _PROTOCOL_TOOLS]
+                if not tools:
+                    continue
 
             # LLM-suggested tool from analysis — always extract, use if present
             llm_tool = v.get("suggested_tool", "") or ""
@@ -2200,15 +2168,23 @@ class Orchestrator:
 
         # Build typed pipeline state from DKG (single source of truth)
         state = normalize_dkg_state(self.dkg)
-        self.llm.reset()
+        # Build tool lists for analyze system prompt
+        attack_tool_names = sorted(self.attack_gateway.get_tool_names())
+        recon_tool_names = sorted(self.recon_gateway.get_tool_names())
+        analyze_system_prompt = SYSTEM_PROMPT_ANALYZE.format(
+            attack_tools=", ".join(attack_tool_names),
+            recon_tools=", ".join(recon_tool_names),
+        )
 
-        # Recover service research CVE findings from DKG (survived reset)
-        svc_research = ""
-        for a in self.dkg.query_nodes("Analysis"):
-            if a.get("type") == "cve_findings" and a.get("phase") == "service_research":
-                svc_research = a.get("content", "")
-        if svc_research:
-            self.llm.add_context_message(svc_research, role="user")
+        # Transition to analyze phase (preserve history, swap system prompt)
+        self.llm.replace_system_prompt(analyze_system_prompt)
+        transition = (
+            f"[PHASE TRANSITION] Moving from reconnaissance to vulnerability analysis.\n"
+            f"Services discovered: {len(state.services)}, Endpoints: {len(state.endpoints)}\n"
+            f"Your task: analyze the application and identify vulnerabilities.\n"
+            f"The conversation above contains all reconnaissance results — do not repeat them."
+        )
+        self.llm.add_context_message(transition, role="user")
 
         # Build unreachable services warning
         unreachable_warning = ""
@@ -2246,23 +2222,6 @@ class Orchestrator:
         if cteg_suggestions.get("bypass_strategies") or cteg_suggestions.get("exploit_strategies"):
             prompt += f"\n\nPrior cross-task experience suggests:\n{json.dumps(cteg_suggestions, indent=2)}"
 
-        # Enrich with DarwinRAG knowledge
-        try:
-            from darwin.rag import get_rag
-            rag = get_rag()
-            services = self.dkg.query_nodes("Service")
-            tech_hints = []
-            for s in services[:5]:
-                version = s.get("version", "") or s.get("banner", "")
-                if version and _is_meaningful_version(version):
-                    rag_results = rag.search(version, top_k=2, min_keyword_overlap=0.1)
-                    for r in rag_results:
-                        tech_hints.append(f"[{r.get('collection','')}/{r.get('category','')}/{r.get('subcategory','')}] {r['title']}: {r['description'][:200]}")
-            if tech_hints:
-                prompt += f"\n\n## Relevant Attack Techniques from Knowledge Base\n" + "\n".join(tech_hints)
-        except Exception:
-            pass
-
         self._maybe_compress()
         tokens_before = self.llm.token_count
 
@@ -2272,17 +2231,8 @@ class Orchestrator:
               f"{len(state.services)} services, "
               f"{len(state.vulnerabilities)} vulns")
 
-        # Build tool lists for the analyze prompt so LLM uses exact names
-        attack_tool_names = sorted(self.attack_gateway.get_tool_names())
-        recon_tool_names = sorted(self.recon_gateway.get_tool_names())
-        analyze_system_prompt = SYSTEM_PROMPT_ANALYZE.format(
-            attack_tools=", ".join(attack_tool_names),
-            recon_tools=", ".join(recon_tool_names),
-        )
-
         content, _ = self.llm.generate(
             prompt=prompt,
-            system_prompt=analyze_system_prompt,
         )
         tokens_used = self.llm.token_count - tokens_before
         self._task_log_event("info", "llm_analyze_call",
@@ -2618,8 +2568,6 @@ class Orchestrator:
         log.info("_service_research: searching %d services for known CVEs", len(services))
         service_research_text = ""
         try:
-            from darwin.rag import get_rag
-            rag = get_rag()
             for s in services[:10]:
                 port = s.get("port", 0)
                 version = s.get("version", "") or s.get("banner", "")
@@ -2627,14 +2575,6 @@ class Orchestrator:
                     continue
                 if not version or version in ("unknown", "tcpwrapped", "http", "https", ""):
                     continue
-                # Local RAG
-                rag_results = rag.search(f"{version} exploit vulnerability", top_k=2,
-                                         min_keyword_overlap=0.1)
-                for r in rag_results:
-                    service_research_text += (
-                        f"\n[port {port}] {version}: {r['title']} "
-                        f"({r.get('collection','')}) — {r['description'][:200]}\n"
-                    )
                 # MCP NVD CVE search
                 try:
                     if "nvd_search_cves" in self.mcp_pool.get_tool_names():
@@ -3214,24 +3154,6 @@ class Orchestrator:
             for s in summaries[-2:]:
                 phase_summary += f"- {s.get('phase','')}: {s.get('key_findings','')[:300]}\n"
 
-        # DarwinRAG knowledge from service versions
-        knowledge_context = ""
-        try:
-            from darwin.rag import get_rag
-            rag = get_rag()
-            seen_titles = set()
-            for s in state.services[:5]:
-                if s.version and s.version not in ("unknown", "tcpwrapped"):
-                    results = rag.search(s.version, top_k=2, min_keyword_overlap=0.1)
-                    for r in results:
-                        if r["title"] not in seen_titles:
-                            seen_titles.add(r["title"])
-                            knowledge_context += f"\n  - [{r.get('collection','')}] {r['title']}: {r['description'][:200]}"
-            if knowledge_context:
-                knowledge_context = "\n## Relevant Knowledge\n" + knowledge_context + "\n"
-        except Exception:
-            pass
-
         prompt = f"""Target: {target_url}
 
 ## Discovered Services (from nmap)
@@ -3242,7 +3164,6 @@ class Orchestrator:
 - {len(state.services)} services detected
 - Credentials: {len(state.credentials)} known
 {phase_summary}
-{knowledge_context}
 ## Analyzed Vulnerabilities
 {self._format_vulnerability_summary()}
 ## Available Tools (all recon + attack)
@@ -3296,7 +3217,7 @@ Output ONLY valid JSON array. One task per vulnerability (3-8 tasks)."""
 
         self._maybe_compress()
         try:
-            content, _ = self.llm.generate(prompt=prompt, timeout=120.0)
+            content, _ = self.llm.generate(prompt=prompt, system_prompt=SYSTEM_PROMPT_ORCHESTRATOR_UNIFIED, timeout=180.0)
         except Exception as e:
             log.warning("Plan generation LLM call failed: %s — retrying with shorter prompt", e)
             self._maybe_compress()
@@ -3307,7 +3228,7 @@ Output ONLY valid JSON array. One task per vulnerability (3-8 tasks)."""
                     short_vulns = self._format_vulnerability_summary_short(max_items=5)
                     short_prompt += f"## Analyzed Vulnerabilities\n{short_vulns}\n"
                 short_prompt += prompt.split("## Available Tools")[1] if "## Available Tools" in prompt else ""
-                content, _ = self.llm.generate(prompt=short_prompt, timeout=120.0)
+                content, _ = self.llm.generate(prompt=short_prompt, system_prompt=SYSTEM_PROMPT_ORCHESTRATOR_UNIFIED, timeout=180.0)
             except Exception as e2:
                 log.warning("Plan generation retry also failed: %s — using hardcoded fallback", e2)
                 content = ""
@@ -3367,13 +3288,14 @@ Output ONLY valid JSON array. One task per vulnerability (3-8 tasks)."""
     def _topological_sort(self, tasks: list) -> list:
         """Sort tasks by dependency order using Kahn's algorithm."""
         from collections import deque
-        task_map = {t["id"]: t for t in tasks}
-        in_degree = {t["id"]: 0 for t in tasks}
-        adj = {t["id"]: [] for t in tasks}
+        task_map = {t.get("id") or str(id(t)): t for t in tasks}
+        in_degree = {tid: 0 for tid in task_map}
+        adj = {tid: [] for tid in task_map}
         for t in tasks:
+            tid = t.get("id") or str(id(t))
             for dep_id in t.get("dependent_task_ids", []) or t.get("dependencies", []):
                 if dep_id in task_map:
-                    adj[dep_id].append(t["id"])
+                    adj[dep_id].append(tid)
                     in_degree[t["id"]] += 1
                 else:
                     log.warning("Task '%s' depends on unknown task '%s' — ignored", t.get("id", "?"), dep_id)
@@ -3386,8 +3308,67 @@ Output ONLY valid JSON array. One task per vulnerability (3-8 tasks)."""
                 in_degree[neighbor] -= 1
                 if in_degree[neighbor] == 0:
                     queue.append(neighbor)
-        result.extend([task_map[tid] for tid in in_degree if tid not in {r["id"] for r in result}])
+        result.extend([task_map[tid] for tid in in_degree if tid not in {r.get("id") or str(id(r)) for r in result}])
         return result
+
+    @staticmethod
+    def _detect_cycle(tasks: list) -> list[str]:
+        """Detect cycles in task dependency graph using DFS.
+
+        Returns list of task IDs involved in the first cycle found, or empty list.
+        """
+        task_map = {t.get("id") or str(id(t)): t for t in tasks}
+        visited: set[str] = set()
+        rec_stack: set[str] = set()
+        parent_map: dict[str, str | None] = {}
+
+        def _dfs(tid: str) -> list[str] | None:
+            if tid in visited:
+                return None
+            if tid in rec_stack:
+                cycle = [tid]
+                cur = tid
+                for _ in range(len(task_map) + 1):
+                    prev = parent_map.get(cur)
+                    if prev is None or prev == tid:
+                        break
+                    cur = prev
+                    cycle.append(cur)
+                cycle.append(tid)
+                return cycle[::-1]
+            if tid not in task_map:
+                return None
+            rec_stack.add(tid)
+            for dep_id in (task_map[tid].get("dependent_task_ids", [])
+                           or task_map[tid].get("dependencies", [])):
+                if dep_id in task_map:
+                    parent_map[dep_id] = tid
+                    result = _dfs(dep_id)
+                    if result:
+                        rec_stack.discard(tid)
+                        return result
+            rec_stack.discard(tid)
+            visited.add(tid)
+            return None
+
+        for tid in task_map:
+            if tid not in visited:
+                result = _dfs(tid)
+                if result:
+                    return result
+        return []
+
+    @staticmethod
+    def _break_cycle(tasks: list, cycle: list[str]) -> None:
+        """Break a dependency cycle by removing the last edge in the cycle."""
+        if len(cycle) < 2:
+            return
+        last = cycle[-1]
+        for t in tasks:
+            deps = t.get("dependent_task_ids", []) or t.get("dependencies", [])
+            if isinstance(deps, list) and last in deps:
+                deps.remove(last)
+                return
 
     def _select_next_plan_task(self, plan: ExploitationPlan | None = None) -> dict | None:
         """Return the first pending task whose dependencies are all done.
@@ -3407,6 +3388,8 @@ Output ONLY valid JSON array. One task per vulnerability (3-8 tasks)."""
         ready_exploit = []
         ready_probe = []
         for task in self._topological_sort(plan.tasks):
+            if task.get("status") == "exhausted" or task.get("id") in self._exhausted_task_ids:
+                continue
             if task.get("status") != "pending":
                 continue
             deps_met = True
@@ -3454,15 +3437,79 @@ Output ONLY valid JSON array. One task per vulnerability (3-8 tasks)."""
         if not plan or not plan.tasks:
             return "(no plan)"
         done = sum(1 for t in plan.tasks if t.get("status") == "done")
-        failed = sum(1 for t in plan.tasks if t.get("status") in ("failed", "skipped"))
+        failed = sum(1 for t in plan.tasks if t.get("status") in ("failed", "skipped", "exhausted"))
         pending = sum(1 for t in plan.tasks if t.get("status") == "pending")
-        lines = [f"## Exploitation Plan ({done}/{len(plan.tasks)} done, {failed} failed, {pending} pending)"]
+        exhausted = sum(1 for t in plan.tasks if t.get("status") == "exhausted"
+                       or t.get("id") in self._exhausted_task_ids)
+        lines = [f"## Exploitation Plan ({done}/{len(plan.tasks)} done, {failed} failed, {exhausted} exhausted, {pending} pending)"]
         for t in self._topological_sort(plan.tasks):
             status = t.get("status", "pending").upper()
             deps = t.get("dependent_task_ids", []) or t.get("dependencies", [])
             dep_str = f" (waits for: {', '.join(deps)})" if deps else ""
             lines.append(f"  {t.get('id','?')}: [{status}] {t.get('instruction','')[:100]}{dep_str}")
         return "\n".join(lines)
+
+    def _build_cycle_summary(self) -> "CycleTransitionSummary":
+        """Build a structured summary of the current cycle's progress.
+
+        Tracks deltas (new discoveries since last cycle) and surfaces
+        failed/successful approaches so the LLM knows what to avoid/repeat.
+        """
+        from darwin.data_model import CycleTransitionSummary
+
+        plan = getattr(self, 'exploitation_plan', None)
+        tasks_done = sum(1 for t in (plan.tasks or []) if t.get("status") == "done") if plan else 0
+        tasks_failed = sum(1 for t in (plan.tasks or []) if t.get("status") == "failed") if plan else 0
+        tasks_exhausted = sum(1 for t in (plan.tasks or [])
+                            if t.get("status") == "exhausted"
+                            or t.get("id") in self._exhausted_task_ids) if plan else 0
+
+        failed_approaches = []
+        successful_approaches = []
+        if plan:
+            for t in plan.tasks:
+                instr = t.get("instruction", "")
+                status = t.get("status", "")
+                if status == "failed":
+                    failed_approaches.append(instr)
+                elif status == "done":
+                    successful_approaches.append(instr)
+
+        state = self._get_state()
+        flags_found = [str(f) for f in state.flags[:3]]
+
+        prev_ep = getattr(self, '_prev_endpoint_count', 0)
+        prev_cred = getattr(self, '_prev_credential_count', 0)
+        prev_vuln = getattr(self, '_prev_vulnerability_count', 0)
+        new_ep = max(0, len(state.endpoints) - prev_ep)
+        new_cred = max(0, len(state.credentials) - prev_cred)
+        new_vuln = max(0, len(state.vulnerabilities) - prev_vuln)
+        self._prev_endpoint_count = len(state.endpoints)
+        self._prev_credential_count = len(state.credentials)
+        self._prev_vulnerability_count = len(state.vulnerabilities)
+
+        highest_vuln = ""
+        if self.vulnerabilities:
+            best = max(self.vulnerabilities, key=lambda v: v.confidence, default=None)
+            if best:
+                highest_vuln = f"{best.vuln_type} @ {best.endpoint} ({best.confidence:.0%})"
+
+        return CycleTransitionSummary(
+            cycle_number=self._loop_count,
+            flags_found=flags_found,
+            tasks_completed=tasks_done,
+            tasks_failed=tasks_failed,
+            tasks_exhausted=tasks_exhausted,
+            new_endpoints=new_ep,
+            new_credentials=new_cred,
+            new_vulnerabilities=new_vuln,
+            defense_changed=bool(self.defense_state.waf_type),
+            waf_type=self.defense_state.waf_type or "",
+            failed_approaches=failed_approaches[-10:],
+            successful_approaches=successful_approaches[-5:],
+            active_sessions=[s.get("host", "") for s in self.dkg.query_nodes("Session")],
+            highest_confidence_vuln=highest_vuln,
+        )
 
     async def _review_and_update_plan(
         self, task: dict, success: bool, task_result: str = ""
@@ -3475,9 +3522,17 @@ Output ONLY valid JSON array. One task per vulnerability (3-8 tasks)."""
         if not getattr(self, 'exploitation_plan', None):
             return
 
-        # Mark task status
-        task["status"] = "done" if success else "failed"
+        # Mark task status with retry enforcement
         task["attempts"] = task.get("attempts", 0) + 1
+        if success:
+            task["status"] = "done"
+        elif task["attempts"] >= self._task_attempt_limit:
+            task["status"] = "exhausted"
+            self._exhausted_task_ids.add(task["id"])
+            log.warning("Task %s exhausted after %d attempts",
+                        task.get("id"), task["attempts"])
+        else:
+            task["status"] = "failed"
         task["result_summary"] = task_result[:500]
 
         # Build prompt: what just happened + current plan + new DKG state
@@ -3543,6 +3598,7 @@ Output ONLY valid JSON array. One task per vulnerability (3-8 tasks)."""
             f"- If pending tasks target endpoints that returned errors, REMOVE or CHANGE them\n"
             f"- If a task partially succeeded (some calls worked, some failed), SPLIT it\n"
             f"- If progress has been made, REMOVE low-value pending tasks\n"
+            f"{'- This task FAILED — generate alternative approaches using different tools, parameters, or endpoints. Do NOT retry the same approach.' if not success else ''}\n"
             f"- If the plan is already optimal for the current state, it is OK to keep it unchanged\n\n"
             f"Output the COMPLETE updated task list as a JSON array. "
             f"Preserve done/failed tasks. Output ONLY valid JSON array."
@@ -3558,7 +3614,7 @@ Output ONLY valid JSON array. One task per vulnerability (3-8 tasks)."""
             if new_tasks and isinstance(new_tasks, list) and len(new_tasks) > 0:
                 # Keep done/failed tasks, replace pending with LLM's updated list
                 preserved = [t for t in self.exploitation_plan.tasks
-                           if t.get("status") in ("done", "failed", "skipped")
+                           if t.get("status") in ("done", "failed", "skipped", "exhausted")
                            and t.get("id") != task.get("id")]
                 # Add the just-completed task with updated status
                 preserved.append(task)
@@ -3573,11 +3629,20 @@ Output ONLY valid JSON array. One task per vulnerability (3-8 tasks)."""
                         preserved.append(nt)
                         existing_ids.add(nt["id"])
                 self.exploitation_plan.tasks = preserved
+
+                # Cycle detection after plan mutation
+                cycle = self._detect_cycle(self.exploitation_plan.tasks)
+                if cycle:
+                    log.warning("[PLAN REVIEW] cycle detected: %s — breaking",
+                                " -> ".join(cycle))
+                    self._break_cycle(self.exploitation_plan.tasks, cycle)
+
                 self._sync_plan_to_dkg()
-                log.info("[PLAN REVIEW] plan updated: %d tasks (%d done, %d failed, %d pending)",
+                log.info("[PLAN REVIEW] plan updated: %d tasks (%d done, %d failed, %d exhausted, %d pending)",
                          len(preserved),
                          sum(1 for t in preserved if t.get("status") == "done"),
                          sum(1 for t in preserved if t.get("status") in ("failed", "skipped")),
+                         sum(1 for t in preserved if t.get("status") == "exhausted"),
                          sum(1 for t in preserved if t.get("status") == "pending"))
         except Exception as e:
             log.warning("Plan review failed: %s — keeping current plan", e)
@@ -3587,8 +3652,14 @@ Output ONLY valid JSON array. One task per vulnerability (3-8 tasks)."""
         """Legacy: kept for sub-agent compatibility. Use _review_and_update_plan instead."""
         if not getattr(self, 'exploitation_plan', None):
             return
-        task["status"] = "done" if success else "failed"
         task["attempts"] = task.get("attempts", 0) + 1
+        if success:
+            task["status"] = "done"
+        elif task["attempts"] >= self._task_attempt_limit:
+            task["status"] = "exhausted"
+            self._exhausted_task_ids.add(task["id"])
+        else:
+            task["status"] = "failed"
         if result:
             task["result_summary"] = str(result)[:500]
 
@@ -3627,7 +3698,7 @@ Output ONLY valid JSON array."""
         if not plan:
             return
         done = sum(1 for t in plan.tasks if t.get("status") == "done")
-        failed = sum(1 for t in plan.tasks if t.get("status") in ("failed", "skipped"))
+        failed = sum(1 for t in plan.tasks if t.get("status") in ("failed", "skipped", "exhausted"))
         self.dkg.add_node("Plan", plan.plan_id, {
             "plan_id": plan.plan_id, "phase": plan.phase, "goal": plan.goal,
             "total_tasks": len(plan.tasks), "completed": done, "failed": failed,
@@ -3641,7 +3712,7 @@ Output ONLY valid JSON array."""
         if not plan or not plan.tasks:
             return ""
         completed = [t.get("instruction", "") for t in plan.tasks if t.get("status") == "done"]
-        failed = [t.get("instruction", "") for t in plan.tasks if t.get("status") in ("failed", "skipped")]
+        failed = [t.get("instruction", "") for t in plan.tasks if t.get("status") in ("failed", "skipped", "exhausted")]
         flags = [n.get("value", "") for n in self.dkg.query_nodes("Flag") if n.get("value", "").startswith("flag{")]
         summary_id = f"summary-{phase}-{plan.plan_id}"
         summary = {
@@ -3745,8 +3816,14 @@ Output ONLY valid JSON array."""
             if clean:
                 pages_text += f"Text: {clean[:1500]}\n"
 
-        # Reset LLM session for fresh exploration context
-        self.llm.reset()
+        # Transition to explore phase (preserve history, swap system prompt)
+        self.llm.replace_system_prompt(SYSTEM_PROMPT_EXPLORE)
+        self.llm.add_context_message(
+            f"[PHASE TRANSITION] Starting authenticated exploration of {base_norm}.\n"
+            f"Seed pages loaded: {len(seed_pages)}. Session cookies are active.\n"
+            f"Previous recon context is preserved above — focus on exploration now.",
+            role="user",
+        )
 
         # LLM interaction loop
         all_actions: list[dict] = []
@@ -4142,7 +4219,22 @@ Max 6 steps. Prioritize high-confidence vulnerabilities. Include different
 payloads and encoding variants if initial attempts might be blocked.
 Respond ONLY with the JSON array."""
 
-        self.llm.reset()
+        # Transition to exploit planning phase (preserve history, swap system prompt)
+        self.llm.replace_system_prompt(SYSTEM_PROMPT_ORCHESTRATOR)
+        vuln_count = len(self.vulnerabilities)
+        if vuln_count > 0:
+            transition_msg = (
+                f"[PHASE TRANSITION] Planning exploitation of {vuln_count} identified vulnerabilities.\n"
+                f"Previous reconnaissance and analysis context is preserved above.\n"
+                f"Generate exploitation steps based on the vulnerabilities below."
+            )
+        else:
+            transition_msg = (
+                f"[PHASE TRANSITION] Planning exploitation. No vulnerabilities identified yet.\n"
+                f"Previous reconnaissance and analysis context is preserved above.\n"
+                f"Start with reconnaissance to identify potential vulnerabilities."
+            )
+        self.llm.add_context_message(transition_msg, role="user")
         self._maybe_compress()
         content, _ = self.llm.generate(
             prompt=prompt,
@@ -4428,6 +4520,134 @@ Respond ONLY with a JSON array of next steps (max 5)."""
         """Generate a checkpoint path for a given phase."""
         sanitized = re.sub(r"[^a-zA-Z0-9_.-]", "_", self.target_url)
         return os.path.join("checkpoints", f"checkpoint_{sanitized}_{phase}.json")
+
+    def _save_orchestrator_checkpoint(self, phase_suffix: str = "") -> str:
+        """Save full orchestrator state + DKG for potential resume."""
+        ts = time.strftime("%Y%m%d_%H%M%S", time.localtime(self.start_time or time.time()))
+        suffix = f"_{phase_suffix}" if phase_suffix else ""
+        path = os.path.join("checkpoints", f"resume_{ts}{suffix}.json")
+        dkg_path = os.path.join("checkpoints", f"dkg_{ts}{suffix}.json")
+
+        checkpoint = {
+            "_format_version": 1,
+            "target_url": getattr(self, 'target_url', ''),
+            "phase": self.phase.value,
+            "loop_count": getattr(self, '_loop_count', 0),
+            "step_count": self.step_count,
+            "start_time": self.start_time,
+            "task_description": getattr(self, '_task_description', ''),
+            "solo_iterations": self._solo_iterations,
+            "multi_agent_iterations": self._multi_agent_iterations,
+            "analyze_done": self._analyze_done,
+            "svc_research_done": self._svc_research_done,
+            "research_done": self._research_done,
+            "known_flags": list(self._known_flags) if hasattr(self, '_known_flags') else [],
+            "surface_exhausted": getattr(self, '_surface_exhausted', False),
+            "vulnerabilities": [
+                {"vuln_type": v.vuln_type, "endpoint": v.endpoint,
+                 "param": v.param, "confidence": v.confidence,
+                 "evidence": v.evidence, "suggested_tool": v.suggested_tool,
+                 "tool_args": v.tool_args}
+                for v in self.vulnerabilities
+            ],
+            "exploitation_plan": (
+                {"plan_id": self.exploitation_plan.plan_id,
+                 "phase": self.exploitation_plan.phase,
+                 "goal": self.exploitation_plan.goal,
+                 "tasks": self.exploitation_plan.tasks,
+                 "status": self.exploitation_plan.status}
+                if self.exploitation_plan else None
+            ),
+            "exhausted_task_ids": list(self._exhausted_task_ids),
+            "dkg_path": dkg_path,
+        }
+
+        os.makedirs("checkpoints", exist_ok=True)
+        with open(path, "w") as f:
+            json.dump(checkpoint, f, indent=2, default=str)
+        self.dkg.save(dkg_path)
+        log.info("Orchestrator checkpoint saved: %s", path)
+        return path
+
+    def _find_latest_checkpoint(self, target_url: str = "") -> str | None:
+        """Find the most recent orchestrator checkpoint, optionally matching target."""
+        import glob
+        pattern = os.path.join("checkpoints", "resume_*.json")
+        files = sorted(glob.glob(pattern), key=os.path.getmtime, reverse=True)
+        if not target_url:
+            return files[0] if files else None
+        for f in files:
+            try:
+                with open(f) as fh:
+                    data = json.load(fh)
+                if data.get("target_url") == target_url:
+                    return f
+            except Exception:
+                continue
+        return None
+
+    async def _load_orchestrator_checkpoint(self, path: str) -> bool:
+        """Load orchestrator + DKG from checkpoint. Returns True on success."""
+        try:
+            with open(path) as f:
+                checkpoint = json.load(f)
+
+            if checkpoint.get("_format_version") != 1:
+                log.warning("Checkpoint format version mismatch: %s", path)
+                return False
+
+            self.target_url = checkpoint.get("target_url", self.target_url)
+            self.phase = OrchestratorPhase(checkpoint.get("phase", "init"))
+            self._loop_count = checkpoint.get("loop_count", 0)
+            self.step_count = checkpoint.get("step_count", 0)
+            self.start_time = checkpoint.get("start_time", time.time())
+            self._task_description = checkpoint.get("task_description", "")
+            self._solo_iterations = checkpoint.get("solo_iterations", 0)
+            self._multi_agent_iterations = checkpoint.get("multi_agent_iterations", 0)
+            self._analyze_done = checkpoint.get("analyze_done", False)
+            self._svc_research_done = checkpoint.get("svc_research_done", False)
+            self._research_done = checkpoint.get("research_done", False)
+            self._known_flags = set(checkpoint.get("known_flags", []))
+            self._surface_exhausted = checkpoint.get("surface_exhausted", False)
+            self._exhausted_task_ids = set(checkpoint.get("exhausted_task_ids", []))
+
+            # Restore vulnerabilities
+            self.vulnerabilities = []
+            for vd in checkpoint.get("vulnerabilities", []):
+                self.vulnerabilities.append(VulnerabilityHypothesis(
+                    vuln_type=vd.get("vuln_type", ""),
+                    endpoint=vd.get("endpoint", ""),
+                    param=vd.get("param", ""),
+                    confidence=vd.get("confidence", 0.0),
+                    evidence=vd.get("evidence", ""),
+                    suggested_tool=vd.get("suggested_tool", ""),
+                    tool_args=vd.get("tool_args", {}),
+                ))
+
+            # Restore exploitation plan
+            ep_data = checkpoint.get("exploitation_plan")
+            if ep_data:
+                self.exploitation_plan = ExploitationPlan(
+                    plan_id=ep_data.get("plan_id", f"plan-resume-{int(time.time())}"),
+                    phase=ep_data.get("phase", ""),
+                    goal=ep_data.get("goal", ""),
+                    tasks=ep_data.get("tasks", []),
+                    status=ep_data.get("status", "pending"),
+                )
+
+            # Restore DKG
+            dkg_path = checkpoint.get("dkg_path", "")
+            if dkg_path and os.path.exists(dkg_path):
+                self.dkg = DKG.load(dkg_path)
+                log.info("DKG restored from %s (%d nodes)",
+                         dkg_path, len(self.dkg.graph.nodes))
+
+            log.info("Checkpoint loaded: %s (phase=%s, loop=%d, step=%d)",
+                     path, self.phase.value, self._loop_count, self.step_count)
+            return True
+        except Exception as e:
+            log.error("Failed to load checkpoint %s: %s", path, e)
+            return False
 
     def _check_tool_dependencies(self) -> None:
         """Verify external CLI tools exist on PATH. Warn for missing required ones."""

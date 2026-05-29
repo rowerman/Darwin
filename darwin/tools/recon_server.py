@@ -345,10 +345,11 @@ def register_recon_tools(gateway: MCPGateway) -> MCPGateway:
     # ── gobuster: Fast directory enumeration ─────────────────────
     gateway.register_shell_tool(
         name="gobuster_dir",
-        command_template="gobuster -u {target_url} -w /usr/share/dirb/wordlists/common.txt -q 2>&1",
-        description="Fast directory brute-force using gobuster (Go-based, faster than dirb)",
+        command_template="gobuster -u {target_url} -w {wordlist} -q 2>&1",
+        description="Fast directory brute-force using gobuster. Default wordlist has common web/CMS paths. For WordPress use wordlist=/home/kianabin/Darwin/wordlists/cms/wordpress.fuzz.txt.",
         parameters={
             "target_url": {"type": "string", "description": "Target URL to scan"},
+            "wordlist": {"type": "string", "description": "Wordlist path (default: raft-large-directories.txt)", "default": "/home/kianabin/Darwin/wordlists/raft-large-directories.txt"},
         },
         parser=_parse_gobuster_output,
         timeout=90,

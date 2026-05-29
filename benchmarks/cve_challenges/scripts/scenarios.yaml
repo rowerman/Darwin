@@ -128,6 +128,48 @@ scenarios:
     difficulty: L1
     cve: N/A (misconfiguration)
     path: k8s/helm-tiller
+
+  # === Phase 9: K8s Expansion ===
+  k8s-11:
+    id: K8S-11
+    name: Privileged Container Breakout
+    type: k8s
+    difficulty: L2
+    cve: N/A (privileged pod)
+    path: k8s/privileged-breakout
+
+  k8s-12:
+    id: K8S-12
+    name: hostPath Writable Mount Escape
+    type: k8s
+    difficulty: L2
+    cve: N/A (hostPath mount)
+    path: k8s/hostpath-escape
+
+  k8s-13:
+    id: K8S-13
+    name: SA Token Cross-Namespace Lateral
+    type: k8s
+    difficulty: L2
+    cve: N/A (RBAC lateral)
+    path: k8s/sa-cross-ns
+
+  k8s-14:
+    id: K8S-14
+    name: CAP_SYS_ADMIN cgroup Escape
+    type: k8s
+    difficulty: L3
+    cve: CAP_SYS_ADMIN abuse
+    path: k8s/cap-sys-admin-cgroup
+
+  k8s-15:
+    id: K8S-15
+    name: Mutable Image Tag Supply Chain
+    type: k8s
+    difficulty: L2
+    cve: N/A (image tag mutation)
+    path: k8s/mutable-image-tag
+
   ad-01:
     id: AD-01
     name: Kerberoasting

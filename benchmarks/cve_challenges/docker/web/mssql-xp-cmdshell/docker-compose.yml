@@ -6,9 +6,11 @@ services:
       MSSQL_SA_PASSWORD: "Password123!"
     ports:
       - "10119:1433"
+    volumes:
+      - ./flag.txt:/flag.txt:ro
 
   web:
-    build: .
+    image: mcr.microsoft.com/dotnet/aspnet:6.0
     ports:
       - "10109:80"
     environment:

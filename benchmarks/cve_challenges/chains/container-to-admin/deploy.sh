@@ -20,7 +20,7 @@ nodes:
     image: kindest/node:v1.27.3
     extraPortMappings:
       - containerPort: 2379
-        hostPort: 2379
+        hostPort: 11379
         protocol: TCP
     extraMounts:
       - hostPath: /home/kianabin/cve-flags/chain2-flags
@@ -85,4 +85,4 @@ echo ""
 echo "[Chain 2] Ready"
 echo "  Step 1: kubectl exec chain2-pod -- cat /run/secrets/kubernetes.io/serviceaccount/token → RBAC → flag{chain2-step1-rbac}"
 echo "  Step 2: Escape container → cat /chain-flags/flag.txt → flag{chain2-step2-escape}"
-echo "  Step 3: etcdctl --endpoints=localhost:2379 get /registry/secrets/kube-system/chain2-etcd-final → FINAL"
+echo "  Step 3: etcdctl --endpoints=localhost:11379 get /registry/secrets/kube-system/chain2-etcd-final → FINAL"

@@ -14,7 +14,7 @@ nodes:
     image: kindest/node:v1.27.3
     extraPortMappings:
       - containerPort: 2379
-        hostPort: 2379
+        hostPort: 11379
         protocol: TCP
     kubeadmConfigPatches:
       - |

@@ -35,9 +35,9 @@
       "abstract_description": "curl_get exploitation; via curl_get; on http://localhost:8000/openapi.json; (GET)",
       "vulnerability_type": "curl_get",
       "required_context": "",
-      "total_attempts": 348,
+      "total_attempts": 355,
       "total_successes": 11,
-      "success_rate": 0.031609195402298854,
+      "success_rate": 0.030985915492957747,
       "last_successful_use": "2026-05-23T19:27:04.849115",
       "half_life_days": 30,
       "created_at": "2026-05-22T10:43:52.014287",
@@ -79,9 +79,9 @@
       "abstract_description": "http_post exploitation; via http_post; on http://localhost:8000/jobs; (GET)",
       "vulnerability_type": "http_post",
       "required_context": "",
-      "total_attempts": 102,
+      "total_attempts": 107,
       "total_successes": 11,
-      "success_rate": 0.10784313725490197,
+      "success_rate": 0.102803738317757,
       "last_successful_use": "2026-05-23T19:27:04.839382",
       "half_life_days": 30,
       "created_at": "2026-05-22T10:43:52.026378",
@@ -361,9 +361,37 @@
       "last_successful_use": "2026-05-26T14:29:13",
       "half_life_days": 30,
       "created_at": "2026-05-26T14:29:13.179539"
+    },
+    {
+      "id": "ep-redis_cmd-task-177",
+      "type": "ExploitPattern",
+      "mechanism": "redis_cmd",
+      "abstract_description": "redis_cmd exploitation; via redis_cmd; (GET)",
+      "vulnerability_type": "redis_cmd",
+      "required_context": "",
+      "total_attempts": 8,
+      "total_successes": 0,
+      "success_rate": 0.0,
+      "last_successful_use": "",
+      "half_life_days": 30,
+      "created_at": "2026-05-28T10:59:44.736073"
+    },
+    {
+      "id": "ep-ssh_key_exec-task-177",
+      "type": "ExploitPattern",
+      "mechanism": "ssh_key_exec",
+      "abstract_description": "ssh_key_exec exploitation; via ssh_key_exec; (GET)",
+      "vulnerability_type": "ssh_key_exec",
+      "required_context": "",
+      "total_attempts": 3,
+      "total_successes": 0,
+      "success_rate": 0.0,
+      "last_successful_use": "",
+      "half_life_days": 30,
+      "created_at": "2026-05-28T14:35:49.339924"
     }
   ],
   "edges": [],
-  "task_count": 96,
-  "created_at": "2026-05-27T18:25:56.044610"
+  "task_count": 118,
+  "created_at": "2026-05-28T14:37:47.249547"
 }

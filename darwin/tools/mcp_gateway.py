@@ -71,8 +71,14 @@ class MCPGateway:
         import logging
         _log = logging.getLogger(__name__)
 
+        # Collect defaults from parameter schema
+        _defaults = {k: v["default"] for k, v in parameters.items() if isinstance(v, dict) and "default" in v}
+
         async def _execute(**kwargs) -> ToolResult:
             try:
+                # Fill missing params from defaults
+                for k, v in _defaults.items():
+                    kwargs.setdefault(k, v)
                 cmd = command_template.format(**kwargs)
             except (ValueError, KeyError) as e:
                 return ToolResult(

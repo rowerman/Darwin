@@ -30,7 +30,7 @@ nodes:
     image: kindest/node:v1.27.3
     extraPortMappings:
       - containerPort: 2379
-        hostPort: 2379
+        hostPort: 11379
 KINDCFG
 
 kubectl wait --for=condition=Ready pods --all -n kube-system --timeout=120s 2>/dev/null || true
