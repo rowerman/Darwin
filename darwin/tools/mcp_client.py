@@ -371,7 +371,14 @@ class MCPClientPool:
         client = self._clients.get(server_name)
         if not client:
             raise RuntimeError(f"MCP server '{server_name}' not connected")
-        return await client.call_tool(name, arguments)
+        try:
+            return await client.call_tool(name, arguments)
+        except asyncio.TimeoutError:
+            return {
+                "content": [{"type": "text",
+                    "text": f"MCP tool '{name}' timed out after 120s — server may be unreachable"}],
+                "isError": True,
+            }
 
     def get_tool_names(self) -> List[str]:
         return list(self._tool_to_server.keys())

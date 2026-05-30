@@ -355,10 +355,12 @@ def normalize_dkg_state(dkg: Any) -> PipelineState:
         if val and raw.get("verified"):
             state.flags.append(str(val))
 
-    # Analysis notes
+    # Analysis notes — phase field distinguishes sub-types since add_node()
+    # forces data["type"] to the node type ("Analysis"), overwriting any
+    # caller-provided "type" key (e.g. "application_understanding").
     for raw in dkg.query_nodes("Analysis"):
         content = raw.get("content", "")
-        if content and raw.get("type") == "application_understanding":
+        if content and raw.get("phase") in ("analyze", "service_research"):
             state.analysis_notes.append(str(content))
 
     # Hosts

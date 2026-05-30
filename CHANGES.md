@@ -1,5 +1,19 @@
 # DARWIN Framework Changes — 2026-05-29
 
+## 2026-05-30
+- **darwin/orchestrator.py**: `_systematic_exploit_pass` HTTP 协议过滤。当 endpoint 是 http/https 时，过滤掉 `ssh_exec`, `mysql_query`, `psql_query`, `mssql_query`, `oracle_query`, `redis_cmd`, `shell_exec` 等仅适用于非 HTTP 协议的工具。修复前 `weakauth` 对 WordPress 登录页会依次尝试 7 个工具（其中 6 个是 DB/SSH 工具全部空转），修复后只保留 HTTP 兼容工具。
+- **darwin/orchestrator.py**: 将 `wpscan` 加入 `REQUIRED_TOOLS` 列表。wpscan_enum 工具依赖 wpscan CLI（Ruby gem），之前未在启动时检查可用性，导致 WordPress 用户枚举静默失败（仅返回 45 bytes 输出）。
+- **darwin/tools/attack_server.py**: 重写 `wpscan_enum` 从 shell template 改为 Python 函数。API token 为空时自动省略 `--api-token` 参数并将 `vp`→`p`, `vt`→`t` 降级（漏洞检测需要 token，但插件/用户枚举不需要）。添加 `--no-banner` 和增大输出限制 head -500。修复前返回 45 bytes，修复后返回 3504 bytes（77x 提升），含 XML-RPC、WP 版本、主题等信息。
+- **darwin/tools/attack_server.py**: `_wpscan_enum` API 额度耗尽自动降级。检测 8 种 API limit 错误模式 + 无漏洞数据返回（缺少 CVE/[critical]），自动重试不带 token。token 来源优先级：LLM 传参 → WPSCAN_API_TOKEN 环境变量 → config/darwin.yaml。
+- **darwin/tools/attack_server.py**: `_wpscan_enum` enum_mode 自动升级。LLM 不知道 token 已配置，传入降级模式 `p,t,u` 时自动升级为 `vp,vt,u` 利用 token 做漏洞检测。
+- **darwin/orchestrator.py**: `_format_tool_feedback` 信息收集工具输出截断上限从 1500→5000 字符。wpscan/nmap/nikto/dirb/knowledge_search 等 11 个工具的 stdout 不再在格式化阶段被截断。
+- **darwin/orchestrator.py**: `add_tool_result` 截断上限从 2500→7000（信息工具）/ 3000（其他工具）。配合格式化阶段改动，确保 LLM 能看到 wpscan 插件列表等长输出。
+- **darwin/utils/llm.py**: `compress()` 修复 tool_calls/tool 对拆散问题。压缩边界（keep_recent=6）可能将 assistant tool_calls 放入被压缩的老消息，而对应的 tool result 保留在最近消息中，导致 DeepSeek 拒绝请求（"Messages with role 'tool' must be a response to a preceding message with 'tool_calls'"）。修复后扫描边界，检测到第一个保留消息是 tool 角色时向前扩展边界以包含其配对的 tool_calls。
+- **darwin/orchestrator.py**: Plan 任务数限制。初始 plan 生成限 8 个任务（prompt 中明确要求），plan review 限总任务数不超过 15（超过时要求先删除低质量 pending 再添加新任务）。修复前单次 plan 生成可达 33 个任务。
+- **darwin/tools/mcp_client.py**: `MCPClientPool.call_tool` 不再向上抛出 `asyncio.TimeoutError`。MCP 工具超时（web-search/nvd_search_cves 等）后 return error dict 而非 re-raise 异常，防止 `_research_phase` → `_unified_llm_loop` → `run()` 整条调用链被一次 MCP 超时杀死。
+- **darwin/orchestrator.py**: `_research_phase` 工具执行增加 45s MCP 超时保护 + 逐工具 try/except。单个 MCP 工具超时或失败不会中断整个研究阶段，其他工具继续执行。修复前 LLM 调用 web-search/nvd_search_cves → MCP 120s 超时 → TimeoutError 穿透到 run() → 任务返回 "Internal timeout at 209s"。
+- **config/darwin.yaml**: 新增 `wpscan.api_token` 配置项。
+
 ## 2026-05-29 (late)
 - **darwin/orchestrator.py**: 彻底禁止 SSH 暴力爆破任务。新增 `_BLACKLISTED_TOOLS` 类常量 + `_sanitize_plan_tools()` 方法，在三个任务生成路径中统一替换 `hydra_ssh_brute` → `ssh_exec`。同时在 tool_defs 和 plan generation prompt 的 tool list 中过滤黑名单工具。
 - **darwin/orchestrator.py**: Task 执行确定性改造。对 shell_exec/redis_cmd/ssh_exec 等明确工具，plan 生成后直接调用 `gateway.call()` 执行，不再通过 LLM 生成 tool call（防止 LLM 在执行阶段篡改 plan 的 params）。curl_get/send_payload 等探索性工具仍走 LLM 路径。

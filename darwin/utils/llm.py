@@ -303,8 +303,25 @@ class LLMSession:
                 self.conversation_history.insert(0, {"role": "user", "content": notice})
             return 0
 
-        old_messages = self.conversation_history[:-keep_recent]
-        recent = self.conversation_history[-keep_recent:]
+        # Protect tool_calls ↔ tool result pairs from being split across
+        # the compression boundary.  DeepSeek rejects orphaned tool messages.
+        _split = len(self.conversation_history) - keep_recent
+        while _split > 0 and _split < len(self.conversation_history):
+            first_recent = self.conversation_history[_split]
+            if first_recent.get("role") != "tool":
+                break
+            # Extend boundary left to include the assistant message that
+            # carries the tool_calls this tool result belongs to.
+            _split -= 2  # step back past [assistant + tool_calls, user prompt]
+            if _split >= 0:
+                _maybe_assistant = self.conversation_history[_split]
+                if _maybe_assistant.get("role") != "assistant" or not _maybe_assistant.get("tool_calls"):
+                    _split += 2  # couldn't find matching tool_calls — give up
+                    break
+        _split = max(0, _split)
+
+        old_messages = self.conversation_history[:_split]
+        recent = self.conversation_history[_split:]
 
         serialized = self._serialize_messages(old_messages)
         tokens_before = self.token_count

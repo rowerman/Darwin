@@ -123,6 +123,7 @@ class Orchestrator:
         "nmap", "dirb", "whatweb", "curl",
         "sqlmap", "ffuf", "python3", "ssh", "sshpass",
         "masscan", "gobuster", "nikto", "hydra", "smbmap",
+        "wpscan",
     ]
     OPTIONAL_TOOLS = ["searchsploit", "msfconsole"]
 
@@ -1260,7 +1261,14 @@ class Orchestrator:
             f"ARGS: {json.dumps(tc_args, default=str)[:200]}",
         ]
         if stdout:
-            parts.append(f"STDOUT: {stdout[:1500]}")
+            # Info-gathering tools need more room — wpscan plugin lists,
+            # nmap results, and RAG knowledge often exceed 1500 chars.
+            _INFO_TOOLS = {"wpscan_enum", "knowledge_search", "nmap_port_range",
+                           "nmap_full_scan", "nikto_scan", "dirb_scan",
+                           "gobuster_dir", "nvd_search_cves", "searchsploit_search",
+                           "metasploit_search", "go_exploitdb_search"}
+            _stdout_limit = 5000 if tc_name in _INFO_TOOLS else 1500
+            parts.append(f"STDOUT: {stdout[:_stdout_limit]}")
         if stderr:
             parts.append(f"STDERR: {stderr[:500]}")
         if not stdout and not stderr:
@@ -1851,6 +1859,16 @@ class Orchestrator:
 
                 # Format feedback for LLM
                 tool_stdout = self._format_tool_feedback(tc_name, tc_args, result, defence_probe)
+                if (tc_name == "file_upload" and not getattr(result, 'success', False)
+                        and getattr(result, 'exit_code', 0) in (400, 403, 500)):
+                    tool_stdout += (
+                        "\n[HINT: HTTP 4xx/5xx on file upload often means the endpoint "
+                        "requires additional form fields (IDs, directories, nonces, tokens). "
+                        "Look at the plugin documentation, readme, or error messages to "
+                        "discover the required parameters. Retry with extra_fields={\"key\":\"value\",...}. "
+                        "Common examples: eeSFL_ID (numeric list ID), eeSFL_FileUploadDir "
+                        "(target directory), action (ajax action), nonce (CSRF token).]"
+                    )
                 if (tc_name == "http_post" and not getattr(result, 'success', False)
                         and tc_args.get("url")):
                     for ep in self.dkg.query_nodes("Endpoint"):
@@ -1868,7 +1886,17 @@ class Orchestrator:
                 # result here would break DeepSeek's API requirement.
                 # Plan review receives everything it needs via task_result_text.
                 if not tc_id.startswith("direct-"):
-                    self.llm.add_tool_result(tc_id, tool_stdout[:2500])
+                    # Allow more room for verbose info-gathering tools.
+                    # _format_tool_feedback already caps per-tool stdout at
+                    # 1500 (default) or 5000 (info tools), so 7000 is enough
+                    # for the formatted feedback + overhead.
+                    _is_info = tc_name in ("wpscan_enum", "knowledge_search",
+                        "nmap_port_range", "nmap_full_scan", "nikto_scan",
+                        "dirb_scan", "gobuster_dir", "nvd_search_cves",
+                        "searchsploit_search", "metasploit_search",
+                        "go_exploitdb_search")
+                    _limit = 7000 if _is_info else 3000
+                    self.llm.add_tool_result(tc_id, tool_stdout[:_limit])
 
                 # Auto-persist technology discoveries to DKG (before compression loses them)
                 if tc_name in ("whatweb_scan",) and getattr(result, 'success', False):
@@ -1880,9 +1908,21 @@ class Orchestrator:
                             "discovered_by": "solo-unified",
                         })
                 task_summary += f"{tc_name}: {'OK' if getattr(result,'success',False) else 'FAIL'}; "
-                # Accumulate each tool's output for plan review context
+                # Accumulate each tool's output for plan review context.
+                # Include the file_upload HINT so the fix-and-retry LLM also
+                # sees it (not just the plan-review LLM via tool_stdout).
                 _out = getattr(result, 'stdout', '') or ''
-                _all_task_stdouts.append(f"[{tc_name}] {_out[:800]}")
+                _hint = ""
+                if (tc_name == "file_upload"
+                        and not getattr(result, 'success', False)
+                        and getattr(result, 'exit_code', 0) in (400, 403, 500)):
+                    _hint = (
+                        " [HINT: HTTP 4xx/5xx on file upload often means "
+                        "required form fields are missing. Retry with "
+                        "extra_fields={'eeSFL_ID':'1','eeSFL_FileUploadDir':'/wp-content/uploads/'} "
+                        "or similar plugin-specific parameters.]"
+                    )
+                _all_task_stdouts.append(f"[{tc_name}] {_out[:600]}{_hint}")
                 # Track if automated test found nothing
                 rl = (getattr(result, 'stdout', '') or '').lower()
                 if "no evidence" in rl or "no flag" in rl:
@@ -2215,6 +2255,15 @@ class Orchestrator:
                     tools = [t for t in tools if t in _ALL_PROTOCOL_TOOLS]
                 if not tools:
                     continue
+            else:
+                # HTTP endpoint — exclude tools that only work over non-HTTP protocols.
+                # mysql_query, ssh_exec, redis_cmd, etc. cannot operate on HTTP endpoints
+                # and running them wastes systematic pass slots.
+                _NON_HTTP_PROTOCOL_TOOLS = {
+                    "ssh_exec", "ssh_key_exec", "mysql_query", "psql_query",
+                    "mssql_query", "oracle_query", "redis_cmd", "shell_exec",
+                }
+                tools = [t for t in tools if t not in _NON_HTTP_PROTOCOL_TOOLS]
 
             # LLM-suggested tool from analysis — always extract, use if present
             llm_tool = v.get("suggested_tool", "") or ""
@@ -3048,6 +3097,7 @@ class Orchestrator:
         )
 
         # Execute research tool calls (max 3 rounds)
+        _MCP_TIMEOUT_S = 45  # per-MCP-call cap; MCP tools can hang (NVD, ddg-search)
         for _ in range(3):
             if not tool_calls:
                 break
@@ -3055,18 +3105,30 @@ class Orchestrator:
                 tc_name = tc.get("name", "")
                 tc_args = tc.get("arguments", {})
                 tc_id = tc.get("id", "")
-                if tc_name in self.attack_gateway.get_tool_names():
-                    result = await self.attack_gateway.call(tc_name, tc_args)
-                elif tc_name in self.recon_gateway.get_tool_names():
-                    result = await self.recon_gateway.call(tc_name, tc_args)
-                elif tc_name in self.mcp_pool.get_tool_names():
-                    import json as _json
-                    mcp_raw = await self.mcp_pool.call_tool(tc_name, tc_args)
-                    mcp_text = _json.dumps(mcp_raw, ensure_ascii=False)
-                    result = type('obj', (object,), {
-                        'success': True, 'stdout': mcp_text,
-                        'stderr': '', 'exit_code': 0, 'elapsed_ms': 0})()
-                else:
+                try:
+                    if tc_name in self.attack_gateway.get_tool_names():
+                        result = await self.attack_gateway.call(tc_name, tc_args)
+                    elif tc_name in self.recon_gateway.get_tool_names():
+                        result = await self.recon_gateway.call(tc_name, tc_args)
+                    elif tc_name in self.mcp_pool.get_tool_names():
+                        import json as _json
+                        mcp_raw = await asyncio.wait_for(
+                            self.mcp_pool.call_tool(tc_name, tc_args),
+                            timeout=_MCP_TIMEOUT_S,
+                        )
+                        mcp_text = _json.dumps(mcp_raw, ensure_ascii=False)
+                        result = type('obj', (object,), {
+                            'success': True, 'stdout': mcp_text,
+                            'stderr': '', 'exit_code': 0, 'elapsed_ms': 0})()
+                    else:
+                        continue
+                except asyncio.TimeoutError:
+                    self.llm.add_tool_result(
+                        tc_id, f"MCP tool '{tc_name}' timed out after {_MCP_TIMEOUT_S}s — skipping")
+                    continue
+                except Exception as _exc:
+                    self.llm.add_tool_result(
+                        tc_id, f"Tool '{tc_name}' failed: {_exc} — skipping")
                     continue
                 tool_stdout = self._format_tool_feedback(tc_name, tc_args, result, "")
                 self.llm.add_tool_result(tc_id, tool_stdout[:2000])
@@ -3091,7 +3153,10 @@ class Orchestrator:
                         result = await self.recon_gateway.call(tc_name, tc_args)
                     elif tc_name in self.mcp_pool.get_tool_names():
                         import json as _json
-                        mcp_raw = await self.mcp_pool.call_tool(tc_name, tc_args)
+                        mcp_raw = await asyncio.wait_for(
+                            self.mcp_pool.call_tool(tc_name, tc_args),
+                            timeout=_MCP_TIMEOUT_S,
+                        )
                         mcp_text = _json.dumps(mcp_raw, ensure_ascii=False)
                         result = type('obj', (object,), {
                             'success': True, 'stdout': mcp_text,
@@ -3100,6 +3165,9 @@ class Orchestrator:
                         continue
                     tool_stdout = self._format_tool_feedback(tc_name, tc_args, result, "")
                     self.llm.add_tool_result(tc_id, tool_stdout[:2000])
+                except asyncio.TimeoutError:
+                    self.llm.add_tool_result(
+                        tc_id, f"MCP tool '{tc_name}' timed out after {_MCP_TIMEOUT_S}s — skipping")
                 except Exception:
                     self.llm.add_tool_result(tc_id, "Tool execution failed")
             # Final summary generation (no tools — closes the tool_call cycle)
@@ -3565,22 +3633,159 @@ class Orchestrator:
         # This gives the LLM concrete exploitation steps instead of
         # relying solely on technique names from the research phase.
         rag_context = ""
+        probed_rag_endpoints: list[str] = []
         try:
             from darwin.rag import get_rag
             rag = get_rag()
             if rag and rag.loaded:
-                # Build search query from service names and vuln types
+                # Build search query: service banners + app type + vuln types.
+                # Service version alone (e.g. "Apache httpd 2.4.62") skews
+                # results toward generic server exploits instead of the CMS
+                # actually running on top.  Include application understanding
+                # from the analyze phase (e.g. "WordPress 6.7.2").
                 svc_terms = []
                 for s in state.services[:3]:
                     if s.version:
-                        svc_terms.append(s.version[:60])
+                        # Keep just the server name, not the full version banner
+                        ver = s.version.split("(")[0].strip()  # "Apache httpd 2.4.62"
+                        svc_terms.append(ver[:40])
                     elif s.banner:
-                        svc_terms.append(s.banner[:60])
+                        svc_terms.append(s.banner[:40])
+                # Pull app-level context from analysis notes
+                app_terms = []
+                for note in state.analysis_notes:
+                    # Extract CMS / framework names
+                    for kw in ["WordPress", "Drupal", "Joomla", "Tomcat", "Jenkins",
+                               "Django", "Laravel", "Rails", "PHP", "ASP.NET",
+                               "Confluence", "GitLab", "Magento", "PrestaShop"]:
+                        if kw.lower() in note.lower() and kw not in app_terms:
+                            app_terms.append(kw)
                 vuln_terms = list({v.vuln_type for v in self.vulnerabilities[:4]})
-                query = " ".join(svc_terms + vuln_terms)
+                query = " ".join(app_terms + svc_terms + vuln_terms)
                 if query.strip():
-                    results = rag.search(query, top_k=5)
+                    # Two-pass search: (1) precise query, (2) broad app-level
+                    # plugin/exploit search to catch what the precise query misses
+                    results = rag.search(query, top_k=5, min_keyword_overlap=0.2)
+                    if app_terms:
+                        _app_str = " ".join(app_terms)
+                        # Multiple query angles to catch different exploit
+                        # patterns.  A single broad query ("plugin exploit")
+                        # often misses entries that match specific technique
+                        # descriptions (e.g. "unrestricted file upload").
+                        _broad_queries = [
+                            _app_str + " plugin exploit vulnerability",
+                            _app_str + " unauthenticated file upload RCE",
+                            _app_str + " arbitrary file upload vulnerability",
+                            _app_str + " unrestricted file upload exploit",
+                        ]
+                        _broad_results: list[dict] = []
+                        for _bq in _broad_queries:
+                            try:
+                                _br = rag.search(_bq, top_k=5, min_keyword_overlap=0.2)
+                                _broad_results.extend(_br)
+                            except Exception:
+                                pass
+                        # Merge: deduplicate by title, keep highest-score copy
+                        seen_titles: set[str] = set()
+                        merged: list[dict] = []
+                        for r in results + _broad_results:
+                            t = (r.get("title") or "").strip().lower()
+                            if t and t not in seen_titles:
+                                seen_titles.add(t)
+                                merged.append(r)
+                        merged.sort(key=lambda r: r.get("score", 0), reverse=True)
+                        results = merged[:10]
                     if results:
+                        # ── Probe RAG-suggested endpoints ─────────────────
+                        # RAG technique entries often contain concrete paths
+                        # (e.g. POST /wp-content/plugins/x/ee-upload-engine.php).
+                        # Probe them proactively — if the endpoint exists,
+                        # the LLM can plan exploitation directly.
+                        _probe_paths: set[str] = set()
+                        _path_re = re.compile(
+                            r'(?:GET|POST|PUT|DELETE)\s+(/\S+)',
+                            re.IGNORECASE,
+                        )
+                        _known_urls = {e.get("url", "") for e in self.dkg.query_nodes("Endpoint")}
+                        # Derive the real HTTP base from discovered endpoints,
+                        # not from target_url (which may lack a port, e.g.
+                        # "http://localhost" vs the real "http://localhost:10103").
+                        _base = target_url.rstrip("/")
+                        _http_eps = [e.get("url", "") for e in self.dkg.query_nodes("Endpoint")
+                                     if e.get("url", "").startswith("http")]
+                        if _http_eps:
+                            from urllib.parse import urlparse as _up
+                            _parsed = _up(_http_eps[0])
+                            _base = f"{_parsed.scheme}://{_parsed.netloc}"
+                        for r in results:
+                            for tech in r.get("techniques", []) or []:
+                                for m in _path_re.finditer(str(tech)):
+                                    path = m.group(1)
+                                    # Skip placeholders like /{{path}} or /{{endpoint}}
+                                    if "{{" in path or "}}" in path:
+                                        continue
+                                    if path not in _probe_paths:
+                                        _probe_paths.add(path)
+
+                        # Collect session cookies for authenticated probing
+                        _cookies = ""
+                        if self.client._session and self.client._session.cookie_jar:
+                            jar = list(self.client._session.cookie_jar)
+                            if jar:
+                                _cookies = "; ".join(f"{c.key}={c.value}" for c in jar)
+
+                        _probed: list[dict] = []
+                        for path in list(_probe_paths)[:8]:
+                            ep_url = f"{_base}{path}"
+                            if ep_url in _known_urls:
+                                continue
+                            _known_urls.add(ep_url)
+                            try:
+                                curl_args: dict = {
+                                    "url": ep_url, "follow_redirects": True,
+                                    "insecure": True if "https" in _base else False,
+                                }
+                                if _cookies:
+                                    curl_args["headers"] = f"Cookie: {_cookies}"
+                                rp = await self.recon_gateway.call("curl_get", curl_args)
+                                if rp.success:
+                                    out = getattr(rp, "stdout", "") or ""
+                                    st = 200
+                                    fl = (out or "").split("\n")[0] if out else ""
+                                    if fl.startswith("HTTP/"):
+                                        pts = fl.split()
+                                        if len(pts) >= 2 and pts[1].isdigit():
+                                            st = int(pts[1])
+                                    # 405 Method Not Allowed means the endpoint exists
+                                    # but doesn't accept GET (likely POST-only)
+                                    _probed.append({
+                                        "url": ep_url, "status": st,
+                                        "size": len(out),
+                                    })
+                            except Exception:
+                                pass
+
+                        if _probed:
+                            # Endpoint exists if status is not 404 (includes 200, 403,
+                            # 405, 500 — all indicate something is there).
+                            _found = [p for p in _probed if p["status"] not in (404, 0)]
+                            for p in _found:
+                                label = p["url"].replace(_base, "").replace("/", "-")[:50]
+                                self.dkg.add_node("Endpoint", f"ep-rag-{label}", {
+                                    "url": p["url"], "method": "GET", "params": "",
+                                    "sample_status": p["status"],
+                                    "sample_response": f"HTTP {p['status']} ({p['size']} bytes)",
+                                    "discovered_by": "rag-endpoint-probe",
+                                })
+                            # Build a concise summary for the plan prompt
+                            _probed_lines = [
+                                f"- {p['url']} → HTTP {p['status']} ({p['size']} bytes)"
+                                for p in _probed[:8]
+                            ]
+                            probed_rag_endpoints = _probed_lines
+                            log.info("RAG endpoint probe: %d/%d paths exist on target",
+                                     len(_found), len(_probed))
+
                         lines = ["\n## Attack Pattern Knowledge (from RAG)\n"]
                         for r in results[:4]:
                             title = r.get("title", "") or ""
@@ -3609,6 +3814,7 @@ class Orchestrator:
 {rag_context}
 ## Available Tools (all recon + attack)
 {', '.join(all_tools)}
+{chr(10).join(['## RAG-Endpoint Probe Results (verified — these endpoints EXIST on the target):'] + probed_rag_endpoints) if probed_rag_endpoints else ''}
 
 ## Task
 Generate a plan as a JSON array of EXPLOIT tasks. Reconnaissance and research
@@ -3619,6 +3825,10 @@ have already been completed. Each task should test or exploit a vulnerability:
 - tool: exact exploit tool name (sqlmap_test, command_injection_test, etc.)
 - params: tool parameters dict
 - reason: which vulnerability this targets
+
+**CRITICAL: Generate at most 8 tasks.** Focus on the MOST PROMISING
+vulnerabilities only — the high-confidence ones with clear exploitation paths.
+Quality over quantity. More than 8 tasks means you are guessing, not planning.
 
 ## Dependency Rules (use dependent_task_ids to build a DAG)
 Create meaningful task dependencies when:
@@ -4170,6 +4380,8 @@ Output ONLY valid JSON:
             f"{new_discoveries}\n\n"
             f"## Your Job: Update the Plan\n"
             f"Review the plan and apply relevant changes from:\n"
+            f"- TOTAL tasks MUST NOT exceed 15. If the plan already has 12+ tasks, "
+            f"you MUST REMOVE low-quality pending tasks before ADDING new ones\n"
             f"- If credentials or tokens were obtained, ADD tasks that USE them immediately "
             f"(e.g., send authenticated requests to the relevant API endpoint)\n"
             f"- If a task discovered new endpoints/services, ADD exploration tasks for them\n"
@@ -4210,6 +4422,28 @@ Output ONLY valid JSON:
                         preserved.append(nt)
                         existing_ids.add(nt["id"])
                 self.exploitation_plan.tasks = preserved
+
+                # Hard cap: trim lowest-quality pending tasks when plan
+                # inflates beyond 15.  Done/failed tasks are kept for history.
+                _MAX = 15
+                if len(preserved) > _MAX:
+                    _pending = [t for t in preserved if t.get("status") == "pending"]
+                    if len(_pending) > (_MAX - len([t for t in preserved if t.get("status") != "pending"])):
+                        # Sort pending by "quality": tasks with no dependencies
+                        # and tool specified are higher quality than those
+                        # with many dependencies or no tool.
+                        def _pending_key(t):
+                            deps = len(t.get("dependent_task_ids", []))
+                            has_tool = 1 if t.get("tool", "") else 0
+                            return (deps, -has_tool)
+                        _pending.sort(key=_pending_key)
+                        # Keep only the needed count of pending tasks.
+                        # Clamp to 0 — when done+failed already exceed _MAX,
+                        # all pending tasks must be removed.
+                        _keep_pending = max(0, _MAX - len([t for t in preserved if t.get("status") != "pending"]))
+                        _to_remove = set(t["id"] for t in _pending[_keep_pending:])
+                        preserved = [t for t in preserved if t.get("id") not in _to_remove]
+                    self.exploitation_plan.tasks = preserved
 
                 # Sanitize: replace blacklisted tools in any LLM-generated tasks
                 self._sanitize_plan_tools(self.exploitation_plan.tasks)
