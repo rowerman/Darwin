@@ -79,11 +79,38 @@ class MCPGateway:
                 # Fill missing params from defaults
                 for k, v in _defaults.items():
                     kwargs.setdefault(k, v)
+                # Auto-correct parameter name variations
+                # Handles both directions:
+                #   LLM "username" → template "user"  (kwargs key contains template var)
+                #   LLM "target"  → template "target_url" (template var contains kwargs key)
+                import string as _string
+                _template_vars = {
+                    fv[1] for fv in _string.Formatter().parse(command_template)
+                    if fv[1] is not None
+                }
+                for _tv in _template_vars:
+                    if _tv not in kwargs:
+                        # Direction 1: template var is substring of kwargs key
+                        _candidates = [
+                            k for k in kwargs if _tv in k and k != _tv
+                        ]
+                        if not _candidates:
+                            # Direction 2: kwargs key is substring of template var
+                            # Only match non-trivial substrings (≥3 chars, ≥50% of template var length)
+                            _candidates = [
+                                k for k in kwargs
+                                if k in _tv and k != _tv
+                                and len(k) >= 3 and len(k) >= len(_tv) * 0.5
+                            ]
+                        if len(_candidates) == 1:
+                            kwargs[_tv] = kwargs[_candidates[0]]
                 cmd = command_template.format(**kwargs)
             except (ValueError, KeyError) as e:
+                _err_msg = f"Template format error: {e} | template={command_template[:200]} | kwargs={kwargs}"
                 return ToolResult(
                     tool_name=name, success=False,
-                    stdout="", stderr=f"Template format error: {e} | template={command_template[:200]} | kwargs={kwargs}",
+                    stdout=_err_msg,  # Write to stdout so orchestrator fix LLM sees it
+                    stderr=_err_msg,
                     exit_code=1, elapsed_ms=0,
                 )
             start = time.perf_counter()
@@ -92,6 +119,7 @@ class MCPGateway:
             max_attempts = 1 + retries
             for attempt in range(max_attempts):
                 current_timeout = timeout * (1.5 ** attempt)
+                proc = None
                 try:
                     proc = await asyncio.create_subprocess_shell(
                         cmd,
@@ -123,7 +151,6 @@ class MCPGateway:
                         elapsed_ms=elapsed,
                         parsed_output=parsed,
                     )
-                    self._execution_log.append(result)
                     return result
 
                 except asyncio.TimeoutError:
@@ -134,7 +161,8 @@ class MCPGateway:
                             name, current_timeout, attempt + 1, max_attempts,
                         )
                     try:
-                        proc.kill()
+                        if proc is not None:
+                            proc.kill()
                     except Exception:
                         pass
 
@@ -147,7 +175,6 @@ class MCPGateway:
                 exit_code=-1,
                 elapsed_ms=elapsed,
             )
-            self._execution_log.append(result)
             return result
 
         self._registry[name] = _ToolEntry(
@@ -169,14 +196,18 @@ class MCPGateway:
                 result = entry.func(**params)
             if not isinstance(result, ToolResult):
                 result = ToolResult(
-                    tool_name=name, success=True, stdout=str(result),
+                    tool_name=name, success=True, stdout=str(result) if result is not None else "",
                     stderr="", exit_code=0, elapsed_ms=0,
                 )
             self._execution_log.append(result)
             return result
         except Exception as e:
+            import traceback
+            _tb = traceback.format_exc()[-800:]
             return ToolResult(
-                tool_name=name, success=False, stdout="", stderr=str(e),
+                tool_name=name, success=False,
+                stdout=f"Tool error: {e}\n{_tb}",
+                stderr=str(e),
                 exit_code=-1, elapsed_ms=0,
             )
 

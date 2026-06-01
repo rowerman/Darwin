@@ -1,0 +1,217 @@
+{
+  "nodes": [
+    {
+      "id": "host-localhost",
+      "ip": "localhost",
+      "is_reachable": true,
+      "is_internal": false,
+      "type": "Host",
+      "created_at": "2026-06-01T17:36:16.120591",
+      "updated_at": "2026-06-01T17:36:16.120604",
+      "_version": 1
+    },
+    {
+      "id": "svc-localhost-10108",
+      "port": 10108,
+      "protocol": "tcp",
+      "version": "Apache httpd 2.4.67 ((Debian))",
+      "banner": "http",
+      "type": "Service",
+      "created_at": "2026-06-01T17:36:16.120634",
+      "updated_at": "2026-06-01T17:36:16.120637",
+      "_version": 1
+    },
+    {
+      "id": "ep-http://localhost:10108",
+      "url": "http://localhost:10108",
+      "method": "GET",
+      "params": "",
+      "sample_status": 200,
+      "sample_response": "<br />\n<b>Fatal error</b>:  Uncaught Error: Class &quot;mysqli&quot; not found in /var/www/html/index.php:3\nStack trace:\n#0 {main}\n  thrown in <b>/var/www/html/index.php</b> on line <b>3</b><br />\n",
+      "response_size": 395,
+      "discovered_by": "deep-recon",
+      "type": "Endpoint",
+      "created_at": "2026-06-01T17:36:34.946230",
+      "updated_at": "2026-06-01T17:36:39.017173",
+      "_version": 3,
+      "deep_recon_done": true,
+      "sample_content_type": "text/html; charset=UTF-8"
+    },
+    {
+      "id": "vuln-nikto-14",
+      "vuln_type": "XSS",
+      "endpoint": "http://localhost:10108",
+      "parameter": "",
+      "severity": "low",
+      "source": "nikto",
+      "detail": "- Nikto v2.1.5",
+      "type": "Vulnerability",
+      "created_at": "2026-06-01T17:37:34.515908",
+      "updated_at": "2026-06-01T17:37:34.515917",
+      "_version": 2,
+      "tested_at": "17:37:34",
+      "test_result": "BLOCKED: <script>alert(1)</script>... (not found)\nBLOCKED: <img src=x onerror=alert(1)>... (not found)\nBLOCKED: \"><script>alert(1)</script>... (not found)\nBLOCKED: '><img src=x onerror=alert(1)>... (n",
+      "test_tool": "xss_reflection_test"
+    },
+    {
+      "id": "vuln-nikto-20",
+      "vuln_type": "XSS",
+      "endpoint": "http://localhost:10108",
+      "parameter": "",
+      "severity": "low",
+      "source": "nikto",
+      "detail": "+ The anti-clickjacking X-Frame-Options header is not present.",
+      "type": "Vulnerability",
+      "created_at": "2026-06-01T17:36:34.939363",
+      "updated_at": "2026-06-01T17:36:34.939365",
+      "_version": 9
+    },
+    {
+      "id": "cred-cteg-sa@localhost:10119",
+      "username": "sa",
+      "password": "Password123!",
+      "host": "localhost",
+      "port": 10119,
+      "cred_type": "mssql",
+      "source": "cteg_memory",
+      "type": "Credential",
+      "created_at": "2026-06-01T17:36:38.032970",
+      "updated_at": "2026-06-01T17:36:38.032979",
+      "_version": 1
+    },
+    {
+      "id": "analysis-1780306612",
+      "phase": "analyze",
+      "type": "Analysis",
+      "content": "The application is a PHP web application that attempts to use MySQLi but fails because the class is not loaded. The only endpoint returns a PHP fatal error revealing the file path and stack trace, indicating active debug output. There are no user input parameters in the URL, so the application does not process any user-supplied data.",
+      "endpoint_count": 1,
+      "created_at": "2026-06-01T17:36:52.058061",
+      "updated_at": "2026-06-01T17:36:52.058070",
+      "_version": 1
+    },
+    {
+      "id": "vuln-1",
+      "vuln_type": "LFI",
+      "endpoint": "http://localhost:10108",
+      "parameter": "",
+      "severity": "unknown",
+      "source": "llm_analysis",
+      "suggested_tool": "curl_get",
+      "tool_args": {
+        "url": "http://localhost:10108"
+      },
+      "type": "Vulnerability",
+      "created_at": "2026-06-01T17:37:34.535000",
+      "updated_at": "2026-06-01T17:37:34.535009",
+      "_version": 2,
+      "tested_at": "17:37:34",
+      "test_result": "HTTP/1.1 200 OK\r\nDate: Mon, 01 Jun 2026 09:37:34 GMT\r\nServer: Apache/2.4.67 (Debian)\r\nX-Powered-By: PHP/8.2.31\r\nVary: Accept-Encoding\r\nContent-Length: 197\r\nContent-Type: text/html; charset=UTF-8\r\n\r\n<b",
+      "test_tool": "curl_get"
+    },
+    {
+      "id": "vuln-2",
+      "vuln_type": "CSRF",
+      "endpoint": "http://localhost:10108",
+      "parameter": "",
+      "severity": "low",
+      "source": "llm_classified",
+      "detail": "- Nikto v2.1.5",
+      "suggested_tool": "curl_get",
+      "type": "Vulnerability",
+      "created_at": "2026-06-01T17:36:58.332039",
+      "updated_at": "2026-06-01T17:36:58.332062",
+      "_version": 1
+    },
+    {
+      "id": "vuln-3",
+      "vuln_type": "XSS",
+      "endpoint": "http://localhost:10108",
+      "parameter": "",
+      "severity": "low",
+      "source": "llm_classified",
+      "detail": "+ The anti-clickjacking X-Frame-Options header is not present.",
+      "type": "Vulnerability",
+      "created_at": "2026-06-01T17:36:58.332135",
+      "updated_at": "2026-06-01T17:36:58.332143",
+      "_version": 1
+    },
+    {
+      "id": "plan-1780306636",
+      "plan_id": "plan-1780306636",
+      "phase": "explore",
+      "goal": "Capture flag on http://localhost",
+      "total_tasks": 26,
+      "completed": 24,
+      "failed": 2,
+      "status": "in_progress",
+      "created_at": "2026-06-01T17:37:16",
+      "updated_at": "2026-06-01T17:42:00.214826",
+      "type": "Plan",
+      "_version": 6
+    },
+    {
+      "id": "summary-exploit-plan-1780306636",
+      "summary_id": "summary-exploit-plan-1780306636",
+      "source_plan_id": "plan-1780306636",
+      "phase": "exploit",
+      "completed_tasks": "[\"Check for common sensitive files that may contain flags or credentials\", \"Check for environment file that might contain database credentials or flags\", \"Check for a robots.txt that may reveal hidden paths\", \"Check for backup copies of the failing index.php that might expose credentials or flags\", \"Check for index.php~ (vim backup file)\", \"Check for phpinfo.php which might expose system details and flags\", \"Check for a flag.txt file at the web root\", \"Check for a flag file in a common CTF location\", \"Check for server-status to leak Apache information\", \"Check for config.php which may contain database credentials\", \"Check for git HEAD to confirm .git exposure\", \"Check for composer.json or package.json that might reveal the application framework\", \"Try to read the PHP source code using PHP filter wrappers via the error-revealing index.php\", \"Brute-force hidden directories and files on the web root to discover endpoints beyond the index.php that errors out\", \"Decode and examine the base64-encoded PHP source from the filter chain result to find credentials, endpoints, or flags\", \"Check for common PHP info disclosure pages\", \"Try to read /flag via PHP filter wrapper assuming parameter injection (low confidence but fast)\", \"Check for db configuration file that might contain MSSQL or MySQL credentials\", \"Try brute-force for PHP files with common names using gobuster_dir in file mode\", \"Try LFI via file parameter on index.php to read /etc/passwd\", \"Test for SQL injection on index.php via query string parameters\", \"Try to read flag directly from filesystem using PHP filter wrapper with common paths\", \"Check for webserver directory listing on /var/www/html\", \"Plan exhausted\"]",
+      "key_findings": "{\"flags_found\": [], \"endpoints\": 1}",
+      "failed_approaches": "[\"Check for composer.json that reveals framework and dependencies\", \"Do a full port scan on localhost to discover all services\"]",
+      "created_at": "2026-06-01T17:42:12",
+      "type": "PlanSummary",
+      "updated_at": "2026-06-01T17:42:12.536961",
+      "_version": 8
+    }
+  ],
+  "edges": [
+    {
+      "from": "plan-1780306636",
+      "to": "summary-exploit-plan-1780306636",
+      "type": "plan_successor",
+      "created_at": "2026-06-01T17:41:35.412726"
+    },
+    {
+      "from": "plan-1780306636",
+      "to": "summary-exploit-plan-1780306636",
+      "type": "plan_successor",
+      "created_at": "2026-06-01T17:41:35.413274"
+    },
+    {
+      "from": "plan-1780306636",
+      "to": "summary-exploit-plan-1780306636",
+      "type": "plan_successor",
+      "created_at": "2026-06-01T17:41:46.892877"
+    },
+    {
+      "from": "plan-1780306636",
+      "to": "summary-exploit-plan-1780306636",
+      "type": "plan_successor",
+      "created_at": "2026-06-01T17:41:46.893420"
+    },
+    {
+      "from": "plan-1780306636",
+      "to": "summary-exploit-plan-1780306636",
+      "type": "plan_successor",
+      "created_at": "2026-06-01T17:42:00.215664"
+    },
+    {
+      "from": "plan-1780306636",
+      "to": "summary-exploit-plan-1780306636",
+      "type": "plan_successor",
+      "created_at": "2026-06-01T17:42:00.216202"
+    },
+    {
+      "from": "plan-1780306636",
+      "to": "summary-exploit-plan-1780306636",
+      "type": "plan_successor",
+      "created_at": "2026-06-01T17:42:12.532913"
+    },
+    {
+      "from": "plan-1780306636",
+      "to": "summary-exploit-plan-1780306636",
+      "type": "plan_successor",
+      "created_at": "2026-06-01T17:42:12.536999"
+    }
+  ],
+  "created_at": "2026-06-01T17:36:03.728622"
+}

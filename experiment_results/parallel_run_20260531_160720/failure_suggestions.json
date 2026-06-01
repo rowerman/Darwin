@@ -1,0 +1,18 @@
+[
+  {
+    "scenario": "WEB-05",
+    "suggestion": "Check scenario infrastructure manually. Error: start-scenario.sh failed (exit=1):  Image wordpress-jwt-copypress-wordpress Building \nDockerfile:7\n\n--------------------\n\n   6 |     # Copypress REST API 1.2 \u2014 CVE-2025-8625: hardcoded JWT secret + no"
+  },
+  {
+    "scenario": "WEB-09",
+    "suggestion": "Check scenario infrastructure manually. Error: Port localhost:10109 not reachable after 180s"
+  },
+  {
+    "scenario": "WEB-03-WAF",
+    "suggestion": "Check scenario infrastructure manually. Error: start-scenario.sh failed (exit=1):  Image waf-waf Building \n Image waf-wordpress Building \n Image waf-wordpress Built \n Image waf-waf Built \ntime=\"2026-05-31T16:38:39+08:00\" level=warning msg=\"Found o"
+  },
+  {
+    "scenario": "WEB-01-WAF",
+    "suggestion": "Check scenario infrastructure manually. Error: start-scenario.sh failed (exit=1):  Image waf-tomcat Building \n Image waf-waf Building \n Image waf-tomcat Built \n Image waf-waf Built \n Network waf_default Creating \n Network waf_default Created \n Con"
+  }
+]

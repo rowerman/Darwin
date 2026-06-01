@@ -28,7 +28,7 @@ from darwin.dpm import DefensePerceptionModule, DefenseStateVector
 from darwin.dave import DAVE, ExploitAttempt, parse_tool_stdout
 from darwin.dynamic_scaling import DynamicScalingEngine, ScalingLevel, compute_task_breadth
 from darwin.tools.mcp_client import MCPClientPool, load_mcp_config
-from darwin.tools.mcp_gateway import MCPGateway
+from darwin.tools.mcp_gateway import MCPGateway, ToolResult
 from darwin.tools.recon_server import create_recon_gateway, parse_response
 from darwin.tools.attack_server import create_attack_gateway
 from darwin.utils.http_client import HTTPClient, ProbeClient, HTTPResponse
@@ -99,7 +99,6 @@ from darwin.prompts.orchestrator import (
     SYSTEM_PROMPT_ANALYZE,
     SYSTEM_PROMPT_LOGIN,
     SYSTEM_PROMPT_BYPASS,
-    SYSTEM_PROMPT_EXPLORE,
 )
 
 # Version strings that carry no useful information for RAG lookup.
@@ -117,6 +116,16 @@ class Orchestrator:
     # near-zero success rate).  Mapped to viable alternatives.
     _BLACKLISTED_TOOLS: dict[str, str] = {
         "hydra_ssh_brute": "ssh_exec",
+        # Bootstrap already scanned ports — no re-scanning allowed.
+        # nmap_scan with --top-ports 1000 would discover ports outside
+        # the benchmark range and waste time on irrelevant services.
+        "nmap_full_scan": "",
+        "masscan_scan": "",
+        "nmap_port_range": "",
+        "nmap_scan": "",
+        "nmap_vulners_scan": "",
+        # sqlcmd not installed — use impacket-based tool instead
+        "mssql_query": "mssqlclient_query",
     }
 
     REQUIRED_TOOLS = [
@@ -125,7 +134,12 @@ class Orchestrator:
         "masscan", "gobuster", "nikto", "hydra", "smbmap",
         "wpscan",
     ]
-    OPTIONAL_TOOLS = ["searchsploit", "msfconsole"]
+    OPTIONAL_TOOLS = [
+        "searchsploit", "msfconsole", "netexec",
+        "impacket-secretsdump", "impacket-psexec", "impacket-wmiexec",
+        "impacket-GetUserSPNs", "impacket-GetNPUsers",
+        "impacket-ticketer",
+    ]
 
     def __init__(
         self,
@@ -184,6 +198,8 @@ class Orchestrator:
         self._prev_endpoint_count = 0
         self._prev_credential_count = 0
         self._prev_vulnerability_count = 0
+        self._absent_services: set[str] = set()  # host:port/URL probed but unreachable
+        self._no_progress_loops = 0  # consecutive outer loops with 0 discoveries
 
     async def run(
         self, task_description: str, target_url: str,
@@ -265,9 +281,76 @@ class Orchestrator:
             if cteg_hints.get("bypass_strategies") or cteg_hints.get("exploit_strategies"):
                 self._task_log_event("info", "cteg_hints", hints=cteg_hints)
 
+            # Load known credentials from CTEG (cross-task memory)
+            # Only inject credentials whose service/port actually EXISTS on the current
+            # target. A credential for MSSQL:10119 is useless (and noisy) when the
+            # current target is an Apache HTTP server on port 10108.
+            _current_ports = {str(s.port) for s in state.services if s.port}
+            _current_svc_names = {
+                (s.get("service_name", "") or "").lower()
+                for s in self.dkg.query_nodes("Service")
+            }
+            _cteg_creds = self.cteg.get_credentials(host=self.target_host)
+            _cteg_creds_filtered = []
+            for _c in _cteg_creds[:10]:
+                _c_port = str(_c.get("port", ""))
+                _c_svc = (_c.get("service_type", "") or "").lower()
+                # Only inject if the port matches a currently open port, OR the
+                # service type matches a discovered service
+                _port_match = _c_port in _current_ports
+                _svc_match = any(
+                    _c_svc in _sn or _sn in _c_svc
+                    for _sn in _current_svc_names
+                ) if _current_svc_names else False
+                if not _port_match and not _svc_match:
+                    log.debug("CTEG: skipping credential %s:%s (port %s/%s not on target)",
+                              _c['username'], _c['service_type'], _c_port, _c_svc)
+                    continue
+                _cteg_creds_filtered.append(_c)
+                _cred_id = f"cred-cteg-{_c['username']}@{_c['host']}:{_c['port']}"
+                self.dkg.add_node("Credential", _cred_id, {
+                    "username": _c["username"],
+                    "password": _c["password"],
+                    "host": _c["host"],
+                    "port": _c["port"],
+                    "cred_type": _c["service_type"],
+                    "source": "cteg_memory",
+                })
+            if _cteg_creds_filtered:
+                log.info("CTEG: loaded %d matching credentials for %s (filtered from %d total)",
+                         len(_cteg_creds_filtered), self.target_host, len(_cteg_creds))
+            # Use filtered list for hints
+            _cteg_creds = _cteg_creds_filtered
+
+            # Inject CTEG credentials into cteg_hints so the LLM sees them
+            if _cteg_creds:
+                _cred_lines = []
+                for _c in _cteg_creds[:8]:
+                    _cred_lines.append(
+                        f"  {_c['username']}:{_c['password']} → "
+                        f"{_c['service_type']}://{_c['host']}:{_c['port']} "
+                        f"(ONLY valid for {_c['service_type']} on port {_c['port']} — "
+                        f"do NOT reuse for SSH, HTTP, or other services)"
+                    )
+                cteg_hints["known_credentials"] = _cred_lines
+
             # ── Main Loop: B-driven mode switching ────────────────
             self._loop_count = 0
-            MAX_LOOPS = 10
+            # Try to read max_iterations from darwin.yaml config
+            _config_max_loops = 30
+            try:
+                import yaml
+                _cfg_path = "config/darwin.yaml"
+                if __import__("os").path.exists(_cfg_path):
+                    with open(_cfg_path, encoding="utf-8") as _fh:
+                        _cfg = yaml.safe_load(_fh)
+                    _darwin = _cfg.get("darwin", {}) if isinstance(_cfg, dict) else {}
+                    _configured = _darwin.get("max_iterations")
+                    if isinstance(_configured, int) and _configured > 0:
+                        _config_max_loops = _configured
+            except Exception:
+                pass
+            MAX_LOOPS = _config_max_loops
             self._known_flags: set[str] = set()
 
             while not self._should_terminate(result, MAX_LOOPS):
@@ -325,7 +408,7 @@ class Orchestrator:
                     # Allow up to 3 solo iterations before marking exhausted
                     self._solo_iterations += 1
                     if result is None or not result.success:
-                        if self._solo_iterations >= 3:
+                        if self._solo_iterations >= 5:
                             self._solo_exhausted = True
                     else:
                         self._solo_exhausted = True
@@ -466,7 +549,15 @@ class Orchestrator:
         """
         self.phase = OrchestratorPhase.BOOTSTRAP
         from urllib.parse import urlparse as _up
-        parsed = _up(target_url)
+
+        # Normalize bare host:port URLs (e.g. "localhost:10205") so urlparse
+        # correctly extracts hostname and port. Without this, urlparse would
+        # treat "localhost" as the scheme and "10205" as the path.
+        normalized_url = target_url
+        if "://" not in target_url:
+            normalized_url = f"http://{target_url}"
+
+        parsed = _up(normalized_url)
         host = parsed.hostname or target_url
         self.target_host = host
 
@@ -702,11 +793,13 @@ class Orchestrator:
                     "params": params, "body_format": "form",
                     "discovered_by": "bootstrap",
                 })
+            if technologies:
+                log.info("bootstrap whatweb: %s → %s", url, technologies)
             for tech in technologies:
                 self.dkg.add_node("Service", f"tech-{tech[:30]}", {
                     "port": 0, "protocol": "HTTP",
                     "version": tech, "banner": tech,
-                    "discovered_by": "bootstrap",
+                    "discovered_by": "bootstrap-whatweb",
                 })
             for path in api_paths[:20]:
                 api_endpoints_to_probe.append(f"{url.rstrip('/')}{path}")
@@ -1048,11 +1141,32 @@ class Orchestrator:
 
     async def _verify_flag(
         self, flag: str, stdout: str, tc_args: dict, elapsed_ms: int = 0,
+        tool_name: str = "",
     ) -> tuple[bool, str]:
         """Verify a flag with full DAVE L1+L4 when HTTP data is available.
 
         Falls back to verify_basic for non-HTTP tools (sqlmap, ffuf, etc.).
         """
+        # Reject flags from local filesystem accesses — "shell_exec find /" or
+        # "curl_get file://" searches the DARWIN host, not the target.
+        # Flags must come from target interaction (remote host/port).
+        if tool_name == "shell_exec":
+            cmd = str(tc_args.get("command", "") or "")
+            # Detect local filesystem search patterns
+            _LOCAL_SEARCH_PATTERNS = [
+                r'find\s+/', r'grep\s+-r.*flag', r'cat\s+/tmp/flag',
+                r'cat\s+/var/.*flag', r'cat\s+/home/.*flag',
+                r'ls\s+-la\s+/tmp/flag', r'locate\s+flag',
+                r'strings\s+/', r'grep\s+-rn.*flag.*/(tmp|var|home|etc|root)',
+            ]
+            import re as _vre
+            if any(_vre.search(p, cmd, _vre.IGNORECASE) for p in _LOCAL_SEARCH_PATTERNS):
+                return False, f"local filesystem search — flag not from target: {flag[:40]}"
+        if tool_name in ("curl_get", "http_post"):
+            url = str(tc_args.get("url", "") or "")
+            if url.startswith("file://"):
+                return False, f"local file read via {tool_name} — flag not from target: {flag[:40]}"
+
         parsed = parse_tool_stdout(stdout)
         if parsed["status_code"] > 0:
             http_resp = HTTPResponse(
@@ -1142,6 +1256,14 @@ class Orchestrator:
                             "username": u, "password": p, "url": base,
                             "host": host, "port": port, "source": "auto_login",
                         })
+                        # Persist to CTEG for cross-task reuse
+                        try:
+                            self.cteg.add_credential(
+                                host=host, port=port, service_type="http",
+                                username=u, password=p, source="auto_login",
+                            )
+                        except Exception:
+                            pass
                         return
                     else:
                         log.info("Auto-login failed: %s:%d with %s/%s", host, port, u, p)
@@ -1164,8 +1286,22 @@ class Orchestrator:
         if self._loop_count >= max_loops:
             log.info("Max loops (%d) reached", max_loops)
             return True
-        if getattr(self, '_solo_exhausted', False) and getattr(self, '_multi_exhausted', False):
-            log.info("All modes exhausted — terminating main loop")
+        if getattr(self, '_solo_exhausted', False):
+            # Multi-agent mode also exhausted → terminate
+            if getattr(self, '_multi_exhausted', False):
+                log.info("All modes exhausted — terminating main loop")
+                return True
+            # Solo exhausted, multi never entered — track no-progress loops
+            _stalled = getattr(self, '_solo_exhausted_stall', 0) + 1
+            self._solo_exhausted_stall = _stalled
+            if _stalled >= 3:
+                log.info("Solo mode exhausted, no multi-agent entry after %d loops — terminating", _stalled)
+                return True
+        else:
+            self._solo_exhausted_stall = 0
+        # No-progress: consecutive outer loops with zero new discoveries
+        if getattr(self, '_no_progress_loops', 0) >= 2:
+            log.info("No progress for %d consecutive loops — terminating", self._no_progress_loops)
             return True
         return False
 
@@ -1182,7 +1318,7 @@ class Orchestrator:
 
     EXPLOIT_TOOLS = {"sqlmap_test", "send_payload", "command_injection_test",
                      "xss_reflection_test", "ffuf_fuzz", "http_post",
-                     "redis_cmd", "mysql_query", "psql_query", "mssql_query",
+                     "redis_cmd", "mysql_query", "psql_query", "mssql_query", "mssqlclient_query",
                      "oracle_query", "tomcat_exploit", "php_filter_chain",
                      "jwt_forge", "impacket_psexec", "impacket_wmiexec",
                      "impacket_pth", "impacket_ticketer", "impacket_silver_ticket",
@@ -1423,7 +1559,7 @@ class Orchestrator:
 
         Plan → execute → observe → replan, all in one loop.
         """
-        MAX_ITER = 12
+        MAX_ITER = 25
         self._plan_review_exhausted = False  # reset for each entry
         if not self._solo_cycle_context_injected:
             self.llm.replace_system_prompt(SYSTEM_PROMPT_ORCHESTRATOR_UNIFIED)
@@ -1448,7 +1584,10 @@ class Orchestrator:
             d for d in self.attack_gateway.get_tool_definitions()
             if d.get("function", {}).get("name") not in self._BLACKLISTED_TOOLS
         ]
-        tool_defs += self.recon_gateway.get_tool_definitions()
+        tool_defs += [
+            d for d in self.recon_gateway.get_tool_definitions()
+            if d.get("function", {}).get("name") not in self._BLACKLISTED_TOOLS
+        ]
         try:
             mcp_defs = self.mcp_pool.get_tool_definitions()
             if mcp_defs:
@@ -1510,6 +1649,12 @@ class Orchestrator:
                     parts.append(f"  → {t}")
             for bs in cteg_hints.get("bypass_strategies", []):
                 parts.append(f"Bypass: {bs.get('mechanism','')} — {bs.get('description','')}")
+            # Inject known credentials from CTEG
+            _known_creds = cteg_hints.get("known_credentials", [])
+            if _known_creds:
+                parts.append("Known credentials (from prior runs — try these FIRST):")
+                for _kc in _known_creds:
+                    parts.append(f"  → {_kc}")
             if parts:
                 cteg_text = "\n## Prior Experience (CTEG):\n" + "\n".join(parts) + "\n"
 
@@ -1567,7 +1712,7 @@ class Orchestrator:
 - Auto-login tried: test/test (failed), admin/admin (failed)
 - Already tested: {systematic_tested}
 - For POST endpoints, check body_format before choosing content_type
-- Use knowledge_search for technique guidance if stuck
+- Use knowledge_search for technique guidance; if results are poor, use an available web search tool for current info
 
 {plan_status}
 {vuln_text}
@@ -1610,18 +1755,31 @@ class Orchestrator:
                     svc_list = [f"{s.port}/{s.protocol} {s.version or s.banner}"
                                for s in state.services[-5:] if s.port]
 
-                    # Thin-plan detection: many endpoints but few exploitation tasks
+                    # Thin-plan detection: too few tasks given the attack surface.
+                    # Also fires for non-HTTP targets (0 endpoints, ≥1 service).
                     thin_warning = ""
-                    if n_endpoints >= 5 and n_tasks <= 3 and n_done <= 2:
+                    if n_tasks <= 3 and n_done <= 4 and (n_endpoints >= 3 or n_services >= 1):
                         thin_warning = (
-                            f"\nWARNING: Only {n_tasks} tasks for {n_endpoints} endpoints + "
-                            f"{n_services} services. The plan was far too thin. "
-                            f"You MUST add substantive exploitation tasks now — "
-                            f"look at EVERY endpoint listed below and ask: could this "
-                            f"be vulnerable to SQLi, LFI, command injection, auth bypass, "
-                            f"credential stuffing, or configuration takeover? "
-                            f"For each likely vulnerability, add a SPECIFIC exploitation task. "
-                            f"Aim for 5-10 tasks minimum for a target this large.\n"
+                            f"\nWARNING: Only {n_tasks} tasks ({n_done} done) for "
+                            f"{n_endpoints} endpoints + {n_services} services. "
+                            f"The plan was too thin. "
+                            f"\nSTEP 1 — ENUMERATE: You have dirb_scan and gobuster_dir — "
+                            f"USE THEM on every HTTP endpoint to discover hidden paths. "
+                            f"Also curl_get common paths: /api, /admin, /login, /config, "
+                            f"/.env, /backup, /robots.txt, /.git/HEAD, plus any "
+                            f"framework-specific paths for the detected technology stack. "
+                            f"A simple index page often hides complex apps behind other paths."
+                            f"\nSTEP 2 — EXPLOIT: After enumeration, based on what you "
+                            f"DISCOVERED, add exploitation tasks. Look at EVERY endpoint: "
+                            f"could it be vulnerable to SQLi, LFI, command injection, SSTI, "
+                            f"auth bypass, XXE, SSRF, file upload, or credential stuffing? "
+                            f"Aim for 8-15 tasks covering multiple attack vectors.\n"
+                            f"IMPORTANT: Prioritize the ORIGINAL vulnerability type "
+                            f"detected during analysis. If the primary vulnerability "
+                            f"has not been fully exploited, try MANY variations "
+                            f"(different credentials, parameters, payloads) before "
+                            f"moving on to unrelated endpoints. Exhaust the primary "
+                            f"target first — don't abandon it for newly discovered ports.\n"
                         )
 
                     exhaustion_summary = (
@@ -1641,8 +1799,7 @@ class Orchestrator:
                     if self._select_next_plan_task():
                         continue
                 self._generate_phase_summary("exploit")
-                log.info("Solo loop: plan exhausted after %d iterations — "
-                         "entering free-form exploration", iteration - 1)
+                log.info("Solo loop: plan exhausted after %d iterations", iteration - 1)
                 break
 
             task_instruction = task.get("instruction", "unknown")
@@ -1771,28 +1928,105 @@ class Orchestrator:
                         if ep_method == "POST":
                             tc_args["body_format"] = "json"
 
-                try:
-                    if tc_name in self.attack_gateway.get_tool_names():
-                        result = await self.attack_gateway.call(tc_name, tc_args)
-                    elif tc_name in self.recon_gateway.get_tool_names():
-                        result = await self.recon_gateway.call(tc_name, tc_args)
-                    elif tc_name in self.mcp_pool.get_tool_names():
-                        mcp_raw = await self.mcp_pool.call_tool(tc_name, tc_args)
-                        mcp_text = json.dumps(mcp_raw, ensure_ascii=False)
-                        result = type('obj', (object,), {
-                            'success': True, 'stdout': mcp_text,
-                            'stderr': '', 'exit_code': 0, 'elapsed_ms': 0,
-                        })()
-                    else:
-                        result = type('obj', (object,), {
-                            'success': False, 'stdout': f"Unknown tool: {tc_name}",
-                            'stderr': '', 'exit_code': 1, 'elapsed_ms': 0,
-                        })()
-                except Exception as e:
-                    result = type('obj', (object,), {
-                        'success': False, 'stdout': '', 'stderr': str(e),
-                        'exit_code': 1, 'elapsed_ms': 0,
-                    })()
+                # Block local filesystem access — flag must come from the target
+                if tc_name in ("curl_get", "http_post") and str(tc_args.get("url", "")).startswith("file://"):
+                    result = ToolResult(
+                        tool_name=tc_name, success=False,
+                        stdout="BLOCKED: file:// URLs search the local host, not the target. "
+                               "Only interact with the target service.",
+                        stderr="", exit_code=1, elapsed_ms=0,
+                    )
+                else:
+                    try:
+                        if tc_name in self.attack_gateway.get_tool_names():
+                            result = await self.attack_gateway.call(tc_name, tc_args)
+                        elif tc_name in self.recon_gateway.get_tool_names():
+                            result = await self.recon_gateway.call(tc_name, tc_args)
+                        elif tc_name in self.mcp_pool.get_tool_names():
+                            mcp_raw = await self.mcp_pool.call_tool(tc_name, tc_args)
+                            mcp_text = json.dumps(mcp_raw, ensure_ascii=False)
+                            is_error = mcp_raw.get("isError", False)
+                            error_text = ""
+                            if is_error:
+                                content_list = mcp_raw.get("content", [])
+                                if content_list and isinstance(content_list[0], dict):
+                                    error_text = content_list[0].get("text", "")
+                            result = ToolResult(
+                                tool_name=tc_name,
+                                success=not is_error,
+                                stdout=error_text if is_error else mcp_text,
+                                stderr=error_text,
+                                exit_code=1 if is_error else 0,
+                                elapsed_ms=0,
+                            )
+                        else:
+                            result = ToolResult(
+                                tool_name=tc_name, success=False,
+                                stdout=f"Unknown tool: {tc_name}", stderr="",
+                                exit_code=1, elapsed_ms=0,
+                            )
+                    except Exception as e:
+                        result = ToolResult(
+                            tool_name=tc_name, success=False,
+                            stdout="", stderr=str(e),
+                            exit_code=1, elapsed_ms=0,
+                        )
+
+                # ── Runtime tool blacklist & absent-service tracking ──
+                _exit_code = getattr(result, 'exit_code', 0)
+                _stderr = (getattr(result, 'stderr', '') or '')
+                _stdout = (getattr(result, 'stdout', '') or '')
+                _combined = (_stdout + " " + _stderr).lower()
+                # Detect missing binary (e.g. netexec not on PATH)
+                if _exit_code == 127 and "not found" in _stderr:
+                    _match = re.search(r'/bin/[a-z]+sh:\s+\d+:\s+(\S+):\s+not found', _stderr)
+                    _missing_bin = _match.group(1).strip() if _match else ""
+                    if _missing_bin:
+                        log.warning("Tool '%s' not found on PATH — blacklisting '%s'", _missing_bin, tc_name)
+                        # Map to fallback if one exists (e.g. mssql_query→mssqlclient_query)
+                        _TOOL_FALLBACK: dict[str, str] = {
+                            "mssql_query": "mssqlclient_query",
+                        }
+                        _fallback = _TOOL_FALLBACK.get(tc_name, "")
+                        self._BLACKLISTED_TOOLS[tc_name] = _fallback
+                        if self.exploitation_plan and self.exploitation_plan.tasks:
+                            self._sanitize_plan_tools(self.exploitation_plan.tasks)
+                        # Auto-retry with fallback tool immediately
+                        if _fallback:
+                            log.info("Auto-retrying '%s' with fallback '%s'", tc_name, _fallback)
+                            try:
+                                if _fallback in self.attack_gateway.get_tool_names():
+                                    fallback_result = await self.attack_gateway.call(_fallback, tc_args)
+                                elif _fallback in self.recon_gateway.get_tool_names():
+                                    fallback_result = await self.recon_gateway.call(_fallback, tc_args)
+                                else:
+                                    fallback_result = None
+                                if fallback_result and getattr(fallback_result, 'success', False):
+                                    result = fallback_result
+                                    tc_name = _fallback
+                                    log.info("Fallback '%s' succeeded", _fallback)
+                                elif fallback_result:
+                                    log.info("Fallback '%s' also failed (exit=%s)",
+                                             _fallback, getattr(fallback_result, 'exit_code', '?'))
+                            except Exception as _fb_err:
+                                log.warning("Fallback '%s' error: %s", _fallback, _fb_err)
+                # Track unreachable targets
+                _target = (tc_args.get("url", "") or tc_args.get("host", "")
+                           or tc_args.get("target", "") or "")
+                if _target:
+                    if (_exit_code == 7 and tc_name == "curl_get") or \
+                       any(kw in _combined for kw in ("connection refused", "could not connect",
+                                                       "no route to host", "can't connect")):
+                        self._absent_services.add(_target)
+                # Track absent DB services (Redis/MySQL/PG/Oracle probes)
+                _DB_TOOLS = {"redis_cmd", "mysql_query", "psql_query", "mssql_query", "mssqlclient_query", "mssqlclient_query",
+                             "oracle_query", "smbmap_enum"}
+                if tc_name in _DB_TOOLS and not getattr(result, 'success', False):
+                    _host = tc_args.get("host", "")
+                    _port = tc_args.get("port", "")
+                    if _host:
+                        _label = f"{_host}:{_port}" if _port else _host
+                        self._absent_services.add(_label)
 
                 # Defense probe + bypass attempt
                 defence_probe = ""
@@ -1883,13 +2117,11 @@ class Orchestrator:
                       f"{tool_stdout.split(chr(10))[0][:120]}")
                 # Direct execution tasks skip LLM history — no preceding
                 # assistant tool_calls message exists, so adding a tool
-                # result here would break DeepSeek's API requirement.
-                # Plan review receives everything it needs via task_result_text.
+                # result here would break DeepSeek's API requirement
+                # ("Messages with role 'tool' must be a response to a
+                #  preceding message with 'tool_calls'").
+                # The fix mechanism (stderr-aware) handles param errors instead.
                 if not tc_id.startswith("direct-"):
-                    # Allow more room for verbose info-gathering tools.
-                    # _format_tool_feedback already caps per-tool stdout at
-                    # 1500 (default) or 5000 (info tools), so 7000 is enough
-                    # for the formatted feedback + overhead.
                     _is_info = tc_name in ("wpscan_enum", "knowledge_search",
                         "nmap_port_range", "nmap_full_scan", "nikto_scan",
                         "dirb_scan", "gobuster_dir", "nvd_search_cves",
@@ -1912,6 +2144,13 @@ class Orchestrator:
                 # Include the file_upload HINT so the fix-and-retry LLM also
                 # sees it (not just the plan-review LLM via tool_stdout).
                 _out = getattr(result, 'stdout', '') or ''
+                _err = getattr(result, 'stderr', '') or ''
+                # Include stderr so the fix LLM can see parameter errors
+                # (e.g. KeyError('host') when wrong param names are used)
+                _combined = _out
+                if _err:
+                    _err_short = _err[:400]
+                    _combined = f"{_out}\n[STDERR] {_err_short}"
                 _hint = ""
                 if (tc_name == "file_upload"
                         and not getattr(result, 'success', False)
@@ -1922,7 +2161,7 @@ class Orchestrator:
                         "extra_fields={'eeSFL_ID':'1','eeSFL_FileUploadDir':'/wp-content/uploads/'} "
                         "or similar plugin-specific parameters.]"
                     )
-                _all_task_stdouts.append(f"[{tc_name}] {_out[:600]}{_hint}")
+                _all_task_stdouts.append(f"[{tc_name}] {_combined[:600]}{_hint}")
                 # Track if automated test found nothing
                 rl = (getattr(result, 'stdout', '') or '').lower()
                 if "no evidence" in rl or "no flag" in rl:
@@ -1951,6 +2190,7 @@ class Orchestrator:
                 if flags:
                     is_valid, reason = await self._verify_flag(
                         flags[0], result_stdout, tc_args, getattr(result, "elapsed_ms", 0),
+                        tool_name=tc_name,
                     )
                     if is_valid:
                         self.phase = OrchestratorPhase.DONE
@@ -1972,6 +2212,42 @@ class Orchestrator:
             while not task_success and _fix_attempts < 2 and _task_tool:
                 fix = await self._analyze_and_fix_task(task, task_result_text)
                 if not fix:
+                    break
+
+                # Partial success: auth worked, store credentials (Fix A)
+                if fix.get("partial_success"):
+                    creds = fix.get("credentials", {})
+                    if creds.get("username"):
+                        _cred_id = f"cred-partial-{int(time.time())}"
+                        _cred_port = int(task.get("params", {}).get("port", 0))
+                        _cred_user = creds["username"]
+                        _cred_pass = creds.get("password", "")
+                        _cred_type = str(creds.get("cred_type", "mssql"))
+                        self.dkg.add_node("Credential", _cred_id, {
+                            "username": _cred_user,
+                            "password": _cred_pass,
+                            "host": self.target_host,
+                            "port": _cred_port,
+                            "source_host": self.target_host,
+                            "cred_type": _cred_type,
+                            "source": "partial_success",
+                        })
+                        # Also persist to CTEG for cross-task reuse
+                        try:
+                            self.cteg.add_credential(
+                                host=self.target_host, port=_cred_port,
+                                service_type=_cred_type,
+                                username=_cred_user, password=_cred_pass,
+                                source="partial_success",
+                            )
+                        except Exception:
+                            pass
+                        log.info("[PARTIAL SUCCESS] Stored credential '%s' (auth OK → CTEG)",
+                                 creds["username"])
+                    task_success = True
+                    task_result_text = (
+                        f"[PARTIAL SUCCESS — {fix.get('reason', 'auth OK, command failed')}]"
+                    )
                     break
 
                 task["params"] = fix["corrected_params"]
@@ -1997,6 +2273,7 @@ class Orchestrator:
                         is_valid, reason_flag = await self._verify_flag(
                             flags[0], retry_stdout, task.get("params", {}),
                             retry_result.elapsed_ms,
+                            tool_name=_task_tool,
                         )
                         if is_valid:
                             self.phase = OrchestratorPhase.DONE
@@ -2022,99 +2299,6 @@ class Orchestrator:
 
         log.info("_unified_llm_loop: %d iterations, flag not found", iteration)
         self._generate_phase_summary("exploit")
-
-        # ── Free-form exploration (plan exhausted but LLM can still try) ──
-        # After plan tasks are done, let the LLM explore freely for a few
-        # more rounds — it may try creative approaches the plan missed.
-        if getattr(self, '_solo_exhausted', False):
-            pass  # skip if already exhausted
-        else:
-            explore_rounds = min(3, MAX_ITER - iteration)
-            for explore_iter in range(1, explore_rounds + 1):
-                if self._time_exceeded() or self._tokens_exceeded():
-                    break
-                self._maybe_compress()
-
-                # Build a summary of what we learned from the plan phase
-                learnings = self._summarize_plan_learnings()
-                explore_prompt = (
-                    f"FREE EXPLORATION round {explore_iter}/{explore_rounds}.\n"
-                    f"All automated and planned tests completed. No flag found yet.\n\n"
-                    f"## What We Have Learned\n{learnings}\n\n"
-                    f"## Your Task\n"
-                    f"Based on the learnings above, try 2-4 manual approaches:\n"
-                    f"- If an API returned JSON data with resource listings, follow the "
-                    f"resource paths: enumerate individual items, check nested sub-resources, "
-                    f"look for fields containing secrets/tokens/keys.\n"
-                    f"- If an endpoint returned different response sizes for different "
-                    f"inputs, enumerate MORE input values to find hidden data.\n"
-                    f"- If you got JSON responses, inspect field values (description, name, "
-                    f"notes, data, secret, token, key, password) — flags are often hidden there.\n"
-                    f"- If you found an OpenAPI spec or API docs, use those paths directly.\n"
-                    f"- Use curl_get to access paths you haven't tried yet based on "
-                    f"patterns seen in responses (IDs, paths, resource types).\n"
-                    f"- Use http_post with JSON body for POST/JSON endpoints to query or mutate.\n"
-                    f"Do NOT repeat tests that already returned the same result."
-                )
-                content, tool_calls = self.llm.generate(
-                    prompt=explore_prompt,
-                    system_prompt=SYSTEM_PROMPT_ORCHESTRATOR,
-                    tools=tool_defs,
-                )
-                if not tool_calls:
-                    # LLM responded with text but no action — push once more
-                    content2, tool_calls = self.llm.generate(
-                        prompt="You MUST call a tool. Try an exploit tool or curl_get to search for the flag.",
-                        system_prompt=SYSTEM_PROMPT_ORCHESTRATOR,
-                        tools=tool_defs,
-                    )
-                if not tool_calls:
-                    break
-                tc_names = [tc.get('name', '?') for tc in tool_calls]
-                print(f"\n[solo:explore:{explore_iter}] {', '.join(tc_names)}")
-                for tc in tool_calls:
-                    tc_name = tc.get("name", "")
-                    tc_args = tc.get("arguments", {})
-                    tc_id = tc.get("id", "")
-                    if self._time_exceeded():
-                        self.llm.add_tool_result(tc_id, "Skipped: time exceeded")
-                        continue
-                    self.step_count += 1
-                    try:
-                        if tc_name in self.attack_gateway.get_tool_names():
-                            result = await self.attack_gateway.call(tc_name, tc_args)
-                        elif tc_name in self.recon_gateway.get_tool_names():
-                            result = await self.recon_gateway.call(tc_name, tc_args)
-                        elif tc_name in self.mcp_pool.get_tool_names():
-                            mcp_raw = await self.mcp_pool.call_tool(tc_name, tc_args)
-                            mcp_text = json.dumps(mcp_raw, ensure_ascii=False)
-                            result = type('obj', (object,), {
-                                'success': True, 'stdout': mcp_text,
-                                'stderr': '', 'exit_code': 0, 'elapsed_ms': 0})()
-                        else:
-                            result = type('obj', (object,), {
-                                'success': False, 'stdout': f"Unknown tool: {tc_name}",
-                                'stderr': '', 'exit_code': 1, 'elapsed_ms': 0})()
-                    except Exception as e:
-                        result = type('obj', (object,), {
-                            'success': False, 'stdout': '', 'stderr': str(e),
-                            'exit_code': 1, 'elapsed_ms': 0})()
-                    result_stdout = getattr(result, 'stdout', '') or ''
-                    tool_stdout = self._format_tool_feedback(tc_name, tc_args, result, "")
-                    self.llm.add_tool_result(tc_id, tool_stdout[:2500])
-                    print(f"  [{tc_name}] → {tool_stdout.split(chr(10))[0][:120]}")
-                    flags = self.flag_pattern.findall(result_stdout)
-                    if flags:
-                        is_valid, reason = await self._verify_flag(
-                            flags[0], result_stdout, tc_args,
-                            getattr(result, "elapsed_ms", 0),
-                        )
-                        if is_valid:
-                            self.phase = OrchestratorPhase.DONE
-                            return TaskResult(
-                                success=True, flag=flags[0], steps=self.step_count,
-                                tokens_used=self.llm.token_count,
-                                time_elapsed=time.time() - self.start_time)
 
         return None
 
@@ -2149,10 +2333,11 @@ class Orchestrator:
             "idor-url-path": ["curl_get"],
             "auth": ["curl_get"],
             "csrf": ["curl_get"],
-            "authbypass": ["redis_cmd", "mysql_query", "psql_query", "mssql_query",
+            "authbypass": ["redis_cmd", "mysql_query", "psql_query", "mssql_query", "mssqlclient_query", "mssqlclient_query",
                           "oracle_query", "ssh_exec", "shell_exec"],
-            "weakauth": ["test_credential", "ssh_exec",
-                        "mysql_query", "psql_query", "mssql_query", "oracle_query"],
+            "weakauth": ["mssqlclient_query", "mssql_query", "mysql_query",
+                        "psql_query", "redis_cmd", "oracle_query",
+                        "test_credential", "ssh_exec"],
         }
         # Fuzzy match: if a vuln type CONTAINS one of these substrings, it maps
         FUZZY_MAP: dict[str, list[str]] = {
@@ -2174,6 +2359,53 @@ class Orchestrator:
                 if keyword in vt_lower:
                     return tlist
             return []
+
+        def _detect_proto_from_service(endpoint: str, dkg: DKG) -> set[str] | None:
+            """Detect protocol tool set from DKG Service node by port.
+
+            When an endpoint has no URI scheme (e.g. 'localhost:10119'),
+            look up the Service node by port to determine which protocol-
+            specific tools are appropriate. Returns a _PROTO_TOOLS set or None.
+            """
+            import re
+            m = re.search(r':(\d+)$', endpoint)
+            if not m:
+                return None
+            port = m.group(1)
+            for svc in dkg.query_nodes("Service"):
+                if str(svc.get("port")) == port:
+                    svc_name = (svc.get("service_name") or svc.get("protocol") or "").lower()
+                    # Service name detection
+                    if "mssql" in svc_name or "sql server" in svc_name:
+                        return {"mssql_query", "mssqlclient_query", "shell_exec"}
+                    if "mysql" in svc_name or "mariadb" in svc_name:
+                        return {"mysql_query", "shell_exec"}
+                    if "postgres" in svc_name:
+                        return {"psql_query", "shell_exec"}
+                    if "redis" in svc_name:
+                        return {"redis_cmd", "shell_exec"}
+                    if "ssh" in svc_name:
+                        return {"ssh_exec", "ssh_key_exec", "test_credential"}
+                    if "oracle" in svc_name:
+                        return {"oracle_query", "shell_exec"}
+                    if "mongodb" in svc_name:
+                        return {"shell_exec"}
+                    if "memcached" in svc_name:
+                        return {"shell_exec"}
+                    # Port-based fallback
+                    _PORT_PROTO: dict[str, set[str]] = {
+                        "1433": {"mssql_query", "mssqlclient_query", "shell_exec"},
+                        "3306": {"mysql_query", "shell_exec"},
+                        "5432": {"psql_query", "shell_exec"},
+                        "6379": {"redis_cmd", "shell_exec"},
+                        "22": {"ssh_exec", "ssh_key_exec", "test_credential"},
+                        "1521": {"oracle_query", "shell_exec"},
+                        "27017": {"shell_exec"},
+                        "11211": {"shell_exec"},
+                    }
+                    if port in _PORT_PROTO:
+                        return _PORT_PROTO[port]
+            return None
 
         session_cookies = ""
         if self.client._session and self.client._session.cookie_jar:
@@ -2238,12 +2470,12 @@ class Orchestrator:
                     "ssh://": {"ssh_exec", "ssh_key_exec", "test_credential"},
                     "mysql://": {"mysql_query", "shell_exec"},
                     "postgresql://": {"psql_query", "shell_exec"},
-                    "mssql://": {"mssql_query", "shell_exec"},
+                    "mssql://": {"mssql_query", "mssqlclient_query", "shell_exec"},
                     "oracle://": {"oracle_query", "shell_exec"},
                     "mongodb://": {"shell_exec"},
                     "memcached://": {"shell_exec"},
                 }
-                # Find matching proto-specific tools, fall back to all protocol tools
+                # Find matching proto-specific tools, fall back to port-based detection
                 matched = None
                 for proto_prefix, proto_tools in _PROTO_TOOLS.items():
                     if endpoint.startswith(proto_prefix):
@@ -2252,7 +2484,12 @@ class Orchestrator:
                 if matched is not None:
                     tools = [t for t in tools if t in matched]
                 else:
-                    tools = [t for t in tools if t in _ALL_PROTOCOL_TOOLS]
+                    # No URI scheme — detect protocol from DKG Service node by port
+                    detected = _detect_proto_from_service(endpoint, self.dkg)
+                    if detected is not None:
+                        tools = [t for t in tools if t in detected]
+                    else:
+                        tools = [t for t in tools if t in _ALL_PROTOCOL_TOOLS]
                 if not tools:
                     continue
             else:
@@ -2305,9 +2542,21 @@ class Orchestrator:
                 elif tool_name == "send_payload":
                     args = {"url": endpoint, "payload": "1", "param": param or "id"}
                 else:
-                    args = {"url": endpoint, "param": param} if param else {"url": endpoint}
+                    # Parse DB/non-HTTP endpoints into host/port args
+                    if "://" in endpoint and not endpoint.startswith("http"):
+                        from urllib.parse import urlparse as _up
+                        _parsed = _up(endpoint)
+                        args = {"host": _parsed.hostname or "localhost"}
+                        if _parsed.port:
+                            args["port"] = _parsed.port
+                    else:
+                        args = {"url": endpoint, "param": param} if param else {"url": endpoint}
                 # Merge LLM-suggested args (method, body_format, etc.) as overrides
                 if tool_name == llm_tool and llm_args:
+                    # Remove 'url' if LLM args provide host-based params (DB tools)
+                    _has_host = any(k in llm_args for k in ("host", "user", "query"))
+                    if _has_host:
+                        args.pop("url", None)
                     args.update(llm_args)
                 # If endpoint is POST-only, ensure exploit tools use POST
                 if tool_name in ("sqlmap_test", "send_payload", "command_injection_test",
@@ -2361,7 +2610,8 @@ class Orchestrator:
                     # DAVE L4: check for flag
                     flags = self.flag_pattern.findall(stdout)
                     for f in flags:
-                        is_valid, reason = DAVE.verify_basic(f, stdout)
+                        is_valid, reason = await self._verify_flag(
+                            f, stdout, args, tool_name=tool_name)
                         if is_valid:
                             self._task_log_event("info", "flag_found_systematic",
                                 tool=tool_name, flag=f)
@@ -2430,7 +2680,9 @@ class Orchestrator:
                     # Check for flag
                     flags = self.flag_pattern.findall(stdout)
                     for f in flags:
-                        is_valid, reason = DAVE.verify_basic(f, stdout)
+                        is_valid, reason = await self._verify_flag(
+                            f, stdout, {"url": ep_url, "headers": f"Cookie: {session_cookies}"},
+                            tool_name="curl_get")
                         if is_valid:
                             self._task_log_event("info", "flag_found_auth_crawl",
                                 url=ep_url, flag=f)
@@ -3051,54 +3303,193 @@ class Orchestrator:
 
         # Build research prompt with only research tools
         research_tools = []
+        _local_research_tool_names = {
+            "knowledge_search", "cve_lookup", "metasploit_search",
+            "searchsploit_search", "go_exploitdb_search", "curl_get",
+            "ddg_web_search",  # Python DuckDuckGo — replaces broken MCP web-search
+        }
         for gw in [self.attack_gateway]:
             for td in gw.get_tool_definitions():
                 name = td.get("function", {}).get("name", "")
-                if name in ("knowledge_search", "cve_lookup",
-                            "metasploit_search", "searchsploit_search",
-                            "go_exploitdb_search", "curl_get"):
+                if name in _local_research_tool_names:
                     research_tools.append(td)
-        # Add MCP research tools (search, code search, CVE lookup)
+        # Add MCP research tools (NVD CVE, GitHub code search — NOT web-search)
         try:
+            _all_mcp_names: list[str] = []
             for td in self.mcp_pool.get_tool_definitions():
                 name = td.get("function", {}).get("name", "")
+                _all_mcp_names.append(name)
+                # Only include MCP tools that are NOT web search (NVD, GitHub code, etc.)
                 if any(kw in name.lower() for kw in
-                       ("search", "cve", "vuln", "exploit", "code", "repo")):
+                       ("cve", "vuln", "nvd", "code", "repo", "issue", "commit", "pull")):
                     research_tools.append(td)
+            log.info("MCP research tools: %d (from %d total MCP tools)",
+                     len(research_tools), len(_all_mcp_names))
         except Exception:
             pass
 
+        # ddg_web_search is always available via attack_gateway (Python ddgs library)
+        _web_search_line = (
+            f"- ddg_web_search: search the internet via DuckDuckGo for up-to-date\n"
+            f"  exploitation techniques, default credentials, and service-specific\n"
+            f"  attack methods. Use this TOGETHER with knowledge_search — RAG covers\n"
+            f"  general techniques, web search provides current service-specific details.\n"
+        )
+
         vuln_text = self._format_vulnerability_summary()
-        research_prompt = (
-            f"You are in the RESEARCH phase. Do NOT run any exploit tools "
-            f"(no sqlmap, command_injection, xss_reflection, send_payload, ffuf, hydra).\n\n"
+
+        # ── Build service-specific search queries ──
+        _svc_name = "service"
+        for v in self.vulnerabilities:
+            ep = (v.endpoint or "").lower()
+            tool = (v.suggested_tool or "").lower()
+            # Try suggested_tool first (most reliable signal)
+            if "mssql" in tool or "mssql" in ep:
+                _svc_name = "Microsoft SQL Server"
+            elif "mysql" in tool or "mysql" in ep:
+                _svc_name = "MySQL"
+            elif "postgres" in tool or "psql" in tool or "postgres" in ep or "psql" in ep:
+                _svc_name = "PostgreSQL"
+            elif "redis" in tool or "redis" in ep:
+                _svc_name = "Redis"
+            elif "oracle" in tool or "oracle" in ep:
+                _svc_name = "Oracle"
+            elif "ssh" in tool or "ssh" in ep:
+                _svc_name = "SSH"
+            elif "smb" in tool or "smb" in ep:
+                _svc_name = "SMB"
+            # Fallback: check DKG services for protocol hints
+            if _svc_name == "service":
+                for s in self.dkg.query_nodes("Service"):
+                    svc_port = str(s.get("port", ""))
+                    vuln_port = str(v.tool_args.get("port", "")) if v.tool_args else ""
+                    if svc_port and vuln_port and svc_port == vuln_port:
+                        svc_data = (s.get("service_name", "") + " " + (s.get("version", "") or "")).lower()
+                        if "mssql" in svc_data or "sql server" in svc_data:
+                            _svc_name = "Microsoft SQL Server"
+                        elif "mysql" in svc_data:
+                            _svc_name = "MySQL"
+                        elif "postgres" in svc_data:
+                            _svc_name = "PostgreSQL"
+                        elif "redis" in svc_data:
+                            _svc_name = "Redis"
+                        elif "oracle" in svc_data:
+                            _svc_name = "Oracle"
+                        break
+            break
+
+        _MCP_TIMEOUT_S = 45  # per-MCP-call cap
+
+        # ── Round 1: Programmatic forced parallel search ──
+        # Run ALL local tools + ddg_web_search in parallel. All are gateway-based
+        # (no MCP dependency), fast and reliable.
+        _queries = {
+            "rag": f"{_svc_name} exploitation default credentials weaknesses",
+            "exploitdb": _svc_name,
+            "searchsploit": _svc_name,
+            "web": f"{_svc_name} default credentials common passwords exploitation techniques",
+        }
+        _tasks: dict[str, asyncio.Task] = {}
+
+        # knowledge_search (RAG)
+        try:
+            _tasks["rag"] = asyncio.create_task(
+                self.attack_gateway.call("knowledge_search",
+                    {"query": _queries["rag"], "category": ""}))
+        except Exception:
+            pass
+
+        # go_exploitdb_search — local SQLite exploit DB
+        try:
+            _tasks["exploitdb"] = asyncio.create_task(
+                self.attack_gateway.call("go_exploitdb_search",
+                    {"query": _queries["exploitdb"], "limit": 10}))
+        except Exception:
+            pass
+
+        # searchsploit_search — Exploit-DB CLI
+        try:
+            _tasks["searchsploit"] = asyncio.create_task(
+                self.attack_gateway.call("searchsploit_search",
+                    {"query": _queries["searchsploit"]}))
+        except Exception:
+            pass
+
+        # ddg_web_search — Python DuckDuckGo (replaces broken MCP web-search)
+        try:
+            _tasks["web"] = asyncio.create_task(
+                self.attack_gateway.call("ddg_web_search",
+                    {"query": _queries["web"], "max_results": 8}))
+        except Exception:
+            pass
+
+        # Wait for all tasks (failures are non-fatal)
+        _results: dict[str, str] = {}
+        for _key, _task in _tasks.items():
+            try:
+                _raw = await _task
+                if _raw and hasattr(_raw, 'stdout') and _raw.stdout:
+                    _results[_key] = _raw.stdout[:2500]
+                elif _raw:
+                    _results[_key] = str(_raw)[:2500]
+            except Exception as _e:
+                log.debug("_research_phase: %s failed: %s", _key, _e)
+
+        # Build context message with all results
+        _context_parts = ["## Research Results (automatic pre-search)\n"]
+        _labels = {
+            "rag": "knowledge_search (RAG)",
+            "exploitdb": "go_exploitdb_search (local Exploit-DB)",
+            "searchsploit": "searchsploit_search (Exploit-DB CLI)",
+            "web": "ddg_web_search (DuckDuckGo internet)",
+        }
+        for _key in ("rag", "exploitdb", "searchsploit", "web"):
+            _label = _labels.get(_key, _key)
+            if _key in _results:
+                _context_parts.append(f"### {_label}: {_queries.get(_key, '')}\n{_results[_key]}")
+            else:
+                _context_parts.append(f"### {_label}\n(search unavailable)")
+        _context_parts.append("")
+        self.llm.add_context_message("\n".join(_context_parts), role="user")
+
+        # ── Rounds 2-3: LLM-driven free research ──
+        # Now the LLM has both RAG and web results. It can call additional tools
+        # (cve_lookup, metasploit_search, more specific searches, etc.)
+        _first_prompt = (
+            f"You are in the RESEARCH phase. Do NOT run any exploit tools.\n\n"
             f"## Vulnerabilities to research:\n{vuln_text}\n\n"
             f"## Available research tools:\n"
-            f"- knowledge_search: query the knowledge base for techniques and bypass patterns\n"
-            f"- cve_lookup: look up CVE details (CVSS, severity, exploit availability)\n"
+            f"- knowledge_search: local knowledge base (general techniques, MITRE ATT&CK, CVEs)\n"
+            f"{_web_search_line}"
+            f"- cve_lookup: look up CVE details\n"
             f"- metasploit_search: search for Metasploit modules\n"
             f"- searchsploit_search: search ExploitDB for public exploits\n"
             f"- go_exploitdb_search: search local exploit database\n"
             f"- curl_get: fetch documentation or verify endpoint details\n\n"
-            f"## Instructions:\n"
-            f"1. For each vulnerability, research the attack technique using knowledge_search\n"
+            f"## Context\n"
+            f"You already have knowledge_search, exploit DB, AND internet search results above.\n"
+            f"Review all carefully, then decide if you need MORE specific research.\n\n"
+            f"## Instructions\n"
+            f"1. For WeakAuth/credential vulns: extract SPECIFIC username:password pairs\n"
+            f"   from the search results. List AT LEAST 8-10 combinations to try.\n"
             f"2. If nmap_vulners found CVE IDs, look them up with cve_lookup\n"
             f"3. Search for known exploits using metasploit_search and searchsploit_search\n"
-            f"4. After researching, output a JSON summary of findings for each vuln:\n"
+            f"4. If you need more details, call additional research tools now.\n"
+            f"5. When done, output a JSON summary of findings for each vuln:\n"
             f'   [{{"vuln_type": "...", "cve_ids": [...], "exploit_modules": [...],'
-            f'     "key_techniques": [...], "confidence_adjustment": 0.0}}]\n'
+            f'     "key_techniques": [...], "credentials_to_try": ["user:pass", ...],'
+            f'     "confidence_adjustment": 0.0}}]\n'
         )
 
         self._maybe_compress()
         content, tool_calls = self.llm.generate(
-            prompt=research_prompt,
+            prompt=_first_prompt,
             system_prompt=getattr(self, '_analyze_prompt_formatted', SYSTEM_PROMPT_ANALYZE),
             tools=research_tools,
         )
 
-        # Execute research tool calls (max 3 rounds)
-        _MCP_TIMEOUT_S = 45  # per-MCP-call cap; MCP tools can hang (NVD, ddg-search)
-        for _ in range(3):
+        # LLM-driven rounds (max 2 more)
+        for _ in range(2):
             if not tool_calls:
                 break
             for tc in tool_calls:
@@ -3111,15 +3502,25 @@ class Orchestrator:
                     elif tc_name in self.recon_gateway.get_tool_names():
                         result = await self.recon_gateway.call(tc_name, tc_args)
                     elif tc_name in self.mcp_pool.get_tool_names():
-                        import json as _json
+                        import json as _json1
                         mcp_raw = await asyncio.wait_for(
                             self.mcp_pool.call_tool(tc_name, tc_args),
                             timeout=_MCP_TIMEOUT_S,
                         )
-                        mcp_text = _json.dumps(mcp_raw, ensure_ascii=False)
-                        result = type('obj', (object,), {
-                            'success': True, 'stdout': mcp_text,
-                            'stderr': '', 'exit_code': 0, 'elapsed_ms': 0})()
+                        is_error = mcp_raw.get("isError", False)
+                        error_text = ""
+                        if is_error:
+                            content_list = mcp_raw.get("content", [])
+                            if content_list and isinstance(content_list[0], dict):
+                                error_text = content_list[0].get("text", "")
+                        result = ToolResult(
+                            tool_name=tc_name,
+                            success=not is_error,
+                            stdout=error_text if is_error else _json1.dumps(mcp_raw, ensure_ascii=False),
+                            stderr=error_text,
+                            exit_code=1 if is_error else 0,
+                            elapsed_ms=0,
+                        )
                     else:
                         continue
                 except asyncio.TimeoutError:
@@ -3140,66 +3541,37 @@ class Orchestrator:
                 tools=research_tools,
             )
 
-        # Execute any remaining tool calls from the last round
-        if tool_calls:
-            for tc in tool_calls:
-                tc_name = tc.get("name", "")
-                tc_args = tc.get("arguments", {})
-                tc_id = tc.get("id", "")
-                try:
-                    if tc_name in self.attack_gateway.get_tool_names():
-                        result = await self.attack_gateway.call(tc_name, tc_args)
-                    elif tc_name in self.recon_gateway.get_tool_names():
-                        result = await self.recon_gateway.call(tc_name, tc_args)
-                    elif tc_name in self.mcp_pool.get_tool_names():
-                        import json as _json
-                        mcp_raw = await asyncio.wait_for(
-                            self.mcp_pool.call_tool(tc_name, tc_args),
-                            timeout=_MCP_TIMEOUT_S,
-                        )
-                        mcp_text = _json.dumps(mcp_raw, ensure_ascii=False)
-                        result = type('obj', (object,), {
-                            'success': True, 'stdout': mcp_text,
-                            'stderr': '', 'exit_code': 0, 'elapsed_ms': 0})()
-                    else:
-                        continue
-                    tool_stdout = self._format_tool_feedback(tc_name, tc_args, result, "")
-                    self.llm.add_tool_result(tc_id, tool_stdout[:2000])
-                except asyncio.TimeoutError:
-                    self.llm.add_tool_result(
-                        tc_id, f"MCP tool '{tc_name}' timed out after {_MCP_TIMEOUT_S}s — skipping")
-                except Exception:
-                    self.llm.add_tool_result(tc_id, "Tool execution failed")
-            # Final summary generation (no tools — closes the tool_call cycle)
-            self._maybe_compress()
-            content, tool_calls = self.llm.generate(
-                prompt="All research complete. Output final JSON summary of findings for each vulnerability.",
-                system_prompt=getattr(self, '_analyze_prompt_formatted', SYSTEM_PROMPT_ANALYZE),
-            )
-            try:
-                findings = self._extract_json(content)
-                if isinstance(findings, list):
-                    for f in findings:
-                        if isinstance(f, dict) and f.get("vuln_type"):
-                            vt = f["vuln_type"].lower()
-                            for v in self.vulnerabilities:
-                                if v.vuln_type.lower() == vt:
-                                    if f.get("cve_ids"):
-                                        v.evidence = (v.evidence or "") + f" CVEs: {f['cve_ids']}"
-                                        v.research_cves = list(f["cve_ids"])
-                                    if f.get("key_techniques"):
-                                        v.evidence = (v.evidence or "") + f" Techniques: {f['key_techniques']}"
-                                        v.research_techniques = list(f["key_techniques"])
-                                    # Update DKG
-                                    for vn in self.dkg.query_nodes("Vulnerability"):
-                                        if (vn.get("vuln_type") or "").lower() == vt:
-                                            self.dkg.add_node("Vulnerability", vn.get("id", ""), {
-                                                "research_cves": f.get("cve_ids", []),
-                                                "research_techniques": f.get("key_techniques", []),
-                                                "research_modules": f.get("exploit_modules", []),
-                                            })
-            except Exception as e:
-                log.warning("Research phase findings parse failed: %s", e)
+        # ── Parse findings from final content ──
+        try:
+            findings = self._extract_json(content)
+            if isinstance(findings, list):
+                for f in findings:
+                    if isinstance(f, dict) and f.get("vuln_type"):
+                        vt = f["vuln_type"].lower()
+                        for v in self.vulnerabilities:
+                            if v.vuln_type.lower() == vt:
+                                if f.get("cve_ids"):
+                                    v.evidence = (v.evidence or "") + f" CVEs: {f['cve_ids']}"
+                                    v.research_cves = list(f["cve_ids"])
+                                if f.get("key_techniques"):
+                                    v.evidence = (v.evidence or "") + f" Techniques: {f['key_techniques']}"
+                                    v.research_techniques = list(f["key_techniques"])
+                                if f.get("credentials_to_try"):
+                                    cred_list = ", ".join(str(c) for c in f["credentials_to_try"][:15])
+                                    v.evidence = (v.evidence or "") + f" Credentials: [{cred_list}]"
+                                    v.tool_args = v.tool_args or {}
+                                    if not v.tool_args.get("credentials"):
+                                        v.tool_args["credentials"] = list(f["credentials_to_try"])
+                                # Update DKG
+                                for vn in self.dkg.query_nodes("Vulnerability"):
+                                    if (vn.get("vuln_type") or "").lower() == vt:
+                                        self.dkg.add_node("Vulnerability", vn.get("id", ""), {
+                                            "research_cves": f.get("cve_ids", []),
+                                            "research_techniques": f.get("key_techniques", []),
+                                            "research_modules": f.get("exploit_modules", []),
+                                        })
+        except Exception as e:
+            log.warning("Research phase findings parse failed: %s", e)
 
         log.info("_research_phase: complete — %d vulns researched", len(self.vulnerabilities))
 
@@ -3489,43 +3861,6 @@ class Orchestrator:
 
         return "\n".join(lines) + "\n"
 
-    def _summarize_plan_learnings(self) -> str:
-        """Build a summary of what we learned from plan task execution.
-
-        Extracts response patterns, discovered endpoints, and anomalies from
-        the exploitation_plan and DKG to guide free-form exploration.
-        """
-        parts: list[str] = []
-
-        # Summarize plan task outcomes
-        plan = getattr(self, 'exploitation_plan', None)
-        if plan and plan.tasks:
-            done_tasks = [t for t in plan.tasks if t.get("status") == "done"]
-            failed_tasks = [t for t in plan.tasks if t.get("status") in ("failed", "skipped")]
-            for t in done_tasks[:5]:
-                summary = t.get("result_summary", "")[:200]
-                inst = t.get("instruction", "")[:120]
-                if summary:
-                    parts.append(f"- DONE: {inst} → {summary}")
-                else:
-                    parts.append(f"- DONE: {inst}")
-            for t in failed_tasks[:3]:
-                inst = t.get("instruction", "")[:120]
-                parts.append(f"- FAILED: {inst}")
-
-        # Summarize endpoints from typed state
-        state = self._get_state()
-        for ep in state.endpoints[:10]:
-            if ep.sample_response:
-                parts.append(
-                    f"- Endpoint {ep.url}: HTTP {ep.sample_status}, "
-                    f"response: {ep.sample_response[:200]}"
-                )
-            elif ep.sample_status:
-                parts.append(f"- Endpoint {ep.url}: HTTP {ep.sample_status}")
-
-        return "\n".join(parts) if parts else "(no learnings yet)"
-
     def _format_vulnerability_summary(self) -> str:
         """Format vulnerability hypotheses into a compact text block for LLM prompts."""
         if not self.vulnerabilities:
@@ -3576,19 +3911,132 @@ class Orchestrator:
         time-wasting tools (e.g. hydra_ssh_brute) never reach execution,
         regardless of which code path injected them.
         """
+        # Resolve $credentials.* placeholders from DKG state
+        _dkg_creds = self.dkg.query_nodes("Credential")
+        _resolved_user = ""
+        _resolved_pass = ""
+        for c in _dkg_creds:
+            if c.get("username"):
+                _resolved_user = str(c.get("username"))
+                _resolved_pass = str(c.get("password", "") or "")
+                break
+
+        # ── Protocol-aware tool validation ──
+        # Build a set of VALID tools for each port discovered during bootstrap.
+        # Any plan task targeting a known port with a protocol-incompatible tool
+        # gets auto-corrected to the right tool or skipped.
+        _PORT_VALID_TOOLS: dict[str, set[str]] = {
+            "1433": {"mssql_query", "mssqlclient_query", "shell_exec"},
+            "3306": {"mysql_query", "shell_exec"},
+            "5432": {"psql_query", "shell_exec"},
+            "6379": {"redis_cmd", "shell_exec"},
+            "1521": {"oracle_query", "shell_exec"},
+            "27017": {"shell_exec"},
+            "11211": {"shell_exec"},
+            "22":   {"ssh_exec", "ssh_key_exec", "test_credential"},
+            "80":   {"curl_get", "http_post", "send_payload", "ffuf_fuzz", "hydra_http_brute", "sqlmap_test"},
+            "443":  {"curl_get", "http_post", "send_payload", "ffuf_fuzz", "hydra_http_brute", "sqlmap_test"},
+        }
+        _PROTO_DEFAULT_TOOL: dict[str, str] = {
+            "mssql": "mssqlclient_query", "mysql": "mysql_query",
+            "postgres": "psql_query", "redis": "redis_cmd",
+            "oracle": "oracle_query", "ssh": "ssh_exec",
+            "http": "curl_get", "https": "curl_get",
+        }
+        # Augment with DKG service name detection
+        _svc_port_to_proto: dict[str, str] = {}
+        for s in self.dkg.query_nodes("Service"):
+            _port = str(s.get("port", ""))
+            _name = (s.get("service_name", "") or "").lower()
+            if _port and not _svc_port_to_proto.get(_port):
+                if "mssql" in _name or "sql server" in _name:
+                    _svc_port_to_proto[_port] = "mssql"
+                elif "mysql" in _name: _svc_port_to_proto[_port] = "mysql"
+                elif "postgres" in _name: _svc_port_to_proto[_port] = "postgres"
+                elif "redis" in _name: _svc_port_to_proto[_port] = "redis"
+                elif "oracle" in _name: _svc_port_to_proto[_port] = "oracle"
+                elif "ssh" in _name: _svc_port_to_proto[_port] = "ssh"
+                elif "http" in _name: _svc_port_to_proto[_port] = "http"
+
         for t in tasks:
             if not isinstance(t, dict):
                 continue
             tool = str(t.get("tool", "")).strip()
+            _params = t.get("params", {}) if isinstance(t.get("params"), dict) else {}
+            _task_port = str(_params.get("port", ""))
+            # LLM sometimes puts port in host (e.g. "localhost:10119")
+            if not _task_port:
+                _host = str(_params.get("host", _params.get("target", "")))
+                if ":" in _host:
+                    _maybe_port = _host.rsplit(":", 1)[-1]
+                    if _maybe_port.isdigit():
+                        _task_port = _maybe_port
+
+            # Determine the valid tool set for this task's target port
+            _valid_tools: set[str] | None = None
+            if _task_port and _task_port in _PORT_VALID_TOOLS:
+                _valid_tools = _PORT_VALID_TOOLS[_task_port]
+            elif _task_port and _task_port in _svc_port_to_proto:
+                _proto = _svc_port_to_proto[_task_port]
+                _valid_tools = _PORT_VALID_TOOLS.get(
+                    _task_port,
+                    set()  # won't match anything → will be caught below
+                )
+
+            # If tool is incompatible with the target port, correct or skip
+            if _valid_tools is not None and tool and tool not in _valid_tools:
+                # Try to find a compatible replacement
+                _proto = _svc_port_to_proto.get(_task_port, "")
+                _replacement = _PROTO_DEFAULT_TOOL.get(_proto, "")
+                if _replacement and _replacement in _valid_tools:
+                    if _replacement != tool and "query" in _replacement:
+                        _params.setdefault("query", "SELECT 1 AS test")
+                    t["tool"] = _replacement
+                    t["instruction"] = (
+                        t.get("instruction", "")
+                        + f" [auto-corrected: {tool}→{_replacement} (protocol mismatch for port {_task_port})]"
+                    )
+                    tool = _replacement
+                elif tool in {"test_credential", "ssh_exec", "ssh_key_exec", "hydra_ssh_brute"}:
+                    # SSH tools on non-SSH ports → skip, can't fix
+                    t["status"] = "skipped"
+                    continue
+
             if tool in self._BLACKLISTED_TOOLS:
                 replacement = self._BLACKLISTED_TOOLS[tool]
-                t["tool"] = replacement
-                t["instruction"] = (
-                    t.get("instruction", "")
-                    .replace("brute force", "authenticate")
-                    .replace("brute-force", "authenticate")
-                    .replace("Brute force", "Authenticate")
-                )
+                if not replacement:
+                    # Tool binary not available — skip the task entirely
+                    t["status"] = "skipped"
+                else:
+                    t["tool"] = replacement
+                    t["instruction"] = (
+                        t.get("instruction", "")
+                        .replace("brute force", "authenticate")
+                        .replace("brute-force", "authenticate")
+                        .replace("Brute force", "Authenticate")
+                    )
+            # Block local filesystem access via file:// URLs — flag must come
+            # from the TARGET, not from searching the DARWIN host filesystem.
+            _params = t.get("params", {})
+            if isinstance(_params, dict):
+                _url_val = str(_params.get("url", ""))
+                if _url_val.startswith("file://") and t.get("tool", "") in ("curl_get", "http_post"):
+                    t["status"] = "skipped"
+                    continue
+            # Resolve $credentials.* placeholders in task params
+            if isinstance(_params, dict):
+                for _key, _val in _params.items():
+                    if isinstance(_val, str) and "$credentials." in _val:
+                        if _resolved_user:
+                            _params[_key] = _val.replace(
+                                "$credentials.username", _resolved_user
+                            ).replace(
+                                "$credentials.password", _resolved_pass
+                            )
+                        else:
+                            # No credentials available — task can't run
+                            t["status"] = "skipped"
+                            break
 
     async def _generate_exploitation_plan(self, target_url: str, cteg_hints: dict | None = None) -> ExploitationPlan:
         """Generate a structured plan from bootstrap state (nmap results only).
@@ -3609,7 +4057,42 @@ class Orchestrator:
             self.attack_gateway.get_tool_names() +
             self.recon_gateway.get_tool_names()
         ))
+        # Include MCP tools (nvd_search_cves, github code search, etc.)
+        try:
+            for t in self.mcp_pool.get_tool_names():
+                if t not in all_tools:
+                    all_tools.append(t)
+        except Exception:
+            pass
         all_tools = [t for t in all_tools if t not in self._BLACKLISTED_TOOLS]
+
+        # Build a tool catalog with parameter schemas so the LLM generates
+        # plans with correct parameter names (e.g. "host"+"port" not "target").
+        _tool_catalog_parts = []
+        _tdefs = list(self.attack_gateway.get_tool_definitions() +
+                      self.recon_gateway.get_tool_definitions())
+        # Include MCP tool definitions so the LLM knows correct parameters
+        try:
+            _tdefs += self.mcp_pool.get_tool_definitions()
+        except Exception:
+            pass
+        for tdef in _tdefs:
+            tname = tdef["function"]["name"]
+            if tname in self._BLACKLISTED_TOOLS:
+                continue
+            params = tdef["function"].get("parameters", {})
+            props = params.get("properties", {})
+            required = params.get("required", [])
+            param_strs = []
+            for pname, pinfo in props.items():
+                ptype = pinfo.get("type", "string")
+                pdesc = (pinfo.get("description", "") or "")[:80]
+                req = "required" if pname in required else "optional"
+                param_strs.append(f"    {pname}: {ptype} ({req}) — {pdesc}")
+            param_block = "\n".join(param_strs) if param_strs else "    (no parameters)"
+            desc = (tdef["function"].get("description", "") or "")[:200]
+            _tool_catalog_parts.append(f"### {tname}\n{desc}\nParameters:\n{param_block}")
+        tool_catalog = "\n\n".join(_tool_catalog_parts)
 
         # Services context
         services_lines = []
@@ -3795,6 +4278,10 @@ class Orchestrator:
                             snippet = (desc[:250] + "...") if len(desc) > 250 else desc
                             lines.append(f"- **{title}**: {snippet}{tech_str}")
                             lines.append("")
+                        lines.append("NOTE: Above RAG results may not be relevant to the "
+                                     "current target. Ignore entries that target different "
+                                     "software or service types. Use web search if "
+                                     "RAG results are insufficient.")
                         rag_context = "\n".join(lines)
         except Exception:
             pass
@@ -3814,7 +4301,8 @@ class Orchestrator:
 {rag_context}
 ## Available Tools (all recon + attack)
 {', '.join(all_tools)}
-{chr(10).join(['## RAG-Endpoint Probe Results (verified — these endpoints EXIST on the target):'] + probed_rag_endpoints) if probed_rag_endpoints else ''}
+
+{chr(10).join(['## RAG-Endpoint Probe Results (verified — these ENDPOINTS EXIST on the target):'] + probed_rag_endpoints) if probed_rag_endpoints else ''}
 
 ## Task
 Generate a plan as a JSON array of EXPLOIT tasks. Reconnaissance and research
@@ -3826,9 +4314,15 @@ have already been completed. Each task should test or exploit a vulnerability:
 - params: tool parameters dict
 - reason: which vulnerability this targets
 
-**CRITICAL: Generate at most 8 tasks.** Focus on the MOST PROMISING
-vulnerabilities only — the high-confidence ones with clear exploitation paths.
-Quality over quantity. More than 8 tasks means you are guessing, not planning.
+**CRITICAL: Generate at most 15 tasks.** Include diverse attack strategies
+(SQLi, XSS, CMDi, LFI, file upload, auth bypass, etc.) even for medium-confidence
+vulnerabilities. The system can handle many parallel tasks.
+
+**For WeakAuth / default credential vulnerabilities:** Generate MULTIPLE tasks
+testing different credential combinations (at least 5-8). Try common accounts
+and common passwords (empty, same-as-username, "password", "admin", "123456",
+etc.). Then add tasks for authenticated enumeration, privilege escalation,
+and data extraction — all depending on at least one credential test succeeding.
 
 ## Dependency Rules (use dependent_task_ids to build a DAG)
 Create meaningful task dependencies when:
@@ -3897,6 +4391,11 @@ Output ONLY valid JSON array (3-20 tasks depending on complexity. More tasks =\=
             # Validate tool names against actual registry
             all_valid_tools = (self.attack_gateway.get_tool_names()
                                + self.recon_gateway.get_tool_names())
+            # Include MCP tools in validation set
+            try:
+                all_valid_tools += self.mcp_pool.get_tool_names()
+            except Exception:
+                pass
             for t in tasks:
                 t.setdefault("status", "pending")
                 t.setdefault("dependent_task_ids", t.pop("dependencies", []))
@@ -4058,7 +4557,7 @@ Output ONLY valid JSON array (3-20 tasks depending on complexity. More tasks =\=
         _EXPLOIT_PRIORITY = {
             "command_injection_test", "sqlmap_test", "send_payload",
             "xss_reflection_test", "ffuf_fuzz",
-            "redis_cmd", "mysql_query", "psql_query", "mssql_query",
+            "redis_cmd", "mysql_query", "psql_query", "mssql_query", "mssqlclient_query",
             "oracle_query", "tomcat_exploit", "php_filter_chain",
             "jwt_forge", "impacket_psexec", "impacket_wmiexec",
             "impacket_pth", "impacket_ticketer", "impacket_silver_ticket",
@@ -4076,12 +4575,22 @@ Output ONLY valid JSON array (3-20 tasks depending on complexity. More tasks =\=
                 continue
             if task.get("status") != "pending":
                 continue
+            dep_ids = task.get("dependent_task_ids", []) or task.get("dependencies", [])
             deps_met = True
-            for dep_id in task.get("dependent_task_ids", []) or task.get("dependencies", []):
+            all_deps_failed = True if dep_ids else False
+            for dep_id in dep_ids:
                 dep_task = next((t for t in plan.tasks if t.get("id") == dep_id), None)
-                if not dep_task or dep_task.get("status") != "done":
+                if not dep_task or dep_task.get("status") not in ("done", "failed", "exhausted", "skipped"):
                     deps_met = False
                     break
+                if dep_task.get("status") != "failed":
+                    all_deps_failed = False
+            # When ALL credential-test dependencies failed, the dependent task
+            # cannot succeed (e.g. "If any credential succeeded, enumerate DBs"
+            # when every credential task returned Login failed).
+            if deps_met and all_deps_failed:
+                task["status"] = "skipped"
+                continue
             if deps_met:
                 tool = task.get("tool", "")
                 if tool in _EXPLOIT_PRIORITY:
@@ -4176,6 +4685,12 @@ Output ONLY valid JSON array (3-20 tasks depending on complexity. More tasks =\=
         self._prev_credential_count = len(state.credentials)
         self._prev_vulnerability_count = len(state.vulnerabilities)
 
+        # No-progress detection: terminate if consecutive loops produce nothing
+        if new_ep == 0 and new_cred == 0 and new_vuln == 0 and not flags_found:
+            self._no_progress_loops += 1
+        else:
+            self._no_progress_loops = 0
+
         highest_vuln = ""
         if self.vulnerabilities:
             best = max(self.vulnerabilities, key=lambda v: v.confidence, default=None)
@@ -4206,7 +4721,6 @@ Output ONLY valid JSON array (3-20 tasks depending on complexity. More tasks =\=
 
         Returns a ToolResult-compatible object with .success, .stdout, .stderr, .exit_code.
         """
-        from darwin.tools.mcp_gateway import ToolResult
         try:
             if tool_name in self.attack_gateway.get_tool_names():
                 return await self.attack_gateway.call(tool_name, params)
@@ -4215,9 +4729,19 @@ Output ONLY valid JSON array (3-20 tasks depending on complexity. More tasks =\=
             elif tool_name in self.mcp_pool.get_tool_names():
                 mcp_raw = await self.mcp_pool.call_tool(tool_name, params)
                 mcp_text = json.dumps(mcp_raw, ensure_ascii=False)
+                is_error = mcp_raw.get("isError", False)
+                error_text = ""
+                if is_error:
+                    content_list = mcp_raw.get("content", [])
+                    if content_list and isinstance(content_list[0], dict):
+                        error_text = content_list[0].get("text", "")
                 return ToolResult(
-                    tool_name=tool_name, success=True, stdout=mcp_text,
-                    stderr="", exit_code=0, elapsed_ms=0,
+                    tool_name=tool_name,
+                    success=not is_error,
+                    stdout=error_text if is_error else mcp_text,
+                    stderr=error_text,
+                    exit_code=1 if is_error else 0,
+                    elapsed_ms=0,
                 )
             else:
                 return ToolResult(
@@ -4273,17 +4797,20 @@ Tool output:
 Classify:
 - "fixable" if the tool was called with wrong/malformed parameters
   (e.g. wrong command syntax, non-existent file path, missing required
-  args, using a read command when a generation command was intended,
-  command would cause an interactive prompt)
+  args, command would cause an interactive prompt)
+- "partial_success" if the tool connected and authenticated successfully
+  but a sub-command within the tool failed (e.g. MSSQL login OK but
+  xp_cmdshell command not found). Credentials are valid — store them.
 - "not_fixable" if the tool executed correctly but the attack didn't
   work (e.g. target not vulnerable, authentication failed, credential
   rejected, service not available, connection refused)
 
-If fixable, provide the CORRECTED params dict that would make the task
-succeed, matching the task instruction's intent.
+If fixable, provide corrected_params.
+If partial_success, include credentials: {{"username":...}}.
+Otherwise not_fixable.
 
 Output ONLY valid JSON:
-{{"fixable": true/false, "corrected_params": {{...}}, "reason": "..."}}"""
+{{"fixable": true/false, "corrected_params": {{...}}, "partial_success": true/false, "credentials": {{...}}, "reason": "..."}}"""
 
         try:
             content, _ = self.llm.generate(prompt=prompt)
@@ -4294,7 +4821,15 @@ Output ONLY valid JSON:
             result = json.loads(match.group(0))
             if result.get("fixable") and result.get("corrected_params"):
                 return {
+                    "fixable": True,
                     "corrected_params": result["corrected_params"],
+                    "reason": result.get("reason", ""),
+                }
+            if result.get("partial_success"):
+                return {
+                    "fixable": False,
+                    "partial_success": True,
+                    "credentials": result.get("credentials", {}),
                     "reason": result.get("reason", ""),
                 }
         except Exception:
@@ -4369,15 +4904,93 @@ Output ONLY valid JSON:
                     "field returned by one of these API calls.\n"
                 )
 
+        _absent_text = ""
+        if self._absent_services:
+            _absent_text = (
+                f"\n## Unreachable (do NOT probe again)\n"
+                f"{', '.join(sorted(self._absent_services)[:8])}\n"
+            )
+
+        # Detect plan drift: when primary target has failed tasks, remind LLM
+        # to fix them BEFORE exploring incidentally discovered HTTP ports.
+        focus_reminder = ""
+        plan = self.exploitation_plan
+        if plan and plan.tasks:
+            failed_primary = [
+                t for t in plan.tasks
+                if t.get("status") == "failed"
+                and not any(kw in (t.get("instruction", "") or "").lower()
+                           for kw in ("probe ", "whatweb", "identify ", "check if port"))
+            ]
+            pending_primary = [
+                t for t in plan.tasks
+                if t.get("status") == "pending"
+                and not any(kw in (t.get("instruction", "") or "").lower()
+                           for kw in ("probe ", "whatweb", "identify ", "check if port"))
+            ]
+            if failed_primary:
+                failed_insts = [t.get("instruction", "")[:100] for t in failed_primary[:4]]
+                focus_reminder = (
+                    f"\nFOCUS: You have {len(failed_primary)} FAILED exploitation "
+                    f"tasks that MUST be retried with corrected tools/params:\n"
+                    + "\n".join(f"  - {inst}" for inst in failed_insts)
+                    + f"\nThese are your PRIMARY target. RETRY them with the tool "
+                    f"that previously succeeded for this target (check DONE tasks "
+                    f"for working tool/param patterns). "
+                    f"Do NOT add HTTP probe tasks for incidentally discovered "
+                    f"ports until these primary exploitation tasks are DONE.\n"
+                )
+            elif pending_primary:
+                focus_reminder = (
+                    f"\nFOCUS: {len(pending_primary)} pending exploitation tasks "
+                    f"for the PRIMARY target must be completed BEFORE adding tasks "
+                    f"for incidentally discovered HTTP ports.\n"
+                )
+
+        # ── Post-exploitation flag hunt reminder ──
+        # If ANY task gained shell/container/command execution, push the LLM
+        # to search for flag files BEFORE doing anything else.
+        _post_exploit_reminder = ""
+        if plan and plan.tasks:
+            _shell_tools = {"shell_exec", "ssh_exec", "ssh_key_exec", "docker_exec"}
+            _has_shell = any(
+                t.get("status") == "done" and t.get("tool", "") in _shell_tools
+                for t in plan.tasks
+            )
+            # Also check if the current task output shows shell/container access
+            if not _has_shell and task and task.get("tool", "") in _shell_tools and success:
+                _has_shell = True
+
+            if _has_shell:
+                _done_flag_hunt = any(
+                    t.get("status") == "done" and "flag" in (t.get("instruction", "") or "").lower()
+                    and t.get("tool", "") in _shell_tools
+                    for t in plan.tasks
+                )
+                if not _done_flag_hunt:
+                    _post_exploit_reminder = (
+                        f"\nFLAG HUNT (HIGHEST PRIORITY): You have shell/container access! "
+                        f"IMMEDIATELY add tasks to search for flag files:\n"
+                        f"  1. shell_exec: ls -la / && cat /flag* /root/flag* /tmp/flag* "
+                        f"/home/*/flag* /app/flag* 2>/dev/null\n"
+                        f"  2. shell_exec: find / -maxdepth 4 -name '*flag*' -type f 2>/dev/null\n"
+                        f"  3. shell_exec: env | grep -i flag; cat /etc/hostname\n"
+                        f"Flag files are the #1 CTF pattern. Do NOT enumerate databases or "
+                        f"configure services before running these commands.\n"
+                    )
+
         prompt = (
             f"Just completed: {task.get('instruction','')}\n"
             f"Tool: {task.get('tool','')}\n"
             f"Result: {success and 'SUCCESS' or 'FAILED'}\n"
             f"Output: {task_result[:1500]}\n"
             f"{cred_reminder}"
-            f"{api_reminder}\n"
+            f"{api_reminder}"
+            f"{focus_reminder}"
+            f"{_post_exploit_reminder}\n"
             f"{self._format_plan_status()}\n"
-            f"{new_discoveries}\n\n"
+            f"{new_discoveries}"
+            f"{_absent_text}\n\n"
             f"## Your Job: Update the Plan\n"
             f"Review the plan and apply relevant changes from:\n"
             f"- TOTAL tasks MUST NOT exceed 15. If the plan already has 12+ tasks, "
@@ -4425,7 +5038,7 @@ Output ONLY valid JSON:
 
                 # Hard cap: trim lowest-quality pending tasks when plan
                 # inflates beyond 15.  Done/failed tasks are kept for history.
-                _MAX = 15
+                _MAX = 25
                 if len(preserved) > _MAX:
                     _pending = [t for t in preserved if t.get("status") == "pending"]
                     if len(_pending) > (_MAX - len([t for t in preserved if t.get("status") != "pending"])):
@@ -4553,233 +5166,6 @@ Output ONLY valid JSON array."""
         self.dkg.add_node("PlanSummary", summary_id, summary)
         self.dkg.add_edge(plan.plan_id, summary_id, "plan_successor")
         return json.dumps(summary)
-
-    async def _llm_explore(self, base_url: str) -> TaskResult | None:
-        """LLM-driven post-authentication exploration.
-
-        Gives the LLM authenticated page content and lets it decide what
-        actions to try. Falls back to heuristic crawl if LLM fails.
-        """
-        base_norm = base_url.rstrip("/")
-        MAX_ITER = 5
-        MAX_ACTIONS_PER_ITER = 10
-
-        # Seed pages to show the LLM
-        seed_pages: list[tuple[str, str]] = []  # (url, body)
-        visited: set[str] = set()
-
-        for ep in self.dkg.query_nodes("Endpoint"):
-            eu = ep.get("url", "")
-            if eu and eu.startswith(base_norm) and eu not in visited:
-                visited.add(eu)
-                try:
-                    resp = await self.client.get(eu)
-                    if resp.status_code == 200 and len(resp.body) > 100:
-                        seed_pages.append((eu, resp.body))
-                        # Check for flag immediately
-                        flags = self.flag_pattern.findall(resp.body)
-                        if flags:
-                            self._task_log_event("info", "flag_found_llm_seed",
-                                url=eu, flag=flags[0])
-                            self.phase = OrchestratorPhase.DONE
-                            return TaskResult(
-                                success=True, flag=flags[0], steps=self.step_count,
-                                tokens_used=self.llm.token_count,
-                                time_elapsed=time.time() - self.start_time,
-                            )
-                except Exception:
-                    pass
-
-        if not seed_pages:
-            seed_pages.append((base_norm, ""))  # at least try base URL
-
-        # Build context for LLM
-        pages_text = f"You are logged in to {base_norm}. The app is a trading platform.\n"
-        pages_text += "Look for custom HTTP headers (X-UserId etc.) and hidden fields with user IDs.\n"
-        # Extract known user IDs from pages
-        import re as _re
-        all_discovered_ids: set[str] = set()
-        for url, body in seed_pages[:6]:
-            # Extract IDs from hidden fields, data attrs, and text
-            for m in _re.findall(r'(?:user[_-]?id|user_id|userId)\s*[=:"\'\s]+(\d+)', body, _re.I):
-                all_discovered_ids.add(m)
-            for m in _re.findall(r'data-user[_-]?id=["\'](\d+)["\']', body, _re.I):
-                all_discovered_ids.add(m)
-        if all_discovered_ids:
-            pages_text += f"Known user IDs: {', '.join(sorted(all_discovered_ids, key=int))}\n"
-            # Generate candidate IDs: known IDs, adjacent, and common ranges
-            candidates: set[int] = set()
-            for sid in all_discovered_ids:
-                vid = int(sid)
-                for off in range(-50, 51):
-                    cid = vid + off
-                    if cid > 0:
-                        candidates.add(cid)
-            pages_text += f"Candidate IDs to try: {', '.join(str(c) for c in sorted(candidates)[:30])} (and more up to {max(candidates) if candidates else 0})\n"
-        pages_text += "\n"
-
-        for url, body in seed_pages[:6]:  # limit to 6 pages for context
-            # Extract visible text and key elements
-            import re as _re
-            # Remove scripts, styles, and excessive whitespace
-            clean = _re.sub(r'<script[^>]*>.*?</script>', '', body, flags=_re.DOTALL | _re.I)
-            clean = _re.sub(r'<style[^>]*>.*?</style>', '', clean, flags=_re.DOTALL | _re.I)
-            clean = _re.sub(r'<[^>]+>', ' ', clean)
-            clean = _re.sub(r'\s+', ' ', clean).strip()
-            # Get key HTML: hidden inputs, data-*, comments
-            hidden = _re.findall(r'<input[^>]+type=["\']hidden["\'][^>]*>', body, _re.I)
-            comments = _re.findall(r'<!--(.*?)-->', body, _re.DOTALL)
-            data_attrs = _re.findall(r'(data-[\w-]+)=["\']([^"\']*)["\']', body, _re.I)
-            js_ids = _re.findall(r'''(?:user|account|customer|order)[-_]?id\w*\s*[=:]\s*["\']?(\d+)["\']?''', body, _re.I)
-
-            pages_text += f"=== {url} ===\n"
-            if comments:
-                pages_text += f"Comments: {'; '.join(c[:200] for c in comments[:3])}\n"
-            if hidden:
-                pages_text += f"Hidden inputs: {'; '.join(h[:200] for h in hidden[:3])}\n"
-            if data_attrs:
-                pages_text += f"Data attrs: {'; '.join(f'{k}={v}' for k,v in data_attrs[:8])}\n"
-            if js_ids:
-                pages_text += f"JS IDs: {', '.join(js_ids[:10])}\n"
-            if clean:
-                pages_text += f"Text: {clean[:1500]}\n"
-
-        # Transition to explore phase (preserve history, swap system prompt)
-        self.llm.replace_system_prompt(SYSTEM_PROMPT_EXPLORE)
-        self.llm.add_context_message(
-            f"[PHASE TRANSITION] Starting authenticated exploration of {base_norm}.\n"
-            f"Seed pages loaded: {len(seed_pages)}. Session cookies are active.\n"
-            f"Previous recon context is preserved above — focus on exploration now.",
-            role="user",
-        )
-
-        # LLM interaction loop
-        all_actions: list[dict] = []
-        iteration = 0
-        executed_actions: set[str] = set()
-
-        while iteration < MAX_ITER:
-            if self._time_exceeded() or self._tokens_exceeded():
-                break
-            iteration += 1
-
-            prompt = f"You have authenticated access to {base_norm}.\n\nPages seen:\n{pages_text}\n"
-            if all_actions:
-                prompt += f"\nPrevious actions taken:\n"
-                for a in all_actions[-8:]:
-                    prompt += f"  {a.get('action','?').upper()} {a.get('url','?')} -> {a.get('result','?')[:200]}\n"
-
-            prompt += "\nWhat actions should we try next to find the flag? Respond with JSON array only."
-
-            self._maybe_compress()
-            try:
-                content, _ = self.llm.generate(
-                    prompt=prompt,
-                    system_prompt=SYSTEM_PROMPT_EXPLORE,
-                )
-                self._task_log_event("info", "llm_explore_call",
-                    iteration=iteration, response=content[:1000],
-                    tokens_used=self.llm.token_count,
-                )
-                actions = self._extract_json(content)
-                if not isinstance(actions, list):
-                    log.warning("_llm_explore: LLM returned non-list: %s", str(content)[:200])
-                    actions = []
-            except Exception as e:
-                log.warning("_llm_explore: LLM call failed: %s", e)
-                break
-
-            if not actions:
-                break
-
-            # Execute actions
-            new_pages_text = ""
-            action_count = 0
-            for act in actions[:MAX_ACTIONS_PER_ITER]:
-                if not isinstance(act, dict):
-                    continue
-                action_type = str(act.get("action", "get")).lower()
-                act_url = str(act.get("url", ""))
-                if not act_url:
-                    continue
-                # Resolve relative URLs
-                from urllib.parse import urljoin as _uj2
-                if not act_url.startswith("http"):
-                    act_url = _uj2(base_norm, act_url)
-
-                headers = act.get("headers", {}) or {}
-                data = act.get("data", {}) or {}
-
-                # Deduplicate
-                action_key = f"{action_type}:{act_url}:{headers}:{data}"
-                if action_key in executed_actions:
-                    continue
-                executed_actions.add(action_key)
-
-                if action_count >= MAX_ACTIONS_PER_ITER:
-                    break
-
-                if self._time_exceeded():
-                    break
-                action_count += 1
-                self.step_count += 1
-
-                try:
-                    if action_type == "post":
-                        resp = await self.client.post(act_url, data=data, headers=headers)
-                    else:
-                        resp = await self.client.get(act_url, headers=headers)
-                except Exception:
-                    continue
-
-                # Check for flag
-                flags = self.flag_pattern.findall(resp.body)
-                result_summary = f"status={resp.status_code} len={len(resp.body)}"
-                if flags:
-                    result_summary += f" FLAG={flags[0]}"
-                else:
-                    # Extract title and key content for LLM feedback
-                    import re as _re2
-                    title_m = _re2.search(r'<title>(.*?)</title>', resp.body, _re.I)
-                    if title_m:
-                        result_summary += f" title='{title_m.group(1)}'"
-                    # Check body for interesting patterns
-                    bf = resp.body[:2000]
-                    id_matches = _re2.findall(r'\b(\d{3,6})\b', bf)
-                    if id_matches:
-                        result_summary += f" ids={id_matches[:5]}"
-
-                act["result"] = result_summary
-                all_actions.append(act)
-                self._task_log_event("info", "llm_action",
-                    iteration=iteration, action=action_type, url=act_url,
-                    headers=headers, status=resp.status_code,
-                    result=result_summary[:500])
-
-                if flags:
-                    self._task_log_event("info", "flag_found_llm",
-                        url=act_url, flag=flags[0])
-                    self.phase = OrchestratorPhase.DONE
-                    return TaskResult(
-                        success=True, flag=flags[0], steps=self.step_count,
-                        tokens_used=self.llm.token_count,
-                        time_elapsed=time.time() - self.start_time,
-                    )
-
-                # If response looks like HTML with useful content, show LLM next iteration
-                ct = resp.headers.get("content-type", "")
-                if ("text/html" in ct or not ct) and len(resp.body) > 200:
-                    clean = _re.sub(r'<script[^>]*>.*?</script>', '', resp.body, flags=_re.DOTALL | _re.I)
-                    clean = _re.sub(r'<style[^>]*>.*?</style>', '', clean, flags=_re.DOTALL | _re.I)
-                    clean = _re.sub(r'<[^>]+>', ' ', clean)
-                    clean = _re.sub(r'\s+', ' ', clean).strip()
-                    new_pages_text += f"=== {act_url} (result) ===\nText: {clean[:1000]}\n"
-
-            pages_text += new_pages_text
-
-        log.info("_llm_explore: %d iterations, %d actions, no flag found",
-                 iteration, len(all_actions))
-        return None
 
     async def _fuzz_idor_patterns(self, base_url: str, patterns: dict[str, set[int]]) -> TaskResult | None:
         """Fuzz adjacent values for every discovered numeric ID pattern.
@@ -4964,11 +5350,6 @@ Output ONLY valid JSON array."""
                                             "url": full, "method": "GET", "params": "",
                                             "auth_required": True,
                                         })
-                            # Try LLM-driven exploration
-                            result = await self._llm_explore(base)
-                            if result:
-                                return result
-                            # Fall back to heuristic crawl
                             result = await self._post_auth_explore(base)
                             if result:
                                 return result
@@ -5091,12 +5472,43 @@ Respond ONLY with the JSON array."""
                 params = step.get("params", {})
                 reason = step.get("reason", "")
 
-                if tool_name not in self.attack_gateway.get_tool_names():
+                # Build dispatch set: attack gateway + MCP pool
+                _all_tool_names = self.attack_gateway.get_tool_names()
+                try:
+                    _all_tool_names += self.mcp_pool.get_tool_names()
+                except Exception:
+                    pass
+                if tool_name not in _all_tool_names:
                     continue
 
                 self.step_count += 1
                 try:
-                    result = await self.attack_gateway.call(tool_name, params)
+                    if tool_name in self.attack_gateway.get_tool_names():
+                        result = await self.attack_gateway.call(tool_name, params)
+                    elif tool_name in self.mcp_pool.get_tool_names():
+                        mcp_raw = await self.mcp_pool.call_tool(tool_name, params)
+                        # Convert MCP response dict → ToolResult
+                        if isinstance(mcp_raw, dict) and "content" in mcp_raw:
+                            text_parts = []
+                            for c in mcp_raw.get("content", []):
+                                if isinstance(c, dict) and c.get("type") == "text":
+                                    text_parts.append(c.get("text", ""))
+                            result = ToolResult(
+                                tool_name=tool_name,
+                                success=not mcp_raw.get("isError", False),
+                                stdout="\n".join(text_parts),
+                                exit_code=1 if mcp_raw.get("isError") else 0,
+                            )
+                        else:
+                            result = ToolResult(
+                                tool_name=tool_name, success=False,
+                                stdout=str(mcp_raw or "MCP error"),
+                            )
+                    else:
+                        result = ToolResult(
+                            tool_name=tool_name, success=False,
+                            stdout=f"Unknown tool: {tool_name}",
+                        )
                 except Exception as e:
                     self._task_log_event("info", "llm_exploit_step",
                         round=round_num, tool=tool_name, error=str(e))

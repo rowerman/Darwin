@@ -11,13 +11,21 @@ services:
     depends_on:
       - wordpress
 
+  # Backend — built from base Dockerfile but NOT exposed to host
   wordpress:
-    extends:
-      file: ../../docker-compose.yml
-      service: wordpress
-    ports: []  # Not directly exposed — only via WAF
+    build:
+      context: ../../
+      dockerfile: Dockerfile
+    environment:
+      WORDPRESS_DB_HOST: db
+      WORDPRESS_DB_USER: wordpress
+      WORDPRESS_DB_PASSWORD: wordpress
+      WORDPRESS_DB_NAME: wordpress
 
   db:
-    extends:
-      file: ../../docker-compose.yml
-      service: db
+    image: mysql:8.0.35
+    environment:
+      MYSQL_ROOT_PASSWORD: rootpassword
+      MYSQL_DATABASE: wordpress
+      MYSQL_USER: wordpress
+      MYSQL_PASSWORD: wordpress

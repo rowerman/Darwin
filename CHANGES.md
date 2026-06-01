@@ -1,5 +1,55 @@
 # DARWIN Framework Changes — 2026-05-29
 
+## 2026-06-01 (dependency + file:// fixes)
+- **darwin/orchestrator.py**: `_select_next_plan_task` 新增全部依赖失败检测。当任务的所有依赖都是 FAILED 时，任务标记为 skipped（如"如果任何凭据成功，枚举数据库"的 7 个凭据全部失败时，后续利用任务不应执行）。修复前 FAILED 被当作"依赖满足"解锁下游任务。
+- **darwin/orchestrator.py**: `_sanitize_plan_tools` 新增 `file://` URL 检测。Plan 任务中 `curl_get`/`http_post` 使用 `file://` 协议时直接标记为 skipped。同时在工具执行时（line ~1860）拦截 `file://` URL 调用并返回 BLOCKED 错误。
+- 修复背景：MSSQL 凭据全部失败后 LLM 漂移到搜索本地文件系统（`curl_get file:///root/.bash_history`），在 /root/.bash_history 中发现 `flag{test_vuln_2026}` 残留 flag。
+
+## 2026-06-01 (plan generation + thin-warning fixes)
+- **darwin/orchestrator.py**: thin_warning 触发条件放宽：从 `n_endpoints >= 3` 改为 `n_endpoints >= 3 or n_services >= 1`。修复前非 HTTP 靶机（0 endpoint）永远不会触发 thin_warning，LLM 不会生成额外任务。同时强化提示词：要求 WeakAuth 至少尝试 5-10 组凭据。
+- **darwin/orchestrator.py**: `_generate_exploitation_plan` prompt 新增 WeakAuth 专项指导：列出常见 MSSQL 账户/密码组合，要求生成多个凭据测试任务 + 数据库枚举 + xp_cmdshell + linked server 发现任务。修复前 LLM 对单个 WeakAuth 漏洞只生成 1 个任务。
+
+## 2026-06-01 (credential placeholder resolution)
+- **darwin/orchestrator.py**: `_sanitize_plan_tools` 新增 `$credentials.*` 占位符解析。从 DKG 查询 Credential 节点，如果有有效凭据则替换占位符为实际值；如果没有凭据则标记任务为 skipped（避免用空值执行导致无意义的 "OK, 0 rows" 结果并错误地解除下游阻塞）。
+
+## 2026-06-01 (preventive blacklist + auth detection)
+- **darwin/orchestrator.py**: `_BLACKLISTED_TOOLS` 初始值新增 `mssql_query → mssqlclient_query`（sqlcmd 未安装，直接路由到 impacket）和 `nmap_port_range → skip`（bootstrap 已完成扫描）。修复前这些工具在 plan 生成时就会出现，导致 7 个任务连续 `exit=127` 失败后才被响应式黑名单拦截。
+- **darwin/tools/attack_server.py**: `mssqlclient_query` 新增认证失败检测。impacket 的 `mssqlclient.py` 即使 "Login failed" 也返回 exit=0，导致空凭据连接被标记为 DONE，解除后续 10 个依赖任务的阻塞。现在解析输出中的 "Login failed" 并设置 success=False。
+
+## 2026-06-01 (remove explore phases)
+- **darwin/orchestrator.py**: 移除 Solo 模式 free-form exploration 阶段（~155 行）。Plan exhausted 后直接进入 outer loop 下一轮生成新 plan，不再有 6 轮无结构的 `[solo:explore:N]` 自由探索。同时删除 `_EXPLORE_BLOCKED_TOOLS` 和 `_summarize_plan_learnings()` 方法。
+- **darwin/orchestrator.py**: 移除 Multi-agent `_llm_explore` 方法（~225 行）。认证后探索直接走 `_post_auth_explore`（确定性启发式爬虫），不再先尝试 LLM 自由发挥。删除 `SYSTEM_PROMPT_EXPLORE` import。
+- 原因：explore 阶段从未产生有效 flag，只产生 false flag（本地文件搜索）、浪费 token（每轮 ~3-4k）、重复 nmap/curl 等无效操作。Plan exhausted 后的 `_review_and_update_plan` + thin_warning 已提供结构化重试机制。
+
+## 2026-06-01 (tool fallback & plan sanitization)
+- **darwin/orchestrator.py**: `mssql_query` 失败时自动回退到 `mssqlclient_query`。新增 `_TOOL_FALLBACK` 映射：当工具因 `exit=127`（二进制未安装）失败时，自动用 fallback 工具重试同一组参数。`_BLACKLISTED_TOOLS` 的 replacement 设为 fallback 工具名（非空），后续 plan 任务自动替换。修复前 `sqlcmd` 未安装导致 5+ 个 MSSQL 任务全部失败，LLM 开始怀疑端口 10119 不是 MSSQL 而漂移。
+- **darwin/orchestrator.py**: `_BLACKLISTED_TOOLS` 新增 `nmap_full_scan` 和 `masscan_scan`（空 replacement = 跳过）。Bootstrap 已完成全端口扫描，plan 中的全扫描任务一律标记为 skipped。
+- **darwin/orchestrator.py**: `_sanitize_plan_tools` 新增 `nmap_port_range` 范围检测：端口范围 >5000 时标记为 skipped。防止 plan 阶段重复全端口扫描。
+
+## 2026-06-01 (explore & systematic fixes)
+- **darwin/orchestrator.py**: Free-form explore 阶段阻止冗余 recon 工具。新增 `_EXPLORE_BLOCKED_TOOLS` 集合（nmap_*, masscan_scan），explore 阶段 LLM 调用这些工具时返回 BLOCKED 消息而不执行。explore prompt 新增 "Do NOT run port scanners" 提示。修复前 plan 耗尽后 LLM 重复运行 nmap/masscan（bootstrap 已扫描完毕）。
+- **darwin/orchestrator.py**: `_systematic_exploit_pass` 协议检测修复。新增 `_detect_proto_from_service()` 函数：当 endpoint 无 URI scheme（如 `localhost:10119`）时，从 DKG Service 节点通过端口号反查协议（service_name + port-based fallback）。修复前 scheme-less endpoint 回退到 `_ALL_PROTOCOL_TOOLS`，导致 ssh_exec/mysql_query/psql_query 全部尝试 MSSQL 端口，全部报 Template format error。
+- **darwin/orchestrator.py**: `_review_and_update_plan` 新增 `focus_reminder`。当 plan 中存在 FAILED 利用任务（非 probe/whatweb 类探测任务）时，强制提醒 LLM 优先用修正后的工具/参数重试这些主目标任务，禁止在主要利用任务完成前为偶然发现的 HTTP 端口添加探测任务。修复前 nmap_full_scan 发现 20+ 端口后，LLM 立即为每个端口创建 whatweb/curl 任务，抛弃失败的 MSSQL 利用任务。
+- **darwin/orchestrator.py**: thin-plan warning 增加 target focus 提醒。当 plan 耗尽需要补充任务时，提示 LLM 优先穷尽分析阶段识别的原始漏洞类型（如 WeakAuth），再探索无关 HTTP 端点。
+- **darwin/orchestrator.py**: `_summarize_plan_learnings()` 新增非 HTTP 服务列表输出。explore 阶段 LLM 现在可以看到 DKG 中已发现的服务（协议+端口+banner），无需 nmap 就能知道目标。
+- **darwin/orchestrator.py**: `_summarize_plan_learnings()` 新增非 HTTP 服务列表输出。explore 阶段 LLM 现在可以看到 DKG 中已发现的服务（协议+端口+banner），无需 nmap 就能知道目标。
+- **darwin/orchestrator.py**: thin-plan warning 增加 target focus 提醒。当 plan 耗尽需要补充任务时，提示 LLM 优先穷尽分析阶段识别的原始漏洞类型（如 WeakAuth），再探索无关 HTTP 端点。防止 plan 漂移到 K8s/Plannotator 等无关目标。
+
+## 2026-06-01 (later)
+- **darwin/tools/attack_server.py**: 新增 `mssqlclient_query` 工具，使用 impacket 的 `mssqlclient.py`（已预装）替代 `sqlcmd`（未安装）。与 `mssql_query` 并存，LLM 可择优使用。修复前 `sqlcmd` 缺失导致所有 MSSQL 凭据测试因 `exit=127` 失败，LLM 飘逸到 nmap/curl/SSH/kubectl。
+- **darwin/tools/attack_server.py**: `netexec_enum` 模板重构：二进制名 `nxc`→`netexec`，支持 `{protocol}` 参数化（smb/mssql/winrm/ssh/ldap），支持 `{user}` `{password}` `{extra_flags}` 传参。
+- **darwin/orchestrator.py**: Solo 耗尽后提前终止。新增 `_solo_exhausted_stall` 计数器：solo 耗尽后若 3 轮仍无 multi-agent 进入（B < 0.3 不变），立即终止。修复前需等到 MAX_LOOPS=100 才停止（95 轮空转）。
+- **darwin/orchestrator.py**: 无进展检测。新增 `_no_progress_loops` 计数器：连续 2 轮外部循环产生 0 新端点/凭据/漏洞 → 提前终止。修复前任务全部失败但探测类任务 "done" 制造假进展，框架感知不到。
+- **darwin/orchestrator.py**: `_should_terminate` 终止条件从 5 项扩展为 7 项（新增 solo-stall + no-progress）。
+- **darwin/orchestrator.py**: 运行时工具黑名单（Fix B）。工具返回 `exit=127` + stderr 含 `not found` 时，自动将工具名加入 `_BLACKLISTED_TOOLS`（空替代值 → 标记 skipped），并调用 `_sanitize_plan_tools` 即时清除 plan 中的待执行任务。修复前 `netexec` 未安装导致 12 个相同 `netexec: not found` 失败。
+- **darwin/orchestrator.py**: DB 认证部分成功检测（Fix A）。扩展 `_analyze_and_fix_task` 增加 `partial_success` 分类：当 LLM 判定"认证成功但子命令失败"时（如 MSSQL sa/sa 登录成功但 xp_cmdshell 'findstr' 在 Linux 上返回 127），提取凭据存入 DKG，任务标记为 done 而非 failed。下游任务可复用已验证的凭据。
+- **darwin/orchestrator.py**: Plan review 负向知识注入（Fix C）。新增 `_absent_services` 集合追踪被探测但不可达的目标（connection refused / can't connect / DB 工具失败），在 plan review prompt 中注入一行 `## Unreachable (do NOT probe again)` 避免 LLM 重复生成 check-redis/check-mysql 等低质量探测任务。
+- **darwin/tools/mcp_gateway.py**: 参数名双向自动纠正。在原有的 `_tv in k`（模板变量是 kwargs key 的子串）基础上增加 `k in _tv` 方向（kwargs key 是模板变量的子串），解决 `target`→`target_url` 不匹配（如 whatweb_scan 模板用 `{target_url}` 但 LLM 传 `target`）。同时要求 ≥3 chars 且 ≥50% 长度避免误匹配。
+
+## 2026-06-01 (early)
+- **darwin/tools/mcp_gateway.py**: `register_shell_tool` 参数名自动纠正。当 LLM 生成的参数名与 shell 模板变量名不匹配时（如 LLM 传 `username` 但模板用 `{user}`），自动检测 substring 包含关系并映射。修复前 `mssql_query` 因 `username`→`{user}` 不匹配报 "Template format error" 导致所有 MSSQL 凭据测试任务失败。
+- **darwin/orchestrator.py**: `_select_next_plan_task` 依赖解除逻辑修复。将 `dep_task.get("status") != "done"` 改为 `not in ("done", "failed", "exhausted", "skipped")`。修复前上游任务因参数错误 FAILED 后，所有依赖任务被永久阻塞（deadlock），导致 Solo 模式在 3 次迭代后 plan exhausted 但无任何进展。
+
 ## 2026-05-30
 - **darwin/orchestrator.py**: `_systematic_exploit_pass` HTTP 协议过滤。当 endpoint 是 http/https 时，过滤掉 `ssh_exec`, `mysql_query`, `psql_query`, `mssql_query`, `oracle_query`, `redis_cmd`, `shell_exec` 等仅适用于非 HTTP 协议的工具。修复前 `weakauth` 对 WordPress 登录页会依次尝试 7 个工具（其中 6 个是 DB/SSH 工具全部空转），修复后只保留 HTTP 兼容工具。
 - **darwin/orchestrator.py**: 将 `wpscan` 加入 `REQUIRED_TOOLS` 列表。wpscan_enum 工具依赖 wpscan CLI（Ruby gem），之前未在启动时检查可用性，导致 WordPress 用户枚举静默失败（仅返回 45 bytes 输出）。

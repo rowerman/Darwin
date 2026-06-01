@@ -1,6 +1,6 @@
 ---
 name: darwin-experiment-driven-dev
-description: Use when debugging DARWIN experiment failures, modifying orchestrator/DKG/CTEG/RAG/DPM/prompt/sub-agent code, analyzing why an LLM-driven pentest didn't capture a flag, adding tools to recon_server or attack_server, using ddg_search for exploitation research, or changing Solo/Multi-agent mode behavior in the DARWIN penetration testing framework
+description: Use when debugging DARWIN experiment failures, modifying orchestrator/DKG/CTEG/RAG/DPM/prompt/sub-agent code, analyzing why an LLM-driven pentest didn't capture a flag, adding tools to recon_server or attack_server, using web-search for exploitation research, or changing Solo/Multi-agent mode behavior in the DARWIN penetration testing framework
 ---
 
 # DARWIN Experiment-Driven Development
@@ -274,7 +274,7 @@ run.py / experiments/runner.py
 | **被谁依赖** | Orchestrator (plan injection), attack_server (knowledge_search tool) |
 | **修改影响面** | embedding 模型路径改动影响索引加载。collection 增删影响 search 路由。 |
 | **集成路径** | 仅两种：`knowledge_search` tool（LLM 主动调用）+ plan injection（plan 生成时注入）。auto-enrich 已从 orchestrator 中移除。RAG 在 `run()` 启动时通过 `asyncio.create_task(asyncio.to_thread(get_rag))` 后台预加载（~45s），与 bootstrap 扫描并行。 |
-| **最佳实践** | `knowledge_search` 查询应使用空 category（`category=""`），让语义搜索自行过滤。先尝试 knowledge_search，无结果时用 ddg_search 补充。prompt 中已更新为非 CVE-only 表述，包含 unauth service 和 exploitation technique 条目。 |
+| **最佳实践** | `knowledge_search` 查询应使用空 category（`category=""`），让语义搜索自行过滤。先尝试 knowledge_search，无结果时用 web-search 补充。prompt 中已更新为非 CVE-only 表述，包含 unauth service 和 exploitation technique 条目。 |
 
 #### SubAgentPool & SubAgents (`darwin/sub_agents/`)
 | 维度 | 详情 |
@@ -293,7 +293,7 @@ run.py / experiments/runner.py
 | **写入** | 工具输出解析 → 传给调用者 (orchestrator 或 sub_agent) |
 | **被谁依赖** | Orchestrator (Solo 直接调用), 所有 SubAgent (通过 MCP Gateway) |
 | **修改影响面** | 新增工具：需要同时在 server 注册 + prompt 模板中告知 LLM。修改输出解析：影响下游所有依赖该工具输出的逻辑。 |
-| **近期新增** | impacket_silver_ticket, tomcat_exploit, wpscan_enum, wp_xmlrpc_brute, oracle_tns_poison, nmap_port_range, searchsploit_copy, php_filter_chain, impacket_ntlmrelayx, ddg_search |
+| **近期新增** | impacket_silver_ticket, tomcat_exploit, wpscan_enum, wp_xmlrpc_brute, oracle_tns_poison, nmap_port_range, searchsploit_copy, php_filter_chain, impacket_ntlmrelayx, web-search |
 | **近期改进** | oracle_query: heredoc→printf（单引号修复）；jwt_forge: claims→claims_b64（base64 编码防单引号破坏）；wp_xmlrpc_brute: 用户列表字符串分割；oracle_tns_poison: PORT 模板变量 + 包长度含 header；gobuster_dir: 自定义 wordlist；ssh_key_exec: BatchMode；mcp_gateway: 自动填充参数默认值 |
 
 #### LLM Session (`darwin/utils/llm.py`)
@@ -605,7 +605,7 @@ CTEG get_suggestions() 返回空或无关结果
         ├── LLM 调用 knowledge_search 时是否用了 category="" ？
         │   └── 非空 category 过滤会导致假阴性
         ├── 对非 HTTP 服务：先尝试 knowledge_search（RAG 已包含 unauth 服务和利用技术条目）
-        │   └── 无结果时用 ddg_search 补充
+        │   └── 无结果时用 web-search 补充
         └── RAG 是否已后台预加载完成？（bootstrap 阶段 asyncio.create_task 并行加载）
 ```
 

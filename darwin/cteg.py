@@ -75,6 +75,35 @@ class ExploitPattern:
 
 
 @dataclass
+class CredentialPattern:
+    """Credential discovered during a penetration test that should persist across runs.
+
+    Unlike ExploitPattern/BypassPattern (which describe techniques), credential
+    patterns store concrete username:password pairs for specific hosts/ports.
+    """
+    pattern_id: str
+    host: str               # target hostname or IP
+    port: int               # target port
+    service_type: str       # "mssql", "mysql", "ssh", "http", etc.
+    username: str
+    password: str
+    source: str = ""        # "user_provided", "discovered", "brute_force", "default"
+    total_successes: int = 1
+    last_successful_use: str = ""
+    half_life_days: int = 14
+    created_from_task: str = ""
+
+    @property
+    def is_active(self) -> bool:
+        return self.total_successes > 0
+
+    @property
+    def key(self) -> str:
+        """Unique key for deduplication: host:port:username"""
+        return f"{self.host}:{self.port}:{self.username}"
+
+
+@dataclass
 class TaskRecord:
     """Record of a completed penetration test task for pattern extraction."""
     task_id: str
@@ -184,6 +213,89 @@ class CTEG:
                     node["last_successful_use"] = datetime.now().isoformat()
                     node["reinforcement_count"] = node.get("reinforcement_count", 0) + 1
                 self._persist()
+
+    # ── Credential Persistence ────────────────────────────────────
+
+    def add_credential(
+        self, host: str, port: int, service_type: str,
+        username: str, password: str, source: str = "discovered",
+    ) -> str:
+        """Store a discovered credential for cross-task reuse.
+
+        Deduplicates by host:port:username — if the same credential exists,
+        updates the password and increments the success counter.
+        """
+        cred_key = f"{host}:{port}:{username}"
+        with self._lock:
+            # Check for existing credential
+            for nid, data in self.graph.nodes(data=True):
+                if data.get("type") == "CredentialPattern":
+                    existing_key = f"{data.get('host','')}:{data.get('port','')}:{data.get('username','')}"
+                    if existing_key == cred_key:
+                        data["password"] = password
+                        data["total_successes"] = data.get("total_successes", 0) + 1
+                        data["last_successful_use"] = datetime.now().isoformat()
+                        self._persist()
+                        return nid
+
+            # New credential
+            pattern_id = f"cred-{service_type}-{host}-{port}-{username}"
+            self.graph.add_node(pattern_id, **{
+                "type": "CredentialPattern",
+                "host": host,
+                "port": port,
+                "service_type": service_type,
+                "username": username,
+                "password": password,
+                "source": source,
+                "total_successes": 1,
+                "last_successful_use": datetime.now().isoformat(),
+                "half_life_days": 14,
+                "created_at": datetime.now().isoformat(),
+            })
+            self._persist()
+        return pattern_id
+
+    def get_credentials(
+        self, host: str = "", port: int = 0, service_type: str = "",
+    ) -> list[dict]:
+        """Retrieve known credentials, optionally filtered by host/port/service.
+
+        Returns list of dicts with host, port, service_type, username, password.
+        Sorted by total_successes descending (most reliable first).
+        """
+        creds = []
+        with self._lock:
+            for nid, data in self.graph.nodes(data=True):
+                if data.get("type") != "CredentialPattern":
+                    continue
+                if host and data.get("host", "") != host:
+                    continue
+                if port and data.get("port", 0) != port:
+                    continue
+                if service_type and data.get("service_type", "") != service_type:
+                    continue
+                # Check half-life: credentials older than 14 days are stale
+                last_use = data.get("last_successful_use", "")
+                if last_use:
+                    try:
+                        last_dt = datetime.fromisoformat(last_use)
+                        age_days = (datetime.now() - last_dt).days
+                        if age_days > data.get("half_life_days", 14):
+                            continue
+                    except Exception:
+                        pass
+                creds.append({
+                    "host": data.get("host", ""),
+                    "port": data.get("port", 0),
+                    "service_type": data.get("service_type", ""),
+                    "username": data.get("username", ""),
+                    "password": data.get("password", ""),
+                    "total_successes": data.get("total_successes", 0),
+                    "last_successful_use": last_use,
+                })
+        creds.sort(key=lambda c: c["total_successes"], reverse=True)
+        return creds
 
     # ── Pattern Abstraction ──────────────────────────────────────
 

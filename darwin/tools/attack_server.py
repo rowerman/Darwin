@@ -602,7 +602,7 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
     gateway.register_shell_tool(
         name="test_credential",
         command_template="sshpass -p '{password}' ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 -p {port} {user}@{host} '{command}' 2>&1",
-        description="Test if a username/password combination works on a remote host via SSH. Returns user info if successful. Always specify port — non-standard ports are common.",
+        description="Test SSH credentials ONLY (uses sshpass). Does NOT work for MSSQL, MySQL, HTTP, or other protocols. For database credential testing use mssqlclient_query, mysql_query, psql_query, or oracle_query instead.",
         parameters={
             "user": {"type": "string", "description": "Username to test"},
             "password": {"type": "string", "description": "Password to test"},
@@ -713,6 +713,57 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
         parameters={
             "query": {"type": "string", "description": "Natural language query (e.g. 'IDOR in FastAPI')"},
             "category": {"type": "string", "description": "Optional filter: IDOR, SQLI, AUTH, RECON"},
+        },
+    )
+
+    # ── DuckDuckGo Web Search (Python ddgs, replaces broken MCP) ────
+    async def ddg_web_search(query: str, max_results: int = 8) -> ToolResult:
+        """Search the internet via DuckDuckGo for up-to-date exploitation
+        techniques, default credentials, version-specific PoCs, and recent CVEs.
+        Use TOGETHER with knowledge_search — RAG covers general techniques,
+        web search provides current service-specific details.
+
+        This replaces the unreliable Node MCP ddg-search server (all 3 backends
+        — web-search, iask-search, monica-search — were timing out).
+        """
+        try:
+            from ddgs import DDGS
+            # Only use engines that work in restricted network environments.
+            # yandex + mojeek are the only ones accessible from mainland China.
+            # DuckDuckGo/Google/Brave/Yahoo/Startpage all timeout (GFW).
+            results = list(DDGS(timeout=8).text(
+                query,
+                max_results=max(1, min(max_results, 15)),
+                backend="yandex,mojeek",
+            ))
+            if not results:
+                return ToolResult(tool_name="ddg_web_search", success=True,
+                    stdout="No results found.", stderr="", exit_code=0, elapsed_ms=0)
+            lines = []
+            for i, r in enumerate(results):
+                lines.append(f"{i+1}. **{r.get('title', '')}**")
+                lines.append(f"   URL: {r.get('href', '')}")
+                body = r.get('body', '') or ''
+                if body:
+                    lines.append(f"   {body[:300]}")
+                lines.append("")
+            return ToolResult(tool_name="ddg_web_search", success=True,
+                stdout="\n".join(lines), stderr="", exit_code=0, elapsed_ms=0)
+        except ImportError:
+            return ToolResult(tool_name="ddg_web_search", success=False,
+                stdout="ddgs library not installed. Run: pip install ddgs",
+                stderr="", exit_code=1, elapsed_ms=0)
+        except Exception as e:
+            return ToolResult(tool_name="ddg_web_search", success=False,
+                stdout=f"Search failed: {e}", stderr="", exit_code=1, elapsed_ms=0)
+
+    gateway.register(
+        name="ddg_web_search",
+        func=ddg_web_search,
+        description="Search the internet via DuckDuckGo for current exploitation techniques, default credentials, version-specific PoCs, and recent CVEs. Use together with knowledge_search. Parameters: query (search terms), max_results (1-15, default 8).",
+        parameters={
+            "query": {"type": "string", "description": "Search query (e.g. 'MSSQL sa default password exploitation')"},
+            "max_results": {"type": "integer", "description": "Max results (1-15, default 8)"},
         },
     )
 
@@ -908,7 +959,7 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
     gateway.register_shell_tool(
         name="mssql_query",
         command_template="sqlcmd -S {host},{port} -U {user} -P '{password}' -Q '{query}' 2>&1",
-        description="Execute a SQL query on a Microsoft SQL Server. Use for data extraction, xp_cmdshell enabling, and linked server enumeration.",
+        description="Execute a SQL query on a Microsoft SQL Server using sqlcmd. If sqlcmd is not available, use mssqlclient_query instead (uses impacket, already installed).",
         parameters={
             "host": {"type": "string", "description": "MSSQL host IP or hostname"},
             "port": {"type": "integer", "description": "MSSQL port (default 1433)"},
@@ -918,6 +969,64 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
         },
         parser=_parse_shell_output,
         timeout=30,
+    )
+    async def _mssqlclient_query(host: str = "localhost", port: int = 1433,
+                                 user: str = "sa", password: str = "",
+                                 query: str = "SELECT @@version",
+                                 **kwargs) -> ToolResult:
+        """Execute a SQL query on MSSQL using impacket's mssqlclient.py."""
+        # Accept common parameter name variations
+        if not host or host == "localhost":
+            host = str(kwargs.get("server", kwargs.get("hostname", host)))
+        if user == "sa":
+            user = str(kwargs.get("username", user))
+        import asyncio, time
+        start = time.perf_counter()
+        # Build target string: empty password → no colon + -no-pass flag
+        if password:
+            target_str = f"{user}:{password}@{host}"
+            cmd = f"mssqlclient.py -port {port} {target_str} -command '{query}' 2>&1"
+        else:
+            target_str = f"{user}@{host}"
+            cmd = f"mssqlclient.py -port {port} -no-pass {target_str} -command '{query}' 2>&1"
+        try:
+            proc = await asyncio.create_subprocess_shell(
+                cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=30)
+            stdout_s = stdout.decode("utf-8", errors="replace")
+            stderr_s = stderr.decode("utf-8", errors="replace")
+            elapsed = (time.perf_counter() - start) * 1000
+            # impacket's mssqlclient.py returns exit 0 even on auth failure —
+            # detect "Login failed" in output to mark as failure so dependent
+            # plan tasks don't get incorrectly unblocked.
+            combined = (stdout_s + stderr_s).lower()
+            auth_failed = "login failed" in combined
+            success = proc.returncode == 0 and not auth_failed
+            return ToolResult(
+                tool_name="mssqlclient_query", success=success,
+                stdout=stdout_s, stderr=stderr_s,
+                exit_code=proc.returncode or 0, elapsed_ms=elapsed,
+            )
+        except asyncio.TimeoutError:
+            elapsed = (time.perf_counter() - start) * 1000
+            return ToolResult(tool_name="mssqlclient_query", success=False,
+                stdout="", stderr=f"Timed out after 30s",
+                exit_code=-1, elapsed_ms=elapsed)
+        except Exception as e:
+            elapsed = (time.perf_counter() - start) * 1000
+            return ToolResult(tool_name="mssqlclient_query", success=False,
+                stdout="", stderr=str(e), exit_code=-1, elapsed_ms=elapsed)
+
+    gateway.register(
+        name="mssqlclient_query", func=_mssqlclient_query,
+        description="Execute a SQL query on MSSQL using impacket's mssqlclient.py (pre-installed, works without sqlcmd). Use for data extraction, xp_cmdshell enabling, and linked server enumeration. Preferred over mssql_query on Linux.",
+        parameters={
+            "host": {"type": "string", "description": "MSSQL host IP or hostname"},
+            "port": {"type": "integer", "description": "MSSQL port (default 1433)"},
+            "user": {"type": "string", "description": "Database username"},
+            "password": {"type": "string", "description": "Database password"},
+            "query": {"type": "string", "description": "SQL query to execute"},
+        },
     )
     gateway.register_shell_tool(
         name="oracle_query",
@@ -951,16 +1060,22 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
 
     gateway.register_shell_tool(
         name="netexec_enum",
-        command_template="netexec smb {target} --shares 2>&1",
-        description="Enumerate SMB shares on a target host using NetExec",
-        parameters={"target": {"type": "string", "description": "Target IP or hostname"}},
+        command_template="netexec {protocol} {target} -u '{user}' -p '{password}' {extra_flags} 2>&1",
+        description="Enumerate a target using NetExec (nxc). Supports protocols: smb, mssql, winrm, ssh, rdp, ftp. Use for share enumeration, user listing, and credential testing. Common flags: --shares (SMB), --users (LDAP), --local-auth (MSSQL).",
+        parameters={
+            "protocol": {"type": "string", "description": "Protocol: smb, mssql, winrm, ssh, ldap, rdp, ftp"},
+            "target": {"type": "string", "description": "Target IP[:port] or hostname"},
+            "user": {"type": "string", "description": "Username for authentication", "default": ""},
+            "password": {"type": "string", "description": "Password for authentication", "default": ""},
+            "extra_flags": {"type": "string", "description": "Extra nxc flags, e.g. --shares, --users, --local-auth", "default": ""},
+        },
         parser=_parse_shell_output,
         timeout=60,
     )
     gateway.register_shell_tool(
         name="netexec_ldap_enum",
-        command_template="netexec ldap {target} -u {user} -p '{password}' --users 2>&1",
-        description="Enumerate AD users via LDAP using NetExec",
+        command_template="netexec ldap {target} -u '{user}' -p '{password}' --users 2>&1",
+        description="Enumerate AD users via LDAP using NetExec (nxc)",
         parameters={"target": {"type": "string"}, "user": {"type": "string"}, "password": {"type": "string"}},
         parser=_parse_shell_output,
         timeout=60,

