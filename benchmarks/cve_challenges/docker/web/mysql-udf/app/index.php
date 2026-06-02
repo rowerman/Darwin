@@ -1,6 +1,6 @@
 <?php
 // Vulnerable MySQL web app with SQLi entry point
-$mysqli = new mysqli(getenv('DB_HOST') ?: 'db', 'app', 'apppass', 'vulnapp');
+$mysqli = new mysqli(getenv('DB_HOST') ?: 'db', 'root', 'rootpass123', 'vulnapp');
 if ($mysqli->connect_error) {
     die("DB connection failed: " . $mysqli->connect_error);
 }

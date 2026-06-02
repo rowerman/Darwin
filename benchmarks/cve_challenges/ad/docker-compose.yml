@@ -12,18 +12,20 @@ services:
       DOMAINPASS: Password123!
       NOCOMPLEXITY: "true"
       INSECURELDAP: "true"
+    # Host ports remapped to 10000-14000 range for compliance
+    # DARWIN agents connect via Docker bridge IP (192.168.100.10) on standard ports
     ports:
-      - "53:53"
-      - "53:53/udp"
-      - "88:88"
-      - "88:88/udp"
-      - "389:389"
-      - "445:445"
-      - "139:139"
-      - "135:135"
-      - "3268:3268"
-      - "464:464"
-      - "464:464/udp"
+      - "10053:53"
+      - "10053:53/udp"
+      - "10088:88"
+      - "10088:88/udp"
+      - "10389:389"
+      - "10445:445"
+      - "10139:139"
+      - "10135:135"
+      - "10326:3268"
+      - "10464:464"
+      - "10464:464/udp"
     networks:
       ad-net:
         ipv4_address: 192.168.100.10

@@ -9,6 +9,7 @@ venv/
 
 # checkpoint
 checkpoint/
+experiments_results/
 
 # secret
 config/

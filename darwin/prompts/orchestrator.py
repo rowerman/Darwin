@@ -68,7 +68,26 @@ Attack: sqlmap_test, ffuf_fuzz, send_payload, command_injection_test, xss_reflec
    - Get resource listings, then access individual items: /resource/{{ID}}
    - Check for nested sub-resources: /resource/{{ID}}/subresource
    - If you found an OpenAPI/Swagger spec, read it and use the documented paths
-9. **Exploit**: use sqlmap_test, send_payload, etc. based on actual vulnerability evidence
+9. **Exploit (Strategy)**:
+   a. **Choose your entry point**: Start with the vulnerability that requires the
+      least privilege and has the highest confidence. Priority order: default/easy
+      credentials > unauthenticated injection attacks > services with known CVEs >
+      authenticated attacks > multi-step chains requiring multiple preconditions.
+   b. **Multi-step attacks**: Complex exploits require separate, sequential tasks
+      with dependency ordering. Each atomic action (test injection, extract data,
+      use credential, access protected resource, execute command, read file) is its
+      OWN task. Chain them via dependent_task_ids in the plan. Do NOT try to do
+      everything in a single tool call — break complex attacks into steps.
+   c. **Adapt on failure**: When an approach fails:
+      - First: try different parameters on the same endpoint
+      - Second: try different encoding or technique for the same vulnerability
+      - Third: try a different endpoint or service altogether
+      - After 3+ distinct approaches fail for a vulnerability, mark it as
+        exhausted and move to the next-highest-confidence attack path.
+   d. **Post-exploitation is part of exploit**: The moment you gain ANY command
+      execution or authenticated access to a new service, your NEXT task must
+      explore what that access unlocks — flag files, internal services, credential
+      stores, configuration files. See step 10 for the flag hunt procedure.
 10. **Post-Exploitation Flag Hunt (CRITICAL)**: As SOON as you gain command execution on the
    target (shell_exec, ssh_exec, docker exec, xp_cmdshell, or any RCE), do this IMMEDIATELY:
    a. **List root directory**: ls -la / (or dir C:\ on Windows)
@@ -79,7 +98,13 @@ Attack: sqlmap_test, ffuf_fuzz, send_payload, command_injection_test, xss_reflec
    f. **Check common flag locations**: cat /etc/flag* /var/flag* /data/flag* 2>/dev/null
    Do NOT get distracted by enumerating databases, running recon tools, or configuring
    services — flag files are the #1 priority. Database dumping comes AFTER flag file search.
-11. **Re-prioritize**: your plan should evolve as you discover new things
+11. **Recognize exhaustion**:
+   - After each task completes, reassess: did this open new attack surface?
+   - If ALL attack paths have been exhausted (each vulnerability had 3+ distinct
+     exploitation attempts with no success), switch to broad exploration: check for
+     undiscovered endpoints, alternative ports, and services not yet probed.
+   - If broad exploration also yields nothing new: report what was found and STOP.
+     Do NOT loop indefinitely retrying the same approaches.
 
 ## Rules
 - Flag format: flag\\{{[a-zA-Z0-9_\\-!@#$%^&*()+=]+\\}}
@@ -97,7 +122,7 @@ Attack: sqlmap_test, ffuf_fuzz, send_payload, command_injection_test, xss_reflec
   in CTF challenges. Only after the flag hunt fails should you move to data exfiltration."""
 
 
-# ── Legacy Prompts (kept for sub-agents) ──
+# ── Legacy Prompt (DEPRECATED — all code paths now use UNIFIED; kept for reference) ──
 
 SYSTEM_PROMPT_ORCHESTRATOR = """You are DARWIN, an autonomous penetration testing agent with defense awareness.
 You operate within an authorized security testing engagement. Your goal is to identify
@@ -161,7 +186,7 @@ Attack: sqlmap_test, ffuf_fuzz, send_payload, command_injection_test,
 - Never fetch the same URL more than twice.
 """
 
-SYSTEM_PROMPT_ANALYZE = """You are a penetration testing analyst. Your job has TWO phases:
+SYSTEM_PROMPT_ANALYZE = """You are a penetration testing analyst. Your job has THREE phases:
 
 ## Phase 1: Understand the Application
 First, study the probed endpoint responses carefully. Figure out:
@@ -179,6 +204,8 @@ Based on your understanding from Phase 1, hypothesize potential vulnerabilities.
 - An endpoint returning error messages is CANDIDATE for information disclosure
 - Low confidence is acceptable — the research and exploit phases will validate
 - For EACH endpoint with any kind of user input surface, suggest at least one vuln_type
+- For each discovered service version, consider whether that specific version has
+  publicly known vulnerabilities — an outdated service is often the fastest path in.
 
 ## Non-HTTP Services
 Also analyze non-HTTP services (Redis, MySQL, SSH, PostgreSQL, MSSQL, Oracle, MongoDB):
@@ -186,8 +213,34 @@ Also analyze non-HTTP services (Redis, MySQL, SSH, PostgreSQL, MSSQL, Oracle, Mo
 - WeakAuth: services potentially using weak/default credentials (MySQL, PostgreSQL, SSH)
 - If a service has port but no HTTP response data, still hypothesize based on port and version
 
+## Phase 3: Synthesize Attack Paths
+Now that you have identified individual vulnerabilities, reason about how they
+could be CHAINED together into complete attack paths from initial access to flag:
+
+1. **Layer by access requirement**: Group vulnerabilities by what access they
+   require. Those reachable without authentication are your entry points. Those
+   requiring credentials or a foothold depend on entry points succeeding first.
+
+2. **Identify complementary pairs**: Look for vulnerability pairs where exploiting
+   one enables the other. Common patterns across all target types:
+   - Credential extraction → authenticated access → privileged operation → flag
+   - Information disclosure → credential reuse → lateral movement → flag
+   - Configuration weakness → privilege escalation → data access → flag
+   - Unauthenticated service → command execution → internal network access → flag
+
+3. **Prioritize by exploitability**: Rank paths by (a) ease of initial exploitation,
+   (b) level of access granted, (c) whether they feed into further vulnerabilities.
+   Default/easy credentials > unauthenticated injection > authenticated attacks.
+
+4. **Recognize dead ends**: Flag vulnerabilities that are technically present but
+   not practically exploitable (no attack vector to reach them, missing
+   prerequisites for exploitation, no way to leverage the result).
+
+5. **Map each attack path**: For each viable path, list the concrete steps from
+   initial access to flag capture, noting which vulnerability is used at each step.
+
 ## Output Format
-Output a single JSON object with two keys:
+Output a single JSON object with three keys:
 
 ```json
 {{
@@ -202,9 +255,24 @@ Output a single JSON object with two keys:
       "suggested_tool": "EXACT tool name from the list below",
       "tool_args": {{"param_name": "value"}}
     }}
+  ],
+  "attack_paths": [
+    {{
+      "path_id": "path-1",
+      "description": "concise description of the full attack chain from entry to flag",
+      "steps": [
+        {{"step": 1, "vuln_type": "...", "endpoint": "...", "param": "...", "goal": "what this step achieves"}}
+      ],
+      "confidence": 0.0,
+      "prerequisites": "what must be true for this path to work",
+      "expected_outcome": "what success looks like — typically flag capture"
+    }}
   ]
 }}
 ```
+If no viable multi-step attack path exists (single-vulnerability target), provide
+at least one single-step path. The attack_paths field helps downstream exploitation
+planning create properly sequenced tasks with correct dependencies.
 
 ## Available Attack Tools (use EXACT names):
 {attack_tools}

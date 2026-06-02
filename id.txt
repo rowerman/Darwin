@@ -4,7 +4,7 @@ claude --resume fabf9fc3-94ba-4ed3-bdf5-c3ea9ede8b4f
 claude --resume 16fc2148-f264-447b-8dc2-80a15cabd6c7
 claude --resume cea7fc55-c474-4cea-8a40-9858b2190496
 claude --resume ac31c0d0-8b76-4778-9ea6-cc973e6a998d
-claude --resume 51047d50-32ee-4fae-83d0-9cee350cdd65    # benchmark 设计
+claude --resume 8c4ed688-9040-428c-80e4-d1a29073ae68    # benchmark 设计
 claude --resume 7dda022f-8f1d-46d4-b1b0-a3ba052ad7f6    # skill设计
 claude --resume 5ce3ee46-37d4-4b67-a227-6f67ab60e5d2
 claude --resume fdcb76fd-ba27-4944-8784-049822d04d93

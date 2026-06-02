@@ -6,8 +6,8 @@
       "is_reachable": true,
       "is_internal": false,
       "type": "Host",
-      "created_at": "2026-06-01T17:36:16.120591",
-      "updated_at": "2026-06-01T17:36:16.120604",
+      "created_at": "2026-06-02T16:28:53.095371",
+      "updated_at": "2026-06-02T16:28:53.095385",
       "_version": 1
     },
     {
@@ -16,9 +16,10 @@
       "protocol": "tcp",
       "version": "Apache httpd 2.4.67 ((Debian))",
       "banner": "http",
+      "service_name": "http",
       "type": "Service",
-      "created_at": "2026-06-01T17:36:16.120634",
-      "updated_at": "2026-06-01T17:36:16.120637",
+      "created_at": "2026-06-02T16:28:53.095416",
+      "updated_at": "2026-06-02T16:28:53.095419",
       "_version": 1
     },
     {
@@ -27,15 +28,15 @@
       "method": "GET",
       "params": "",
       "sample_status": 200,
-      "sample_response": "HTTP/1.1 200 OK\r\nDate: Mon, 01 Jun 2026 09:36:16 GMT\r\nServer: Apache/2.4.67 (Debian)\r\nX-Powered-By: PHP/8.2.31\r\nVary: Accept-Encoding\r\nContent-Length: 197\r\nContent-Type: text/html; charset=UTF-8\r\n\r\n<br />\n<b>Fatal error</b>:  Uncaught Error: Class &quot;mysqli&quot; not found in /var/www/html/index.php:3\nStack trace:\n#0 {main}\n  thrown in <b>/var/www/html/index.php</b> on line <b>3</b><br />\n",
+      "sample_response": "HTTP/1.1 200 OK\r\nDate: Tue, 02 Jun 2026 08:28:53 GMT\r\nServer: Apache/2.4.67 (Debian)\r\nX-Powered-By: PHP/8.2.31\r\nVary: Accept-Encoding\r\nContent-Length: 197\r\nContent-Type: text/html; charset=UTF-8\r\n\r\n<br />\n<b>Fatal error</b>:  Uncaught Error: Class &quot;mysqli&quot; not found in /var/www/html/index.php:3\nStack trace:\n#0 {main}\n  thrown in <b>/var/www/html/index.php</b> on line <b>3</b><br />\n",
       "response_size": 395,
       "discovered_by": "bootstrap",
       "type": "Endpoint",
-      "created_at": "2026-06-01T17:36:18.389794",
-      "updated_at": "2026-06-01T17:36:18.389813",
+      "created_at": "2026-06-02T16:28:55.428805",
+      "updated_at": "2026-06-02T16:28:55.428825",
       "_version": 1
     }
   ],
   "edges": [],
-  "created_at": "2026-06-01T17:36:03.728622"
+  "created_at": "2026-06-02T16:28:40.637135"
 }

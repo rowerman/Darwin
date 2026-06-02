@@ -1,5 +1,54 @@
 # DARWIN Framework Changes — 2026-05-29
 
+## 2026-06-02 (tools + knowledge: benchmark capability gap fill)
+
+**背景**: 对照 `benchmarks/cve_challenges/docs/` 中 50 个场景 + 22 条攻击链，识别 DARWIN 缺失的工具和知识条目。
+
+**新增工具 (4)**:
+- **darwin/tools/attack_server.py — `mysql_file_write`**: MySQL SELECT INTO DUMPFILE 二进制文件写入。用 hex-encoded content 通过 `mysql -e` 写入 MySQL 服务器文件系统。填补 MySQL UDF 提权的关键工具缺口（WEB-08, DB-02, 2 条链）。
+- **darwin/tools/attack_server.py — `impacket_getST`**: S4U2Self/S4U2Proxy 约束委派攻击。填补 AD-16 (Constrained Delegation) 和 kerb-to-deleg 链的工具缺口。
+- **darwin/tools/attack_server.py — `smb_client`**: SMB/CIFS 文件读写。填补 GPP/cpassword 提取（AD-13）和 SMB 文件访问的缺口。
+- **darwin/tools/attack_server.py — `etcdctl_get` 增强**: 新增 `key` 和 `output_opts` 参数。支持读取具体 Secret 的完整值（-o json），不再只做 keys-only。影响所有 12 条以 etcd 为终点的 K8s 链。
+
+**VULN_TOOL_MAP 扩增**:
+- **darwin/orchestrator.py**: 新增 11 个漏洞类型映射（deserialization, ssrf, xxe, jwt, race condition, informationdisclosure, privilege_escalation, container_escape, mysql_file_write, mysql_udf, postgres_rce）。FUZZY_MAP 新增 6 个关键词。
+
+**新增知识条目 (11)**:
+- **knowledge/db_exploitation.json** (新文件): MySQL UDF 提权, PostgreSQL COPY PROGRAM RCE, MSSQL xp_cmdshell 启用, MSSQL Linked Server 横向移动
+- **knowledge/cloud/k8s_escape_techniques.json** (新文件): cgroup release_agent 逃逸, Kubelet 匿名 API, etcd 导航, CRI socket 逃逸, Docker socket 逃逸, hostPath symlink 逃逸, SA token 跨命名空间横向移动
+
+**RAG**: 8073 total entries (rebuild 后)
+
+**验证**: Pytest 90 passed (0.31s), import test 通过, RAG rebuild 成功
+
+## 2026-06-02 (fix: CTEG credential leak → LLM drift)
+
+**根因**: `_current_svc_names` set 包含空字符串 (`{""}`)，因为 bootstrap Service 节点没有 `service_name` 字段。`"" in "mssql"` 在 Python 中永远为 True → CTEG 凭据的 service match filter 完全失效 → 所有历史凭据（包括 `sa:Password123! → localhost:10119`）泄漏到当前靶机的 LLM context → LLM 在 plan review 阶段创造虚构目标的任务（nmap_full_scan, MSSQL 探测 port 10119, K8s）。
+
+**修复**:
+- **darwin/orchestrator.py — Fix 1 (根因)**: `_current_svc_names` 构建时过滤掉空的 service_name：`if s.get("service_name")`。修复后空 set → `_svc_match` = False → 凭据只能通过 port 精确匹配进入。
+- **darwin/orchestrator.py — Fix 3 (数据完整性)**: Bootstrap `_bootstrap_scan()` 创建 Service 节点时新增 `service_name` 字段（来自 nmap 输出）。2 处 Service 节点创建均添加。
+- **darwin/orchestrator.py — Fix 4 (防御层)**: Plan review prompt 新增 "Target Consistency" 提醒：LLM 只能为 reconnaissance 已确认的服务创建 task，未发现的端口/服务上的凭据不可用于当前靶机。
+
+**验证**: Pytest 90 passed (0.32s)。空字符串匹配逻辑确认：修复前 `{""}` → `"" in "mssql"` = True (bug)；修复后空 set → `_svc_match` = False。
+
+## 2026-06-02 (prompt: attack path reasoning)
+
+**核心问题**: LLM 拥有 Recon + Research 知识但无法合成攻击链、设计带依赖关系的攻击 task。根因：prompt 引导 LLM 识别独立漏洞，但无攻击链合成指引。
+
+**修改**:
+- **darwin/prompts/orchestrator.py — SYSTEM_PROMPT_ANALYZE**: 新增 Phase 3 "Synthesize Attack Paths"（5 步推理框架）+ attack_paths JSON 输出字段。Phase 2 扩展版本对照子步骤。
+- **darwin/prompts/orchestrator.py — SYSTEM_PROMPT_ORCHESTRATOR_UNIFIED**: 将 1 句话的 Exploit 步骤(step 9)替换为 4 段策略块（入口选择→多步分解→失败自适应→后利用集成）。step 11 "Re-prioritize" 改为 "Recognize exhaustion"（含停止条件）。
+- **darwin/orchestrator.py — _generate_exploitation_plan()**: 在 RAG context 与 Task format 之间插入"Synthesizing Knowledge into Attack Tasks"知识合成桥梁。
+- **darwin/prompts/exploit_agent.py — SYSTEM_PROMPT_EXPLOIT_EVALUATE**: Key indicators 从 5 种扩展到 15 种漏洞类型（SSTI/LFI/XXE/IDOR/SSRF/反序列化/JWT/FileUpload 等）。
+- **darwin/data_model.py — to_prompt_context()**: 漏洞假设/凭据段落无数据时输出显式空状态文本。
+- **darwin/orchestrator.py**: 统一双 Prompt — 6 处 legacy SYSTEM_PROMPT_ORCHESTRATOR 引用替换为 UNIFIED。
+- **darwin/orchestrator.py**: CTEG/RAG 无数据时输出明确 fallback 消息。
+
+**泛用性**: 所有攻击链示例为抽象模式，无硬编码路径/端口/CVE，适用于 Web/DB/K8s/AD 场景。向后兼容。
+
+**验证**: import test 通过、pytest 90 passed (0.33s)、模板 .format() 无 KeyError。
+
 ## 2026-06-01 (dependency + file:// fixes)
 - **darwin/orchestrator.py**: `_select_next_plan_task` 新增全部依赖失败检测。当任务的所有依赖都是 FAILED 时，任务标记为 skipped（如"如果任何凭据成功，枚举数据库"的 7 个凭据全部失败时，后续利用任务不应执行）。修复前 FAILED 被当作"依赖满足"解锁下游任务。
 - **darwin/orchestrator.py**: `_sanitize_plan_tools` 新增 `file://` URL 检测。Plan 任务中 `curl_get`/`http_post` 使用 `file://` 协议时直接标记为 skipped。同时在工具执行时（line ~1860）拦截 `file://` URL 调用并返回 BLOCKED 错误。

@@ -289,7 +289,8 @@ class Orchestrator:
             _current_svc_names = {
                 (s.get("service_name", "") or "").lower()
                 for s in self.dkg.query_nodes("Service")
-            }
+                if s.get("service_name")  # exclude nodes without service_name (empty
+            }                              # string matches ALL strings in Python)
             _cteg_creds = self.cteg.get_credentials(host=self.target_host)
             _cteg_creds_filtered = []
             for _c in _cteg_creds[:10]:
@@ -594,6 +595,7 @@ class Orchestrator:
                 "port": p["port"], "protocol": "tcp",
                 "version": p.get("version", "") or p.get("service", ""),
                 "banner": p.get("service", ""),
+                "service_name": p.get("service", ""),  # nmap service name for CTEG filtering
             })
 
         # AD detection
@@ -1875,7 +1877,7 @@ class Orchestrator:
                 )
                 content, task_tool_calls = self.llm.generate(
                     prompt=task_prompt,
-                    system_prompt=SYSTEM_PROMPT_ORCHESTRATOR,
+                    system_prompt=SYSTEM_PROMPT_ORCHESTRATOR_UNIFIED,
                     tools=tool_defs,
                 )
 
@@ -1884,7 +1886,7 @@ class Orchestrator:
                     content2, task_tool_calls = self.llm.generate(
                         prompt=f"You MUST call the tool '{task_tool}' now. "
                                f"Do not explain. Just execute the function call.",
-                        system_prompt=SYSTEM_PROMPT_ORCHESTRATOR,
+                        system_prompt=SYSTEM_PROMPT_ORCHESTRATOR_UNIFIED,
                         tools=tool_defs,
                     )
                 if not task_tool_calls:
@@ -2333,6 +2335,17 @@ class Orchestrator:
             "idor-url-path": ["curl_get"],
             "auth": ["curl_get"],
             "csrf": ["curl_get"],
+            "deserialization": ["send_payload", "shell_exec"],
+            "ssrf": ["curl_get"],
+            "xxe": ["send_payload"],
+            "jwt": ["jwt_forge"],
+            "race condition": ["send_payload", "shell_exec"],
+            "informationdisclosure": ["curl_get"],
+            "privilege_escalation": ["shell_exec", "linux_priv_check"],
+            "container_escape": ["check_capabilities", "check_mounts", "shell_exec"],
+            "mysql_file_write": ["mysql_file_write"],
+            "mysql_udf": ["mysql_query", "mysql_file_write", "shell_exec"],
+            "postgres_rce": ["psql_query", "shell_exec"],
             "authbypass": ["redis_cmd", "mysql_query", "psql_query", "mssql_query", "mssqlclient_query", "mssqlclient_query",
                           "oracle_query", "ssh_exec", "shell_exec"],
             "weakauth": ["mssqlclient_query", "mssql_query", "mysql_query",
@@ -2346,6 +2359,12 @@ class Orchestrator:
             "cmdi": ["command_injection_test"],
             "idor": ["curl_get"],
             "auth": ["curl_get"],
+            "deserialization": ["send_payload"],
+            "ssrf": ["curl_get"],
+            "xxe": ["send_payload"],
+            "jwt": ["jwt_forge"],
+            "privilege": ["shell_exec", "linux_priv_check"],
+            "escape": ["check_capabilities", "check_mounts", "shell_exec"],
         }
 
         def _resolve_tools(vt: str) -> list[str]:
@@ -2766,6 +2785,8 @@ class Orchestrator:
         )
         if cteg_suggestions.get("bypass_strategies") or cteg_suggestions.get("exploit_strategies"):
             prompt += f"\n\nPrior cross-task experience suggests:\n{json.dumps(cteg_suggestions, indent=2)}"
+        else:
+            prompt += "\n\nNo prior cross-task experience available for this target type."
 
         self._maybe_compress()
         tokens_before = self.llm.token_count
@@ -4286,6 +4307,14 @@ class Orchestrator:
         except Exception:
             pass
 
+        # If RAG returned nothing, provide a clear fallback so the prompt
+        # doesn't have a blank "Attack Pattern Knowledge" section.
+        if not rag_context:
+            rag_context = ("\n## Attack Pattern Knowledge\n"
+                           "No stored attack patterns matched the target's "
+                           "technology stack. Use general exploitation knowledge "
+                           "and web search for technique guidance.\n")
+
         prompt = f"""Target: {target_url}
 
 ## Discovered Services (from nmap)
@@ -4299,6 +4328,19 @@ class Orchestrator:
 ## Analyzed Vulnerabilities
 {self._format_vulnerability_summary()}
 {rag_context}
+## Synthesizing Knowledge into Attack Tasks
+You have received multiple intelligence sources above:
+- Vulnerability hypotheses from the analysis phase
+- Attack pattern knowledge (if RAG results matched your target's technology stack)
+- Service version information from reconnaissance
+
+Your job: COMBINE these sources when designing each task.
+- When an attack pattern matches a discovered service: use the pattern's technique as the task's approach. The RAG result title and techniques field tell you exactly what to do.
+- When patterns do NOT match: rely on general vulnerability exploitation principles for that vulnerability type.
+- Service versions are primary signals: an outdated service with known weaknesses should generate high-priority exploitation tasks targeting those specific weaknesses.
+- If the analyze phase produced attack_paths, translate each path into a chain of tasks with dependent_task_ids reflecting the path's step ordering. A 4-step path becomes 4 tasks where each depends on the previous one.
+- Tasks targeting DIFFERENT services or vulnerabilities with no shared prerequisites should have empty dependent_task_ids so they can execute in parallel.
+
 ## Available Tools (all recon + attack)
 {', '.join(all_tools)}
 
@@ -4995,6 +5037,11 @@ Output ONLY valid JSON:
             f"Review the plan and apply relevant changes from:\n"
             f"- TOTAL tasks MUST NOT exceed 15. If the plan already has 12+ tasks, "
             f"you MUST REMOVE low-quality pending tasks before ADDING new ones\n"
+            f"- **Target Consistency**: Only create tasks for services and ports that "
+            f"were ACTUALLY discovered during reconnaissance (see Current State). "
+            f"If you see credentials for a service whose port is NOT in the discovered "
+            f"services list, do NOT create tasks for it — those credentials are from a "
+            f"different target and are NOT relevant here.\n"
             f"- If credentials or tokens were obtained, ADD tasks that USE them immediately "
             f"(e.g., send authenticated requests to the relevant API endpoint)\n"
             f"- If a task discovered new endpoints/services, ADD exploration tasks for them\n"
@@ -5429,7 +5476,7 @@ payloads and encoding variants if initial attempts might be blocked.
 Respond ONLY with the JSON array."""
 
         # Transition to exploit planning phase (preserve history, swap system prompt)
-        self.llm.replace_system_prompt(SYSTEM_PROMPT_ORCHESTRATOR)
+        self.llm.replace_system_prompt(SYSTEM_PROMPT_ORCHESTRATOR_UNIFIED)
         vuln_count = len(self.vulnerabilities)
         if vuln_count > 0:
             transition_msg = (
@@ -5447,7 +5494,7 @@ Respond ONLY with the JSON array."""
         self._maybe_compress()
         content, _ = self.llm.generate(
             prompt=prompt,
-            system_prompt=SYSTEM_PROMPT_ORCHESTRATOR,
+            system_prompt=SYSTEM_PROMPT_ORCHESTRATOR_UNIFIED,
         )
         self._task_log_event("info", "llm_exploit_plan",
             response=content[:2000],
@@ -5553,7 +5600,7 @@ Respond ONLY with a JSON array of next steps (max 5)."""
                 self._maybe_compress()
                 content2, _ = self.llm.generate(
                     prompt=replan_prompt,
-                    system_prompt=SYSTEM_PROMPT_ORCHESTRATOR,
+                    system_prompt=SYSTEM_PROMPT_ORCHESTRATOR_UNIFIED,
                 )
                 steps = self._extract_json(content2)
                 if not isinstance(steps, list):
@@ -6296,7 +6343,7 @@ Respond ONLY with a JSON array of next steps (max 5)."""
                                 f"Mark tasks that sub-agents completed as done. "
                                 f"Output updated plan as JSON array."
                             ),
-                            system_prompt=SYSTEM_PROMPT_ORCHESTRATOR,
+                            system_prompt=SYSTEM_PROMPT_ORCHESTRATOR_UNIFIED,
                         )
                         if plan_content:
                             try:

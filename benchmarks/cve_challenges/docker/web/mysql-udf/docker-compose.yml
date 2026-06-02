@@ -1,6 +1,8 @@
 services:
   db:
     image: mysql:8.0.35
+    ports:
+      - "10306:3306"
     environment:
       MYSQL_ROOT_PASSWORD: rootpass123
       MYSQL_DATABASE: vulnapp

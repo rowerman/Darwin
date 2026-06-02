@@ -382,3 +382,73 @@ scenarios:
     base_scenario: web-01
     defense: waf
     port: 10101
+
+  # === Phase 10: AD Expansion — Samba-compatible scenarios ===
+  ad-13:
+    id: AD-13
+    name: GPP/cpassword Credential Extraction
+    type: samba-ad
+    difficulty: L1
+    cve: ATT&CK T1552.006
+    path: ad/scenarios/ad-13-gpp
+    dc_ip: 192.168.100.10
+
+  ad-14:
+    id: AD-14
+    name: Silver Ticket Attack
+    type: samba-ad
+    difficulty: L2
+    cve: ATT&CK T1558.002
+    path: ad/scenarios/ad-14-silver
+    dc_ip: 192.168.100.10
+
+  ad-15:
+    id: AD-15
+    name: Targeted Kerberoasting via ACL Abuse
+    type: samba-ad
+    difficulty: L2
+    cve: ATT&CK T1098
+    path: ad/scenarios/ad-15-targeted-kerb
+    dc_ip: 192.168.100.10
+
+  ad-16:
+    id: AD-16
+    name: Constrained Delegation Abuse
+    type: samba-ad
+    difficulty: L2
+    cve: ATT&CK T1558.003
+    path: ad/scenarios/ad-16-constrained-deleg
+    dc_ip: 192.168.100.10
+
+  # === Phase 10: K8s Expansion — new escape techniques ===
+  k8s-16:
+    id: K8S-16
+    name: CRI Socket Mount Escape
+    type: k8s
+    difficulty: L2
+    cve: CRI socket abuse
+    path: k8s/cri-socket-escape
+
+  k8s-17:
+    id: K8S-17
+    name: Docker Socket Mount Escape
+    type: k8s
+    difficulty: L1
+    cve: Docker socket abuse
+    path: k8s/docker-socket-escape
+
+  k8s-18:
+    id: K8S-18
+    name: SA Token Cluster-Admin Escalation
+    type: k8s
+    difficulty: L2
+    cve: RBAC misconfiguration
+    path: k8s/sa-cluster-admin
+
+  k8s-19:
+    id: K8S-19
+    name: CAP_SYS_PTRACE Host Process Injection
+    type: k8s
+    difficulty: L3
+    cve: CAP_SYS_PTRACE abuse
+    path: k8s/cap-sys-ptrace-inject

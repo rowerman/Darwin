@@ -82,15 +82,21 @@ cd benchmarks/cve_challenges
 docker ps --format "table {{.Names}}\t{{.Ports}}" | grep <scenario-id>
 ```
 
+**参考文档**：
+- `benchmarks/cve_challenges/README.md` — 场景总览（44 可用场景 + 22 攻击链）
+- `benchmarks/cve_challenges/docs/scenarios/` — 逐个场景详细利用流程（Docker Web/DB/Linux/AD/K8s 共 50 个文档）
+- `benchmarks/cve_challenges/docs/chains/` — 每条攻击链的完整利用步骤
+- `docs/cve-benchmark-design.md` — 场景设计理念和评估指标
+
 选靶机顺序建议（从简单到复杂，渐进发现框架泛化问题）：
 1. L1 Web 场景（web-03, web-04）→ 验证 Solo 模式基础链路
 2. L2 Web 场景（web-01, web-02）→ 验证多步骤利用
 3. L1 DB 场景（db-05）→ 验证非 HTTP 目标处理
 4. Defense 变体（def-waf）→ 验证 DPM 检测和 bypass
 5. L2 DB 场景 → 验证数据库提权链路
-6. K8s 场景（14 个场景：RBAC、容器逃逸、hostPath、privileged、CAP_SYS_ADMIN 等）→ 验证 CloudAgent 和 multi-agent 模式
-7. AD 场景 → 验证 ADAgent
-8. 攻击链（18 条链）→ 验证跨域和 DKG 跨步骤复用
+6. K8s 场景（18 个场景：RBAC、容器逃逸、hostPath、privileged、CAP_SYS_ADMIN、CRI Socket、Docker Socket、SA Cluster-Admin、CAP_SYS_PTRACE 等）→ 验证 CloudAgent 和 multi-agent 模式
+7. AD 场景（9 个可用场景：Kerberoasting、AS-REP、PTH、DCSync、Golden、GPP/cpassword、Silver Ticket、ACL Kerberoasting、Constrained Delegation）→ 验证 ADAgent
+8. 攻击链（22 条链）→ 验证跨域和 DKG 跨步骤复用
 
 ### 阶段 2：运行实验
 
@@ -219,9 +225,12 @@ run.py / experiments/runner.py
 | **被谁依赖** | run.py, experiments/runner.py, experiments/chain_runner.py |
 | **修改影响面** | 全部。修改 run() 循环逻辑影响三个模式。修改 phase 顺序影响数据流。`_bootstrap_scan` 是三个模式的共同入口，端口遗漏是阻塞性故障。 |
 | **关键参数** | time_budget=1200, token_budget=200000, port_range (benchmark 模式) |
-| **模式耗尽** | `_solo_exhausted` 和 `_multi_exhausted` 独立标志，替代旧的共享 `_surface_exhausted`。Solo 3 次迭代或成功后标记耗尽；Multi-agent 同理。`_should_terminate()` 只在两者均耗尽时才终止。Solo 耗尽后空转会直接 `continue` 跳过。 |
-| **非 HTTP 过滤** | `_bootstrap_scan` 使用 `_NON_HTTP_PORTS`（端口号）和 `_NON_HTTP_SVC_NAMES`（服务名称，如 ssh/redis/mysql/ldap/smb）双重过滤，防止为非 HTTP 服务创建 HTTP 端点（避免后续生成 XSS/SQLi 假阳性）。 |
+| **Prompt 架构** | `SYSTEM_PROMPT_ORCHESTRATOR_UNIFIED` 是唯一的 orchestrator prompt（legacy `SYSTEM_PROMPT_ORCHESTRATOR` 已废弃）。所有 6 处引用（exploit plan 生成、plan review、replan、multi-agent 等）统一使用 UNIFIED。Analyze prompt 新增 Phase 3 "Synthesize Attack Paths" 输出 `attack_paths` 字段（多步攻击链推理）。 |
+| **知识合成** | `_generate_exploitation_plan()` 在 RAG context 与 Task format 之间插入 "Synthesizing Knowledge into Attack Tasks" 知识合成桥梁——指导 LLM 将 RAG pattern + 漏洞假设 + 服务版本 结合为一个 task。RAG/CTEG 无数据时输出明确 fallback 消息（非空白段落）。 |
+| **模式耗尽** | `_solo_exhausted` 和 `_multi_exhausted` 独立标志，替代旧的共享 `_surface_exhausted`。Solo 3 次迭代或成功后标记耗尽；Multi-agent 同理。`_should_terminate()` 只在两者均耗尽时才终止。 |
+| **非 HTTP 过滤** | `_bootstrap_scan` 使用 `_NON_HTTP_PORTS`（端口号）和 `_NON_HTTP_SVC_NAMES`（服务名称，如 ssh/redis/mysql/ldap/smb）双重过滤，防止为非 HTTP 服务创建 HTTP 端点。同时为新 Service 节点填充 `service_name` 字段（来自 nmap），用于 CTEG 凭据匹配。 |
 | **RAG 预加载** | `run()` 中通过 `asyncio.create_task(asyncio.to_thread(get_rag))` 后台加载 RAG，与 bootstrap 扫描并行，节省 ~45s 启动时间。 |
+| **CTEG 凭据过滤** | `_current_svc_names` 构建时过滤空 service_name（`if s.get("service_name")`），防止 `"" in "mssql"` 永远为 True 导致历史凭据泄漏到当前靶机。 |
 
 #### DKG (`darwin/dkg.py`)
 | 维度 | 详情 |
@@ -382,7 +391,8 @@ LLM 输出包含不存在的工具名
     │   └── attack_server.py → register_attack_tools()
     │
     ├── 工具名在 prompt 模板中告诉 LLM 了吗？
-    │   ├── Solo 模式 → darwin/prompts/orchestrator.py
+    │   ├── Solo 模式 → darwin/prompts/orchestrator.py（唯一活跃 prompt：UNIFIED）
+    │   │   └── Legacy SYSTEM_PROMPT_ORCHESTRATOR 已废弃，所有代码路径使用 UNIFIED
     │   ├── ReconAgent → darwin/prompts/recon_agent.py
     │   ├── ExploitAgent → darwin/prompts/exploit_agent.py
     │   ├── PivotAgent → darwin/prompts/pivot_agent.py
@@ -426,8 +436,11 @@ _analyze_phase 正确识别了漏洞，但 exploit 阶段失败
     │   ├── 这个 CVE 需要什么利用工具？当前 attack_server 有吗？
     │   ├── 不需要一次性补全，但至少要有 1 个可达路径的工具
     │   ├── 例：需要 PHP filter chain 但只有 sqlmap → 缺工具，注册 php_filter_chain
-    │   └── 非 HTTP 服务（Redis/MySQL/SSH）→ 检查 VULN_TOOL_MAP 是否有 authbypass/weakauth
-    │       映射（redis_cmd, mysql_query, psql_query, mssql_query, oracle_query, ssh_exec）
+    │   ├── 非 HTTP 服务（Redis/MySQL/SSH）→ 检查 VULN_TOOL_MAP 是否有 authbypass/weakauth
+    │   │   映射（redis_cmd, mysql_query, psql_query, mssql_query, oracle_query, ssh_exec）
+    │   └── ExploitAgent 现在能识别 15 种漏洞类型（SSTI/LFI/XXE/IDOR/SSRF/反序列化/JWT/FileUpload/
+    │       Race Condition/WeakAuth 等）——如果 LLM 无法评估工具输出，检查 exploit_agent prompt 的
+    │       Key indicators 是否覆盖了当前漏洞类型
     │
     ├── 第二步：检查 exploit agent 是否能访问必要参数
     │   ├── DKG 中有目标的端口/服务/版本信息吗？
@@ -438,7 +451,12 @@ _analyze_phase 正确识别了漏洞，但 exploit 阶段失败
     │   ├── _systematic_exploit_pass 是否为每个漏洞生成了尝试？
     │   ├── plan 中的 tool name 是否通过 get_close_matches 校验？
     │   ├── _replan_after_failure 是否正确去重了 task ID？
-    │   └── _topological_sort 是否警告了未解决的依赖引用？
+    │   ├── _topological_sort 是否警告了未解决的依赖引用？
+    │   ├── 攻击链合成是否合理？analyze 阶段是否输出了 attack_paths？
+    │   │   └── attack_paths 为 exploitation plan 提供步骤顺序——如果 analyze 没给 attack_paths，
+    │   │       LLM 需要自行推断依赖关系（更易出错）
+    │   └── Plan review 是否有 "Target Consistency" 约束？
+    │       └── 防止 LLM 为未发现的端口/服务创建虚构任务
     │
     └── 第四步：检查验证层
         └── DAVE L4 flag 提取 — 即使 L3 检测到 payload 被修改，L4 也会继续执行
@@ -595,7 +613,11 @@ CTEG get_suggestions() 返回空或无关结果
     ├── CTEG
     │   ├── cteg_state.json 中是否有积累的经验？
     │   ├── BypassPattern/ExploitPattern 的衰减函数是否过快淘汰了经验？
-    │   └── commit_task / commit_attempt 是否在正确的时机被调用？
+    │   ├── commit_task / commit_attempt 是否在正确的时机被调用？
+    │   └── CTEG 凭据是否泄漏到当前靶机？（跨靶机污染）
+    │       └── 检查 `_current_svc_names` 是否包含空字符串 `""`
+    │       └── 如果 Service 节点缺少 `service_name` 字段，`"" in any_string` 永远为 True
+    │           → 所有历史凭据的 service match filter 失效 → LLM 看到不属于当前靶机的凭据
     │
     └── RAG (knowledge_search tool)
         ├── knowledge/ 中对应 collection 是否有相关内容？
@@ -621,6 +643,8 @@ CTEG get_suggestions() 返回空或无关结果
 | 1 | 漏洞确认但利用失败 | 缺工具 | D4 第一步 |
 | 2 | nmap 没扫到端口 | 端口范围不对或 Docker 网络 | D1 |
 | 3 | LLM 行为混乱 | 上下文压缩丢失信息 | D9 |
+| 4 | LLM 为不存在的服务创建任务 | CTEG 凭据跨靶机泄漏 | D11 CTEG 分支 |
+| 5 | 攻击链任务缺少依赖关系 | analyze 未输出 attack_paths | D4 第三步 |
 
 ---
 

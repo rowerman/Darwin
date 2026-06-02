@@ -211,6 +211,10 @@ class PipelineState:
             for v in self.vulnerabilities:
                 parts.append(f"- {v.to_prompt_line()}")
             parts.append("")
+        else:
+            parts.append("## Vulnerability Hypotheses")
+            parts.append("(none identified yet — exploit phase will generate hypotheses)")
+            parts.append("")
 
         if self.services:
             parts.append("## Services")
@@ -225,6 +229,10 @@ class PipelineState:
             for c in self.credentials:
                 parts.append(f"- {c.username}@{c.source_host}"
                              + (f" (hash: {c.hash_value[:20]}...)" if c.hash_value else ""))
+            parts.append("")
+        else:
+            parts.append("## Credentials")
+            parts.append("(none discovered yet)")
             parts.append("")
 
         if self.hosts:

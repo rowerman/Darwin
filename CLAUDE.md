@@ -124,7 +124,7 @@ Orchestrator.run() → recon → analyze → exploit → bypass → verify
 
 The `run()` method (`orchestrator.py:200`) follows this linear phase pipeline for Solo mode. For Coordinated/Distributed modes, it dispatches to `_run_multi_agent_cycle()` (`orchestrator.py:5727`) based on the B dimension threshold from `dynamic_scaling.py`.
 
-Key `Orchestrator` method locations (~6500-line file; line numbers approximate):
+Key `Orchestrator` method locations (~6700-line file; line numbers approximate):
 - `run()` (~line 200) — entry point, main loop with mode dispatch, termination conditions
 - `_unified_llm_loop()` (~line 1484) — Solo mode LLM-driven ReAct loop
 - `_analyze_phase()` (~line 2613) — vulnerability hypothesis generation
@@ -189,7 +189,7 @@ Where:
 - `D_present = 1.0 if defense_complexity > 0.1 else 0.0` — active defenses (WAF/Honey/Trap)
 - `env_complexity = 1.0` for AD (SMB+LDAP), `0.8` for cloud (K8s API), `0.0` otherwise
 
-Canonical implementation: `compute_task_breadth()` at `dynamic_scaling.py:118`.
+Canonical implementation: `compute_task_breadth()` at `dynamic_scaling.py:118`. Note: README.md shows a simplified 3-factor version (`B = 0.4*N + 0.3*M + 0.3*L`); the 6-factor formula here is authoritative.
 
 ## Key design decisions
 
@@ -224,7 +224,7 @@ Docker-based challenge infrastructure for comprehensive evaluation:
   - `_defense/` — 4 defense compose fragments (waf, cloak, honey, trap) + trap-proxy
 - **K8s scenarios** in `k8s/` — 14 deployable scenarios with kind-config, deploy.sh, teardown.sh (K8S-04 is defined in scenarios.yaml but blocked — requires NVIDIA GPU hardware)
 - **AD scenarios** in `ad/scenarios/` — 12 AD scenarios (ad-01 through ad-12) with config.yaml
-- **Management scripts** in `scripts/` — `flag_manager.py`, `generate_defense_variants.py`, `start-scenario.sh`, `stop-scenario.sh`, `validate-all.sh`, `verify-flag.sh`, `scenarios.yaml`
+- **Management scripts** in `benchmarks/cve_challenges/scripts/` — `flag_manager.py`, `generate_defense_variants.py`, `start-scenario.sh`, `stop-scenario.sh`, `validate-all.sh`, `verify-flag.sh`, `scenarios.yaml` (note: the top-level `scripts/` directory only contains `pull_benchmark_images.sh`)
 
 ### Custom defense benchmark (`benchmarks/custom_defense/`)
 - `challenges.py` — 20 local challenge definitions + HTTP challenge server
@@ -262,7 +262,7 @@ Core orchestrator, all agents, tools, RAG, DPM, CTEG, DAVE, and LLM utilities ar
 - `config/darwin.yaml`: Time/token budgets, solo mode limits, defense probe settings, browser config. `max_context_tokens` (180000) and `context_compression_threshold` (0.4).
 - `config/llm.yaml`: Three LLM profiles — `default`, `reasoning`, `classifier`. API key can be set directly in this file or via the corresponding env var (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `DEEPSEEK_API_KEY`, `GEMINI_API_KEY`).
 - `config/waf_fingerprints.yaml`: ModSecurity, Cloudflare, Naxsi, Coraza signatures with detection rules and bypass hints.
-- `config/mcp_servers.yaml`: MCP server configurations for external tool servers. 8 servers defined: `filesystem` (disabled), `brave-search` (disabled), `puppeteer` (enabled), `github` (enabled), `memory` (enabled), `sequential-thinking` (enabled), `ddg-search` (enabled), `nvd` (enabled).
+- `config/mcp_servers.yaml`: MCP server configurations for external tool servers. 8 servers defined: `filesystem` (disabled), `brave-search` (disabled), `puppeteer` (enabled), `github` (enabled), `memory` (enabled), `sequential-thinking` (enabled), `ddg-search` (disabled — deprecated, replaced by `ddg_web_search` Python tool in attack_server.py), `nvd` (enabled).
 
 **Model path**: DarwinRAG loads SentenceTransformer from `/home/kianabin/utils/all-MiniLM-L6-v2` by default. Override via `DarwinRAG(model_dir=...)` or `--model-dir`.
 
@@ -273,8 +273,8 @@ Core orchestrator, all agents, tools, RAG, DPM, CTEG, DAVE, and LLM utilities ar
 
 ## Runtime state
 
-- **`checkpoints/`** — LangGraph checkpoint JSON files (bootstrap + per-loop snapshots). DKG state is persisted at the end of each loop iteration. Critical for debugging failed runs.
-- **`cteg_state.json`** — Persisted CTEG graph (bypass/exploit patterns with half-life decay). Accumulates across runs.
+- **`checkpoints/`** — LangGraph checkpoint JSON files (bootstrap + per-loop snapshots). DKG state is persisted at the end of each loop iteration. Critical for debugging failed runs. **Note**: despite the `.gitignore` `checkpoint/` pattern (singular), `checkpoints/` (plural) is tracked by git — local run artifacts may appear in `git status`.
+- **`cteg_state.json`** — Persisted CTEG graph (bypass/exploit patterns with half-life decay). Accumulates across runs. Also tracked by git.
 - **DKG persistence**: `dkg.save()` is called each loop iteration via `_checkpoint_path()`. On crash, the last checkpoint preserves all reconnaissance/exploitation state.
 
 ## Flag format

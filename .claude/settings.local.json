@@ -198,7 +198,8 @@
       "Bash(sed -i 's|localhost:12379|localhost:11379|g' k8s/etcd-unauth/deploy.sh)",
       "Bash(sort -t'→' -k2 -n)",
       "Bash(nmap -sV -p 10205 localhost)",
-      "Bash(docker run *)"
+      "Bash(docker run *)",
+      "Bash(git *)"
     ]
   }
 }
