@@ -18,7 +18,7 @@ DARWIN is an LLM-driven adaptive penetration testing agent framework. Two core i
 
 ## Commands
 
-Requires Python >=3.10. Dependencies are in `pyproject.toml`.
+Requires Python >=3.10. Dependencies are in `pyproject.toml`. A `setup.py` also exists at the project root for backward compatibility.
 
 ```bash
 # Create and activate virtual environment (prerequisite for all commands below)
@@ -56,8 +56,13 @@ pytest tests/ -v --cov=darwin --cov=experiments --cov-report=term
 python experiments/runner.py
 
 # Run parallel benchmark experiment (Docker/K8s scenarios with configurable parallelism)
-python experiments/parallel_runner.py --dry-run        # list scenarios without executing
-python experiments/parallel_runner.py --parallel 4     # run with 4 concurrent scenarios
+python experiments/parallel_runner.py --dry-run                  # list scenarios without executing
+python experiments/parallel_runner.py --parallelism 4            # run all Docker + K8s with 4 workers
+python experiments/parallel_runner.py --group docker -p 4        # Docker scenarios only
+python experiments/parallel_runner.py --group k8s -p 2           # K8s scenarios only
+python experiments/parallel_runner.py --scenario WEB-01          # single scenario
+python experiments/parallel_runner.py -s WEB-01 -s WEB-02 -p 2  # specific scenarios in parallel
+python experiments/parallel_runner.py -p 4 --pass-at-k 3         # 3 attempts per scenario
 
 # Start PACEBench adapter server (port 8000)
 python benchmarks/pacebench_adapter.py
@@ -122,16 +127,17 @@ Orchestrator.run() → recon → analyze → exploit → bypass → verify
                         DKG      LLM     DPM+DAVE   DAVE(L1-L4)
 ```
 
-The `run()` method (`orchestrator.py:200`) follows this linear phase pipeline for Solo mode. For Coordinated/Distributed modes, it dispatches to `_run_multi_agent_cycle()` (`orchestrator.py:5727`) based on the B dimension threshold from `dynamic_scaling.py`.
+The `run()` method (`orchestrator.py:204`) follows this linear phase pipeline for Solo mode. For Coordinated/Distributed modes, it dispatches to `_run_multi_agent_cycle()` (`orchestrator.py:6092`) based on the B dimension threshold from `dynamic_scaling.py`.
 
-Key `Orchestrator` method locations (~6700-line file; line numbers approximate):
-- `run()` (~line 200) — entry point, main loop with mode dispatch, termination conditions
-- `_unified_llm_loop()` (~line 1484) — Solo mode LLM-driven ReAct loop
-- `_analyze_phase()` (~line 2613) — vulnerability hypothesis generation
-- `_sanitize_plan_tools()` (~line 3748) — filters/rewrites plan tasks (blacklist, fallback, credential placeholder resolution, file:// detection)
-- `_generate_exploitation_plan()` (~line 3805) — LLM exploitation strategy
-- `_exploit_phase()` (~line 5022) — tool execution and verification
-- `_run_multi_agent_cycle()` (~line 5727) — Coordinated/Distributed dispatch
+Key `Orchestrator` method locations (6750-line file):
+- `run()` (line 204) — entry point, main loop with mode dispatch, termination conditions
+- `_unified_llm_loop()` (line 1553) — Solo mode LLM-driven ReAct loop
+- `_analyze_phase()` (line 2725) — vulnerability hypothesis generation
+- `_sanitize_plan_tools()` (line 3928) — filters/rewrites plan tasks (blacklist, fallback, credential placeholder resolution, file:// detection)
+- `_generate_exploitation_plan()` (line 4062) — LLM exploitation strategy
+- `_analyze_and_fix_task()` (line 4800) — LLM-based task failure classification and retry (up to 2 attempts)
+- `_exploit_phase()` (line 5356) — tool execution and verification
+- `_run_multi_agent_cycle()` (line 6092) — Coordinated/Distributed dispatch
 
 ### Module roles
 
@@ -280,6 +286,14 @@ Core orchestrator, all agents, tools, RAG, DPM, CTEG, DAVE, and LLM utilities ar
 ## Flag format
 
 `flag{...}` — matched by regex `flag\{[a-zA-Z0-9_\-]+\}` (config, `config/darwin.yaml:27` flag_pattern). Note: DAVE L4, orchestrator, and exploit agent modules use a more permissive variant (`flag\{[a-zA-Z0-9_\-!@#$%^&*()+=]+\}`) that also matches special characters. Honeypot flags (`flag{test}`, `flag{example}`, `flag{honeypot}`, etc.) are rejected by DAVE L4.
+
+## Reference exploits
+
+Two standalone WordPress exploit scripts exist at the project root for reference/testing:
+- `48449.py` — WordPress Simple File List ≤ 4.2.2 pre-auth RCE (CVE-2020-36847, original PoC)
+- `52371.py` — Same vulnerability, alternative exploit with multi-threaded scanning
+
+These are not part of the DARWIN framework; they are reference material for WordPress vulnerability testing.
 
 ## What is not yet integrated
 

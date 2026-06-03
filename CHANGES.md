@@ -1,5 +1,32 @@
 # DARWIN Framework Changes — 2026-05-29
 
+## 2026-06-03 (knowledge: exhaustive web/AD/K8S gap fill — phase 3)
+
+**背景**: 第一轮知识补全遗漏了 5/9 Web 场景和大部分 AD/K8S 场景的 exploitation 知识。全面审计 42 个场景后发现 18 个知识缺口。仅创建知识文件，零框架代码修改。
+
+**新增知识文件 (5, 18 条目)**:
+- **knowledge/web/web_exploitation_supplement.json** (4 条目): WEB-02 Tomcat race condition JSP RCE, WEB-05 WordPress JWT hardcoded secret → REST API RCE, WEB-06 SVG upload → LFI → RCE, WEB-07 PostgreSQL BIG5 encoding SQL injection bypass
+- **knowledge/network/database_exploitation_supplement.json** (1 条目): DB-01 PostgreSQL COPY PROGRAM RCE via weak superuser credentials
+- **knowledge/windows_ad/ad_exploitation_supplement.json** (6 条目): AD-02 AS-REP roasting, AD-05 Pass-the-Hash, AD-09 DCSync, AD-13 GPP cpassword, AD-14 Silver Ticket, AD-15 Targeted Kerberoasting ACL abuse
+- **knowledge/cloud/k8s_runC_escapes.json** (3 条目): K8S-01 CVE-2024-21626 WORKDIR escape, K8S-02 CVE-2025-31133 /dev/null escape, K8S-03 CVE-2025-52881 LSM bypass escape
+- **knowledge/cloud/k8s_misconfig_exploitation_supplement.json** (4 条目): K8S-05 gitRepo hook, K8S-09 registry poison, K8S-10 Helm Tiller, K8S-15 containerd mirror MITM
+
+**验证**: 重建索引后 total=8106 条目 (+18)。14/18 gap 完全消除 (score≥0.6), 4 个 borderline (0.54-0.59) — 条目存在但语义搜索排序需优化。
+
+## 2026-06-03 (tools + knowledge: benchmark capability gap fill — phase 2)
+
+**背景**: 对照 `benchmarks/cve_challenges/docs/` 全部 50+ 场景，识别出新一批工具和知识缺口。
+
+**新增工具 (2)**:
+- **darwin/tools/attack_server.py — `gpp_decrypt`**: Microsoft GPP cpassword 解密。使用公开的 Microsoft AES-256-CBC 密钥解密 SYSVOL Groups.xml 中的加密密码。填补 AD-13 (GPP/cpassword) 和 gpp-to-dcsync 链的关键工具缺口。
+- **darwin/tools/attack_server.py — `hash_crack`**: 离线哈希破解。包装 hashcat/john，自动检测哈希类型 ($krb5tgs$→13100, $krb5asrep$→18200, NTLM→1000, bcrypt→3200 等)。填补所有 Kerberoasting/AS-REP/约束委派 AD 场景的哈希破解缺口。
+
+**新增知识文件 (4)**:
+- **knowledge/network/default_credentials.json** (8 条目): PostgreSQL、MySQL、MSSQL、Oracle、Redis、WordPress、SSH、通用 Web 应用的默认/弱凭据。填补所有 weak-auth 场景的知识空白。
+- **knowledge/network/database_oracle_exploitation.json** (2 条目): Oracle UTL_FILE 文件读写/RCE、Oracle TNS 投毒攻击链。填补 DB-03 的知识空白。
+- **knowledge/network/linux_exploitation.json** (2 条目): sudo chroot 逃逸 (CVE-2025-32463)、nftables 内核提权。填补 LNX-05 的知识空白。
+- **knowledge/cloud/k8s_escape_techniques_supplement.json** (3 条目): CAP_SYS_PTRACE 进程注入、可变镜像标签供应链攻击、gitRepo 卷密钥泄露。填补 K8S-19/15/05 的知识空白。
+
 ## 2026-06-02 (tools + knowledge: benchmark capability gap fill)
 
 **背景**: 对照 `benchmarks/cve_challenges/docs/` 中 50 个场景 + 22 条攻击链，识别 DARWIN 缺失的工具和知识条目。

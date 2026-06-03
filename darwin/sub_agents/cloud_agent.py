@@ -45,7 +45,7 @@ class CloudAgent(BaseSubAgent):
             dkg=dkg,
             budget=budget or TokenBudget(),
             tools=tools,
-            llm_session=llm_session,
+            llm_session=llm_session or LLMSession.from_config("default"),
         )
         self.cloud_context = cloud_context or {}
         self._system_prompt = SYSTEM_PROMPT_CLOUD

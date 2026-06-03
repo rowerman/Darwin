@@ -420,6 +420,51 @@ scenarios:
     path: ad/scenarios/ad-16-constrained-deleg
     dc_ip: 192.168.100.10
 
+  ad-17:
+    id: AD-17
+    name: RBCD Computer Takeover
+    type: samba-ad
+    difficulty: L2
+    cve: ATT&CK T1558.003 (RBCD)
+    path: ad/scenarios/ad-17-rbcd
+    dc_ip: 192.168.100.10
+
+  ad-18:
+    id: AD-18
+    name: Shadow Credentials via KeyCredentialLink
+    type: samba-ad
+    difficulty: L2
+    cve: ATT&CK T1606.002
+    path: ad/scenarios/ad-18-shadow-credentials
+    dc_ip: 192.168.100.10
+
+  ad-19:
+    id: AD-19
+    name: WriteOwner DACL Abuse Chain
+    type: samba-ad
+    difficulty: L2
+    cve: ATT&CK T1098 / T1484
+    path: ad/scenarios/ad-19-writeowner
+    dc_ip: 192.168.100.10
+
+  ad-20:
+    id: AD-20
+    name: ForceChangePassword Privilege Escalation
+    type: samba-ad
+    difficulty: L2
+    cve: ATT&CK T1098
+    path: ad/scenarios/ad-20-forcechangepass
+    dc_ip: 192.168.100.10
+
+  ad-21:
+    id: AD-21
+    name: Unconstrained Delegation Discovery & Exploitation
+    type: samba-ad
+    difficulty: L3
+    cve: ATT&CK T1558.001
+    path: ad/scenarios/ad-21-unconstrained-deleg
+    dc_ip: 192.168.100.10
+
   # === Phase 10: K8s Expansion — new escape techniques ===
   k8s-16:
     id: K8S-16
@@ -452,3 +497,70 @@ scenarios:
     difficulty: L3
     cve: CAP_SYS_PTRACE abuse
     path: k8s/cap-sys-ptrace-inject
+
+  # === Phase 11: K8s ingress/webhook/network expansion ===
+  k8s-20:
+    id: K8S-20
+    name: ingress-nginx Admission Controller RCE (IngressNightmare)
+    type: k8s
+    difficulty: L3
+    cve: CVE-2025-1974
+    path: k8s/ingress-nginx-rce
+    port: 10443
+
+  k8s-21:
+    id: K8S-21
+    name: ingress-nginx Lua Snippet Secret Extraction
+    type: k8s
+    difficulty: L2
+    cve: CVE-2021-25742
+    path: k8s/ingress-snippet
+    port: 10480
+
+  k8s-22:
+    id: K8S-22
+    name: Service ExternalIP Traffic Interception
+    type: k8s
+    difficulty: L2
+    cve: CVE-2020-8554
+    path: k8s/externalip-hijack
+
+  k8s-23:
+    id: K8S-23
+    name: hostPID ProcFS Host Filesystem Access
+    type: k8s
+    difficulty: L1
+    cve: N/A (misconfiguration)
+    path: k8s/seccomp-bypass
+
+  k8s-24:
+    id: K8S-24
+    name: kube-proxy Localhost Boundary Bypass
+    type: k8s
+    difficulty: L2
+    cve: CVE-2020-8558
+    path: k8s/localhost-bypass
+
+  k8s-25:
+    id: K8S-25
+    name: Mutating Webhook Sidecar Injection
+    type: k8s
+    difficulty: L2
+    cve: N/A (admission control abuse)
+    path: k8s/webhook-inject
+
+  k8s-26:
+    id: K8S-26
+    name: Compromised Node API Server Redirect
+    type: k8s
+    difficulty: L3
+    cve: CVE-2020-8559
+    path: k8s/node-redirect
+
+  k8s-27:
+    id: K8S-27
+    name: NetworkPolicy Label Spoofing Bypass
+    type: k8s
+    difficulty: L2
+    cve: N/A (network policy bypass)
+    path: k8s/networkpolicy-bypass

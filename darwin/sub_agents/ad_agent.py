@@ -46,7 +46,7 @@ class ADAgent(BaseSubAgent):
             dkg=dkg,
             budget=budget or TokenBudget(),
             tools=tools,
-            llm_session=llm_session,
+            llm_session=llm_session or LLMSession.from_config("default"),
         )
         self.domain_context = domain_context or {}
         self._system_prompt = SYSTEM_PROMPT_AD
