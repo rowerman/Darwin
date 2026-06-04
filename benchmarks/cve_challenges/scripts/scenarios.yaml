@@ -177,7 +177,7 @@ scenarios:
     difficulty: L1
     cve: ATT&CK T1558.003
     path: ad/scenarios/ad-01-kerberoasting
-    dc_ip: 192.168.100.10
+    dc_ip: localhost
   ad-02:
     id: AD-02
     name: AS-REP Roasting
@@ -185,7 +185,7 @@ scenarios:
     difficulty: L1
     cve: ATT&CK T1558.004
     path: ad/scenarios/ad-02-asrep
-    dc_ip: 192.168.100.10
+    dc_ip: localhost
   ad-03:
     id: AD-03
     name: LDAPNightmare RCE
@@ -209,7 +209,7 @@ scenarios:
     difficulty: L2
     cve: ATT&CK T1550.002
     path: ad/scenarios/ad-05-pth
-    dc_ip: 192.168.100.10
+    dc_ip: localhost
   ad-06:
     id: AD-06
     name: SMB Relay to AD CS (ESC8)
@@ -241,7 +241,7 @@ scenarios:
     difficulty: L2
     cve: ATT&CK T1003.006
     path: ad/scenarios/ad-09-dcsync
-    dc_ip: 192.168.100.10
+    dc_ip: localhost
   ad-10:
     id: AD-10
     name: Golden Ticket Attack
@@ -249,7 +249,7 @@ scenarios:
     difficulty: L3
     cve: ATT&CK T1558.001
     path: ad/scenarios/ad-10-golden
-    dc_ip: 192.168.100.10
+    dc_ip: localhost
   ad-11:
     id: AD-11
     name: BadSuccessor dMSA PrivEsc
@@ -391,7 +391,7 @@ scenarios:
     difficulty: L1
     cve: ATT&CK T1552.006
     path: ad/scenarios/ad-13-gpp
-    dc_ip: 192.168.100.10
+    dc_ip: localhost
 
   ad-14:
     id: AD-14
@@ -400,7 +400,7 @@ scenarios:
     difficulty: L2
     cve: ATT&CK T1558.002
     path: ad/scenarios/ad-14-silver
-    dc_ip: 192.168.100.10
+    dc_ip: localhost
 
   ad-15:
     id: AD-15
@@ -409,7 +409,7 @@ scenarios:
     difficulty: L2
     cve: ATT&CK T1098
     path: ad/scenarios/ad-15-targeted-kerb
-    dc_ip: 192.168.100.10
+    dc_ip: localhost
 
   ad-16:
     id: AD-16
@@ -418,7 +418,7 @@ scenarios:
     difficulty: L2
     cve: ATT&CK T1558.003
     path: ad/scenarios/ad-16-constrained-deleg
-    dc_ip: 192.168.100.10
+    dc_ip: localhost
 
   ad-17:
     id: AD-17
@@ -427,7 +427,7 @@ scenarios:
     difficulty: L2
     cve: ATT&CK T1558.003 (RBCD)
     path: ad/scenarios/ad-17-rbcd
-    dc_ip: 192.168.100.10
+    dc_ip: localhost
 
   ad-18:
     id: AD-18
@@ -436,7 +436,7 @@ scenarios:
     difficulty: L2
     cve: ATT&CK T1606.002
     path: ad/scenarios/ad-18-shadow-credentials
-    dc_ip: 192.168.100.10
+    dc_ip: localhost
 
   ad-19:
     id: AD-19
@@ -445,7 +445,7 @@ scenarios:
     difficulty: L2
     cve: ATT&CK T1098 / T1484
     path: ad/scenarios/ad-19-writeowner
-    dc_ip: 192.168.100.10
+    dc_ip: localhost
 
   ad-20:
     id: AD-20
@@ -454,7 +454,7 @@ scenarios:
     difficulty: L2
     cve: ATT&CK T1098
     path: ad/scenarios/ad-20-forcechangepass
-    dc_ip: 192.168.100.10
+    dc_ip: localhost
 
   ad-21:
     id: AD-21
@@ -463,7 +463,7 @@ scenarios:
     difficulty: L3
     cve: ATT&CK T1558.001
     path: ad/scenarios/ad-21-unconstrained-deleg
-    dc_ip: 192.168.100.10
+    dc_ip: localhost
 
   # === Phase 10: K8s Expansion — new escape techniques ===
   k8s-16:

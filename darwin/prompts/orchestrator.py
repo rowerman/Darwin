@@ -24,13 +24,14 @@ Research: knowledge_search, cve_lookup, metasploit_search, searchsploit_search, 
   category mismatches. Let the semantic search do the filtering.
 - Only if the first query returns >10 results, narrow with category on the SECOND attempt.
 - knowledge_search and ddg_web_search are COMPLEMENTARY, not alternatives:
-  - knowledge_search covers general techniques, MITRE ATT&CK, CVEs
-  - ddg_web_search provides current, service-specific exploitation guides and credentials
+  - knowledge_search covers general techniques, MITRE ATT&CK, CVEs, AND default credentials
+  - ddg_web_search provides current, service-specific exploitation guides and PoCs
 - For EVERY service discovered, call BOTH knowledge_search AND ddg_web_search.
   Do NOT skip ddg_web_search just because knowledge_search returned results.
-- For WeakAuth/credential vulnerabilities, ddg_web_search is MANDATORY.
-  Search for: "<service> default credentials" or "<service> common passwords"
-  RAG does NOT contain service-specific default credential lists.
+- For WeakAuth/credential vulnerabilities, FIRST call knowledge_search:
+  Search for: "<service> default credentials" or "<service> weak credentials common passwords"
+  RAG contains service-specific default credential lists (postgresql, mysql, mssql, oracle, redis, etc.).
+  Then supplement with ddg_web_search for additional current password lists.
 - For non-HTTP database services (Redis, MySQL, PostgreSQL, MSSQL, Oracle, MongoDB),
   call knowledge_search for general techniques AND ddg_web_search for specific PoCs
 

@@ -12,7 +12,7 @@ DARWIN is an LLM-driven adaptive penetration testing agent framework. Two core i
 - **Dynamic Scaling (B dimension)**: Simple single-host vulns use Solo Mode (0 sub-agents); complex multi-host/WAF scenarios auto-spawn ReconAgent/ExploitAgent/PivotAgent. See B dimension formula section below.
 - **DKG communication**: Sub-agents communicate only via structured Dynamic Knowledge Graph with asyncio.Event notifications, never natural language.
 - **CTEG cross-task learning**: Dynamic bypass/exploit patterns accumulated across challenges, with time-based decay (static knowledge is handled separately by DarwinRAG).
-- **DarwinRAG static knowledge**: 94 curated entries across 4 domain collections (web=7, windows_ad=7, cloud=72, network=5, plus 3 root-level misc files). SentenceTransformer `all-MiniLM-L6-v2` (384-dim) + Faiss IndexFlatIP with TfidfVectorizer fallback.
+- **DarwinRAG static knowledge**: 8106+ curated entries across 4 domain collections (web, windows_ad, cloud, network), continuously expanded via `tools/ingest_knowledge.py`. SentenceTransformer `all-MiniLM-L6-v2` (384-dim) + Faiss IndexFlatIP with TfidfVectorizer fallback.
 - **LangGraph integration**: ReAct loop (observe→plan→act→evaluate) via LangGraph StateGraph with checkpointing. SubAgentPool defaults to LangGraph.
 - **Prompt architecture (Layer 0)**: System prompts live in `darwin/prompts/` as per-agent Python files with templated string constants. The `__init__.py` is archived — canonical prompts are in the individual agent files (`orchestrator.py`, `recon_agent.py`, `exploit_agent.py`, `pivot_agent.py`, `ad_agent.py`, `cloud_agent.py`, `dpm_classifier.py`).
 
@@ -127,17 +127,17 @@ Orchestrator.run() → recon → analyze → exploit → bypass → verify
                         DKG      LLM     DPM+DAVE   DAVE(L1-L4)
 ```
 
-The `run()` method (`orchestrator.py:204`) follows this linear phase pipeline for Solo mode. For Coordinated/Distributed modes, it dispatches to `_run_multi_agent_cycle()` (`orchestrator.py:6092`) based on the B dimension threshold from `dynamic_scaling.py`.
+The `run()` method (`orchestrator.py:210`) follows this linear phase pipeline for Solo mode. For Coordinated/Distributed modes, it dispatches to `_run_multi_agent_cycle()` (`orchestrator.py:6325`) based on the B dimension threshold from `dynamic_scaling.py`.
 
-Key `Orchestrator` method locations (6750-line file):
-- `run()` (line 204) — entry point, main loop with mode dispatch, termination conditions
-- `_unified_llm_loop()` (line 1553) — Solo mode LLM-driven ReAct loop
-- `_analyze_phase()` (line 2725) — vulnerability hypothesis generation
-- `_sanitize_plan_tools()` (line 3928) — filters/rewrites plan tasks (blacklist, fallback, credential placeholder resolution, file:// detection)
-- `_generate_exploitation_plan()` (line 4062) — LLM exploitation strategy
-- `_analyze_and_fix_task()` (line 4800) — LLM-based task failure classification and retry (up to 2 attempts)
-- `_exploit_phase()` (line 5356) — tool execution and verification
-- `_run_multi_agent_cycle()` (line 6092) — Coordinated/Distributed dispatch
+Key `Orchestrator` method locations (~7000-line file):
+- `run()` (line 210) — entry point, main loop with mode dispatch, termination conditions
+- `_unified_llm_loop()` (line 1735) — Solo mode LLM-driven ReAct loop
+- `_analyze_phase()` (line 2907) — vulnerability hypothesis generation
+- `_sanitize_plan_tools()` (line 4110) — filters/rewrites plan tasks (blacklist, fallback, credential placeholder resolution, file:// detection)
+- `_generate_exploitation_plan()` (line 4244) — LLM exploitation strategy
+- `_analyze_and_fix_task()` (line 4998) — LLM-based task failure classification and retry (up to 2 attempts)
+- `_exploit_phase()` (line 5589) — tool execution and verification
+- `_run_multi_agent_cycle()` (line 6325) — Coordinated/Distributed dispatch
 
 ### Module roles
 
@@ -161,11 +161,11 @@ Key `Orchestrator` method locations (6750-line file):
 | `darwin/tools/mcp_gateway.py` | Tool registry with OpenAI function-calling format export. Supports Python functions and shell command templates. |
 | `darwin/tools/mcp_client.py` | MCP client pool (`MCPClientPool`) with per-server connection management. `MCPServerConfig` and `MCPToolDef` dataclasses. `load_mcp_config()` reads `config/mcp_servers.yaml`. Tool calls time out gracefully (return error dict, never raise). |
 | `darwin/tools/recon_server.py` | 15 recon tools: nmap_scan, nmap_full_scan, nmap_port_range, nmap_vulners_scan, masscan_scan, whatweb_scan, dirb_scan, gobuster_dir, nikto_scan, curl_get, http_post, form_extract, try_login, idor_header_test, response_parse. |
-| `darwin/tools/attack_server.py` | 59 attack tools across categories: SQL injection (sqlmap_test), fuzzing (ffuf_fuzz, send_payload, command_injection_test, xss_reflection_test), brute force (hydra_http_brute, hydra_ssh_brute, wp_xmlrpc_brute), DB clients (mysql_query, psql_query, redis_cmd, mssql_query, mssqlclient_query, oracle_query), AD/Windows (netexec_enum, netexec_ldap_enum, impacket_secretsdump, impacket_psexec, impacket_wmiexec, ldapsearch_ad, impacket_GetUserSPNs, impacket_GetNPUsers, impacket_secretsdump_dcsync, impacket_pth, impacket_ticketer, impacket_silver_ticket, impacket_ntlmrelayx), K8s/cloud (kubectl_auth_check, kubectl_get_secrets, kubectl_get_pods, kubectl_run, kubectl_get_clusterrolebindings, kubectl_exec, check_capabilities, check_mounts, check_cloud_metadata, sa_token_read, etcdctl_get, kubelet_probe, docker_registry, helm), post-exploit (ssh_exec, shell_exec, ssh_key_exec, linux_priv_check, file_upload, php_filter_chain), knowledge (knowledge_search, cve_lookup, metasploit_search, go_exploitdb_search, searchsploit_search, searchsploit_copy), and specialized exploits (tomcat_exploit, oracle_tns_poison, wpscan_enum, jwt_forge, test_credential, smbmap_enum). |
+| `darwin/tools/attack_server.py` | 75 attack tools across categories: SQL injection (sqlmap_test), fuzzing (ffuf_fuzz, send_payload, command_injection_test, xss_reflection_test), brute force (hydra_http_brute, hydra_ssh_brute, wp_xmlrpc_brute), DB clients (mysql_query, mysql_file_write, psql_query, redis_cmd, mssql_query, mssqlclient_query, oracle_query), AD/Windows (netexec_enum, netexec_ldap_enum, impacket_secretsdump, impacket_psexec, impacket_wmiexec, ldapsearch_ad, impacket_GetUserSPNs, impacket_GetNPUsers, impacket_secretsdump_dcsync, impacket_pth, impacket_ticketer, impacket_silver_ticket, impacket_ntlmrelayx, impacket_getST, smb_client, gpp_decrypt, hash_crack), K8s/cloud (kubectl_auth_check, kubectl_get_secrets, kubectl_get_pods, kubectl_run, kubectl_get_clusterrolebindings, kubectl_exec, check_capabilities, check_mounts, check_cloud_metadata, sa_token_read, etcdctl_get, kubelet_probe, docker_registry, helm), post-exploit (ssh_exec, shell_exec, ssh_key_exec, linux_priv_check, file_upload, php_filter_chain), knowledge (knowledge_search, cve_lookup, metasploit_search, go_exploitdb_search, searchsploit_search, searchsploit_copy, ddg_web_search), and specialized exploits (tomcat_exploit, oracle_tns_poison, wpscan_enum, jwt_forge, test_credential, smbmap_enum). |
 | `darwin/prompts/` | System prompt templates per agent: `orchestrator.py`, `recon_agent.py`, `exploit_agent.py`, `pivot_agent.py`, `ad_agent.py`, `cloud_agent.py`, `dpm_classifier.py`. The `__init__.py` is archived (not imported). |
 | `darwin/utils/llm.py` | LiteLLM wrapper with conversation history, token counting, context compression (`compress()` method), and `LLMFunctionMapping`. |
 | `darwin/utils/http_client.py` | Async HTTP client (aiohttp) with A-E WAF probe classes and baseline comparison. `ProbeClient` extends `HTTPClient`. |
-| `experiments/runner.py` | Pilot experiment runner: single PACEBench D-CVE challenge. |
+| `experiments/runner.py` | Experiment runner supporting both pilot (single PACEBench D-CVE challenge) and CVE benchmark modes. Run `python experiments/runner.py` for pilot or `python experiments/runner.py cve [scenario_id...]` for benchmarks against a hardcoded 21-challenge list. Also supports attack chains via `run_chains()`. |
 | `experiments/parallel_runner.py` | Parallel experiment runner for Docker and K8s benchmark scenarios. Groups by infrastructure type with configurable parallelism. |
 | `experiments/lifecycle_manager.py` | Scenario lifecycle manager: START → wait-for-readiness → (DARWIN runs) → STOP for Docker and K8s. |
 | `experiments/result_aggregator.py` | Collects, classifies, and reports experiment results across parallel runs. |
@@ -174,6 +174,19 @@ Key `Orchestrator` method locations (6750-line file):
 | `experiments/analysis.py` | Statistical tests: McNemar, Friedman, bootstrap CI, Cohen's κ, paired t-test, EMA. |
 | `experiments/chain_runner.py` | Multi-step attack chain runner (reads chain.yaml from `benchmarks/cve_challenges/chains/<name>/`). |
 | `experiments/baselines/pentest_agent.py` | PentestAgent (AsiaCCS 2025) baseline adapter. Wraps PentestAgent as a comparative baseline with `BaselineResult` dataclass. |
+
+### Knowledge collections (`knowledge/`)
+
+DarwinRAG's 4 domain collections, continuously expanded via `tools/ingest_knowledge.py`:
+
+| Collection | Contents |
+|-----------|----------|
+| `web/` | Web exploitation techniques (SQLi, XSS, CMDi, file inclusion, SSRF, deserialization, WordPress vulns) |
+| `network/` | Network services exploitation, default credentials, lateral movement, protocol attacks |
+| `windows_ad/` | AD enumeration, exploitation, privilege escalation, persistence, Kerberos attacks |
+| `cloud/` | K8s escape, container breakout, cloud metadata (IMDS) access, CIS benchmark docs |
+
+Plus ~10 flat JSON files at the `knowledge/` root (nuclei CVE templates, unauth services, web vulnerabilities).
 
 ### Three operating modes
 
@@ -195,7 +208,7 @@ Where:
 - `D_present = 1.0 if defense_complexity > 0.1 else 0.0` — active defenses (WAF/Honey/Trap)
 - `env_complexity = 1.0` for AD (SMB+LDAP), `0.8` for cloud (K8s API), `0.0` otherwise
 
-Canonical implementation: `compute_task_breadth()` at `dynamic_scaling.py:118`. Note: README.md shows a simplified 3-factor version (`B = 0.4*N + 0.3*M + 0.3*L`); the 6-factor formula here is authoritative.
+Canonical implementation: `compute_task_breadth()` at `dynamic_scaling.py:118`. Note: README.md shows a simplified 3-factor version (`B = 0.4*N + 0.3*M + 0.3*L`); the 6-factor formula here is authoritative. Also note: the module docstring at `dynamic_scaling.py:5` incorrectly states `0.10*env_complexity` — the code at line 184 uses `0.18`, which is correct.
 
 ## Key design decisions
 
@@ -222,14 +235,14 @@ Canonical implementation: `compute_task_breadth()` at `dynamic_scaling.py:118`. 
 ### CVE challenges (`benchmarks/cve_challenges/`)
 Docker-based challenge infrastructure for comprehensive evaluation:
 
-- **18 attack chains** in `chains/<name>/` — each with `chain.yaml` + deploy/teardown scripts. Chains span web→DA, container→cluster, Redis→K8s, WordPress→K8s, and more.
+- **29 attack chains** in `chains/<name>/` — each with `chain.yaml` + deploy/teardown scripts. ~24 are deployable; 5 are blocked due to infrastructure dependencies (esc3-to-dcsync, mysql-to-cluster, redis-to-golden, web-to-da, wordpress-to-k8s). Chains span web→DA, container→cluster, Redis→K8s, WordPress→K8s, and more.
 - **Docker scenarios** in `docker/`:
   - `db/` — 5 database targets (mssql-linked-server, mysql-udf-direct, oracle-tns, postgres-weak-auth, redis-unauth)
   - `web/` — 9 web targets (mssql-xp-cmdshell, mysql-udf, postgres-sqli, tomcat-deserialization, tomcat-race-condition, plus 4 WordPress vulns)
   - `linux/` — 5 Linux kernel CVE challenges (QEMU/Vagrant)
   - `_defense/` — 4 defense compose fragments (waf, cloak, honey, trap) + trap-proxy
-- **K8s scenarios** in `k8s/` — 14 deployable scenarios with kind-config, deploy.sh, teardown.sh (K8S-04 is defined in scenarios.yaml but blocked — requires NVIDIA GPU hardware)
-- **AD scenarios** in `ad/scenarios/` — 12 AD scenarios (ad-01 through ad-12) with config.yaml
+- **K8s scenarios** in `k8s/` — 26 deployable scenarios with kind-config, deploy.sh, teardown.sh (K8S-04 is defined in scenarios.yaml but blocked — requires NVIDIA GPU hardware)
+- **AD scenarios** in `ad/scenarios/` — 21 AD scenarios (ad-01 through ad-21) with config.yaml
 - **Management scripts** in `benchmarks/cve_challenges/scripts/` — `flag_manager.py`, `generate_defense_variants.py`, `start-scenario.sh`, `stop-scenario.sh`, `validate-all.sh`, `verify-flag.sh`, `scenarios.yaml` (note: the top-level `scripts/` directory only contains `pull_benchmark_images.sh`)
 
 ### Custom defense benchmark (`benchmarks/custom_defense/`)
@@ -242,10 +255,11 @@ Docker-based challenge infrastructure for comprehensive evaluation:
 ## Testing
 
 ### Current state
-Only 3 of ~25+ modules have tests, covering pure data-structure code:
+Only 4 of ~25+ modules have tests, covering pure data-structure code:
 - `tests/test_dkg.py` — DKG node/edge CRUD, query, filter, serialization, save/load, reset. 8 test classes covering all node/edge types.
 - `tests/test_metrics.py` — ExperimentMetrics properties (TSR, token efficiency, avg steps, etc.) and Pass@k calculation.
 - `tests/test_analysis.py` — Statistical functions: McNemar, Cohen's g, paired t-test, bootstrap CI, Friedman, Cohen's κ, EMA.
+- `tests/test_dynamic_scaling.py` — B dimension formula (`compute_task_breadth()`), complexity hint detection, hysteresis voting. 28 test methods across 3 test classes.
 
 Core orchestrator, all agents, tools, RAG, DPM, CTEG, DAVE, and LLM utilities are **untested**.
 
@@ -265,7 +279,7 @@ Core orchestrator, all agents, tools, RAG, DPM, CTEG, DAVE, and LLM utilities ar
 
 **Important**: The `config/` directory is in `.gitignore` (contains API keys). On a fresh checkout, create these files manually or obtain from a secure source.
 
-- `config/darwin.yaml`: Time/token budgets, solo mode limits, defense probe settings, browser config. `max_context_tokens` (180000) and `context_compression_threshold` (0.4).
+- `config/darwin.yaml`: Time/token budgets, solo mode limits, defense probe settings, browser config. `max_context_tokens` (180000) and `context_compression_threshold` (0.4). Also: `chain_mode: auto` (multi-flag attack chain mode), `chain_max_flags: 10` (safety cap for intermediate flags), and `wpscan.api_token` (WPScan API token for WordPress scanning — falls back to unauthenticated if empty).
 - `config/llm.yaml`: Three LLM profiles — `default`, `reasoning`, `classifier`. API key can be set directly in this file or via the corresponding env var (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `DEEPSEEK_API_KEY`, `GEMINI_API_KEY`).
 - `config/waf_fingerprints.yaml`: ModSecurity, Cloudflare, Naxsi, Coraza signatures with detection rules and bypass hints.
 - `config/mcp_servers.yaml`: MCP server configurations for external tool servers. 8 servers defined: `filesystem` (disabled), `brave-search` (disabled), `puppeteer` (enabled), `github` (enabled), `memory` (enabled), `sequential-thinking` (enabled), `ddg-search` (disabled — deprecated, replaced by `ddg_web_search` Python tool in attack_server.py), `nvd` (enabled).
@@ -275,7 +289,24 @@ Core orchestrator, all agents, tools, RAG, DPM, CTEG, DAVE, and LLM utilities ar
 ## Documentation and planning
 
 - `docs/` — Design and research docs: benchmark research, context compression design, CVE benchmark guide, experiment procedure. `docs/phase-plans/` contains 8 phase implementation plans (phase1–phase8).
-- `plan/` — Framework design (`DARWIN_framework.md`), implementation plan, progress tracker (`DARWIN_todo.md`), and `KNOWN_ISSUES.md` (note: many critical items from the May 2026 audit have been resolved — CTEG is integrated, multi-agent dispatch is active, tests exist, duplicate `compute_task_breadth` removed).
+- `plan/` — Framework design (`DARWIN_framework.md`), implementation plan, progress tracker (`DARWIN_todo.md`), and `KNOWN_ISSUES.md`. **Note**: `KNOWN_ISSUES.md` is dated 2026-05-14 and several items listed there have since been resolved (CTEG is integrated, multi-agent dispatch is active, tests exist, duplicate `compute_task_breadth` removed). Consult `CHANGES.md` for the authoritative resolution status of each item.
+- `CHANGES.md` — Chronological change log of all framework modifications since May 2026. Consult this when investigating why a feature works a certain way or when a recent change may have introduced a regression.
+
+### Root-level documentation
+- `BENCHMARK_SUMMARY.md` — Comprehensive ~7900-line exploitation guide covering all deployable scenarios and attack chains with step-by-step commands. The single most detailed benchmark reference.
+- `BENCHMARK_SCENARIOS_OVERVIEW.md` — Concise overview table of 57 single-point scenarios and 24 attack chains.
+- `BENCHMARK_IMAGES.md` — Docker image reference for benchmark challenges.
+- `TOOLS.md` — Security tools installation checklist.
+- `install.sh` — Full system installation script (35KB). Automates dependency setup including external CLI tools.
+
+### Claude Code integration (`.claude/`)
+- `settings.local.json` — Fine-grained Bash permission allowlist for Claude Code operations in this project.
+- `skills/darwin-experiment-driven-dev/SKILL.md` — 745-line experiment-driven development skill with diagnostic decision tree, module dependency maps, and verification checklist. Invoked via the Skill tool when debugging experiment failures or modifying DARWIN core modules.
+
+### Wordlists (`wordlists/`)
+Dictionary files used by fuzzing tools (ffuf, dirb, gobuster):
+- `raft-large-directories.txt`, `raft-medium-words.txt`, `combined_directories.txt`
+- `cms/` subdirectory with CMS-specific wordlists
 
 ## Runtime state
 
@@ -285,7 +316,7 @@ Core orchestrator, all agents, tools, RAG, DPM, CTEG, DAVE, and LLM utilities ar
 
 ## Flag format
 
-`flag{...}` — matched by regex `flag\{[a-zA-Z0-9_\-]+\}` (config, `config/darwin.yaml:27` flag_pattern). Note: DAVE L4, orchestrator, and exploit agent modules use a more permissive variant (`flag\{[a-zA-Z0-9_\-!@#$%^&*()+=]+\}`) that also matches special characters. Honeypot flags (`flag{test}`, `flag{example}`, `flag{honeypot}`, etc.) are rejected by DAVE L4.
+`flag{...}` — matched by regex `flag\{[a-zA-Z0-9_\-]+\}` (config, `config/darwin.yaml:34` flag_pattern). Note: DAVE L4, orchestrator, and exploit agent modules use a more permissive variant (`flag\{[a-zA-Z0-9_\-!@#$%^&*()+=]+\}`) that also matches special characters. Honeypot flags (`flag{test}`, `flag{example}`, `flag{honeypot}`, etc.) are rejected by DAVE L4.
 
 ## Reference exploits
 

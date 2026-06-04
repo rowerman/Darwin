@@ -1,3 +1,125 @@
+## 2026-06-04 (tools: impacket -no-pass + systematic pass AD filter)
+
+**impacket 工具交互式密码提示修复**:
+- **darwin/tools/attack_server.py** `impacket_GetNPUsers`: 从 `register_shell_tool` 改为 async 函数，支持 `-no-pass` 标志。拆分参数为 `domain`、`dc_ip`、`user`（可选）、`password`（可选）。空密码时使用 `-dc-ip` + `-no-pass` 模式，不再交互式阻塞
+- **darwin/tools/attack_server.py** `impacket_GetUserSPNs`: 同上模式修改。参数拆分 + 条件性 `-no-pass`
+
+**Systematic pass 对错误服务调用不适当工具**:
+- **darwin/orchestrator.py** `_systematic_exploit_pass`: 未知协议时（非 8 种已知服务类型），将工具过滤为仅 `shell_exec`。阻止对 Kerberos/LDAP/SMB 端口调用 `mysql_query`、`redis_cmd` 等。之前 `_ALL_PROTOCOL_TOOLS` 包含所有协议工具，无过滤效果
+- **darwin/orchestrator.py** `_detect_proto_from_service`: 新增 AD/Windows 服务识别（kerberos、ldap、smb、msrpc、netbios）。AD 端口（88、389、636、445、139、135、3268、3269）返回空工具集，跳过 systematic pass（AD 利用由 ADAgent 处理）。服务名包含 AD 关键字时同样跳过
+
+**mcp_gateway 参数别名**:
+- **darwin/tools/mcp_gateway.py** `register_shell_tool`: 新增显式参数别名表 `{"url": "target_url"}`。修复 LLM 使用 `url` 参数名但模板期望 `target_url` 的问题。子串自动修正的 50% 长度阈值 (`url`(3) < `target_url`(10)*0.5=5) 无法处理此情况
+
+**multi-agent fallback 上下文注入修复**:
+- **darwin/orchestrator.py**: 修复 `add_context_message` 调用参数顺序错误（content 和 role 交换导致 Deepseek API 拒绝）
+
+**验证**: Pytest 119 passed, import OK
+
+## 2026-06-04 (multi-agent bug fixes: chain mode, stall detection, checkpoint, DKG, dead code)
+
+**背景**: 全面审计 multi-agent 代码路径发现 15+ 个 bug，修复了影响最大的 10 个。
+
+**链模式修复**:
+- **darwin/orchestrator.py** `_multi_exhausted`: 链模式下不再在首次成功时设置 `_multi_exhausted = True`（仅在非链模式下设置）。修复多 flag 攻击链过早终止
+- **darwin/orchestrator.py** `_save_orchestrator_checkpoint` / `_load_orchestrator_checkpoint`: 新增 `chain_mode`、`captured_flags`、`chain_services_total`、`chain_exhausted` 到检查点序列化和恢复。修复链模式从检查点恢复时丢失中间 flag
+- **darwin/orchestrator.py** `_should_terminate`: 链模式下跳过 solo-exhausted-stall 计数器（multi-agent 是链场景的主要工作模式）
+
+**ExploitAgent 状态保留**:
+- **darwin/sub_agents/base.py** `SubAgentState`: 新增 `WAITING` 状态用于暂停的代理。`cleanup()` 现在保留 WAITING 状态的代理
+- **darwin/orchestrator.py** `_run_multi_agent_cycle`: 不再删除/重建 ExploitAgent。改为设置 `state = WAITING`（保留 plan、findings、iteration、stale 计数器），阶段 3 恢复。防止重复工作
+
+**停滞检测修复**:
+- **darwin/sub_agents/recon_agent.py**、**exploit_agent.py**、**pivot_agent.py**: 在 `_evaluate_result()` 开头添加 `await super()._evaluate_result(task, result)` 调用，正确维护基类的 `_stale_iterations` 计数器。修复 `_is_stalled()` 永不触发问题
+
+**DKG 事件通知竞态**:
+- **darwin/dkg.py** `add_node()`: 移除 `event.clear()` 调用（紧接在 `event.set()` 之后）。事件保持 set 状态，防止唤醒等待者之前被清除的通知丢失
+
+**死代码和初始化**:
+- **darwin/orchestrator.py**: 移除未使用的 `self.sub_agents = SubAgentPool()`。将 `_persistent_pool` 重命名为 `_multi_pool`。新增 `_solo_exhausted_stall`、`_solo_empty_runs`、`_prev_solo_done_count` 初始化
+- **darwin/orchestrator.py** `_run_multi_agent_cycle`: 当多代理返回 None 时，向 solo 回退注入上下文，解释多代理为何未产生结果
+
+**首次循环进度虚高**:
+- **darwin/orchestrator.py**: 进入主循环之前快照 DKG 计数，防止 bootstrap/deep_recon 发现被计为"新"发现
+
+**类型修复**:
+- **darwin/sub_agents/ad_agent.py**、**cloud_agent.py**: 未找到工具的回退路径现在返回 `ToolResult`（而非 `SubAgentResult`），与基类期望的方法签名一致
+
+**验证**: Pytest 119 passed, import OK
+
+## 2026-06-04 (prompt fix: RAG authority + PGPASSWORD block)
+
+**背景**: 两个问题：(1) plan 生成 prompt 中有 "NOTE: Above RAG results may not be relevant... Ignore entries" 直接引导 LLM 忽略 RAG 结果，导致 `password123` 被丢弃；(2) `mcp_gateway.py` 的 shell 执行路径没有设置 `PGPASSWORD`，导致 psql 仍弹出交互密码提示。
+
+**RAG 权威性修复**:
+- **darwin/orchestrator.py** `_generate_exploitation_plan()`: 将 "Ignore entries that target different software" 改为 "CRITICAL: RAG results contain proven techniques and credential combinations... MUST be used"。在知识合成段落新增 "When RAG results contain specific credential combinations (username:password pairs), you MUST include EVERY listed combination"
+- 修复前 LLM 看到 note 直接把 RAG 条目丢弃，凭记忆列密码
+
+**PGPASSWORD 全面封堵**:
+- **darwin/tools/mcp_gateway.py** `register_shell_tool`: `create_subprocess_shell` 现在传入 `env={PGPASSWORD: ""}`，阻止 psql 在所有 shell_exec 调用中弹出交互密码提示。之前仅修复了 `attack_server._run_shell`，但 99% 工具走 mcp_gateway 路径
+
+**验证**: Pytest 119 passed (0.34s), import OK
+
+## 2026-06-04 (rag + orchestration fix: retrieval, batching, dependencies)
+
+**背景**: DB-01 测试暴露三个问题：RAG 未检索到 default-creds-postgresql（尽管知识库中有 `password123`）、凭据爆破 20 次逐个执行效率极低、依赖列表不更新导致后续 task 饥饿。
+
+**RAG 检索修复**:
+- **darwin/rag.py**: `TfidfVectorizer(max_features=5000)` → `max_features=None` (2 处)。修复了低频词 "postgresql" 因词频不够被踢出词汇表的问题（网络集合仅 ~80 文档，无性能影响）
+- **darwin/prompts/orchestrator.py**: 修正错误指引 "RAG does NOT contain service-specific default credential lists" → "RAG contains service-specific default credential lists (postgresql, mysql, mssql, oracle, redis, etc.)"
+
+**凭据爆破批量化**:
+- **darwin/orchestrator.py** `_generate_exploitation_plan()` prompt: 将 "Generate MULTIPLE tasks for each credential pair" 改为 "Create a SINGLE shell_exec task to batch-test ALL credentials at once"，附带 Python 示例。减少 10+ 次 LLM roundtrip 到 1 次工具调用
+
+**依赖列表动态更新**:
+- **darwin/orchestrator.py** `_review_and_update_plan()`: LLM 输出的新 task 列表中如果包含已有 task ID，其 `dependent_task_ids` 现在会覆盖旧版本。修复后新增的 credential task 可以解锁后续枚举/RCE task
+
+**验证**: Pytest 119 passed (0.36s), RAG rebuild 8111 entries, import 无错误
+
+## 2026-06-04 (tools: AD高级 + Java + Oracle — phase 3)
+
+**背景**: 安装 pywhisker、PKINITtools、bloodyAD、krbrelayx、ysoserial、sqlplus 后注册工具。
+
+**新增工具 (6)**:
+- **darwin/tools/attack_server.py — `pywhisker`**: Shadow Credentials 攻击 (AD-18)，添加 KeyCredentialLink
+- **darwin/tools/attack_server.py — `gettgtpkinit`**: 通过 PKINIT 证书获取 Kerberos TGT (AD-18)
+- **darwin/tools/attack_server.py — `getnthash`**: 通过 PKINIT U2U 恢复 NT Hash (AD-18)
+- **darwin/tools/attack_server.py — `bloodyad_dacl`**: DACL 滥用 (AD-19/20)，支持 set owner/GenericAll/密码修改
+- **darwin/tools/attack_server.py — `krbrelayx`**: Kerberos Unconstrained Delegation 中继 (AD-21)
+- **darwin/tools/attack_server.py — `ysoserial_generate`**: Java 反序列化 payload 生成 (WEB-01)
+
+**工具总数**: 75 (was 69)
+
+**验证**: Pytest 119 passed (0.37s)
+
+## 2026-06-04 (tools: netexec tools + venv path fix — phase 2)
+
+**背景**: 安装 netexec、ldapsearch、smbclient 后，注册新的 NetExec 专用工具并统一使用 venv 路径。
+
+**新增 NetExec 工具 (4)**:
+- **darwin/tools/attack_server.py — `netexec_smb_shares`**: 枚举 SMB 共享，列出可读写共享
+- **darwin/tools/attack_server.py — `netexec_smb_users`**: 通过 SMB 枚举域用户
+- **darwin/tools/attack_server.py — `netexec_kerberoasting`**: 直接通过 LDAP Kerberoasting，输出 hashcat 格式
+- **darwin/tools/attack_server.py — `netexec_smb_sam`**: 通过 SMB 导出 SAM 数据库（需本地管理员）
+
+**工具路径修复**:
+- **darwin/tools/attack_server.py**: `netexec_enum` 和 `netexec_ldap_enum` 的命令模板改为 venv 绝对路径 `/home/kianabin/Darwin/venv/bin/netexec`
+
+**工具总数**: 69 (was 65)
+
+## 2026-06-04 (knowledge + tools: benchmark gap analysis fix)
+
+**背景**: 对照 BENCHMARK_SUMMARY.md 中的 81 个可部署场景（57 单点 + 24 攻击链），分析 RAG 知识和工具的缺口并修复。
+
+**新增知识条目 (5)**:
+- **knowledge/web/web_exploitation_supplement.json (+4)**: wordpress-simple-file-list-rce (WEB-03), wordpress-wpbookit-rce (WEB-04), wordpress-copypress-jwt-rce (WEB-05), wordpress-jupiterx-svg-lfi-rce (WEB-06)。共 8 条目（原 4 条目）
+- **knowledge/windows_ad/ad_exploitation_supplement.json (+1)**: ad-kerberoasting-standard (AD-01)。共 7 条目（原 6 条目）
+
+**修复 Impacket 工具命名不匹配（关键）**:
+- **darwin/tools/attack_server.py**: 11 个 impacket shell 工具的命令模板从 `impacket-X` 改为 `python3 /home/kianabin/Darwin/venv/bin/X.py`（psexec, GetUserSPNs, GetNPUsers, ticketer, getST, ntlmrelayx, secretsdump, wmiexec）。修复前这些工具因 `impacket-X` wrapper 不存在而在运行时静默失败，导致 12/14 AD 场景不可用。
+
+**验证**: Pytest 119 passed (0.36s), 所有 37 个知识 JSON 文件校验通过, RAG rebuild 成功 (8111 docs)
+
 # DARWIN Framework Changes — 2026-05-29
 
 ## 2026-06-03 (knowledge: exhaustive web/AD/K8S gap fill — phase 3)

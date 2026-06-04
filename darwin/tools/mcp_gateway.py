@@ -79,6 +79,15 @@ class MCPGateway:
                 # Fill missing params from defaults
                 for k, v in _defaults.items():
                     kwargs.setdefault(k, v)
+                # Explicit parameter name aliases for common LLM naming patterns
+                # that the substring auto-correction below cannot handle
+                # (e.g. "url" → "target_url" fails the 50% length threshold: 3 < 5)
+                _PARAM_ALIASES = {
+                    "url": "target_url",    # LLMs commonly use 'url' instead of 'target_url'
+                }
+                for _alias, _canonical in _PARAM_ALIASES.items():
+                    if _canonical not in kwargs and _alias in kwargs:
+                        kwargs[_canonical] = kwargs[_alias]
                 # Auto-correct parameter name variations
                 # Handles both directions:
                 #   LLM "username" → template "user"  (kwargs key contains template var)
@@ -121,10 +130,13 @@ class MCPGateway:
                 current_timeout = timeout * (1.5 ** attempt)
                 proc = None
                 try:
+                    # Prevent psql/mysql from blocking on interactive password prompts
+                    no_prompt_env = {**__import__("os").environ, "PGPASSWORD": ""}
                     proc = await asyncio.create_subprocess_shell(
                         cmd,
                         stdout=asyncio.subprocess.PIPE,
                         stderr=asyncio.subprocess.PIPE,
+                        env=no_prompt_env,
                     )
                     stdout, stderr = await asyncio.wait_for(
                         proc.communicate(), timeout=current_timeout

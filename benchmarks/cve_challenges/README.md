@@ -127,7 +127,12 @@ bash chains/container-to-admin/deploy.sh   # 纯 K8s 链
 
 ## 详细利用文档
 
-所有场景和攻击链的详细分步利用流程文档位于 `docs/` 目录下（共 70 个文档）：
+分步利用流程源文件位于 `docs/` 目录（共 70 个文档）。**可部署、可测试子集**已合并为项目根目录单文件：
+
+- **[`/BENCHMARK_SCENARIOS_OVERVIEW.md`](../../BENCHMARK_SCENARIOS_OVERVIEW.md)** — 场景一览表（57 单点 + 24 攻击链：服务、漏洞、利用简介、难度）
+- **[`/BENCHMARK_SUMMARY.md`](../../BENCHMARK_SUMMARY.md)** — 完整利用步骤正文（可测试子集）
+- 重新生成一览表：`python benchmarks/cve_challenges/scripts/build_benchmark_overview.py`
+- 重新生成全文：`python benchmarks/cve_challenges/scripts/build_benchmark_summary.py`
 
 | 目录 | 内容 | 数量 |
 |------|------|:---:|

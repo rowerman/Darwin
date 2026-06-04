@@ -81,3 +81,41 @@ Output ONLY valid JSON array. 3-6 tasks."""
                 {"id": "check-2", "instruction": "Check for cloud metadata access",
                  "tool": "check_cloud_metadata", "params": {}, "dependent_task_ids": ["check-1"],
                  "reason": "IMDS access enables cloud credential theft"}]
+
+    async def _execute_task(self, task: Dict[str, Any]) -> Any:
+        """Execute a cloud/K8s task — delegates to the LLM for tool selection."""
+        tool_names = sorted(self.tools.get_tool_names()) if self.tools else []
+        creds = self.dkg.query_nodes("Credential")
+        pods = self.dkg.query_nodes("Service")
+
+        ctx = (
+            f"Services: {len(pods)}, Credentials: {len(creds)}"
+        )
+
+        prompt = (
+            f"Task: {task['instruction']}\n"
+            f"DKG Context: {ctx}\n"
+            f"Params: {task.get('params', {})}\n"
+            f"Available tools: {', '.join(tool_names)}\n\n"
+            f"Execute this cloud/K8s task. Choose ONE tool, call it with appropriate params.\n"
+            f"Output ONLY: {{\"tool\": \"tool_name\", \"params\": {{...}}}}"
+        )
+        self._maybe_compress()
+        content, _ = self.llm.generate(prompt=prompt)
+        import re, json
+        try:
+            match = re.search(r'\{.*\}', content, re.DOTALL)
+            if match:
+                spec = json.loads(match.group(0))
+                tool_name = spec.get("tool", "")
+                params = spec.get("params", {})
+                if tool_name and tool_name in tool_names:
+                    return await self.tools.call(tool_name, params)
+        except Exception:
+            pass
+        _tool = task.get("tool", "")
+        if _tool and _tool in tool_names:
+            return await self.tools.call(_tool, task.get("params", {}))
+        from darwin.tools.mcp_gateway import ToolResult
+        return ToolResult(success=False, stdout=f"Cloud agent: no tool found for {task.get('instruction', '')}",
+                         parsed={})

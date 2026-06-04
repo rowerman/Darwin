@@ -171,8 +171,7 @@ class Orchestrator:
         self.mcp_pool = MCPClientPool()
         self.client = HTTPClient()
         self.probe_client = ProbeClient()
-        self.sub_agents = SubAgentPool()
-        self._persistent_pool = None  # Created on first multi-agent cycle
+        self._multi_pool = None  # SubAgentPool, created on first multi-agent cycle
 
         # Task log — structured event log written to file
         self._task_log: List[Dict[str, Any]] = []
@@ -200,6 +199,15 @@ class Orchestrator:
         self._prev_vulnerability_count = 0
         self._absent_services: set[str] = set()  # host:port/URL probed but unreachable
         self._no_progress_loops = 0  # consecutive outer loops with 0 discoveries
+        self._solo_exhausted_stall = 0  # stalled loops when solo exhausted but multi never entered
+        self._solo_empty_runs = 0  # consecutive solo runs with 0 done tasks
+        self._prev_solo_done_count = 0  # done task count from previous solo run
+
+        # Chain / multi-flag mode
+        self._chain_mode = False
+        self._captured_flags: list[str] = []
+        self._chain_services_total = 0
+        self._chain_exhausted = False
 
     async def run(
         self, task_description: str, target_url: str,
@@ -337,8 +345,10 @@ class Orchestrator:
 
             # ── Main Loop: B-driven mode switching ────────────────
             self._loop_count = 0
-            # Try to read max_iterations from darwin.yaml config
+            # Try to read max_iterations and chain_mode from darwin.yaml config
             _config_max_loops = 30
+            _chain_mode_config = "auto"
+            _chain_max_flags = 10
             try:
                 import yaml
                 _cfg_path = "config/darwin.yaml"
@@ -349,10 +359,39 @@ class Orchestrator:
                     _configured = _darwin.get("max_iterations")
                     if isinstance(_configured, int) and _configured > 0:
                         _config_max_loops = _configured
+                    _chain_mode_config = _darwin.get("chain_mode", "auto")
+                    _chain_max_flags = int(_darwin.get("chain_max_flags", 10))
             except Exception:
                 pass
             MAX_LOOPS = _config_max_loops
             self._known_flags: set[str] = set()
+
+            # ── After recon, before main loop: detect complexity & chain topology ──
+            try:
+                from darwin.dynamic_scaling import detect_complexity_hints
+                hint = detect_complexity_hints(self.dkg, self.defense_state)
+                if hint is not None:
+                    self.scaling_engine.seed_votes(hint)
+                    log.info("Seeded scaling votes to %s based on recon complexity", hint)
+            except Exception:
+                pass
+
+            # Detect chain topology for multi-flag awareness
+            self._detect_chain_topology(_chain_mode_config)
+            if self._chain_mode:
+                log.info("Chain topology detected: %d services, "
+                         "will continue after intermediate flags (max=%d)",
+                         self._chain_services_total, _chain_max_flags)
+                # Store chain_max_flags for use in termination checks
+                self._chain_max_flags = _chain_max_flags
+            else:
+                self._chain_max_flags = _chain_max_flags  # keep default for safety
+
+            # Snapshot DKG counts after bootstrap so first cycle summary only
+            # counts discoveries made DURING the loop (not bootstrap + deep_recon).
+            self._prev_endpoint_count = len(self.dkg.query_nodes("Endpoint"))
+            self._prev_credential_count = len(self.dkg.query_nodes("Credential"))
+            self._prev_vulnerability_count = len(self.dkg.query_nodes("Vulnerability"))
 
             while not self._should_terminate(result, MAX_LOOPS):
                 self._loop_count += 1
@@ -365,14 +404,40 @@ class Orchestrator:
                 for fv in dkg_flags:
                     if fv and fv not in self._known_flags:
                         self._known_flags.add(fv)
-                        self.phase = OrchestratorPhase.DONE
-                        result = TaskResult(
-                            success=True, flag=fv, steps=self.step_count,
-                            tokens_used=self.llm.token_count,
-                            time_elapsed=time.time() - self.start_time,
-                        )
+                        if not self._chain_mode:
+                            # ORIGINAL BEHAVIOR: stop on first flag
+                            self.phase = OrchestratorPhase.DONE
+                            result = TaskResult(
+                                success=True, flag=fv, steps=self.step_count,
+                                tokens_used=self.llm.token_count,
+                                time_elapsed=time.time() - self.start_time,
+                            )
+                        else:
+                            # CHAIN MODE: record intermediate flag, continue
+                            self._captured_flags.append(fv)
+                            log.info("Chain mode: captured intermediate flag %s (%d/%d services)",
+                                     fv[:40], len(self._captured_flags),
+                                     max(self._chain_services_total, 1))
+                            # Check if all exploitable services are exhausted
+                            if self._count_unexploited_services() == 0:
+                                self._chain_exhausted = True
+                                log.info("Chain mode: all services exhausted, chain complete")
                 if result and result.success:
-                    break
+                    # In chain mode, only break if chain exhausted
+                    if self._chain_mode:
+                        if self._chain_exhausted:
+                            # Build final result with last captured flag
+                            final_flag = self._captured_flags[-1] if self._captured_flags else ""
+                            result = TaskResult(
+                                success=True, flag=final_flag, steps=self.step_count,
+                                tokens_used=self.llm.token_count,
+                                time_elapsed=time.time() - self.start_time,
+                            )
+                            result.all_flags = list(self._captured_flags)
+                            break
+                        # Otherwise continue the loop
+                    else:
+                        break
 
                 # Re-compute B dimension each iteration (DKG may have changed)
                 B = compute_task_breadth(self.dkg, self.defense_state)
@@ -411,6 +476,19 @@ class Orchestrator:
                     if result is None or not result.success:
                         if self._solo_iterations >= 5:
                             self._solo_exhausted = True
+                        # Fast exhaust: 2 consecutive plan-exhausted runs with 0 done tasks
+                        _done_count = sum(1 for t in (self.exploitation_plan.tasks if self.exploitation_plan else [])
+                                         if t.get("status") == "done")
+                        _prev_done = getattr(self, '_prev_solo_done_count', -1)
+                        if result is None and _done_count == _prev_done:
+                            _empty_runs = getattr(self, '_solo_empty_runs', 0) + 1
+                            self._solo_empty_runs = _empty_runs
+                            if _empty_runs >= 2:
+                                log.info("Solo mode: 2 runs with no new progress — marking exhausted")
+                                self._solo_exhausted = True
+                        else:
+                            self._solo_empty_runs = 0
+                        self._prev_solo_done_count = _done_count
                     else:
                         self._solo_exhausted = True
                 else:
@@ -423,6 +501,18 @@ class Orchestrator:
                         cteg_hints=cteg_hints,
                     )
                     if result is None:
+                        # Inject context so solo LLM knows why multi-agent was attempted
+                        # but produced no results (no agents spawned, or all found nothing)
+                        _ma_agents = getattr(self._multi_pool, '_agents', {}) if self._multi_pool else {}
+                        _ma_results = getattr(self._multi_pool, '_results', {}) if self._multi_pool else {}
+                        _ctx = (
+                            f"[Multi-Agent Cycle Summary] Scaling level: {scaling_level.value} "
+                            f"(B={B:.2f}). Agents spawned: {len(_ma_agents)}. "
+                            f"Results collected: {len(_ma_results)}. "
+                            f"No flag was captured by the multi-agent cycle. "
+                            f"Falling back to solo mode for continued exploitation."
+                        )
+                        self.llm.add_context_message(_ctx, "user")
                         result = await self._unified_llm_loop(target_url, cteg_hints)
 
                     self._multi_agent_iterations += 1
@@ -430,7 +520,10 @@ class Orchestrator:
                         if self._multi_agent_iterations >= 3:
                             self._multi_exhausted = True
                     else:
-                        self._multi_exhausted = True
+                        # In chain mode, don't exhaust on first success — there may be
+                        # more flags to find. Only exhaust when chain is truly done.
+                        if not self._chain_mode:
+                            self._multi_exhausted = True
 
                 # Checkpoint DKG after each loop iteration
                 self.dkg.save(self._checkpoint_path(f"loop_{self._loop_count}"))
@@ -587,6 +680,34 @@ class Orchestrator:
             log.warning("nmap failed for %s, probing %d common HTTP ports",
                        host, len(common_ports))
 
+        # When nmap returns tcpwrapped for all ports (common in Docker
+        # port-forwarding setups), detect whether the ports share a
+        # consistent offset from known AD service ports.
+        # E.g. 10088→88(Kerberos), 10389→389(LDAP), 10139→139(NetBIOS)
+        # with an offset of +10000.
+        _AD_STD_PORTS = {
+            88: "kerberos-sec", 135: "msrpc", 139: "netbios-ssn",
+            389: "ldap", 445: "microsoft-ds", 636: "ldaps",
+        }
+        _tcpwrapped = [p for p in discovered_ports
+                       if p.get("service", "") == "tcpwrapped"]
+        if len(_tcpwrapped) >= 2:
+            _offsets: dict[int, int] = {}
+            for _tp in _tcpwrapped:
+                for _std in _AD_STD_PORTS:
+                    if _tp["port"] > _std:
+                        _off = _tp["port"] - _std
+                        _offsets[_off] = _offsets.get(_off, 0) + 1
+            if _offsets:
+                _best_offset = max(_offsets, key=_offsets.get)
+                if _offsets[_best_offset] >= 2:
+                    for _tp in _tcpwrapped:
+                        _std_port = _tp["port"] - _best_offset
+                        if _std_port in _AD_STD_PORTS:
+                            _tp["service"] = _AD_STD_PORTS[_std_port]
+                    log.info("nmap: detected port offset +%d, resolved %d tcpwrapped ports",
+                             _best_offset, _offsets[_best_offset])
+
         for p in discovered_ports:
             self.dkg.add_node("Host", f"host-{host}", {
                 "ip": host, "is_reachable": True, "is_internal": False,
@@ -598,9 +719,17 @@ class Orchestrator:
                 "service_name": p.get("service", ""),  # nmap service name for CTEG filtering
             })
 
-        # AD detection
+        # AD detection: if banner scan identified AD-related services,
+        # create a Domain node to enable multi-agent mode.
         _AD_PORTS = {445, 389, 636, 3268, 3269}
-        if any(p["port"] in _AD_PORTS for p in discovered_ports):
+        _AD_SVC_NAMES = {"ldap", "ldaps", "kerberos", "kerberos-sec",
+                          "microsoft-ds", "netbios-ssn", "msrpc"}
+        _has_ad = any(p["port"] in _AD_PORTS for p in discovered_ports)
+        _has_ad = _has_ad or any(
+            (p.get("service", "") or "").lower() in _AD_SVC_NAMES
+            for p in discovered_ports
+        )
+        if _has_ad:
             self.dkg.add_node("Domain", f"domain-{host}", {
                 "name": host, "dc_ip": host, "detected_by": "port_scan",
             })
@@ -1280,7 +1409,18 @@ class Orchestrator:
     def _should_terminate(self, result: TaskResult | None, max_loops: int) -> bool:
         """Check if the main loop should stop."""
         if result and result.success:
-            return True
+            # Chain mode: only stop if chain exhausted or safety cap reached
+            if getattr(self, '_chain_mode', False):
+                if getattr(self, '_chain_exhausted', False):
+                    log.info("Chain mode: chain exhausted, terminating")
+                    return True
+                _max_flags = getattr(self, '_chain_max_flags', 10)
+                if len(getattr(self, '_captured_flags', [])) >= _max_flags:
+                    log.info("Chain mode: safety cap reached (%d flags), terminating", _max_flags)
+                    return True
+                # Otherwise continue — don't terminate on intermediate flag
+            else:
+                return True
         if self._time_exceeded() or self._tokens_exceeded():
             return True
         if self.phase in (OrchestratorPhase.DONE, OrchestratorPhase.FAILED):
@@ -1293,12 +1433,15 @@ class Orchestrator:
             if getattr(self, '_multi_exhausted', False):
                 log.info("All modes exhausted — terminating main loop")
                 return True
-            # Solo exhausted, multi never entered — track no-progress loops
-            _stalled = getattr(self, '_solo_exhausted_stall', 0) + 1
-            self._solo_exhausted_stall = _stalled
-            if _stalled >= 3:
-                log.info("Solo mode exhausted, no multi-agent entry after %d loops — terminating", _stalled)
-                return True
+            # Solo exhausted, multi never entered — track no-progress loops.
+            # In chain mode with multi-agent active, don't count solo stalls
+            # (multi-agent is the primary work mode for chain scenarios).
+            if not getattr(self, '_chain_mode', False):
+                _stalled = getattr(self, '_solo_exhausted_stall', 0) + 1
+                self._solo_exhausted_stall = _stalled
+                if _stalled >= 3:
+                    log.info("Solo mode exhausted, no multi-agent entry after %d loops — terminating", _stalled)
+                    return True
         else:
             self._solo_exhausted_stall = 0
         # No-progress: consecutive outer loops with zero new discoveries
@@ -1306,6 +1449,71 @@ class Orchestrator:
             log.info("No progress for %d consecutive loops — terminating", self._no_progress_loops)
             return True
         return False
+
+    # ── Chain Topology Detection ──────────────────────────────────
+
+    def _detect_chain_topology(self, chain_mode_config: str = "auto") -> bool:
+        """Detect if the target has multi-step attack chain topology.
+
+        Activates chain_mode when: >= 2 distinct services each have
+        associated vulnerability hypotheses, or >= 3 services total,
+        indicating a multi-step chain target.
+
+        Args:
+            chain_mode_config: "auto" (detect), "off" (never activate)
+        """
+        if chain_mode_config == "off":
+            return False
+
+        if chain_mode_config != "auto":
+            # Unknown value — don't activate
+            return False
+
+        services = self.dkg.query_nodes("Service")
+        vulns = self.dkg.query_nodes("Vulnerability")
+
+        # Count services that have vulnerability hypotheses
+        services_with_vulns: set[str] = set()
+        for v in vulns:
+            svc = v.get("service") or v.get("port")
+            if svc:
+                services_with_vulns.add(str(svc))
+
+        # Need >= 2 distinct services with vulns to qualify as chain
+        if len(services_with_vulns) >= 2:
+            self._chain_mode = True
+            self._chain_services_total = len(services_with_vulns)
+            return True
+
+        # Also activate if >= 3 services total (potential chain, even w/o vulns yet)
+        if len(services) >= 3:
+            self._chain_mode = True
+            self._chain_services_total = len(services)
+            return True
+
+        return False
+
+    def _count_unexploited_services(self) -> int:
+        """Count services that still have unexploited vulnerability hypotheses.
+
+        A service is considered exploited if its associated vulnerability
+        nodes are marked as exploited.
+        """
+        vulns = self.dkg.query_nodes("Vulnerability")
+        exploited: set[str] = set()
+        for v in vulns:
+            if v.get("exploited") or v.get("status") == "exploited":
+                svc = v.get("service") or v.get("port")
+                if svc:
+                    exploited.add(str(svc))
+
+        services_with_vulns: set[str] = set()
+        for v in vulns:
+            svc = v.get("service") or v.get("port")
+            if svc:
+                services_with_vulns.add(str(svc))
+
+        return len(services_with_vulns - exploited)
 
     # ── Unified State Access ──────────────────────────────────────
 
@@ -2411,6 +2619,13 @@ class Orchestrator:
                         return {"shell_exec"}
                     if "memcached" in svc_name:
                         return {"shell_exec"}
+                    # Active Directory / Windows services — recognizable but no
+                    # generic protocol tools in the current VULN_TOOL_MAP.
+                    # Return empty set so systematic pass skips these vulns
+                    # (AD exploitation is handled by ADAgent, not systematic pass).
+                    if any(kw in svc_name for kw in ("kerberos", "ldap", "smb", "msrpc",
+                                                       "netbios", "kpasswd", "ad-")):
+                        return set()
                     # Port-based fallback
                     _PORT_PROTO: dict[str, set[str]] = {
                         "1433": {"mssql_query", "mssqlclient_query", "shell_exec"},
@@ -2421,6 +2636,9 @@ class Orchestrator:
                         "1521": {"oracle_query", "shell_exec"},
                         "27017": {"shell_exec"},
                         "11211": {"shell_exec"},
+                        # AD ports — recognized but no generic tools
+                        "88": set(), "389": set(), "636": set(), "445": set(),
+                        "139": set(), "135": set(), "3268": set(), "3269": set(),
                     }
                     if port in _PORT_PROTO:
                         return _PORT_PROTO[port]
@@ -2508,7 +2726,11 @@ class Orchestrator:
                     if detected is not None:
                         tools = [t for t in tools if t in detected]
                     else:
-                        tools = [t for t in tools if t in _ALL_PROTOCOL_TOOLS]
+                        # Unknown protocol (not in the 8 known service types).
+                        # Strip ALL protocol-specific tools — only keep generic
+                        # shell_exec which can run arbitrary commands. Prevents
+                        # mysql_query on Kerberos, redis_cmd on LDAP, etc.
+                        tools = [t for t in tools if t == "shell_exec"]
                 if not tools:
                     continue
             else:
@@ -4299,10 +4521,12 @@ class Orchestrator:
                             snippet = (desc[:250] + "...") if len(desc) > 250 else desc
                             lines.append(f"- **{title}**: {snippet}{tech_str}")
                             lines.append("")
-                        lines.append("NOTE: Above RAG results may not be relevant to the "
-                                     "current target. Ignore entries that target different "
-                                     "software or service types. Use web search if "
-                                     "RAG results are insufficient.")
+                        lines.append("**CRITICAL: RAG results above contain proven attack techniques "
+                                     "and credential combinations for the detected services. "
+                                     "When the service name/type matches your target, the techniques "
+                                     "and specific credentials listed MUST be used in your tasks. "
+                                     "Only discard entries whose software/service type clearly does "
+                                     "not match the target (e.g., MySQL techniques for a PostgreSQL target).")
                         rag_context = "\n".join(lines)
         except Exception:
             pass
@@ -4335,6 +4559,10 @@ You have received multiple intelligence sources above:
 - Service version information from reconnaissance
 
 Your job: COMBINE these sources when designing each task.
+**CRITICAL for WeakAuth/default credentials:** When RAG results contain specific credential
+combinations (username:password pairs), you MUST include EVERY listed combination in your
+batch credential test. Do NOT rely on your own memory of "common passwords" — the RAG
+entries are the authoritative source for service-specific defaults.
 - When an attack pattern matches a discovered service: use the pattern's technique as the task's approach. The RAG result title and techniques field tell you exactly what to do.
 - When patterns do NOT match: rely on general vulnerability exploitation principles for that vulnerability type.
 - Service versions are primary signals: an outdated service with known weaknesses should generate high-priority exploitation tasks targeting those specific weaknesses.
@@ -4360,11 +4588,17 @@ have already been completed. Each task should test or exploit a vulnerability:
 (SQLi, XSS, CMDi, LFI, file upload, auth bypass, etc.) even for medium-confidence
 vulnerabilities. The system can handle many parallel tasks.
 
-**For WeakAuth / default credential vulnerabilities:** Generate MULTIPLE tasks
-testing different credential combinations (at least 5-8). Try common accounts
-and common passwords (empty, same-as-username, "password", "admin", "123456",
-etc.). Then add tasks for authenticated enumeration, privilege escalation,
-and data extraction — all depending on at least one credential test succeeding.
+**For WeakAuth / default credential vulnerabilities:** Do NOT create individual tasks
+for each credential pair — this wastes iterations. Create a SINGLE shell_exec task
+that uses a Python one-liner to batch-test ALL credential combinations at once.
+Example for PostgreSQL:
+```json
+{{"id": "task-cred-batch", "dependent_task_ids": [],
+ "instruction": "Batch-test all PostgreSQL credential combinations in ONE shell_exec call. Use Python subprocess with PGPASSWORD env var. Test common combos: (postgres,postgres), (postgres,''), (postgres,password), (postgres,admin), (postgres,password123), (postgres,postgresql). Print SUCCESS: for any working pair.",
+ "tool": "shell_exec", "params": {{"command": "python3 -c \"import subprocess,os; combos=[('postgres','postgres'),('postgres',''),('postgres','password'),('postgres','admin'),('postgres','password123')]; [print(f'SUCCESS: {{u}}:{{p}}') if subprocess.run(['psql','-h','HOST','-p','PORT','-U',u,'-w','-c','SELECT 1'],env={{**os.environ,'PGPASSWORD':p}},capture_output=True).returncode==0 else None for u,p in combos]\""}}}}
+```
+This reduces 10+ sequential LLM roundtrips to 1 single tool execution.
+Then add tasks for authenticated enumeration and data extraction depending on task-cred-batch.
 
 ## Dependency Rules (use dependent_task_ids to build a DAG)
 Create meaningful task dependencies when:
@@ -4405,7 +4639,11 @@ task-1 and task-2 run first (parallel, independent). task-3 waits for both.
    updated after each task — new tasks can be added in replanning.
 4. Do NOT add curl_get/http_post probing tasks — services have already been
    probed during reconnaissance.
-5. If a vulnerability's suggested tool is curl_get (for LFI/IDOR/SSRF), use
+5. **Flag location strategy**: After gaining RCE, try simple flag paths FIRST
+   (/flag.txt, /flag, /root/flag.txt, /home/*/flag.txt) before launching
+   complex recursive find/grep searches. Simple cat commands are faster and
+   avoid timeouts.
+6. If a vulnerability's suggested tool is curl_get (for LFI/IDOR/SSRF), use
    curl_get with the exact URL and parameter.
 
 Output ONLY valid JSON array (3-20 tasks depending on complexity. More tasks =\= better — prefer focused, high-impact exploitation tasks over exhaustive probing)."""
@@ -4924,10 +5162,14 @@ Output ONLY valid JSON:
             task_result_lower = task_result.lower()
             if any(kw in task_result_lower for kw in
                    ("token:", "client-certificate-data", "bearer",
-                    "password:", "apiVersion:", "server: https://")):
+                    "password:", "apiVersion:", "server: https://",
+                    "success:", "login ok", "auth ok", "connected")):
                 cred_reminder = (
-                    "\nIMPORTANT: The task output above CONTAINS CREDENTIALS. "
-                    "You MUST add tasks that USE these credentials now. "
+                    "\nIMPORTANT: The task output above CONTAINS WORKING CREDENTIALS. "
+                    "You MUST update ALL pending tasks that connect to this service "
+                    "to use the discovered credentials (username and password). "
+                    "If any pending task still has placeholder/wrong credentials in "
+                    "its params, CORRECT them now. "
                     "If the output shows 'server: https://HOST:PORT', use that "
                     "exact URL with the credentials from the same file. "
                     "Send authenticated requests with curl_get: "
@@ -5073,14 +5315,45 @@ Output ONLY valid JSON:
                 preserved.append(task)
                 # Merge in new tasks from LLM (avoid duplicate IDs)
                 existing_ids = {t["id"] for t in preserved}
+                # Collect LLM's dependency updates for existing tasks
+                llm_dep_updates: dict[str, list] = {}
                 for nt in new_tasks:
                     if not isinstance(nt, dict):
                         continue
                     nt.setdefault("status", "pending")
                     nt.setdefault("dependent_task_ids", nt.pop("dependencies", []))
                     if nt["id"] not in existing_ids:
+                        # Dedup: skip if >80% similar to an existing pending task
+                        _nt_inst = (nt.get("instruction") or "").lower()
+                        _is_dup = False
+                        if _nt_inst:
+                            for pt in preserved:
+                                if pt.get("status") != "pending":
+                                    continue
+                                _pt_inst = (pt.get("instruction") or "").lower()
+                                if not _pt_inst:
+                                    continue
+                                # Simple word overlap ratio
+                                _nt_words = set(_nt_inst.split())
+                                _pt_words = set(_pt_inst.split())
+                                if _nt_words and _pt_words:
+                                    _overlap = len(_nt_words & _pt_words) / min(len(_nt_words), len(_pt_words))
+                                    if _overlap > 0.75:
+                                        _is_dup = True
+                                        break
+                        if _is_dup:
+                            continue
                         preserved.append(nt)
                         existing_ids.add(nt["id"])
+                    else:
+                        # LLM updated an existing task — capture its dependency changes
+                        if "dependent_task_ids" in nt:
+                            llm_dep_updates[nt["id"]] = nt["dependent_task_ids"]
+                # Apply LLM's dependency updates to preserved tasks
+                for t in preserved:
+                    tid = t.get("id", "")
+                    if tid in llm_dep_updates:
+                        t["dependent_task_ids"] = llm_dep_updates[tid]
                 self.exploitation_plan.tasks = preserved
 
                 # Hard cap: trim lowest-quality pending tasks when plan
@@ -5897,6 +6170,15 @@ Respond ONLY with a JSON array of next steps (max 5)."""
                 if self.exploitation_plan else None
             ),
             "exhausted_task_ids": list(self._exhausted_task_ids),
+            # Chain / multi-flag mode state
+            "chain_mode": getattr(self, '_chain_mode', False),
+            "captured_flags": list(getattr(self, '_captured_flags', [])),
+            "chain_services_total": getattr(self, '_chain_services_total', 0),
+            "chain_exhausted": getattr(self, '_chain_exhausted', False),
+            "no_progress_loops": getattr(self, '_no_progress_loops', 0),
+            "solo_exhausted_stall": getattr(self, '_solo_exhausted_stall', 0),
+            "solo_empty_runs": getattr(self, '_solo_empty_runs', 0),
+            "prev_solo_done_count": getattr(self, '_prev_solo_done_count', 0),
             "dkg_path": dkg_path,
         }
 
@@ -5949,6 +6231,16 @@ Respond ONLY with a JSON array of next steps (max 5)."""
             self._solo_exhausted = checkpoint.get("solo_exhausted", False)
             self._multi_exhausted = checkpoint.get("multi_exhausted", False)
             self._exhausted_task_ids = set(checkpoint.get("exhausted_task_ids", []))
+
+            # Restore chain / multi-flag mode state
+            self._chain_mode = checkpoint.get("chain_mode", False)
+            self._captured_flags = checkpoint.get("captured_flags", [])
+            self._chain_services_total = checkpoint.get("chain_services_total", 0)
+            self._chain_exhausted = checkpoint.get("chain_exhausted", False)
+            self._no_progress_loops = checkpoint.get("no_progress_loops", 0)
+            self._solo_exhausted_stall = checkpoint.get("solo_exhausted_stall", 0)
+            self._solo_empty_runs = checkpoint.get("solo_empty_runs", 0)
+            self._prev_solo_done_count = checkpoint.get("prev_solo_done_count", 0)
 
             # Restore vulnerabilities
             self.vulnerabilities = []
@@ -6111,10 +6403,10 @@ Respond ONLY with a JSON array of next steps (max 5)."""
         from darwin.sub_agents.pivot_agent import PivotAgent
 
         # Create persistent pool if first call
-        if self._persistent_pool is None:
-            self._persistent_pool = SubAgentPool()
+        if self._multi_pool is None:
+            self._multi_pool = SubAgentPool()
 
-        pool = self._persistent_pool
+        pool = self._multi_pool
 
         # Determine which agents to spawn based on DKG state
         spawned_any = await self._spawn_agents_from_dkg(target_url, pool, scaling_level, cteg_hints)
@@ -6140,9 +6432,23 @@ Respond ONLY with a JSON array of next steps (max 5)."""
                         fv = f.get("value", "")
                         if fv and fv.startswith("flag{") and fv not in self._known_flags:
                             self._known_flags.add(fv)
-                            self.__dict__['_multi_agent_flag'] = fv
-                            flag_found.set()
-                            return
+                            if self._chain_mode:
+                                # Chain mode: record flag, continue unless chain exhausted
+                                self._captured_flags.append(fv)
+                                log.info("Chain mode: captured flag %s in multi-agent (%d/%d)",
+                                         fv[:40], len(self._captured_flags),
+                                         max(self._chain_services_total, 1))
+                                if self._count_unexploited_services() == 0:
+                                    self._chain_exhausted = True
+                                    self.__dict__['_multi_agent_flag'] = fv
+                                    flag_found.set()
+                                    return
+                                # Don't set flag_found — continue to next service
+                            else:
+                                # Original behavior: stop immediately
+                                self.__dict__['_multi_agent_flag'] = fv
+                                flag_found.set()
+                                return
                     try:
                         await asyncio.wait_for(flag_event.wait(), timeout=5.0)
                     except asyncio.TimeoutError:
@@ -6164,14 +6470,12 @@ Respond ONLY with a JSON array of next steps (max 5)."""
                             if getattr(a, 'agent_type', None) not in (AgentType.RECON, AgentType.EXPLOIT)
                             and getattr(a, 'state', None) != SubAgentState.DONE]
 
-            # Save ExploitAgent specs (deferred until after analyze+research)
-            saved_exploit_specs = [
-                (a.agent_id, a.task_scope, a.dkg, a.dpm, a.dave, a.cteg, a.cteg_hints, a.budget)
-                for a in exploit_agents
-            ]
-            for aid in [s[0] for s in saved_exploit_specs]:
-                if aid in pool._agents:
-                    del pool._agents[aid]
+            # Pause ExploitAgent (deferred until after analyze+research).
+            # Set state to WAITING instead of deleting — preserves plan, findings,
+            # iteration, _stale_iterations, and _completed_task_ids across phases.
+            for a in exploit_agents:
+                a._pre_wait_state = getattr(a, 'state', SubAgentState.SPAWNING)
+                a.state = SubAgentState.WAITING
 
             # Phase 1: Recon agents first
             if recon_agents and not flag_found.is_set():
@@ -6202,17 +6506,14 @@ Respond ONLY with a JSON array of next steps (max 5)."""
                 self.exploitation_plan = await self._generate_exploitation_plan(
                     target_url, cteg_hints)
 
-            # Phase 3: Re-create ExploitAgent (now DKG has Vulnerability nodes)
-            if not flag_found.is_set() and saved_exploit_specs:
-                for agent_id, scope, dkg, dpm, dave, cteg, cteg_hints, budget in saved_exploit_specs:
-                    if agent_id not in pool._agents:
-                        exploit = ExploitAgent(
-                            agent_id=agent_id, task_scope=scope,
-                            dkg=dkg, dpm=dpm, dave=dave,
-                            cteg=cteg, cteg_hints=cteg_hints,
-                            budget=budget,
-                        )
-                        pool.spawn(exploit)
+            # Phase 3: Resume ExploitAgent (now DKG has Vulnerability nodes).
+            # Restore previous state instead of recreating — preserves internal state.
+            if not flag_found.is_set():
+                exploit_agents = [a for a in pool._agents.values()
+                                  if getattr(a, 'agent_type', None) == AgentType.EXPLOIT
+                                  and getattr(a, 'state', None) == SubAgentState.WAITING]
+                for a in exploit_agents:
+                    a.state = getattr(a, '_pre_wait_state', SubAgentState.RUNNING)
                 exploit_agents = [a for a in pool._agents.values()
                                   if getattr(a, 'agent_type', None) == AgentType.EXPLOIT
                                   and getattr(a, 'state', None) != SubAgentState.DONE]
@@ -6259,12 +6560,24 @@ Respond ONLY with a JSON array of next steps (max 5)."""
                 total_tokens = self.llm.token_count + sum(
                     getattr(r, 'tokens_used', 0) for r in results.values()
                 )
-                self.phase = OrchestratorPhase.DONE
-                return TaskResult(
-                    success=True, flag=watcher_flag, steps=self.step_count,
-                    tokens_used=total_tokens,
-                    time_elapsed=time.time() - self.start_time,
-                )
+                if self._chain_mode:
+                    # In chain mode: flag_watcher only sets this when chain exhausted
+                    final_flag = self._captured_flags[-1] if self._captured_flags else watcher_flag
+                    result_task = TaskResult(
+                        success=True, flag=final_flag, steps=self.step_count,
+                        tokens_used=total_tokens,
+                        time_elapsed=time.time() - self.start_time,
+                    )
+                    result_task.all_flags = list(self._captured_flags)
+                    self.phase = OrchestratorPhase.DONE
+                    return result_task
+                else:
+                    self.phase = OrchestratorPhase.DONE
+                    return TaskResult(
+                        success=True, flag=watcher_flag, steps=self.step_count,
+                        tokens_used=total_tokens,
+                        time_elapsed=time.time() - self.start_time,
+                    )
 
             # Query DKG for flags (fallback if watcher didn't catch it)
             flags = self.dkg.query_nodes("Flag")
@@ -6275,12 +6588,30 @@ Respond ONLY with a JSON array of next steps (max 5)."""
                     total_tokens = self.llm.token_count + sum(
                         getattr(r, 'tokens_used', 0) for r in results.values()
                     )
-                    self.phase = OrchestratorPhase.DONE
-                    return TaskResult(
-                        success=True, flag=fv, steps=self.step_count,
-                        tokens_used=total_tokens,
-                        time_elapsed=time.time() - self.start_time,
-                    )
+                    if self._chain_mode:
+                        # Chain mode: record intermediate flag, only return if exhausted
+                        self._captured_flags.append(fv)
+                        if self._count_unexploited_services() == 0:
+                            self._chain_exhausted = True
+                            final_flag = self._captured_flags[-1] if self._captured_flags else fv
+                            result_task = TaskResult(
+                                success=True, flag=final_flag, steps=self.step_count,
+                                tokens_used=total_tokens,
+                                time_elapsed=time.time() - self.start_time,
+                            )
+                            result_task.all_flags = list(self._captured_flags)
+                            self.phase = OrchestratorPhase.DONE
+                            return result_task
+                        # Not exhausted: don't return, let loop continue
+                        log.info("Chain mode: captured flag %s in multi-agent fallback, continuing",
+                                 fv[:40])
+                    else:
+                        self.phase = OrchestratorPhase.DONE
+                        return TaskResult(
+                            success=True, flag=fv, steps=self.step_count,
+                            tokens_used=total_tokens,
+                            time_elapsed=time.time() - self.start_time,
+                        )
 
             # Inject sub-agent results into orchestrator LLM context
             if results:

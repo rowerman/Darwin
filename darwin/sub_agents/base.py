@@ -35,6 +35,7 @@ class SubAgentState(str, Enum):
     SPAWNING = "spawning"
     INITIALIZING = "initializing"
     RUNNING = "running"
+    WAITING = "waiting"        # Paused mid-cycle (e.g. ExploitAgent deferred for Phase 2)
     DONE = "done"
     BUDGET_EXHAUSTED = "budget_exhausted"
     STALLED = "stalled"
@@ -731,5 +732,5 @@ class SubAgentPool:
         """Remove all terminated agents."""
         self._agents = {
             aid: agent for aid, agent in self._agents.items()
-            if agent.state == SubAgentState.RUNNING
+            if agent.state in (SubAgentState.RUNNING, SubAgentState.WAITING)
         }

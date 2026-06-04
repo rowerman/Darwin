@@ -199,7 +199,9 @@
       "Bash(sort -t'→' -k2 -n)",
       "Bash(nmap -sV -p 10205 localhost)",
       "Bash(docker run *)",
-      "Bash(git *)"
+      "Bash(git *)",
+      "Bash(netexec --help)",
+      "Bash(pip show *)"
     ]
   }
 }

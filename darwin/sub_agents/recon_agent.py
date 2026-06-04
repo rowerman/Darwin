@@ -194,6 +194,9 @@ Output as JSON array:
         """
         findings = []
 
+        # Track stall detection via base class (maintains _stale_iterations)
+        await super()._evaluate_result(task, result)
+
         if not hasattr(result, "success") or not result.success:
             self.findings.extend(findings)
             return False, findings

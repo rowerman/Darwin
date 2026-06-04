@@ -297,11 +297,12 @@ def register_recon_tools(gateway: MCPGateway) -> MCPGateway:
 
     gateway.register_shell_tool(
         name="nmap_port_range",
-        command_template="nmap -sV -p {ports} {target}",
+        command_template="nmap -sV {extra_args} -p {ports} {target}",
         description="Scan a specific port range (e.g. '8080-8090,3306') for benchmarking",
         parameters={
             "target": {"type": "string", "description": "Target IP or hostname"},
             "ports": {"type": "string", "description": "Port range expression (e.g. '8000-8100,3306')"},
+            "extra_args": {"type": "string", "description": "Extra nmap arguments (e.g. '--version-intensity 9')", "default": ""},
         },
         parser=_parse_nmap_output,
         timeout=60,

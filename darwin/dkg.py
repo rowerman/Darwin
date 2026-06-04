@@ -100,13 +100,14 @@ class DKG:
             self.graph.add_node(node_id, **props)
             self._persist()
 
-        # Notify subscribers when new nodes appear
+        # Notify subscribers when new nodes appear.
+        # Event stays set (no clear) so late subscribers don't miss notifications.
+        # The _node_counts counter lets waiters detect new nodes without resetting.
         if is_new:
             self._node_counts[node_type] = self._node_counts.get(node_type, 0) + 1
             event = self._events.get(node_type)
             if event:
                 event.set()
-                event.clear()  # Reset for next notification
 
         return node_id
 

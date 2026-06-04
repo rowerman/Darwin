@@ -187,6 +187,62 @@ def compute_task_breadth(dkg: DKG, defense_state: DefenseStateVector | None = No
     return min(b_raw, 1.0)
 
 
+def detect_complexity_hints(dkg: DKG, defense_state: DefenseStateVector | None = None) -> str | None:
+    """Check DKG for obvious complexity signals after initial recon.
+
+    Returns 'coordinated', 'distributed', or None (let normal hysteresis decide).
+    Only fires for CLEAR multi-agent indicators; borderline cases return None
+    so the existing hysteresis mechanism handles them normally.
+
+    Called once after bootstrap+deep_recon, before the main loop starts.
+    """
+    services = dkg.query_nodes("Service")
+    hosts = dkg.query_nodes("Host")
+    domains = dkg.query_nodes("Domain")
+    credentials = dkg.query_nodes("Credential")
+    n_services = len(services)
+    n_hosts = len(hosts)
+
+    # Extract unique ports for AD/K8s detection
+    ports: set[int] = set()
+    for s in services:
+        p = s.get("port")
+        if p is not None:
+            try:
+                ports.add(int(p))
+            except (TypeError, ValueError):
+                pass
+
+    # AD environment: Domain node OR SMB+LDAP ports → at least coordinated
+    if domains or (445 in ports and 389 in ports):
+        return "coordinated"
+
+    # K8s/cloud environment: API server or kubelet port
+    if 6443 in ports or 10250 in ports:
+        return "coordinated"
+
+    # Many services: >= 6 → distributed, >= 4 → coordinated
+    if n_services >= 6:
+        return "distributed"
+    if n_services >= 4:
+        return "coordinated"
+
+    # Multi-host with credentials → coordinated
+    if n_hosts >= 2 and len(credentials) > 0:
+        return "coordinated"
+
+    # Defense present + multiple services → coordinated
+    if (
+        defense_state is not None
+        and defense_state.defense_complexity > 0.1
+        and n_services >= 3
+    ):
+        return "coordinated"
+
+    # Borderline or simple: let normal hysteresis handle it
+    return None
+
+
 class DynamicScalingEngine:
     """Dynamic scaling decision engine.
 
@@ -208,6 +264,17 @@ class DynamicScalingEngine:
         self._level_votes: List[ScalingLevel] = []
         self.hysteresis = hysteresis
         self._dkg: DKG | None = None
+
+    def seed_votes(self, level_str: str) -> None:
+        """Pre-fill vote queue so the next decide() can switch immediately.
+
+        Only call once during initialization, before the main loop starts,
+        when recon has revealed clear multi-agent indicators.
+        With hysteresis=2, pre-filling [target, target] means the very
+        first decide() call will switch to that level if B agrees.
+        """
+        target = ScalingLevel(level_str)
+        self._level_votes = [target, target]
 
     def decide(self, dkg: DKG, defense_state: DefenseStateVector | None = None) -> ScalingLevel:
         """Decide scaling level based on current state."""

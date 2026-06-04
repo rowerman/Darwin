@@ -208,7 +208,7 @@ class DarwinRAG:
                 # TF-IDF: fit vectorizer and build sparse matrix
                 from sklearn.feature_extraction.text import TfidfVectorizer
                 vec = TfidfVectorizer(
-                    max_features=5000, analyzer="word",
+                    max_features=None, analyzer="word",
                     ngram_range=(1, 2), stop_words="english",
                 )
                 matrix = vec.fit_transform(texts)
@@ -527,7 +527,7 @@ class DarwinRAG:
             if not embedder:
                 from sklearn.feature_extraction.text import TfidfVectorizer
                 vec = TfidfVectorizer(
-                    max_features=5000, analyzer="word",
+                    max_features=None, analyzer="word",
                     ngram_range=(1, 2), stop_words="english",
                 )
                 matrix = vec.fit_transform(texts)
@@ -713,7 +713,7 @@ class DarwinRAG:
 
             from sklearn.feature_extraction.text import TfidfVectorizer
             vec = TfidfVectorizer(
-                max_features=5000, analyzer="word",
+                max_features=None, analyzer="word",
                 ngram_range=(1, 2), stop_words="english",
             )
             matrix = vec.fit_transform(texts)
