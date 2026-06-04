@@ -1248,7 +1248,6 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
             "user": {"type": "string", "description": "Username (optional, omit for -no-pass)"},
             "password": {"type": "string", "description": "Password (optional, omit for -no-pass)"},
         },
-        timeout=120,
     )
     async def _impacket_GetNPUsers(domain: str, dc_ip: str,
                                    user: str = "", password: str = "",
@@ -1290,7 +1289,6 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
             "user": {"type": "string", "description": "Username (optional, omit for -no-pass)"},
             "password": {"type": "string", "description": "Password (optional, omit for -no-pass)"},
         },
-        timeout=120,
     )
     gateway.register_shell_tool(
         name="impacket_secretsdump_dcsync",

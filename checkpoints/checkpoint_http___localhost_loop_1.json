@@ -6,9 +6,9 @@
       "is_reachable": true,
       "is_internal": false,
       "type": "Host",
-      "created_at": "2026-06-04T14:36:11.917669",
-      "updated_at": "2026-06-04T14:36:11.917676",
-      "_version": 6
+      "created_at": "2026-06-04T17:41:40.900557",
+      "updated_at": "2026-06-04T17:41:40.900563",
+      "_version": 7
     },
     {
       "id": "svc-localhost-10053",
@@ -18,44 +18,56 @@
       "banner": "tcpwrapped",
       "service_name": "tcpwrapped",
       "type": "Service",
-      "created_at": "2026-06-04T14:36:11.917418",
-      "updated_at": "2026-06-04T14:36:11.917425",
+      "created_at": "2026-06-04T17:41:40.900249",
+      "updated_at": "2026-06-04T17:41:40.900257",
+      "_version": 1
+    },
+    {
+      "id": "svc-localhost-10080",
+      "port": 10080,
+      "protocol": "tcp",
+      "version": "tcpwrapped",
+      "banner": "tcpwrapped",
+      "service_name": "tcpwrapped",
+      "type": "Service",
+      "created_at": "2026-06-04T17:41:40.900337",
+      "updated_at": "2026-06-04T17:41:40.900344",
       "_version": 1
     },
     {
       "id": "svc-localhost-10088",
       "port": 10088,
       "protocol": "tcp",
-      "version": "tcpwrapped",
-      "banner": "tcpwrapped",
-      "service_name": "tcpwrapped",
+      "version": "kerberos-sec",
+      "banner": "kerberos-sec",
+      "service_name": "kerberos-sec",
       "type": "Service",
-      "created_at": "2026-06-04T14:36:11.917495",
-      "updated_at": "2026-06-04T14:36:11.917502",
+      "created_at": "2026-06-04T17:41:40.900392",
+      "updated_at": "2026-06-04T17:41:40.900398",
       "_version": 1
     },
     {
       "id": "svc-localhost-10135",
       "port": 10135,
       "protocol": "tcp",
-      "version": "tcpwrapped",
-      "banner": "tcpwrapped",
-      "service_name": "tcpwrapped",
+      "version": "msrpc",
+      "banner": "msrpc",
+      "service_name": "msrpc",
       "type": "Service",
-      "created_at": "2026-06-04T14:36:11.917546",
-      "updated_at": "2026-06-04T14:36:11.917552",
+      "created_at": "2026-06-04T17:41:40.900440",
+      "updated_at": "2026-06-04T17:41:40.900447",
       "_version": 1
     },
     {
       "id": "svc-localhost-10139",
       "port": 10139,
       "protocol": "tcp",
-      "version": "tcpwrapped",
-      "banner": "tcpwrapped",
-      "service_name": "tcpwrapped",
+      "version": "netbios-ssn",
+      "banner": "netbios-ssn",
+      "service_name": "netbios-ssn",
       "type": "Service",
-      "created_at": "2026-06-04T14:36:11.917592",
-      "updated_at": "2026-06-04T14:36:11.917597",
+      "created_at": "2026-06-04T17:41:40.900488",
+      "updated_at": "2026-06-04T17:41:40.900494",
       "_version": 1
     },
     {
@@ -66,266 +78,473 @@
       "banner": "tcpwrapped",
       "service_name": "tcpwrapped",
       "type": "Service",
-      "created_at": "2026-06-04T14:36:11.917635",
-      "updated_at": "2026-06-04T14:36:11.917641",
+      "created_at": "2026-06-04T17:41:40.900534",
+      "updated_at": "2026-06-04T17:41:40.900541",
       "_version": 1
     },
     {
       "id": "svc-localhost-10389",
       "port": 10389,
       "protocol": "tcp",
-      "version": "tcpwrapped",
-      "banner": "tcpwrapped",
-      "service_name": "tcpwrapped",
+      "version": "ldap",
+      "banner": "ldap",
+      "service_name": "ldap",
       "type": "Service",
-      "created_at": "2026-06-04T14:36:11.917691",
-      "updated_at": "2026-06-04T14:36:11.917697",
+      "created_at": "2026-06-04T17:41:40.900579",
+      "updated_at": "2026-06-04T17:41:40.900585",
       "_version": 1
     },
     {
-      "id": "analysis-1780555036",
+      "id": "domain-localhost",
+      "name": "localhost",
+      "dc_ip": "localhost",
+      "detected_by": "port_scan",
+      "type": "Domain",
+      "created_at": "2026-06-04T17:41:40.900624",
+      "updated_at": "2026-06-04T17:41:40.900631",
+      "_version": 1
+    },
+    {
+      "id": "plan-recon-host-localhost-1780566162",
+      "plan_id": "plan-recon-host-localhost-1780566162",
+      "phase": "ReconAgent",
+      "goal": "Sub-agent task",
+      "total_tasks": 5,
+      "completed": 0,
+      "failed": 0,
+      "status": "in_progress",
+      "created_at": "2026-06-04T17:42:42",
+      "type": "Plan",
+      "updated_at": "2026-06-04T17:42:42.622347",
+      "_version": 1
+    },
+    {
+      "id": "recon-1",
+      "plan_id": "plan-recon-host-localhost-1780566162",
+      "instruction": "Identify web technologies on localhost",
+      "tool": "whatweb_scan",
+      "params": {
+        "url": "http://localhost"
+      },
+      "status": "pending",
+      "dependencies": [],
+      "attempts": 0,
+      "max_attempts": 3,
+      "type": "Task",
+      "created_at": "2026-06-04T17:42:42.622383",
+      "updated_at": "2026-06-04T17:42:42.622386",
+      "_version": 1
+    },
+    {
+      "id": "recon-2",
+      "plan_id": "plan-recon-host-localhost-1780566162",
+      "instruction": "Enumerate directories with dirb",
+      "tool": "dirb_scan",
+      "params": {
+        "url": "http://localhost"
+      },
+      "status": "pending",
+      "dependencies": [],
+      "attempts": 0,
+      "max_attempts": 3,
+      "type": "Task",
+      "created_at": "2026-06-04T17:42:42.622436",
+      "updated_at": "2026-06-04T17:42:42.622441",
+      "_version": 1
+    },
+    {
+      "id": "recon-3",
+      "plan_id": "plan-recon-host-localhost-1780566162",
+      "instruction": "Probe /admin endpoint",
+      "tool": "curl_get",
+      "params": {
+        "url": "http://localhost/admin"
+      },
+      "status": "pending",
+      "dependencies": [
+        "recon-2"
+      ],
+      "attempts": 0,
+      "max_attempts": 3,
+      "type": "Task",
+      "created_at": "2026-06-04T17:42:42.622471",
+      "updated_at": "2026-06-04T17:42:42.622474",
+      "_version": 1
+    },
+    {
+      "id": "recon-4",
+      "plan_id": "plan-recon-host-localhost-1780566162",
+      "instruction": "Probe /backup endpoint",
+      "tool": "curl_get",
+      "params": {
+        "url": "http://localhost/backup"
+      },
+      "status": "pending",
+      "dependencies": [
+        "recon-2"
+      ],
+      "attempts": 0,
+      "max_attempts": 3,
+      "type": "Task",
+      "created_at": "2026-06-04T17:42:42.622492",
+      "updated_at": "2026-06-04T17:42:42.622495",
+      "_version": 1
+    },
+    {
+      "id": "recon-5",
+      "plan_id": "plan-recon-host-localhost-1780566162",
+      "instruction": "Probe /uploads endpoint",
+      "tool": "curl_get",
+      "params": {
+        "url": "http://localhost/uploads"
+      },
+      "status": "pending",
+      "dependencies": [
+        "recon-2"
+      ],
+      "attempts": 0,
+      "max_attempts": 3,
+      "type": "Task",
+      "created_at": "2026-06-04T17:42:42.622520",
+      "updated_at": "2026-06-04T17:42:42.622523",
+      "_version": 1
+    },
+    {
+      "id": "svc-research-1780566258",
+      "phase": "service_research",
+      "type": "Analysis",
+      "content": "  [NVD CVEs] **Total:** 1 matching CVEs | **Showing:** 1 (offset 0)\n\n### CVE-2026-3039\n**Status:** Analyzed | **Published:** 2026-05-20T13:16:23.647\n**Severity:** HIGH (7.5) from CVSS 3.1\n\n  [NVD CVEs] **Total:** 2 matching CVEs | **Showing:** 2 (offset 0)\n\n### CVE-2002-1873\n**Status:** Modified | **Published:** 2002-12-31T05:00:00.000\n**Severity:** MEDIUM (5) from CVSS 2.0\n\n### CVE-2013-4688\n**Status:** Modified | **Published:** 2013-07-11T14:55:01.403\n**Severity:** HIGH (7.8) from CVSS 2.0\n\n  [NVD CVEs] **Total:** 844 matching CVEs | **Showing:** 3 (offset 0)\n\n### CVE-1999-0385\n**Status:** Modified | **Published:** 1998-12-01T05:00:00.000\n**Severity:** HIGH (10) from CVSS 2.0\n\n### CVE-1999-0895\n**Status:** Modified | **Published:** 1999-10-20T04:00:00.000\n**Severity:** HIGH (7.5) from CVSS 2.0\n\n### CVE-2000-0516\n**Status:** Modified | **Published:** 2000-06-06T04:00:00.000\n**Severity:** HIGH (7.2\n",
+      "created_at": "2026-06-04T17:44:18.250547",
+      "updated_at": "2026-06-04T17:44:18.250582",
+      "_version": 1
+    },
+    {
+      "id": "analysis-1780566330",
       "phase": "analyze",
       "type": "Analysis",
-      "content": "No HTTP endpoints discovered. Six TCP ports are open but all responded 'tcpwrapped', indicating non-HTTP services that did not return banners. These likely require authentication (SSH, databases) and may be vulnerable to weak or missing credentials.",
+      "content": "Target is a Windows domain controller with Kerberos (10088), MSRPC (10135), NetBIOS (10139), and LDAP (10389) services exposed. These services support domain authentication and resource access. The presence of LDAP and Kerberos suggests a full Active Directory environment. No HTTP endpoints were identified; the application is the domain services themselves. The business logic is authentication, user/group management, and file sharing.",
       "endpoint_count": 0,
-      "created_at": "2026-06-04T14:37:16.755841",
-      "updated_at": "2026-06-04T14:37:16.755852",
+      "created_at": "2026-06-04T17:45:30.933135",
+      "updated_at": "2026-06-04T17:45:30.933148",
       "_version": 1
     },
     {
       "id": "vuln-1",
       "vuln_type": "AuthBypass",
-      "endpoint": "localhost:10053",
-      "parameter": "",
-      "severity": "unknown",
-      "source": "llm_analysis",
-      "suggested_tool": "test_credential",
-      "tool_args": {
-        "host": "localhost",
-        "port": 10053,
-        "username": "root",
-        "password": ""
-      },
-      "type": "Vulnerability",
-      "created_at": "2026-06-04T14:40:47.565959",
-      "updated_at": "2026-06-04T14:40:47.565963",
-      "_version": 8,
-      "tested_at": "14:40:47",
-      "test_result": "Template format error: 'command' | template={command} 2>&1 | kwargs={'url': 'localhost:10053'}",
-      "test_tool": "shell_exec"
-    },
-    {
-      "id": "vuln-2",
-      "vuln_type": "AuthBypass",
-      "endpoint": "localhost:10088",
-      "parameter": "",
-      "severity": "unknown",
-      "source": "llm_analysis",
-      "suggested_tool": "test_credential",
-      "tool_args": {
-        "host": "localhost",
-        "port": 10088,
-        "username": "root",
-        "password": ""
-      },
-      "type": "Vulnerability",
-      "created_at": "2026-06-04T14:40:47.566474",
-      "updated_at": "2026-06-04T14:40:47.566477",
-      "_version": 8,
-      "tested_at": "14:40:47",
-      "test_result": "Template format error: 'command' | template={command} 2>&1 | kwargs={'url': 'localhost:10088'}",
-      "test_tool": "shell_exec"
-    },
-    {
-      "id": "vuln-3",
-      "vuln_type": "AuthBypass",
-      "endpoint": "localhost:10135",
-      "parameter": "",
-      "severity": "unknown",
-      "source": "llm_analysis",
-      "suggested_tool": "test_credential",
-      "tool_args": {
-        "host": "localhost",
-        "port": 10135,
-        "username": "root",
-        "password": ""
-      },
-      "type": "Vulnerability",
-      "created_at": "2026-06-04T14:40:47.567149",
-      "updated_at": "2026-06-04T14:40:47.567152",
-      "_version": 7,
-      "tested_at": "14:40:47",
-      "test_result": "Template format error: 'password' | template=sshpass -p '{password}' ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 {username}@{host} '{command}' 2>&1 | kwargs={'url': 'localhost:10135'}",
-      "test_tool": "ssh_exec"
-    },
-    {
-      "id": "vuln-4",
-      "vuln_type": "AuthBypass",
-      "endpoint": "localhost:10139",
-      "parameter": "",
-      "severity": "unknown",
-      "source": "llm_analysis",
-      "suggested_tool": "test_credential",
-      "tool_args": {
-        "host": "localhost",
-        "port": 10139,
-        "username": "root",
-        "password": ""
-      },
-      "type": "Vulnerability",
-      "created_at": "2026-06-04T14:37:16.755993",
-      "updated_at": "2026-06-04T14:37:16.755996",
-      "_version": 1
-    },
-    {
-      "id": "vuln-5",
-      "vuln_type": "AuthBypass",
-      "endpoint": "localhost:10326",
-      "parameter": "",
-      "severity": "unknown",
-      "source": "llm_analysis",
-      "suggested_tool": "test_credential",
-      "tool_args": {
-        "host": "localhost",
-        "port": 10326,
-        "username": "root",
-        "password": ""
-      },
-      "type": "Vulnerability",
-      "created_at": "2026-06-04T14:37:16.756011",
-      "updated_at": "2026-06-04T14:37:16.756014",
-      "_version": 1
-    },
-    {
-      "id": "vuln-6",
-      "vuln_type": "AuthBypass",
-      "endpoint": "localhost:10389",
+      "endpoint": "port 10389 (ldap)",
       "parameter": "",
       "severity": "unknown",
       "source": "llm_analysis",
       "suggested_tool": "ldapsearch_ad",
       "tool_args": {
         "host": "localhost",
-        "port": 10389
+        "port": 10389,
+        "anonymous": true
       },
       "type": "Vulnerability",
-      "created_at": "2026-06-04T14:37:16.756028",
-      "updated_at": "2026-06-04T14:37:16.756031",
+      "created_at": "2026-06-04T17:49:47.374438",
+      "updated_at": "2026-06-04T17:49:47.374445",
+      "_version": 2,
+      "tested_at": "17:49:47",
+      "test_result": "Template format error: 'command' | template={command} 2>&1 | kwargs={'url': 'port 10389 (ldap)', 'target_url': 'port 10389 (ldap)'}",
+      "test_tool": "shell_exec"
+    },
+    {
+      "id": "vuln-2",
+      "vuln_type": "WeakAuth",
+      "endpoint": "port 10088 (kerberos-sec)",
+      "parameter": "",
+      "severity": "unknown",
+      "source": "llm_analysis",
+      "suggested_tool": "impacket_GetNPUsers",
+      "tool_args": {
+        "dc_ip": "localhost",
+        "dc_port": 10088,
+        "outputfile": "/tmp/asrep_hashes.txt",
+        "usersfile": "/tmp/users.txt"
+      },
+      "type": "Vulnerability",
+      "created_at": "2026-06-04T17:45:30.933268",
+      "updated_at": "2026-06-04T17:45:30.933272",
       "_version": 1
     },
     {
-      "id": "vuln-7",
+      "id": "vuln-3",
+      "vuln_type": "AuthBypass",
+      "endpoint": "port 10139 (netbios-ssn)",
+      "parameter": "",
+      "severity": "unknown",
+      "source": "llm_analysis",
+      "suggested_tool": "netexec_smb_users",
+      "tool_args": {
+        "target": "localhost",
+        "port": 10139,
+        "null_session": true
+      },
+      "type": "Vulnerability",
+      "created_at": "2026-06-04T17:49:47.374599",
+      "updated_at": "2026-06-04T17:49:47.374603",
+      "_version": 2,
+      "tested_at": "17:49:47",
+      "test_result": "Template format error: 'command' | template={command} 2>&1 | kwargs={'url': 'port 10139 (netbios-ssn)', 'target_url': 'port 10139 (netbios-ssn)'}",
+      "test_tool": "shell_exec"
+    },
+    {
+      "id": "vuln-4",
       "vuln_type": "XSS",
-      "endpoint": "localhost:10053",
+      "endpoint": "port 10389 (ldap)",
       "parameter": "",
       "severity": "low",
       "source": "nikto_keyword",
       "detail": "",
       "type": "Vulnerability",
-      "created_at": "2026-06-04T14:37:16.756084",
-      "updated_at": "2026-06-04T14:37:16.756087",
+      "created_at": "2026-06-04T17:45:30.933346",
+      "updated_at": "2026-06-04T17:45:30.933350",
       "_version": 1
     },
     {
-      "id": "vuln-8",
+      "id": "vuln-5",
       "vuln_type": "XSS",
-      "endpoint": "localhost:10088",
+      "endpoint": "port 10088 (kerberos-sec)",
       "parameter": "",
       "severity": "low",
       "source": "nikto_keyword",
       "detail": "",
       "type": "Vulnerability",
-      "created_at": "2026-06-04T14:37:16.756103",
-      "updated_at": "2026-06-04T14:37:16.756106",
+      "created_at": "2026-06-04T17:45:30.933368",
+      "updated_at": "2026-06-04T17:45:30.933372",
       "_version": 1
     },
     {
-      "id": "vuln-9",
+      "id": "vuln-6",
       "vuln_type": "XSS",
-      "endpoint": "localhost:10135",
+      "endpoint": "port 10139 (netbios-ssn)",
       "parameter": "",
       "severity": "low",
       "source": "nikto_keyword",
       "detail": "",
       "type": "Vulnerability",
-      "created_at": "2026-06-04T14:37:16.756119",
-      "updated_at": "2026-06-04T14:37:16.756122",
+      "created_at": "2026-06-04T17:45:30.933389",
+      "updated_at": "2026-06-04T17:45:30.933393",
       "_version": 1
     },
     {
-      "id": "vuln-10",
-      "vuln_type": "XSS",
-      "endpoint": "localhost:10139",
-      "parameter": "",
-      "severity": "low",
-      "source": "nikto_keyword",
-      "detail": "",
-      "type": "Vulnerability",
-      "created_at": "2026-06-04T14:37:16.756135",
-      "updated_at": "2026-06-04T14:37:16.756138",
-      "_version": 1
-    },
-    {
-      "id": "vuln-11",
-      "vuln_type": "XSS",
-      "endpoint": "localhost:10326",
-      "parameter": "",
-      "severity": "low",
-      "source": "nikto_keyword",
-      "detail": "",
-      "type": "Vulnerability",
-      "created_at": "2026-06-04T14:37:16.756151",
-      "updated_at": "2026-06-04T14:37:16.756153",
-      "_version": 1
-    },
-    {
-      "id": "vuln-12",
-      "vuln_type": "XSS",
-      "endpoint": "localhost:10389",
-      "parameter": "",
-      "severity": "low",
-      "source": "nikto_keyword",
-      "detail": "",
-      "type": "Vulnerability",
-      "created_at": "2026-06-04T14:37:16.756166",
-      "updated_at": "2026-06-04T14:37:16.756169",
-      "_version": 1
-    },
-    {
-      "id": "plan-1780555089",
-      "plan_id": "plan-1780555089",
-      "phase": "explore",
-      "goal": "Capture flag on http://localhost",
-      "total_tasks": 15,
-      "completed": 1,
+      "id": "plan-ad-primary-1780566524",
+      "plan_id": "plan-ad-primary-1780566524",
+      "phase": "ADAgent",
+      "goal": "Sub-agent task",
+      "total_tasks": 6,
+      "completed": 0,
       "failed": 0,
       "status": "in_progress",
-      "created_at": "2026-06-04T14:38:09",
-      "updated_at": "2026-06-04T14:42:58.567855",
+      "created_at": "2026-06-04T17:48:44",
       "type": "Plan",
+      "updated_at": "2026-06-04T17:48:44.911472",
       "_version": 1
     },
     {
-      "id": "summary-exploit-plan-1780555089",
-      "summary_id": "summary-exploit-plan-1780555089",
-      "source_plan_id": "plan-1780555089",
+      "id": 1,
+      "plan_id": "plan-ad-primary-1780566524",
+      "instruction": "Enumerate SMB shares and null session access on the domain controller (localhost).",
+      "tool": "netexec_enum",
+      "params": "target: localhost, protocol: smb",
+      "status": "pending",
+      "dependencies": [],
+      "attempts": 0,
+      "max_attempts": 3,
+      "type": "Task",
+      "created_at": "2026-06-04T17:48:44.911535",
+      "updated_at": "2026-06-04T17:48:44.911541",
+      "_version": 1
+    },
+    {
+      "id": 2,
+      "plan_id": "plan-ad-primary-1780566524",
+      "instruction": "Enumerate all domain users, groups, and computers via LDAP on the domain controller.",
+      "tool": "ldapsearch_ad",
+      "params": "dc: localhost, filter: (objectClass=user), attributes: sAMAccountName,userAccountControl,memberOf",
+      "status": "failed",
+      "dependencies": [],
+      "attempts": 0,
+      "max_attempts": 3,
+      "type": "Task",
+      "created_at": "2026-06-04T17:48:57.103547",
+      "updated_at": "2026-06-04T17:48:57.103570",
+      "_version": 2,
+      "completed_at": 1780566537.1035225
+    },
+    {
+      "id": 3,
+      "plan_id": "plan-ad-primary-1780566524",
+      "instruction": "Attempt AS-REP roasting to retrieve Kerberos AS-REP hashes for users without pre-authentication, using the user list from LDAP enumeration.",
+      "tool": "impacket_GetNPUsers",
+      "params": "dc_ip: localhost, usersfile: users.txt (output from task 2), request: TGT, format: hashcat",
+      "status": "failed",
+      "dependencies": [
+        2
+      ],
+      "attempts": 0,
+      "max_attempts": 3,
+      "type": "Task",
+      "created_at": "2026-06-04T17:49:00.989532",
+      "updated_at": "2026-06-04T17:49:00.989552",
+      "_version": 2,
+      "completed_at": 1780566540.9895093
+    },
+    {
+      "id": 4,
+      "plan_id": "plan-ad-primary-1780566524",
+      "instruction": "Perform password spraying with common passwords against the discovered user accounts.",
+      "tool": "netexec_smb_users",
+      "params": "target: localhost, userfile: users.txt, password_list: common_passwords.txt",
+      "status": "pending",
+      "dependencies": [
+        2
+      ],
+      "attempts": 0,
+      "max_attempts": 3,
+      "type": "Task",
+      "created_at": "2026-06-04T17:48:44.911703",
+      "updated_at": "2026-06-04T17:48:44.911708",
+      "_version": 1
+    },
+    {
+      "id": 5,
+      "plan_id": "plan-ad-primary-1780566524",
+      "instruction": "Crack any obtained AS-REP hashes using a wordlist.",
+      "tool": "hash_crack",
+      "params": "hash_file: asrephashes.txt, wordlist: /usr/share/wordlists/rockyou.txt",
+      "status": "failed",
+      "dependencies": [
+        3
+      ],
+      "attempts": 0,
+      "max_attempts": 3,
+      "type": "Task",
+      "created_at": "2026-06-04T17:49:33.352066",
+      "updated_at": "2026-06-04T17:49:33.352081",
+      "_version": 2,
+      "completed_at": 1780566573.3520463
+    },
+    {
+      "id": 6,
+      "plan_id": "plan-ad-primary-1780566524",
+      "instruction": "If valid credentials are obtained (from cracking or password spraying), dump SAM and LSA secrets from the domain controller.",
+      "tool": "impacket_secretsdump",
+      "params": "target: localhost, auth: domain/username:password@localhost",
+      "status": "pending",
+      "dependencies": [
+        4,
+        5
+      ],
+      "attempts": 0,
+      "max_attempts": 3,
+      "type": "Task",
+      "created_at": "2026-06-04T17:48:44.911772",
+      "updated_at": "2026-06-04T17:48:44.911777",
+      "_version": 1
+    },
+    {
+      "id": "plan-1780566355",
+      "plan_id": "plan-1780566355",
+      "phase": "explore",
+      "goal": "Capture flag on http://localhost",
+      "total_tasks": 25,
+      "completed": 9,
+      "failed": 4,
+      "status": "in_progress",
+      "created_at": "2026-06-04T17:45:55",
+      "updated_at": "2026-06-04T18:02:22.709893",
+      "type": "Plan",
+      "_version": 7
+    },
+    {
+      "id": "summary-exploit-plan-1780566355",
+      "summary_id": "summary-exploit-plan-1780566355",
+      "source_plan_id": "plan-1780566355",
       "phase": "exploit",
-      "completed_tasks": "[\"SMB null/guest session enumeration on port 10139. List all shares with anonymous/guest access, enumerate share contents recursively, and attempt to read any flag files from world-readable shares.\", \"NetExec SMB share enumeration with null/anonymous session on port 10139. Use guest account and empty password to enumerate shares and check read access. This complements smbmap_enum with alternative tooling.\", \"If task-6 identified users with SPNs (Service Principal Names), perform targeted Kerberoasting to request TGS tickets for those service accounts. These tickets contain crackable service account password hashes.\", \"Probe unknown port 10326 for common database services. Attempt MySQL (root with empty/root/password123), PostgreSQL (postgres with postgres/password123), Redis (no-auth PING), and MongoDB (no-auth connection). Identify the service and extract any data containing flag patterns.\", \"If task-11 identified port 10326 as a database service, perform deep data extraction. For MySQL/PostgreSQL: dump all databases, tables, and search all columns for flag patterns. For Redis: dump all keys and values. For MongoDB: iterate all databases and collections.\", \"AS-REP roasting on Kerberos port 10088 with common AD usernames. Request TGTs for typical accounts (administrator, guest, krbtgt, user, admin, svc_account, backup, sqlservice, webservice) to capture crackable hashes when pre-authentication is disabled.\"]",
+      "completed_tasks": "[\"Enumerate SMB users via RID cycling null session on port 10139. Use netexec_smb_users to brute-force RIDs and discover all domain user accounts without authentication.\", \"Enumerate SMB shares via null session on port 10139. Use netexec_smb_shares to list all accessible shares and their permissions. Also use smbmap_enum for comprehensive share enumeration including readable shares and their contents.\", \"Perform comprehensive SMB enumeration using smbmap_enum on port 10139 with null session. This checks share listing, directory contents, and file read permissions in a single tool call \\u2014 may reveal flag files directly.\", \"Perform AS-REP roasting against Kerberos on port 10088. Use impacket_GetNPUsers with the user list compiled from LDAP and SMB enumeration. If previous tasks yielded no user list, use a minimal list containing common AD accounts: Administrator, Guest, krbtgt, user, admin, defaultaccount.\", \"Retry LDAP anonymous enumeration using raw ldapsearch via shell_exec. First discover the base DN, then dump all objects and grep for flag patterns and user SAM account names. Save usernames to /tmp/users.txt for AS-REP roasting.\", \"Perform AS-REP roasting against Kerberos on port 10088 using the user list from LDAP enumeration. Include domain parameter. If /tmp/users.txt is empty or missing from LDAP, fall back to common AD accounts.\", \"Enumerate MSRPC service on port 10135 using rpcclient with null session. Discover domain users, groups, and accessible pipes. Save any discovered usernames to /tmp/users.txt if LDAP enumeration yielded nothing.\", \"Perform anonymous LDAP enumeration on port 10389 via shell_exec. Discover base DN, dump all objects (users, groups, computers), extract sAMAccountNames to /tmp/users.txt, and grep for flag patterns in all LDAP attributes (description, info, comment, division, streetAddress, wWWHomePage).\", \"Enumerate MSRPC service on port 10135 using rpcclient with null session. Discover domain users and save to /tmp/users.txt if LDAP fails. Also query domain SID via lsaquery.\"]",
       "key_findings": "{\"flags_found\": [], \"endpoints\": 0}",
-      "failed_approaches": "[\"LDAP anonymous bind enumeration on port 10389. Dump all directory entries (users, groups, computers, configuration) to discover usernames and search for flag values in all LDAP attributes (description, info, comment, streetAddress, postalCode, etc.).\", \"DNS zone transfer and AD record enumeration on port 10053. Attempt full AXFR zone transfer and query AD-specific SRV records (_ldap._tcp, _kerberos._tcp, _gc._tcp) to map the domain infrastructure.\", \"NetExec LDAP enumeration using discovered domain info from task-1. Enumerate all users, groups, computers, and trust relationships. Search for accounts with weak configurations (no pre-auth, weak passwords, SPNs for Kerberoasting).\", \"If task-1 discovered valid usernames, perform credential spraying via SMB on port 10139. Test each username with common passwords (username as password, Password123, password123, Passw0rd, Spring2024, Welcome1) using NetExec.\", \"If LDAP or SMB enumeration revealed a domain name and usernames, attempt SMB share access with discovered usernames and empty/simple passwords via smb_client. List all accessible shares and search recursively for flag files (flag.txt, flag, *.flag, flag*.txt).\", \"If task-4 DNS zone transfer succeeded and revealed internal hostnames, attempt to access those hosts via their services. Also query for any TXT records that may directly contain flag values.\"]",
-      "created_at": "2026-06-04T14:56:41",
+      "failed_approaches": "[\"Perform anonymous LDAP bind enumeration on port 10389 to discover domain users, groups, computers, and search for flag-related attributes. Use ldapsearch_ad to dump all user objects and check description/info fields for flag patterns.\", \"If HTTP service on port 10080 returned a web application, perform directory brute-force enumeration using dirb_scan to discover hidden endpoints, admin panels, API paths, or file upload endpoints that may contain or lead to flag files.\", \"Directly search LDAP for flag values in common AD attributes. Use ldapsearch_ad with a broad filter to retrieve all user/computer/group objects and grep for 'flag' pattern in all returned attributes (description, info, comment, displayName, department, title, streetAddress, physicalDeliveryOfficeName).\", \"Probe HTTP service on port 10080. Use curl_get to retrieve the root page and check for web applications, APIs, or flag files served over HTTP.\"]",
+      "created_at": "2026-06-04T18:02:22",
       "type": "PlanSummary",
-      "updated_at": "2026-06-04T14:56:41.041191",
+      "updated_at": "2026-06-04T18:02:22.710705",
       "_version": 1
     }
   ],
   "edges": [
     {
-      "from": "plan-1780555089",
-      "to": "summary-exploit-plan-1780555089",
+      "from": "plan-recon-host-localhost-1780566162",
+      "to": "recon-1",
+      "type": "plan_contains_task",
+      "created_at": "2026-06-04T17:42:42.622402"
+    },
+    {
+      "from": "plan-recon-host-localhost-1780566162",
+      "to": "recon-2",
+      "type": "plan_contains_task",
+      "created_at": "2026-06-04T17:42:42.622456"
+    },
+    {
+      "from": "plan-recon-host-localhost-1780566162",
+      "to": "recon-3",
+      "type": "plan_contains_task",
+      "created_at": "2026-06-04T17:42:42.622483"
+    },
+    {
+      "from": "plan-recon-host-localhost-1780566162",
+      "to": "recon-4",
+      "type": "plan_contains_task",
+      "created_at": "2026-06-04T17:42:42.622511"
+    },
+    {
+      "from": "plan-recon-host-localhost-1780566162",
+      "to": "recon-5",
+      "type": "plan_contains_task",
+      "created_at": "2026-06-04T17:42:42.622531"
+    },
+    {
+      "from": "plan-ad-primary-1780566524",
+      "to": 1,
+      "type": "plan_contains_task",
+      "created_at": "2026-06-04T17:48:44.911579"
+    },
+    {
+      "from": "plan-ad-primary-1780566524",
+      "to": 2,
+      "type": "plan_contains_task",
+      "created_at": "2026-06-04T17:48:44.911649"
+    },
+    {
+      "from": "plan-ad-primary-1780566524",
+      "to": 3,
+      "type": "plan_contains_task",
+      "created_at": "2026-06-04T17:48:44.911687"
+    },
+    {
+      "from": "plan-ad-primary-1780566524",
+      "to": 4,
+      "type": "plan_contains_task",
+      "created_at": "2026-06-04T17:48:44.911723"
+    },
+    {
+      "from": "plan-ad-primary-1780566524",
+      "to": 5,
+      "type": "plan_contains_task",
+      "created_at": "2026-06-04T17:48:44.911757"
+    },
+    {
+      "from": "plan-ad-primary-1780566524",
+      "to": 6,
+      "type": "plan_contains_task",
+      "created_at": "2026-06-04T17:48:44.911792"
+    },
+    {
+      "from": "plan-1780566355",
+      "to": "summary-exploit-plan-1780566355",
       "type": "plan_successor",
-      "created_at": "2026-06-04T14:56:41.041640"
+      "created_at": "2026-06-04T18:02:22.710740"
     }
   ],
-  "created_at": "2026-06-04T14:36:10.522643"
+  "created_at": "2026-06-04T17:41:33.533393"
 }

@@ -5323,17 +5323,30 @@ Output ONLY valid JSON:
                     nt.setdefault("status", "pending")
                     nt.setdefault("dependent_task_ids", nt.pop("dependencies", []))
                     if nt["id"] not in existing_ids:
-                        # Dedup: skip if >80% similar to an existing pending task
+                        # Dedup: skip if duplicate of an existing pending task
                         _nt_inst = (nt.get("instruction") or "").lower()
+                        _nt_tool = (nt.get("tool") or "").lower()
+                        _nt_endpoint = (nt.get("endpoint") or nt.get("params", {}).get("target_url", "") or
+                                       nt.get("params", {}).get("url", "") or
+                                       nt.get("params", {}).get("target", "") or
+                                       nt.get("params", {}).get("host", "")).lower()
                         _is_dup = False
-                        if _nt_inst:
-                            for pt in preserved:
-                                if pt.get("status") != "pending":
-                                    continue
-                                _pt_inst = (pt.get("instruction") or "").lower()
-                                if not _pt_inst:
-                                    continue
-                                # Simple word overlap ratio
+                        for pt in preserved:
+                            if pt.get("status") != "pending":
+                                continue
+                            # Same tool + same endpoint = definite duplicate
+                            _pt_tool = (pt.get("tool") or "").lower()
+                            _pt_endpoint = (pt.get("endpoint") or pt.get("params", {}).get("target_url", "") or
+                                           pt.get("params", {}).get("url", "") or
+                                           pt.get("params", {}).get("target", "") or
+                                           pt.get("params", {}).get("host", "")).lower()
+                            if _nt_tool and _pt_tool and _nt_endpoint and _pt_endpoint:
+                                if _nt_tool == _pt_tool and _nt_endpoint == _pt_endpoint:
+                                    _is_dup = True
+                                    break
+                            # Word overlap ratio check (fallback)
+                            _pt_inst = (pt.get("instruction") or "").lower()
+                            if _nt_inst and _pt_inst:
                                 _nt_words = set(_nt_inst.split())
                                 _pt_words = set(_pt_inst.split())
                                 if _nt_words and _pt_words:
@@ -5377,6 +5390,46 @@ Output ONLY valid JSON:
                         _to_remove = set(t["id"] for t in _pending[_keep_pending:])
                         preserved = [t for t in preserved if t.get("id") not in _to_remove]
                     self.exploitation_plan.tasks = preserved
+
+                # ── Dependency resolution: rewrite stale references ──
+                # LLM may reference task IDs that were renamed or removed.
+                # Resolve broken dependencies by matching on instruction similarity.
+                _valid_ids = {t.get("id", "") for t in self.exploitation_plan.tasks}
+                _all_tasks = list(self.exploitation_plan.tasks)
+                for _t in self.exploitation_plan.tasks:
+                    _deps = _t.get("dependent_task_ids", [])
+                    if not _deps:
+                        continue
+                    _resolved = []
+                    for _dep_id in _deps:
+                        if _dep_id in _valid_ids:
+                            _resolved.append(_dep_id)
+                            continue
+                        # Try to find a replacement by instruction keyword overlap
+                        _dep_inst = ""
+                        for _ot in _all_tasks:
+                            if _ot.get("id") == _dep_id:
+                                _dep_inst = (_ot.get("instruction") or "").lower()
+                                break
+                        _best, _best_score = None, 0.0
+                        if _dep_inst:
+                            _dep_words = set(_dep_inst.split())
+                            for _ct in self.exploitation_plan.tasks:
+                                if _ct.get("id") == _t.get("id"):
+                                    continue
+                                _ct_inst = (_ct.get("instruction") or "").lower()
+                                _ct_words = set(_ct_inst.split())
+                                if _dep_words and _ct_words:
+                                    _score = len(_dep_words & _ct_words) / len(_dep_words)
+                                    if _score > _best_score:
+                                        _best_score = _score
+                                        _best = _ct.get("id")
+                        if _best and _best_score > 0.4:
+                            _resolved.append(_best)
+                        else:
+                            log.warning("Task '%s' depends on unknown task '%s' — "
+                                        "dependency removed", _t.get("id"), _dep_id)
+                    _t["dependent_task_ids"] = _resolved
 
                 # Sanitize: replace blacklisted tools in any LLM-generated tasks
                 self._sanitize_plan_tools(self.exploitation_plan.tasks)

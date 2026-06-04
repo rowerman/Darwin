@@ -1,3 +1,16 @@
+## 2026-06-04 (mcp_gateway: host→target + anonymous; plan: dedup + dependency remap)
+
+**参数映射增强**:
+- **darwin/tools/mcp_gateway.py**: 新增 `host` → `target` 参数别名，当同时提供 `host` 和 `port` 时自动构造 `host:port` 格式。新增 `anonymous: True` → `user=""` + `password=""` 自动设置。修复 `ldapsearch_ad` 等 AD 工具因 LLM 传递 `{host, port, anonymous}` 而模板期望 `{target}` 导致的 Template format error
+
+**Plan 去重增强**:
+- **darwin/orchestrator.py** `_review_and_update_plan()`: 新增 tool+endpoint 匹配去重（两个 task 使用相同工具和相同端点 → 视为重复）。在原有的词重叠去重（>75%）基础上增加了更精确的检测
+
+**依赖引用修复**:
+- **darwin/orchestrator.py** `_review_and_update_plan()`: 合并 plan 后新增依赖解析步骤。对已被重命名/删除的 task ID 引用，通过指令相似度（>40% 词重叠）查找 replacement。无法解析的引用被移除并警告。修复 "Task X depends on unknown task Y" 导致的永久阻塞
+
+**验证**: Pytest 119 passed, import OK
+
 ## 2026-06-04 (tools: impacket -no-pass + systematic pass AD filter)
 
 **impacket 工具交互式密码提示修复**:

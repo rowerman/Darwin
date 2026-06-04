@@ -84,10 +84,19 @@ class MCPGateway:
                 # (e.g. "url" → "target_url" fails the 50% length threshold: 3 < 5)
                 _PARAM_ALIASES = {
                     "url": "target_url",    # LLMs commonly use 'url' instead of 'target_url'
+                    "host": "target",       # LLMs use 'host'+'port' instead of 'target'
                 }
                 for _alias, _canonical in _PARAM_ALIASES.items():
                     if _canonical not in kwargs and _alias in kwargs:
-                        kwargs[_canonical] = kwargs[_alias]
+                        _val = kwargs[_alias]
+                        # Compose host:port → target when both are provided
+                        if _alias == "host" and "port" in kwargs:
+                            _val = f"{_val}:{kwargs['port']}"
+                        kwargs[_canonical] = _val
+                # Handle 'anonymous' flag: set empty credentials for anonymous auth
+                if kwargs.pop("anonymous", None) is True:
+                    kwargs.setdefault("user", "")
+                    kwargs.setdefault("password", "")
                 # Auto-correct parameter name variations
                 # Handles both directions:
                 #   LLM "username" → template "user"  (kwargs key contains template var)
