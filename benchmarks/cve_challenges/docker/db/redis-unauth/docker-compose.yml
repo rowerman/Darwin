@@ -1,9 +1,0 @@
-services:
-  redis-ssh:
-    build:
-      context: .
-      dockerfile: Dockerfile.ssh
-    container_name: db05-redis-ssh
-    ports:
-      - "10205:6379"
-      - "10222:22"

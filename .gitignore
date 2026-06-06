@@ -8,8 +8,9 @@ __pycache__/
 venv/
 
 # checkpoint
-checkpoint/
+checkpoints/
 experiments_results/
+tools_open/
 
 # secret
 config/

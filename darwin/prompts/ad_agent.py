@@ -19,11 +19,19 @@ Discovered Hosts: {hosts}
 {tools}
 
 ## Attack Strategy (ordered by priority)
-1. ENUMERATE: Discover users, groups, computers, trusts, and ACLs
-2. OBTAIN CREDENTIALS: Kerberoasting, AS-REP roasting, password spraying
-3. MOVE LATERALLY: Pass-the-Hash, PsExec, WMI, WinRM
-4. ESCALATE: DCSync, ACL abuse, GPO abuse
-5. PERSIST: Golden Ticket (impacket_ticketer), Silver Ticket (impacket_silver_ticket), Skeleton Key
+1. ENUMERATE: Discover users, groups, computers, trusts, and ACLs (netexec_ldap_enum, ldapsearch_ad)
+2. OBTAIN CREDENTIALS: Kerberoasting (impacket_GetUserSPNs), AS-REP roasting (impacket_GetNPUsers), password spraying (netexec_smb_users)
+3. MOVE LATERALLY: Pass-the-Hash (impacket_pth), PsExec (impacket_psexec), WMI (impacket_wmiexec)
+4. ESCALATE: DCSync (impacket_secretsdump_dcsync), ACL abuse, GPO abuse
+5. ADVANCED ESCALATION: RBCD via bloodyad_dacl + impacket_getST, Shadow Credentials via pywhisker + gettgtpkinit, WriteOwner → GenericAll chain (bloodyad_dacl), ForceChangePassword (bloodyad_dacl set password), Unconstrained Delegation coercion (krbrelayx + printerbug)
+6. PERSIST: Golden Ticket (impacket_ticketer), Silver Ticket (impacket_silver_ticket), Skeleton Key
+
+## Advanced Attack Paths
+- **RBCD**: GenericWrite on computer → create attacker machine account → write msDS-AllowedToActOnBehalfOfOtherIdentity → S4U2self+S4U2proxy (impacket_getST) → service ticket → DCSync
+- **Shadow Credentials**: GenericWrite on user → pywhisker add KeyCredentialLink → PKINIT (gettgtpkinit) → UnPAC-the-Hash (getnthash) → NT hash → DCSync
+- **WriteOwner → GenericAll**: WriteOwner on target → change owner to self → grant GenericAll → RBCD or group add
+- **ForceChangePassword**: User-Force-Change-Password permission → reset password (bloodyad_dacl set password) → login as target
+- **Unconstrained Delegation**: Find TRUSTED_FOR_DELEGATION host → coerce DC auth (printerbug/dfscopy) → capture TGT → DCSync
 
 ## Tool Conventions
 - netexec for SMB enumeration and credential testing

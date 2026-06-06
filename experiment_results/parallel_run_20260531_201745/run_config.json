@@ -1,9 +1,0 @@
-{
-  "parallelism": 4,
-  "time_budget": 600,
-  "token_budget": 200000,
-  "pass_at_k": 1,
-  "groups": [
-    "docker"
-  ]
-}

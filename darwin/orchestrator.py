@@ -1059,13 +1059,15 @@ class Orchestrator:
                                 if rp.success:
                                     parsed = getattr(rp, "parsed_output", {})
                                     for form in parsed.get("forms", []):
-                                        self._add_form_endpoint(form, url)
+                                        _add_form_endpoint(form, url)
                     except Exception:
                         pass
                 scanned = True
 
-            elif resp_len < 200000:
-                # Small HTML page — full recon: gobuster + nikto + form_extract
+            elif resp_len < 500000:
+                # Small/medium HTML page — full recon: gobuster + nikto + form_extract
+                # Threshold raised from 200K to 500K to cover medium pages (200-500KB)
+                # that previously fell into a gap and received no recon at all.
                 try:
                     bust_result = await self.recon_gateway.call("gobuster_dir",
                         {"target_url": url})
@@ -1105,7 +1107,7 @@ class Orchestrator:
                     if form_result.success:
                         parsed = getattr(form_result, "parsed_output", {})
                         for form in parsed.get("forms", []):
-                            self._add_form_endpoint(form, url)
+                            _add_form_endpoint(form, url)
                 except Exception:
                     pass
 
@@ -1127,6 +1129,21 @@ class Orchestrator:
                                     "sample_status": 200, "sample_response": out[:5000],
                                     "discovered_by": "deep-recon-json-probe",
                                 })
+                    scanned = True
+                except Exception:
+                    pass
+
+            else:
+                # Medium/large HTML page (500KB-1MB) that isn't JSON/SPA.
+                # Too large for full dirb/nikto but still likely has forms and
+                # important content.  At minimum: run form_extract.
+                try:
+                    form_result = await self.recon_gateway.call("form_extract",
+                        {"url": url})
+                    if form_result.success:
+                        parsed = getattr(form_result, "parsed_output", {})
+                        for form in parsed.get("forms", []):
+                            _add_form_endpoint(form, url)
                     scanned = True
                 except Exception:
                     pass
@@ -4064,6 +4081,61 @@ class Orchestrator:
                 resp_summary = body[:500]
                 if len(body) > 500:
                     resp_summary += f"... (total {len(body)} bytes)"
+
+                # Smart extraction for HTML pages larger than 500B:
+                # Without this, the LLM only sees <!DOCTYPE + <head> and
+                # concludes the page is "static/blank", missing forms entirely.
+                if len(body) > 500 and ("<html" in body[:200].lower() or
+                                         "<!doctype" in body[:200].lower()):
+                    import re as _re
+                    smart_parts = []
+                    # Extract <title>
+                    tm = _re.search(r'<title[^>]*>([^<]+)</title>',
+                                    body, _re.IGNORECASE)
+                    if tm:
+                        smart_parts.append(f"[TITLE] {tm.group(1).strip()}")
+                    # Extract form actions and input names
+                    forms = _re.findall(
+                        r'<form[^>]*?action\s*=\s*[\'"]([^\'"]*)[\'"][^>]*>',
+                        body, _re.IGNORECASE)
+                    if forms:
+                        smart_parts.append(f"[FORMS] actions: {', '.join(forms[:5])}")
+                    # Extract input names
+                    inputs = _re.findall(
+                        r'<input[^>]*?name\s*=\s*[\'"]([^\'"]*)[\'"]',
+                        body, _re.IGNORECASE)
+                    if inputs:
+                        smart_parts.append(f"[INPUTS] names: {', '.join(inputs[:15])}")
+                    # Extract textarea names
+                    textareas = _re.findall(
+                        r'<textarea[^>]*?name\s*=\s*[\'"]([^\'"]*)[\'"]',
+                        body, _re.IGNORECASE)
+                    if textareas:
+                        smart_parts.append(f"[TEXTAREAS] names: {', '.join(textareas[:5])}")
+                    # Extract links (up to 10)
+                    links = _re.findall(
+                        r'<a[^>]*?href\s*=\s*[\'"]([^\'"]*)[\'"]',
+                        body, _re.IGNORECASE)
+                    if links:
+                        unique_links = list(dict.fromkeys(
+                            l for l in links if not l.startswith('#') and not l.startswith('javascript:')))
+                        smart_parts.append(f"[LINKS] {', '.join(unique_links[:10])}")
+                    # Extract text content summary (strip tags, first 300 chars)
+                    text = _re.sub(r'<script[^>]*>.*?</script>', '', body,
+                                   flags=_re.IGNORECASE | _re.DOTALL)
+                    text = _re.sub(r'<style[^>]*>.*?</style>', '', text,
+                                   flags=_re.IGNORECASE | _re.DOTALL)
+                    text = _re.sub(r'<[^>]+>', ' ', text)
+                    text = _re.sub(r'\s+', ' ', text).strip()
+                    if text:
+                        smart_parts.append(f"[TEXT] {text[:300]}")
+
+                    if smart_parts:
+                        resp_summary = (
+                            f"[PAGE_SIZE {len(body)} bytes] "
+                            + " | ".join(smart_parts)
+                            + f"\n[RAW_PREFIX] {body[:500]}"
+                        )
 
                 result_parts.append(f"  HTTP {status} ({content_type[:40]})")
                 result_parts.append(f"  Response: {resp_summary}")

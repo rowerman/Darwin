@@ -1,6 +1,0 @@
-[
-  {
-    "scenario": "DB-03",
-    "suggestion": "Check scenario infrastructure manually. Error: start-scenario.sh failed (exit=1):  Image gvenzl/oracle-xe:21.3.0-slim Pulling \n Image gvenzl/oracle-xe:21.3.0-slim Error Get \"https://registry-1.docker.io/v2/\": context deadline exceeded\nError respon"
-  }
-]

