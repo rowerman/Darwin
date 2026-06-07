@@ -1,3 +1,8 @@
+## 2026-06-07 (bootstrap: probe common web paths when root returns empty)
+
+- **darwin/orchestrator.py** `_bootstrap_scan._probe_one_port`: 当 curl probe 返回 < 500 字节时，并行探测 14 个通用 web 路径（/index.html, /home, /login, /admin, /api, /fetch, /upload 等），找到内容 > 200 字节的页面后注册为额外 Endpoint。解决某些靶机根路径返回空响应导致 LLM 看不到页面内容的问题（如 cloud-02 SSRF localhost bypass，根路径返回 0 字节 text/plain，但 /fetch 有完整 HTML 表单）。
+- **验证**: pytest 119 passed, import OK
+
 ## 2026-06-06 (bug fix: _deep_recon response size gap + _probe_endpoints HTML truncation)
 
 **_deep_recon 响应大小分支缺口修复 (orchestrator.py:1067)**:

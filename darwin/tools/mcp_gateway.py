@@ -14,6 +14,45 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional
 
 
+# ── Semantic parameter alias table ────────────────────────────────────
+# Maps LLM-preferred parameter names to tool-declared canonical names.
+# Aliases are DIRECTIONAL: "alias": "canonical" means "if LLM provides
+# 'alias' but the tool expects 'canonical', remap it."
+# An alias is ONLY applied when the canonical name exists in the tool's
+# declared parameter schema, preventing false matches (e.g. command→query
+# on ssh_exec, which legitimately expects 'command').
+_PARAM_ALIASES: Dict[str, str] = {
+    # URL / target concept — 4 LLM names for the same thing
+    "url":        "target_url",
+    "ssrf_url":   "target_url",
+    "endpoint":   "target_url",
+
+    # Host / target concept
+    "host":       "target",
+    "server":     "host",
+    "hostname":   "host",
+    "dc_ip":      "target",
+
+    # Username concept
+    "username":   "user",
+    "login":      "user",
+
+    # Password concept
+    "pass":       "password",
+    "passwd":     "password",
+    "pwd":        "password",
+
+    # Request body / data
+    "body":       "data",
+    "post_data":  "data",
+    "json_body":  "data",
+}
+
+# Substring auto-correction thresholds
+_SUBSTRING_MIN_LEN = 3         # minimum chars for a substring to match
+_SUBSTRING_MIN_RATIO = 0.4     # minimum ratio of substring / declared-param length
+
+
 @dataclass
 class ToolResult:
     """Standardized tool execution result."""
@@ -79,49 +118,15 @@ class MCPGateway:
                 # Fill missing params from defaults
                 for k, v in _defaults.items():
                     kwargs.setdefault(k, v)
-                # Explicit parameter name aliases for common LLM naming patterns
-                # that the substring auto-correction below cannot handle
-                # (e.g. "url" → "target_url" fails the 50% length threshold: 3 < 5)
-                _PARAM_ALIASES = {
-                    "url": "target_url",    # LLMs commonly use 'url' instead of 'target_url'
-                    "host": "target",       # LLMs use 'host'+'port' instead of 'target'
-                }
-                for _alias, _canonical in _PARAM_ALIASES.items():
-                    if _canonical not in kwargs and _alias in kwargs:
-                        _val = kwargs[_alias]
-                        # Compose host:port → target when both are provided
-                        if _alias == "host" and "port" in kwargs:
-                            _val = f"{_val}:{kwargs['port']}"
-                        kwargs[_canonical] = _val
-                # Handle 'anonymous' flag: set empty credentials for anonymous auth
-                if kwargs.pop("anonymous", None) is True:
-                    kwargs.setdefault("user", "")
-                    kwargs.setdefault("password", "")
-                # Auto-correct parameter name variations
-                # Handles both directions:
-                #   LLM "username" → template "user"  (kwargs key contains template var)
-                #   LLM "target"  → template "target_url" (template var contains kwargs key)
+
+                # Extract template variables — only pass what the
+                # command template actually uses to format()
                 import string as _string
                 _template_vars = {
                     fv[1] for fv in _string.Formatter().parse(command_template)
                     if fv[1] is not None
                 }
-                for _tv in _template_vars:
-                    if _tv not in kwargs:
-                        # Direction 1: template var is substring of kwargs key
-                        _candidates = [
-                            k for k in kwargs if _tv in k and k != _tv
-                        ]
-                        if not _candidates:
-                            # Direction 2: kwargs key is substring of template var
-                            # Only match non-trivial substrings (≥3 chars, ≥50% of template var length)
-                            _candidates = [
-                                k for k in kwargs
-                                if k in _tv and k != _tv
-                                and len(k) >= 3 and len(k) >= len(_tv) * 0.5
-                            ]
-                        if len(_candidates) == 1:
-                            kwargs[_tv] = kwargs[_candidates[0]]
+                kwargs = {k: v for k, v in kwargs.items() if k in _template_vars}
                 cmd = command_template.format(**kwargs)
             except (ValueError, KeyError) as e:
                 _err_msg = f"Template format error: {e} | template={command_template[:200]} | kwargs={kwargs}"
@@ -202,6 +207,81 @@ class MCPGateway:
             name=name, func=_execute, description=description, parameters=parameters,
         )
 
+    def _normalize_params(
+        self, name: str, params: Dict[str, Any], entry: "_ToolEntry",
+    ) -> Dict[str, Any]:
+        """Normalize LLM-provided parameters to match tool-declared names.
+
+        Applies four phases:
+          1. Explicit alias table (_PARAM_ALIASES)
+          2. 'anonymous' flag → empty credentials
+          3. Substring fuzzy matching for close-but-not-exact names
+          4. Drop params not in the tool's declared schema
+
+        Aliases are only applied when the canonical name exists in the tool's
+        parameters schema — this prevents false matches like command→query on
+        ssh_exec, which legitimately expects 'command'.
+        """
+        normalized = dict(params)
+        tool_params = entry.parameters  # declared parameter schema dict
+
+        # Phase 1: apply explicit aliases
+        for alias, canonical in _PARAM_ALIASES.items():
+            if (
+                canonical in tool_params
+                and canonical not in normalized
+                and alias in normalized
+            ):
+                val = normalized[alias]
+                # Compose host:port → target when both are provided
+                if alias == "host" and "port" in normalized:
+                    val = f"{val}:{normalized['port']}"
+                normalized[canonical] = val
+
+        # Phase 2: handle 'anonymous' flag — set empty credentials
+        if normalized.pop("anonymous", None) is True:
+            normalized.setdefault("user", "")
+            normalized.setdefault("password", "")
+
+        # Phase 3: substring fuzzy matching
+        # Handles both directions:
+        #   Direction 1: declared param is substring of provided key
+        #     e.g.  declared "url"  ←  provided "target_url"
+        #   Direction 2: provided key is substring of declared param
+        #     e.g.  provided "url"  →  declared "target_url"
+        #     (only when key ≥ _SUBSTRING_MIN_LEN chars AND
+        #      key ≥ _SUBSTRING_MIN_RATIO of declared param length)
+        for declared_param in list(tool_params.keys()):
+            if declared_param not in normalized:
+                # Direction 1: declared param is substring of provided key
+                candidates = [
+                    k for k in normalized
+                    if declared_param in k and k != declared_param
+                ]
+                # Direction 2: provided key is substring of declared param
+                if not candidates:
+                    candidates = [
+                        k for k in normalized
+                        if k in declared_param and k != declared_param
+                        and len(k) >= _SUBSTRING_MIN_LEN
+                        and len(k) >= len(declared_param) * _SUBSTRING_MIN_RATIO
+                    ]
+                if len(candidates) == 1:
+                    normalized[declared_param] = normalized[candidates[0]]
+
+        # Phase 4: drop params not in the tool's declared schema.
+        # This prevents "unexpected keyword argument" errors in Python
+        # function tools and Template format errors in shell tools.
+        # Keep alias-source keys as well — they'll be dropped later if
+        # the template doesn't need them (shell path) or ignored via
+        # the strip below.
+        normalized = {
+            k: v for k, v in normalized.items()
+            if k in tool_params
+        }
+
+        return normalized
+
     async def call(self, name: str, params: Dict[str, Any]) -> ToolResult:
         """Execute a registered tool."""
         if name not in self._registry:
@@ -210,6 +290,12 @@ class MCPGateway:
                 exit_code=-1, elapsed_ms=0,
             )
         entry = self._registry[name]
+
+        # Normalize LLM-provided parameters before dispatch.
+        # This single call site covers BOTH register() Python functions
+        # AND register_shell_tool() shell commands.
+        params = self._normalize_params(name, params, entry)
+
         try:
             if asyncio.iscoroutinefunction(entry.func):
                 result = await entry.func(**params)

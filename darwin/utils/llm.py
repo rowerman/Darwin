@@ -306,18 +306,38 @@ class LLMSession:
         # Protect tool_calls ↔ tool result pairs from being split across
         # the compression boundary.  DeepSeek rejects orphaned tool messages.
         _split = len(self.conversation_history) - keep_recent
-        while _split > 0 and _split < len(self.conversation_history):
-            first_recent = self.conversation_history[_split]
-            if first_recent.get("role") != "tool":
-                break
-            # Extend boundary left to include the assistant message that
-            # carries the tool_calls this tool result belongs to.
-            _split -= 2  # step back past [assistant + tool_calls, user prompt]
-            if _split >= 0:
-                _maybe_assistant = self.conversation_history[_split]
-                if _maybe_assistant.get("role") != "assistant" or not _maybe_assistant.get("tool_calls"):
-                    _split += 2  # couldn't find matching tool_calls — give up
+        # Walk the boundary leftwards until no orphaned tool messages remain
+        # in the "recent" (kept) suffix.  An orphan is a tool-role message
+        # whose matching assistant+tool_calls would be left in the compressed
+        # (dropped) prefix, breaking the required adjacency.
+        _MAX_WALK = 30
+        for _ in range(_MAX_WALK):
+            _orphan_ids: set[str] = set()
+            for _m in self.conversation_history[_split:]:
+                if _m.get("role") == "tool" and _m.get("tool_call_id"):
+                    _orphan_ids.add(_m["tool_call_id"])
+            if not _orphan_ids:
+                break  # no orphaned tool messages in recent — safe
+            # Check whether the OLD (to-be-compressed) prefix is the ONLY
+            # place where any orphaned tool_call_id's matching assistant
+            # message lives.  If so, move the boundary left to keep the
+            # assistant+tool_calls with its tool result.
+            _old_ids: set[str] = set()
+            _recent_ids: set[str] = set()
+            for _m in self.conversation_history[:_split]:
+                for _tc in (_m.get("tool_calls") or []):
+                    _old_ids.add(_tc.get("id", ""))
+            for _m in self.conversation_history[_split:]:
+                for _tc in (_m.get("tool_calls") or []):
+                    _recent_ids.add(_tc.get("id", ""))
+            _need_move = False
+            for _oid in _orphan_ids:
+                if _oid in _old_ids and _oid not in _recent_ids:
+                    _need_move = True
                     break
+            if not _need_move:
+                break  # every orphan has its tool_calls also in recent — safe
+            _split = max(0, _split - 2)  # move left to capture more context
         _split = max(0, _split)
 
         old_messages = self.conversation_history[:_split]

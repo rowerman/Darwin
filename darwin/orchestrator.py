@@ -273,6 +273,12 @@ class Orchestrator:
             # ── Phase 1.5: Deep Recon (dirb, nikto, form_extract) ──
             await self._deep_recon()
 
+            # ── Phase 1.55: Cloud Platform Discovery ──
+            # Check endpoints for cloud-like response signatures and add
+            # a vulnerability hint so the LLM explores additional services
+            # on the same endpoint (e.g. S3 → IAM, STS, Lambda).
+            await self._cloud_discovery_hint()
+
             # ── Phase 1.6: Defense Detection (DPM) ──
             await self._detect_defenses()
 
@@ -478,7 +484,7 @@ class Orchestrator:
                             self._solo_exhausted = True
                         # Fast exhaust: 2 consecutive plan-exhausted runs with 0 done tasks
                         _done_count = sum(1 for t in (self.exploitation_plan.tasks if self.exploitation_plan else [])
-                                         if t.get("status") == "done")
+                                         if isinstance(t, dict) and t.get("status") == "done")
                         _prev_done = getattr(self, '_prev_solo_done_count', -1)
                         if result is None and _done_count == _prev_done:
                             _empty_runs = getattr(self, '_solo_empty_runs', 0) + 1
@@ -924,14 +930,44 @@ class Orchestrator:
                     "params": params, "body_format": "form",
                     "discovered_by": "bootstrap",
                 })
+            # ── When root is near-empty, probe common paths for real content ──
+            if resp_len < 500 and len(discovered_ports) <= 3:
+                _WEB_PATHS = ["/", "/index.html", "/home", "/login", "/admin",
+                              "/api", "/app", "/status", "/health", "/metrics",
+                              "/fetch", "/upload", "/dashboard", "/console"]
+                async def _probe_web_path(path: str):
+                    try:
+                        r = await self.recon_gateway.call("curl_get",
+                            {"url": f"{url.rstrip('/')}{path}", "follow_redirects": True})
+                        if r.success:
+                            out = getattr(r, "stdout", "")
+                            if len(out) > 200:
+                                self.dkg.add_node("Endpoint", f"ep-path-{path.replace('/','-')[:30]}", {
+                                    "url": f"{url.rstrip('/')}{path}", "method": "GET",
+                                    "params": "",
+                                    "sample_status": 200, "sample_response": out[:5000],
+                                    "response_size": len(out),
+                                    "discovered_by": "bootstrap-path-probe",
+                                })
+                    except Exception:
+                        pass
+                path_tasks = [asyncio.create_task(_probe_web_path(p))
+                              for p in _WEB_PATHS]
+                await asyncio.gather(*path_tasks, return_exceptions=True)
+
             if technologies:
                 log.info("bootstrap whatweb: %s → %s", url, technologies)
-            for tech in technologies:
-                self.dkg.add_node("Service", f"tech-{tech[:30]}", {
-                    "port": 0, "protocol": "HTTP",
-                    "version": tech, "banner": tech,
-                    "discovered_by": "bootstrap-whatweb",
-                })
+                # Enrich the existing nmap Service node with whatweb
+                # fingerprint data instead of creating fake tech-* nodes.
+                from urllib.parse import urlparse as _up2
+                _p = _up2(url)
+                _svc_port = _p.port or (443 if _p.scheme == "https" else 80)
+                _svc_id = f"svc-{host}-{_svc_port}"
+                _existing = self.dkg.get_node(_svc_id)
+                if _existing:
+                    self.dkg.update_node(_svc_id, {
+                        "fingerprint": technologies,
+                    })
             for path in api_paths[:20]:
                 api_endpoints_to_probe.append(f"{url.rstrip('/')}{path}")
 
@@ -2015,6 +2051,14 @@ class Orchestrator:
                         + (f"\nKnown services ({n_services}): {', '.join(svc_list)}" if svc_list else "")
                         + (f"\nCredentials: {len(state.credentials)} known" if state.credentials else "")
                         + thin_warning
+                        + "\n[RECONSIDER] No flag found after exhausting the plan. "
+                        "The evidence you've relied on may be incomplete or "
+                        "misleading. What ELSE could this application be? "
+                        "Also review the tools you used — some support multiple "
+                        "services or operations beyond what you tried. If you "
+                        "only used a subset of a tool's capabilities, explore "
+                        "its other functions; the attack surface may be broader "
+                        "than what the initial evidence suggested."
                     )
                     await self._review_and_update_plan(
                         {"id": "plan-exhausted", "instruction": "Plan exhausted",
@@ -2237,6 +2281,19 @@ class Orchestrator:
                                              _fallback, getattr(fallback_result, 'exit_code', '?'))
                             except Exception as _fb_err:
                                 log.warning("Fallback '%s' error: %s", _fallback, _fb_err)
+                # Detect broken binaries: Go/C binaries that start but
+                # can't parse their own flags (e.g. corrupt gobuster
+                # binary that rejects -w and -u even when present).
+                if (_exit_code not in (0, 127)
+                        and "must be specified" in _combined
+                        and tc_name not in self._BLACKLISTED_TOOLS):
+                    log.warning(
+                        "Tool '%s' appears broken (binary rejects its own "
+                        "flags) — blacklisting", tc_name
+                    )
+                    self._BLACKLISTED_TOOLS[tc_name] = ""
+                    if self.exploitation_plan and self.exploitation_plan.tasks:
+                        self._sanitize_plan_tools(self.exploitation_plan.tasks)
                 # Track unreachable targets
                 _target = (tc_args.get("url", "") or tc_args.get("host", "")
                            or tc_args.get("target", "") or "")
@@ -2360,12 +2417,26 @@ class Orchestrator:
                 # Auto-persist technology discoveries to DKG (before compression loses them)
                 if tc_name in ("whatweb_scan",) and getattr(result, 'success', False):
                     parsed = getattr(result, "parsed_output", {})
-                    for tech in parsed.get("technologies", [])[:5]:
-                        self.dkg.add_node("Service", f"tech-{tech[:30]}", {
-                            "port": 0, "protocol": "HTTP",
-                            "version": tech, "banner": tech,
-                            "discovered_by": "solo-unified",
-                        })
+                    _fingerprint = parsed.get("technologies", [])[:5]
+                    if _fingerprint:
+                        # Enrich the existing nmap Service node with
+                        # whatweb fingerprint — do NOT create fake
+                        # port-0 Service nodes.
+                        _ww_host = self.target_host
+                        from urllib.parse import urlparse as _up3
+                        _ww_url = tc_args.get("target_url", "")
+                        _ww_parts = _up3(_ww_url) if _ww_url else None
+                        if _ww_parts and _ww_parts.hostname:
+                            _ww_host = _ww_parts.hostname
+                        _ww_port = (_ww_parts.port if _ww_parts and _ww_parts.port
+                                    else 80)
+                        _ww_svc_id = f"svc-{_ww_host}-{_ww_port}"
+                        _ww_svc = self.dkg.get_node(_ww_svc_id)
+                        if _ww_svc:
+                            self.dkg.update_node(
+                                _ww_svc_id,
+                                {"fingerprint": _fingerprint},
+                            )
                 task_summary += f"{tc_name}: {'OK' if getattr(result,'success',False) else 'FAIL'}; "
                 # Accumulate each tool's output for plan review context.
                 # Include the file_upload HINT so the fix-and-retry LLM also
@@ -2571,11 +2642,13 @@ class Orchestrator:
             "mysql_file_write": ["mysql_file_write"],
             "mysql_udf": ["mysql_query", "mysql_file_write", "shell_exec"],
             "postgres_rce": ["psql_query", "shell_exec"],
-            "authbypass": ["redis_cmd", "mysql_query", "psql_query", "mssql_query", "mssqlclient_query", "mssqlclient_query",
-                          "oracle_query", "ssh_exec", "shell_exec"],
+            "authbypass": ["curl_get", "aws_cli", "test_credential", "ssh_exec", "shell_exec",
+                          "redis_cmd", "mysql_query", "psql_query", "mssql_query",
+                          "mssqlclient_query", "oracle_query"],
             "weakauth": ["mssqlclient_query", "mssql_query", "mysql_query",
                         "psql_query", "redis_cmd", "oracle_query",
                         "test_credential", "ssh_exec"],
+            "platformdiscovery": ["aws_cli", "curl_get"],
         }
         # Fuzzy match: if a vuln type CONTAINS one of these substrings, it maps
         FUZZY_MAP: dict[str, list[str]] = {
@@ -2831,6 +2904,29 @@ class Orchestrator:
                 if session_cookies and "headers" not in args:
                     args["headers"] = f"Cookie: {session_cookies}"
 
+                # ── Schema-based tool compatibility check ─────────
+                # Verify that the args we constructed for this endpoint
+                # have at least one key matching the tool's declared
+                # parameters.  If zero overlap, the tool cannot work on
+                # this endpoint (e.g. aws_cli on HTTP, test_credential
+                # on HTTP, mssqlclient_query on HTTP).
+                # This is a general safety net — it does not depend on
+                # any hardcoded tool-name list.
+                _tool_entry = (
+                    self.attack_gateway._registry.get(tool_name)
+                    or self.recon_gateway._registry.get(tool_name)
+                )
+                if _tool_entry is not None:
+                    _tool_params = set(_tool_entry.parameters.keys())
+                    _arg_keys = set(args.keys())
+                    if _tool_params and not (_tool_params & _arg_keys):
+                        print(
+                            f"[systematic] skip {tool_name}: schema mismatch "
+                            f"(tool expects {sorted(_tool_params)}, "
+                            f"got {sorted(_arg_keys)})"
+                        )
+                        continue
+
                 try:
                     cookie_note = " [with auth]" if session_cookies else ""
                     source_note = ""
@@ -2970,12 +3066,40 @@ class Orchestrator:
 
         # Build typed pipeline state from DKG (single source of truth)
         state = normalize_dkg_state(self.dkg)
-        # Build tool lists for analyze system prompt
-        attack_tool_names = sorted(self.attack_gateway.get_tool_names())
-        recon_tool_names = sorted(self.recon_gateway.get_tool_names())
+        # Build tool lists for analyze system prompt.
+        # Include required parameter names so the LLM can write correct
+        # tool_args without guessing (e.g. "service" not "command" for aws_cli).
+        def _fmt_tool_list(gateway) -> str:
+            lines = []
+            for d in sorted(gateway.get_tool_definitions(),
+                           key=lambda d: d["function"]["name"]):
+                name = d["function"]["name"]
+                props = d["function"]["parameters"].get("properties", {})
+                required = d["function"]["parameters"].get("required", [])
+                req_params = [p for p in required if p in props]
+                opt_params = [p for p in props if p not in required]
+                # Show required params, hint optional ones with ?
+                sig = ", ".join(req_params)
+                if opt_params:
+                    sig += (", " if sig else "") + ", ".join(f"{p}?" for p in opt_params)
+                # Include description snippet so the LLM knows what the
+                # tool can do (e.g. aws_cli supports S3, IAM, STS, etc.).
+                # First 140 chars — enough for 1-2 sentences.
+                desc = d["function"].get("description", "")
+                if len(desc) > 140:
+                    # Truncate at last complete word before the limit
+                    _cut = desc[:140].rfind(" ")
+                    desc = desc[:_cut] + "..."
+                _hint = f"  → {desc}" if desc else ""
+                lines.append(
+                    f"  {name}({sig}){_hint}" if sig
+                    else f"  {name}{_hint}"
+                )
+            return "\n".join(lines)
+
         analyze_system_prompt = SYSTEM_PROMPT_ANALYZE.format(
-            attack_tools=", ".join(attack_tool_names),
-            recon_tools=", ".join(recon_tool_names),
+            attack_tools=_fmt_tool_list(self.attack_gateway),
+            recon_tools=_fmt_tool_list(self.recon_gateway),
         )
         self._analyze_prompt_formatted = analyze_system_prompt
 
@@ -3453,6 +3577,69 @@ class Orchestrator:
                     if nid:
                         self.dkg.graph.remove_node(nid)
 
+    # ── Phase 1.55: Cloud Platform Discovery ────────────────────────
+
+    async def _cloud_discovery_hint(self) -> None:
+        """Add a PlatformDiscovery vulnerability when cloud signatures found.
+
+        Checks DKG Endpoint sample responses for platform-specific
+        patterns (response headers, API structures).  If a cloud
+        platform is detected, adds a hint so the analyze LLM knows
+        to explore additional services on the same endpoint.
+
+        General — works for any cloud platform, not just AWS.
+        """
+        # Platform signatures: header/substring → platform name + hint
+        _SIGNATURES: list[tuple[str, str, str]] = [
+            # (header/pattern to search for, platform name, exploration hint)
+            ("x-amz-request-id", "AWS-compatible",
+             "This endpoint returns AWS S3/API-Gateway headers. "
+             "Explore what OTHER AWS services (IAM, STS, Lambda, KMS, "
+             "DynamoDB, SQS) are available on the same endpoint — "
+             "many AWS-compatible platforms run multiple services."),
+            ("x-amz-id-2", "AWS S3-compatible",
+             "AWS S3 signature header detected. The endpoint may also "
+             "support other AWS services — probe IAM, STS, and KMS."),
+            ('"kind"', "Kubernetes API",
+             "K8s API detected. Explore all API groups: /api/v1/pods, "
+             "/apis/rbac.authorization.k8s.io/, /apis/apps/v1/, etc."),
+            ('"apiVersion"', "Kubernetes API",
+             "K8s API detected. Enumerate available resources and RBAC."),
+        ]
+
+        endpoints = self.dkg.query_nodes("Endpoint")
+        if not endpoints:
+            return
+
+        for pattern, platform, hint in _SIGNATURES:
+            for ep in endpoints:
+                resp = (ep.get("sample_response", "") or "")[:3000]
+                if pattern.lower() in resp.lower():
+                    # Found cloud signature — add a discovery hint to DKG
+                    ep_url = ep.get("url", "")
+                    # Derive the base URL (strip path)
+                    from urllib.parse import urlparse as _up4
+                    _p = _up4(ep_url) if "://" in ep_url else None
+                    _base = f"{_p.scheme}://{_p.hostname}:{_p.port}" if _p and _p.port else ep_url.split("/")[0] + "//" + ep_url.split("/")[2] if "://" in ep_url else ep_url
+
+                    self.dkg.add_node(
+                        "Vulnerability",
+                        f"vuln-platform-{platform.lower().replace(' ','-')}",
+                        {
+                            "vuln_type": "PlatformDiscovery",
+                            "endpoint": _base,
+                            "param": "",
+                            "confidence": 0.7,
+                            "evidence": f"Response contains '{pattern}' — "
+                                        f"suggests {platform} platform. {hint}",
+                            "suggested_tool": "",
+                            "tool_args": {},
+                            "source": "bootstrap-cloud-discovery",
+                        },
+                    )
+                    # One match per platform is enough
+                    break
+
     # ── Phase 1.8: Service Research (before analyze) ────────────────
 
     async def _service_research(self) -> None:
@@ -3648,6 +3835,7 @@ class Orchestrator:
             "exploitdb": _svc_name,
             "searchsploit": _svc_name,
             "web": f"{_svc_name} default credentials common passwords exploitation techniques",
+            "web_alt": f"{_svc_name} alternative attack vectors privilege escalation misconfiguration",
         }
         _tasks: dict[str, asyncio.Task] = {}
 
@@ -3734,8 +3922,12 @@ class Orchestrator:
             f"   from the search results. List AT LEAST 8-10 combinations to try.\n"
             f"2. If nmap_vulners found CVE IDs, look them up with cve_lookup\n"
             f"3. Search for known exploits using metasploit_search and searchsploit_search\n"
-            f"4. If you need more details, call additional research tools now.\n"
-            f"5. When done, output a JSON summary of findings for each vuln:\n"
+            f"4. If a PlatformDiscovery hypothesis exists (cloud API, K8s, Docker),\n"
+            f"   research what OTHER services the same endpoint might expose.\n"
+            f"   Multi-service platforms often run 5-10 services on one port —\n"
+            f"   don't assume only one is available.\n"
+            f"5. If you need more details, call additional research tools now.\n"
+            f"6. When done, output a JSON summary of findings for each vuln:\n"
             f'   [{{"vuln_type": "...", "cve_ids": [...], "exploit_modules": [...],'
             f'     "key_techniques": [...], "credentials_to_try": ["user:pass", ...],'
             f'     "confidence_adjustment": 0.0}}]\n'
@@ -5230,6 +5422,7 @@ Output ONLY valid JSON:
         # If the task was reading a config/credential file, flag it explicitly
         cred_reminder = ""
         api_reminder = ""
+        unexpected_data = ""
         if success and task_result:
             task_result_lower = task_result.lower()
             if any(kw in task_result_lower for kw in
@@ -5258,6 +5451,21 @@ Output ONLY valid JSON:
                     "check nested sub-resources. If there's an OpenAPI spec, read it "
                     "fully and use the documented paths. The flag is likely in a data "
                     "field returned by one of these API calls.\n"
+                )
+            # Detect structured data that doesn't match the tool used —
+            # the service may have capabilities beyond current hypothesis
+            _structured_indicators = (
+                '"arn:', '"policy', '"permission', '"principal"',
+                '"statement"', '"effect"', '"action"', '"resource"',
+            )
+            if any(kw in task_result_lower for kw in _structured_indicators):
+                unexpected_data = (
+                    "\nNOTE: The response contains structured permission/policy "
+                    "data that doesn't match the tool you just called. The service "
+                    "may have capabilities (access control, privilege management) "
+                    "beyond its apparent purpose. Consider whether your initial "
+                    "hypothesis about this application is correct — try tools and "
+                    "operations that match the UNEXPECTED data you're seeing.\n"
                 )
 
         _absent_text = ""
@@ -5342,6 +5550,7 @@ Output ONLY valid JSON:
             f"Output: {task_result[:1500]}\n"
             f"{cred_reminder}"
             f"{api_reminder}"
+            f"{unexpected_data}"
             f"{focus_reminder}"
             f"{_post_exploit_reminder}\n"
             f"{self._format_plan_status()}\n"
@@ -5381,7 +5590,8 @@ Output ONLY valid JSON:
             if new_tasks and isinstance(new_tasks, list) and len(new_tasks) > 0:
                 # Keep done/failed tasks, replace pending with LLM's updated list
                 preserved = [t for t in self.exploitation_plan.tasks
-                           if t.get("status") in ("done", "failed", "skipped", "exhausted", "pending")
+                           if isinstance(t, dict)
+                           and t.get("status") in ("done", "failed", "skipped", "exhausted", "pending")
                            and t.get("id") != task.get("id")]
                 # Add the just-completed task with updated status
                 preserved.append(task)

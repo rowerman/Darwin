@@ -291,12 +291,25 @@ Based on your understanding from Phase 1, hypothesize potential vulnerabilities.
 - For EACH endpoint with any kind of user input surface, suggest at least one vuln_type
 - For each discovered service version, consider whether that specific version has
   publicly known vulnerabilities — an outdated service is often the fastest path in.
+- If response samples are too short to understand the application (e.g. truncated),
+  call curl_get on the root URL to fetch the full page before forming hypotheses.
+- If the evidence strongly suggests one application type, briefly note 1-2
+  alternative interpretations. If your primary hypothesis is wrong, these
+  fallback paths will prevent wasted exploration.
 
 ## Non-HTTP Services
 Also analyze non-HTTP services (Redis, MySQL, SSH, PostgreSQL, MSSQL, Oracle, MongoDB):
 - AuthBypass: services accessible without authentication (Redis without password, MongoDB without auth)
 - WeakAuth: services potentially using weak/default credentials (MySQL, PostgreSQL, SSH)
 - If a service has port but no HTTP response data, still hypothesize based on port and version
+
+## Multi-Service Platforms (Cloud, K8s, Docker)
+When response headers or content indicate a cloud platform (e.g. x-amz-request-id
+for AWS, \"kind\" for K8s, Docker API JSON), do NOT assume only one service is
+available. These platforms typically expose MULTIPLE services on the same
+endpoint. If you detect one (e.g. S3), hypothesize about others (e.g. IAM, STS).
+Check the available attack tools — tools like aws_cli list multiple supported
+sub-services in their description. Systematically consider each one.
 
 ## Phase 3: Synthesize Attack Paths
 Now that you have identified individual vulnerabilities, reason about how they
@@ -332,7 +345,7 @@ Output a single JSON object with three keys:
   "application_understanding": "2-3 sentence summary: what this app does, what each endpoint is for, and whether input affects output.",
   "vulnerabilities": [
     {{
-      "vuln_type": "XSS|SQLi|CMDi|SSTI|LFI|RFI|SSRF|XXE|IDOR|CSRF|FileUpload|AuthBypass|WeakAuth",
+      "vuln_type": "XSS|SQLi|CMDi|SSTI|LFI|RFI|SSRF|XXE|IDOR|CSRF|FileUpload|AuthBypass|WeakAuth|PlatformDiscovery",
       "endpoint": "full URL",
       "param": "parameter name or empty string",
       "confidence": 0.0,
@@ -359,14 +372,15 @@ If no viable multi-step attack path exists (single-vulnerability target), provid
 at least one single-step path. The attack_paths field helps downstream exploitation
 planning create properly sequenced tasks with correct dependencies.
 
-## Available Attack Tools (use EXACT names):
+## Available Attack Tools (name with required params, ? = optional):
 {attack_tools}
 
-## Available Recon Tools (use EXACT names):
+## Available Recon Tools (name with required params, ? = optional):
 {recon_tools}
 
 ## Tool Arguments Format
-Each tool expects a JSON object (dict) of named parameters, NOT CLI-style flags.
+Each tool expects a JSON object (dict) of named parameters — use the EXACT
+parameter names shown in parentheses above, NOT CLI-style flags.
 Examples:
   - sqlmap_test: {{"url": "http://target/page?id=1", "param": "id"}}
   - command_injection_test: {{"url": "http://target/ping", "param": "host"}}

@@ -95,6 +95,13 @@ Additional env vars (not in the LLM provider table):
 - `netexec`, `impacket-secretsdump`, `impacket-psexec`, `impacket-wmiexec`, `ldapsearch` (AD agent)
 - `kubectl`, `capsh` (cloud/K8s agent)
 
+**Cloud/K8s container escape tools** (`tools/tools_open/`): External Go/Python tools used by `cloud_agent.py` for container breakout and K8s penetration testing:
+- `botb` — Break Out The Box (container breakout detection via capabilities, mounts, sockets)
+- `ccat` — Cloud Container Attack Tool (metadata extraction, credential discovery)
+- `CDK` — Container Defense Kit (K8s RBAC abuse, node escape, lateral movement)
+- `peirates` — K8s penetration testing (pod enumeration, secret theft, service account abuse)
+- `veinmind-tools` — Container security scanning (image inspection, malware detection)
+
 Additional Python dependencies for RAG: `sentence-transformers`, `faiss-cpu` (or `faiss-gpu`). **These are NOT in `pyproject.toml`** — install them manually if DarwinRAG is needed.
 
 The orchestrator checks for required CLI tools at startup and warns if any are missing.
@@ -111,7 +118,7 @@ Orchestrator.run() → recon → analyze → exploit → bypass → verify
 
 The `run()` method (`orchestrator.py:212`) follows this linear phase pipeline for Solo mode. For Coordinated/Distributed modes, it dispatches to `_run_multi_agent_cycle()` (`orchestrator.py:6437`) based on the B dimension threshold from `dynamic_scaling.py`.
 
-Key `Orchestrator` method locations (~7100-line file):
+Key `Orchestrator` method locations (~7258-line file; line numbers approximate):
 - `run()` (line 212) — entry point, main loop with mode dispatch, termination conditions
 - `_unified_llm_loop()` (line 1761) — Solo mode LLM-driven ReAct loop
 - `_analyze_phase()` (line 2947) — vulnerability hypothesis generation
@@ -220,6 +227,8 @@ Canonical implementation: `compute_task_breadth()` at `dynamic_scaling.py:118`. 
 
 **Benchmark infrastructure has moved to `/home/kianabin/benchmark_design/benchmarks/`.** The old `benchmarks/` path in this repo is removed. The experiment runners (`experiments/runner.py`, `experiments/parallel_runner.py`) and scenario loader (`experiments/scenario_loader.py`) remain in this repo and discover scenarios dynamically.
 
+**Note**: README.md still references `benchmarks/pacebench_adapter.py` — this path no longer exists. Use `experiments/runner.py` for benchmark evaluation instead.
+
 ### Root-level benchmark documentation
 - `BENCHMARK_SUMMARY.md` — Comprehensive ~7900-line exploitation guide covering deployable scenarios and attack chains.
 - `BENCHMARK_SCENARIOS_OVERVIEW.md` — Concise overview table of 57 single-point scenarios and 24 attack chains.
@@ -261,6 +270,7 @@ Core orchestrator, all agents, tools, RAG, DPM, CTEG, DAVE, and LLM utilities ar
 ## Documentation and planning
 
 - `plan/` — Framework design (`DARWIN_framework.md`), implementation plan, progress tracker (`DARWIN_todo.md`), and `KNOWN_ISSUES.md`. **Note**: `KNOWN_ISSUES.md` is dated 2026-05-14 and several items listed there have since been resolved (CTEG is integrated, multi-agent dispatch is active, tests exist, duplicate `compute_task_breadth` removed). Consult `CHANGES.md` for the authoritative resolution status of each item.
+- `darwin-experiment-automation.md` — Plan for automated DARWIN vs PentestAgent comparative experiments across Custom Defense, PACEBench, and XBOW benchmarks. Phase A (Custom Defense, 20 challenges) is immediately runnable.
 - `CHANGES.md` — Chronological change log of all framework modifications since May 2026. Consult this when investigating why a feature works a certain way or when a recent change may have introduced a regression.
 - `research/` — Research notes (e.g., `container_escape_cve_research.md`).
 - `tools/` (top-level) — Knowledge ingestion/conversion scripts: `ingest_knowledge.py`, `convert_knowledge.py`, `convert_nuclei.py`.

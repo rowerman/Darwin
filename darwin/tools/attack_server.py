@@ -2344,7 +2344,7 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
             "service": {"type": "string", "description": "AWS service: s3, iam, sts, kms, lambda, sqs, dynamodb"},
             "action": {"type": "string", "description": "AWS CLI action: ls, cp, list-roles, get-policy, assume-role, decrypt, list-functions, invoke, list-queues, receive-message, list-tables, scan, query, get-caller-identity"},
             "resource": {"type": "string", "description": "Resource identifier (e.g., 's3://bucket-name', 'role/role-name', '--function-name NAME', '--queue-url URL', '--table-name NAME'). Leave empty for list operations."},
-            "payload_json": {"type": "string", "description": "Additional flags, --query filters, or JSON payload. Examples: '--no-sign-request', '--role-session-name test', '--max-number-of-messages 10', '--filter-expression \"attribute_exists(flag)\"', '--query \"Buckets[].Name\"'"},
+            "payload_json": {"type": "string", "description": "Additional flags, --query filters, or JSON payload. Examples: '--no-sign-request', '--role-session-name test', '--max-number-of-messages 10', '--filter-expression \"attribute_exists(flag)\"', '--query \"Buckets[].Name\"'", "default": ""},
         },
         parser=_parse_shell_output,
         timeout=30,

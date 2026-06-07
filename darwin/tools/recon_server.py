@@ -102,13 +102,26 @@ def _parse_nikto_output(stdout: str) -> Dict[str, Any]:
 
 
 def _parse_whatweb_output(stdout: str) -> Dict[str, Any]:
-    """Parse whatweb output for technology stack."""
+    """Parse whatweb output for technology stack.
+
+    Filters out non-technology bracket content: HTTP status codes
+    ("200 OK"), country/region codes ("ZZ", "RESERVED").  Version
+    numbers and IPs are kept — the bootstrap layer decides whether
+    to register them as services.
+    """
     techs = []
     for line in stdout.split("\n"):
         line = line.strip()
         if line and "http" in line:
-            tech_matches = re.findall(r"\[(.*?)\]", line)
-            techs.extend(tech_matches)
+            raw_matches = re.findall(r"\[(.*?)\]", line)
+            for m in raw_matches:
+                if re.match(r"^\d{3}\s", m):       # "200 OK"
+                    continue
+                if re.match(r"^[A-Z]{2,3}$", m):   # "ZZ", "US"
+                    continue
+                if m == "RESERVED":
+                    continue
+                techs.append(m)
     return {"technologies": techs}
 
 
@@ -346,8 +359,8 @@ def register_recon_tools(gateway: MCPGateway) -> MCPGateway:
     # ── gobuster: Fast directory enumeration ─────────────────────
     gateway.register_shell_tool(
         name="gobuster_dir",
-        command_template="gobuster -u {target_url} -w {wordlist} -q 2>&1",
-        description="Fast directory brute-force using gobuster. Default wordlist has common web/CMS paths. For WordPress use wordlist=/home/kianabin/Darwin/wordlists/cms/wordpress.fuzz.txt.",
+        command_template="gobuster dir -u {target_url} -w {wordlist} -q 2>&1 || gobuster dir -u {target_url} -w /home/kianabin/Darwin/wordlists/raft-large-directories.txt -q 2>&1",
+        description="Fast directory brute-force using gobuster. Falls back to raft-large-directories.txt if specified wordlist is missing.",
         parameters={
             "target_url": {"type": "string", "description": "Target URL to scan"},
             "wordlist": {"type": "string", "description": "Wordlist path (default: raft-large-directories.txt)", "default": "/home/kianabin/Darwin/wordlists/raft-large-directories.txt"},
@@ -423,7 +436,7 @@ def register_recon_tools(gateway: MCPGateway) -> MCPGateway:
     # ── whatweb: Technology fingerprinting ──────────────────────
     gateway.register_shell_tool(
         name="whatweb_scan",
-        command_template="timeout 30 whatweb -q -a 1 {target_url}",
+        command_template="timeout 30 whatweb --color=never -a 1 {target_url} 2>&1",
         description="Identify web technologies used by a target (lightweight, max 30s)",
         parameters={
             "target_url": {"type": "string", "description": "Target URL"},
