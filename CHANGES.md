@@ -1,3 +1,22 @@
+## 2026-06-08 (pivot threshold fix + plan exhaustion IAM escalation context)
+
+- **darwin/orchestrator.py** `_review_and_update_plan`: pivot 条件新增 `_all_clean` OR 分支——当所有 task 完成（≥7）且零失败但无 flag 时也触发 ATTACK SURFACE EXHAUSTION。修复了 CLOUD-02 实验中 8/8 tasks 全部成功导致 pivot 从未触发（原条件要求 ≥3 failures）的 bug。通用：纯定量统计。
+- **darwin/orchestrator.py** `_unified_llm_loop` plan exhaustion: 当 plan 耗尽且存在 PlatformDiscovery vuln 时，注入 IAM 枚举完成状态 + privilege escalation 具体步骤（create-policy, attach-user-policy）。修复了 LLM 枚举 IAM 后不知升级到提权的 gap。通用：基于 PlatformDiscovery + IAM task 完成状态检测。
+- **darwin/orchestrator.py** `_unified_llm_loop` [RECONSIDER] 文本：强化工具多样性提示——明确指出 `aws_cli` 支持 S3/IAM/STS/Lambda/KMS/DynamoDB，`kubectl` 支持 pods/secrets/RBAC。引导 LLM 不要只用单一子命令。
+- **验证**: pytest 147 passed, import OK
+
+## 2026-06-08 (bug fix: PlatformDiscovery hint not reaching plan generation + impacket symlinks)
+
+- **darwin/orchestrator.py**: 将 PlatformDiscovery hint 提取为 `_build_platform_discovery_hint()` 方法，在 `_generate_exploitation_plan()`（plan 生成 prompt）和 `_unified_llm_loop()`（执行上下文）两处调用。修复了之前的 bug：hint 在 plan 生成之后才构建，导致初始 plan 没有收到"探索 IAM/STS/Lambda"的提示。
+- **venv/bin/**: 创建 impacket 工具的符号链接（`impacket-psexec` → `psexec.py` 等 6 个），使 `_check_tool_dependencies()` 的 `shutil.which("impacket-*")` 能解析到脚本。消除了启动时的 "Optional tool not found" 警告。
+
+## 2026-06-08 (cloud platform discovery → multi-service enumeration gap fix)
+
+- **darwin/orchestrator.py** `_generate_exploitation_plan`: 当 DKG 中存在 PlatformDiscovery 漏洞时，新增 cloud-specific RAG 搜索（AWS→IAM privilege escalation, K8s→RBAC enumeration）。解决 cloud-02 实验中 RAG 查询只命中 S3/MinIO 内容而完全忽略 `aws_exploitation.json` 中 IAM 提权知识的问题。通用：基于 platform type text evidence 自动选择搜索词。
+- **darwin/orchestrator.py** `_unified_llm_loop`: 当 PlatformDiscovery 漏洞存在时，在 plan 生成上下文中注入强制性多服务探索提示（具体到工具+action：aws_cli iam list-roles, aws_cli sts get-caller-identity, kubectl_auth_check 等）。防止 LLM 固守在第一个发现的服务（如 S3）而从不探索 IAM/STS/Lambda。
+- **darwin/orchestrator.py** `_review_and_update_plan`: 新增攻击面耗尽检测——当 ≥6 个 task 成功但未找到 flag 且 ≥3 个 task 失败时，注入 pivot reminder 强制 LLM 考虑全新攻击面。通用：基于 task 统计数据，不依赖场景知识。
+- **验证**: pytest 147 passed, import OK
+
 ## 2026-06-07 (bootstrap: probe common web paths when root returns empty)
 
 - **darwin/orchestrator.py** `_bootstrap_scan._probe_one_port`: 当 curl probe 返回 < 500 字节时，并行探测 14 个通用 web 路径（/index.html, /home, /login, /admin, /api, /fetch, /upload 等），找到内容 > 200 字节的页面后注册为额外 Endpoint。解决某些靶机根路径返回空响应导致 LLM 看不到页面内容的问题（如 cloud-02 SSRF localhost bypass，根路径返回 0 字节 text/plain，但 /fetch 有完整 HTML 表单）。

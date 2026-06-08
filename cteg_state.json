@@ -426,13 +426,13 @@
       "abstract_description": "shell_exec exploitation; via shell_exec; (GET)",
       "vulnerability_type": "shell_exec",
       "required_context": "",
-      "total_attempts": 170,
-      "total_successes": 38,
-      "success_rate": 0.2235294117647059,
-      "last_successful_use": "2026-06-06T16:45:10.788345",
+      "total_attempts": 172,
+      "total_successes": 40,
+      "success_rate": 0.23255813953488372,
+      "last_successful_use": "2026-06-08T14:17:11.738203",
       "half_life_days": 30,
       "created_at": "2026-05-29T16:15:22.468137",
-      "reinforcement_count": 38
+      "reinforcement_count": 40
     },
     {
       "id": "ep-ssh_exec-task-178",
@@ -515,13 +515,13 @@
       "abstract_description": "curl_get exploitation; via curl_get; on http://localhost:10103/xmlrpc.php; (GET)",
       "vulnerability_type": "curl_get",
       "required_context": "",
-      "total_attempts": 338,
-      "total_successes": 32,
-      "success_rate": 0.09467455621301775,
-      "last_successful_use": "2026-06-03T14:45:42.485496",
+      "total_attempts": 377,
+      "total_successes": 71,
+      "success_rate": 0.1883289124668435,
+      "last_successful_use": "2026-06-08T14:17:11.732138",
       "half_life_days": 30,
       "created_at": "2026-05-29T18:19:01.052254",
-      "reinforcement_count": 32
+      "reinforcement_count": 71
     },
     {
       "id": "ep-try_login-task-178",
@@ -572,13 +572,13 @@
       "abstract_description": "gobuster_dir exploitation; via gobuster_dir; on http://localhost:10103/; (GET)",
       "vulnerability_type": "gobuster_dir",
       "required_context": "",
-      "total_attempts": 21,
-      "total_successes": 2,
-      "success_rate": 0.09523809523809523,
-      "last_successful_use": "2026-06-03T14:45:42.399690",
+      "total_attempts": 22,
+      "total_successes": 3,
+      "success_rate": 0.13636363636363635,
+      "last_successful_use": "2026-06-08T14:17:11.621394",
       "half_life_days": 30,
       "created_at": "2026-05-29T18:19:01.063942",
-      "reinforcement_count": 2
+      "reinforcement_count": 3
     },
     {
       "id": "ep-dirb_scan-task-178",
@@ -717,13 +717,13 @@
       "abstract_description": "INJECTION exploitation; via send_payload; on http://localhost:10103; (GET)",
       "vulnerability_type": "INJECTION",
       "required_context": "",
-      "total_attempts": 11,
-      "total_successes": 2,
-      "success_rate": 0.18181818181818182,
-      "last_successful_use": "2026-06-06T16:18:00.279161",
+      "total_attempts": 12,
+      "total_successes": 3,
+      "success_rate": 0.25,
+      "last_successful_use": "2026-06-08T13:48:43.106406",
       "half_life_days": 30,
       "created_at": "2026-05-30T15:12:28.665615",
-      "reinforcement_count": 2
+      "reinforcement_count": 3
     },
     {
       "id": "ep-wp_xmlrpc_brute-task-178",
@@ -1291,12 +1291,13 @@
       "abstract_description": "aws_cli exploitation; via aws_cli; (GET)",
       "vulnerability_type": "aws_cli",
       "required_context": "",
-      "total_attempts": 22,
-      "total_successes": 0,
-      "success_rate": 0.0,
-      "last_successful_use": "",
+      "total_attempts": 26,
+      "total_successes": 4,
+      "success_rate": 0.15384615384615385,
+      "last_successful_use": "2026-06-08T13:48:43.152440",
       "half_life_days": 30,
-      "created_at": "2026-06-07T16:57:20.911520"
+      "created_at": "2026-06-07T16:57:20.911520",
+      "reinforcement_count": 4
     },
     {
       "id": "ep-Directory Enumeration-ffuf_fuzz",
@@ -1400,6 +1401,6 @@
     }
   ],
   "edges": [],
-  "task_count": 195,
-  "created_at": "2026-06-07T17:45:36.009609"
+  "task_count": 197,
+  "created_at": "2026-06-08T14:09:25.062593"
 }

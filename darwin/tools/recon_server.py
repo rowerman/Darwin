@@ -359,11 +359,12 @@ def register_recon_tools(gateway: MCPGateway) -> MCPGateway:
     # ── gobuster: Fast directory enumeration ─────────────────────
     gateway.register_shell_tool(
         name="gobuster_dir",
-        command_template="gobuster dir -u {target_url} -w {wordlist} -q 2>&1 || gobuster dir -u {target_url} -w /home/kianabin/Darwin/wordlists/raft-large-directories.txt -q 2>&1",
-        description="Fast directory brute-force using gobuster. Falls back to raft-large-directories.txt if specified wordlist is missing.",
+        command_template="gobuster dir -u {target_url} -w {wordlist} -q 2>&1",
+        description="Fast directory brute-force using gobuster. Uses raft-large-directories.txt wordlist by default. Target URL must include scheme (e.g. http://host:port).",
         parameters={
-            "target_url": {"type": "string", "description": "Target URL to scan"},
-            "wordlist": {"type": "string", "description": "Wordlist path (default: raft-large-directories.txt)", "default": "/home/kianabin/Darwin/wordlists/raft-large-directories.txt"},
+            "target_url": {"type": "string", "description": "Target URL with scheme (e.g. http://host:port)"},
+            "url": {"type": "string", "description": "Alias for target_url — same as target_url parameter"},
+            "wordlist": {"type": "string", "description": "Wordlist path", "default": "/home/kianabin/Darwin/wordlists/raft-large-directories.txt"},
         },
         parser=_parse_gobuster_output,
         timeout=90,

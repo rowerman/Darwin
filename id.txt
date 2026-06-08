@@ -1,3 +1,6 @@
 claude --resume 7dda022f-8f1d-46d4-b1b0-a3ba052ad7f6    # skill设计
 claude --resume c037c5d3-b3c1-4be7-b801-d92514b278b3    # benchmark
 claude --resume cdb179bf-7c0b-410e-9897-9a136b0dc260
+
+这是一个自动化渗透测试框架，分为单agent模式和Multi-agent模式，测试对象是一个自建的benchmark。此框架包含DKG CTEG RAG 等模块，执行流程为scan -> recon -> research(RAG + web tool search) -> plan -> exploit -> replan -> ...
+你需要全面地了解这个仓库中的代码，记得加载skill 

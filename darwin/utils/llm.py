@@ -11,6 +11,12 @@ from typing import Any, Callable, Dict, List, Optional
 
 import litellm
 
+# Suppress LiteLLM's verbose INFO logs — they produce 2-4 lines per
+# LLM call that add zero debugging value for DARWIN experiments.
+import logging
+logging.getLogger("LiteLLM").setLevel(logging.WARNING)
+logging.getLogger("litellm").setLevel(logging.WARNING)
+
 
 SYSTEM_PROMPT_COMPRESS = """You are a context compressor. Summarize the conversation below into a structured, compact record. Preserve ALL of the following:
 

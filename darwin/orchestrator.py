@@ -823,6 +823,48 @@ class Orchestrator:
                     "discovered_by": "bootstrap-nmap",
                 })
 
+        # ── Identify unknown TLS services via certificate CN ─────
+        # nmap cannot fingerprint etcd (0 entries in service-probes).
+        # For SSL-wrapped unknown ports, openssl s_client extracts the
+        # TLS certificate CN which reliably identifies the service.
+        for p in discovered_ports:
+            _svc = (p.get("service", "") or "").lower()
+            if "unknown" not in _svc and "tcpwrapped" not in _svc:
+                continue
+            try:
+                proc = await asyncio.create_subprocess_shell(
+                    f"echo '' | openssl s_client -connect {host}:{p['port']} "
+                    f"-servername {host} 2>&1",
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+                stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=8)
+                out = stdout.decode("utf-8", errors="replace")
+                # Extract CN from subject line: "CN = etcd" or "CN = k8s-..."
+                cn_match = re.search(r"\bCN\s*=\s*(\S+)", out)
+                cn = cn_match.group(1) if cn_match else ""
+                cn_lower = cn.lower()
+                if any(kw in cn_lower for kw in ("etcd", "k8s", "kubernetes")):
+                    _name = "etcd" if "etcd" in cn_lower else "kubernetes"
+                    _proto = "etcd" if "etcd" in cn_lower else "kubernetes"
+                    self.dkg.add_node("Service",
+                        f"svc-{host}-{p['port']}", {
+                            "port": p["port"], "protocol": "tcp",
+                            "version": _name, "service_name": _name,
+                            "banner": f"CN={cn}",
+                    })
+                    self.dkg.add_node("Endpoint",
+                        f"endpoint-{host}-{p['port']}-{_proto}", {
+                            "url": f"https://{host}:{p['port']}",
+                            "method": "GET", "params": "",
+                            "proto": _proto,
+                            "discovered_by": "bootstrap-openssl",
+                    })
+                    log.info("openssl s_client CN=%s → identified as %s on port %d",
+                             cn, _name, p["port"])
+            except Exception:
+                pass
+
         # Probe HTTP ports discovered by nmap (parallel)
         # Exclude SSH, AD, and DB ports (not HTTP)
         _NON_HTTP_PORTS = {"22", "445", "389", "636", "3268", "3269",
@@ -1835,8 +1877,17 @@ class Orchestrator:
         if not hasattr(self, '_exploit_chain'):
             self._exploit_chain: list[dict] = []
 
-        # Generate initial plan
-        if not self.exploitation_plan or not self.exploitation_plan.tasks:
+        # Generate initial plan (or regenerate when all tasks are resolved)
+        _needs_regenerate = (
+            not self.exploitation_plan
+            or not self.exploitation_plan.tasks
+            or all(
+                t.get("status") in ("done", "failed", "skipped", "exhausted")
+                for t in self.exploitation_plan.tasks
+                if isinstance(t, dict)
+            )
+        )
+        if _needs_regenerate:
             self.exploitation_plan = await self._generate_exploitation_plan(target_url, cteg_hints)
 
         # Plan already generated before systematic exploit — skip duplicate
@@ -2367,8 +2418,8 @@ class Orchestrator:
                     log.info("[EXPLOIT] %s: DEFENSE — %s", tc_name,
                              defence_probe[:120].replace('\n', ' '))
                 elif getattr(result, 'success', False):
-                    log.info("[EXPLOIT] %s: OK (exit=%d, %d bytes) — no flag",
-                             tc_name, result_exit, len(result_stdout))
+                    log.debug("[EXPLOIT] %s: OK (exit=%d, %d bytes) — no flag",
+                              tc_name, result_exit, len(result_stdout))
                     _any_success = True
                 else:
                     log.info("[EXPLOIT] %s: FAILED (exit=%d) — %s",
@@ -2397,8 +2448,7 @@ class Orchestrator:
                             )
                             break
 
-                print(f"  [{tc_name}] {str(tc_args)[:120]} → "
-                      f"{tool_stdout.split(chr(10))[0][:120]}")
+                log.debug("  [%s] %s", tc_name, str(tc_args)[:120])
                 # Direct execution tasks skip LLM history — no preceding
                 # assistant tool_calls message exists, so adding a tool
                 # result here would break DeepSeek's API requirement
@@ -2872,6 +2922,19 @@ class Orchestrator:
                         args = {"url": u}
                 elif tool_name == "send_payload":
                     args = {"url": endpoint, "payload": "1", "param": param or "id"}
+                elif tool_name == "aws_cli":
+                    # aws_cli uses service+action+resource, not url+param.
+                    # Use the vuln's tool_args directly; fall back to s3 ls.
+                    _va = {}
+                    for v in vulns:
+                        if v.get("suggested_tool") == "aws_cli" and v.get("tool_args"):
+                            _va = v["tool_args"]
+                            break
+                    if _va:
+                        args = dict(_va)
+                    else:
+                        args = {"service": "s3", "action": "ls",
+                                "resource": "", "payload_json": ""}
                 else:
                     # Parse DB/non-HTTP endpoints into host/port args
                     if "://" in endpoint and not endpoint.startswith("http"):
@@ -4485,10 +4548,23 @@ class Orchestrator:
                 _valid_tools = _PORT_VALID_TOOLS[_task_port]
             elif _task_port and _task_port in _svc_port_to_proto:
                 _proto = _svc_port_to_proto[_task_port]
-                _valid_tools = _PORT_VALID_TOOLS.get(
-                    _task_port,
-                    set()  # won't match anything → will be caught below
-                )
+                # Non-standard ports need protocol-based tool validation
+                if _proto == "ssh":
+                    _valid_tools = {"test_credential", "ssh_exec", "ssh_key_exec", "hydra_ssh_brute", "shell_exec"}
+                elif _proto == "mssql":
+                    _valid_tools = {"mssql_query", "mssqlclient_query", "shell_exec"}
+                elif _proto in ("mysql", "mariadb"):
+                    _valid_tools = {"mysql_query", "shell_exec"}
+                elif _proto == "postgres":
+                    _valid_tools = {"psql_query", "shell_exec"}
+                elif _proto == "redis":
+                    _valid_tools = {"redis_cmd", "shell_exec"}
+                elif _proto == "oracle":
+                    _valid_tools = {"oracle_query", "shell_exec"}
+                else:
+                    _valid_tools = _PORT_VALID_TOOLS.get(
+                        _task_port, set()
+                    )
 
             # If tool is incompatible with the target port, correct or skip
             if _valid_tools is not None and tool and tool not in _valid_tools:
@@ -4522,6 +4598,22 @@ class Orchestrator:
                         .replace("brute-force", "authenticate")
                         .replace("Brute force", "Authenticate")
                     )
+                    # Convert params for tool replacement
+                    _rep_params = t.get("params", {})
+                    if isinstance(_rep_params, dict):
+                        if tool == "hydra_ssh_brute" and replacement == "ssh_exec":
+                            _target = str(_rep_params.get("target", ""))
+                            if ":" in _target:
+                                _parts = _target.rsplit(":", 1)
+                                _rep_params["host"] = _parts[0]
+                                try:
+                                    _rep_params["port"] = int(_parts[1])
+                                except ValueError:
+                                    _rep_params["port"] = 22
+                            else:
+                                _rep_params["host"] = _target
+                            _rep_params.pop("target", None)
+                            t["params"] = _rep_params
             # Block local filesystem access via file:// URLs — flag must come
             # from the TARGET, not from searching the DARWIN host filesystem.
             _params = t.get("params", {})
@@ -4544,6 +4636,26 @@ class Orchestrator:
                             # No credentials available — task can't run
                             t["status"] = "skipped"
                             break
+
+        # ── Cascade skip to dependent tasks ──────────────────────
+        # When a task is blacklisted or protocol-incompatible and
+        # gets skipped, all tasks that depend on it can never run.
+        # Mark them skipped too, in topological order, so the LLM
+        # doesn't waste iterations waiting for impossible dependencies.
+        _skipped_ids = {t.get("id", "") for t in tasks if t.get("status") == "skipped"}
+        _changed = True
+        while _changed:
+            _changed = False
+            for t in tasks:
+                if t.get("status") != "pending":
+                    continue
+                _deps = t.get("dependent_task_ids", []) or t.get("dependencies", [])
+                if not _deps:
+                    continue
+                if all(d in _skipped_ids for d in _deps):
+                    t["status"] = "skipped"
+                    _skipped_ids.add(t.get("id", ""))
+                    _changed = True
 
     async def _generate_exploitation_plan(self, target_url: str, cteg_hints: dict | None = None) -> ExploitationPlan:
         """Generate a structured plan from bootstrap state (nmap results only).
@@ -4685,6 +4797,68 @@ class Orchestrator:
                                 merged.append(r)
                         merged.sort(key=lambda r: r.get("score", 0), reverse=True)
                         results = merged[:10]
+
+                    # ── Cloud Platform Discovery enrichment ──────────
+                    # When _cloud_discovery_hint() detected a cloud platform
+                    # (AWS-compatible, K8s API), search RAG for privilege
+                    # escalation and service discovery patterns beyond the
+                    # initial service (S3 → IAM, STS, Lambda; K8s → RBAC).
+                    _pd_vulns = [
+                        v for v in self.dkg.query_nodes("Vulnerability")
+                        if v.get("vuln_type") == "PlatformDiscovery"
+                    ]
+                    if _pd_vulns:
+                        _pd_evidence = (_pd_vulns[0].get("evidence", "") or "").lower()
+                        _platform_queries: list[str] = []
+                        if "aws" in _pd_evidence or "s3" in _pd_evidence:
+                            _platform_queries = [
+                                "AWS IAM privilege escalation enumeration techniques",
+                                "AWS cloud service discovery STS Lambda after S3 access",
+                            ]
+                        elif "kubernetes" in _pd_evidence or "k8s" in _pd_evidence:
+                            _platform_queries = [
+                                "Kubernetes RBAC enumeration privilege escalation",
+                                "K8s API resource discovery after initial access",
+                            ]
+                        else:
+                            # Generic cloud platform — search broadly
+                            _platform_queries = [
+                                "cloud platform service enumeration privilege escalation",
+                            ]
+                        _cloud_merged: list[dict] = []
+                        _cloud_seen: set[str] = set()
+                        for _pq in _platform_queries:
+                            try:
+                                _cr = rag.search(_pq, top_k=4, min_keyword_overlap=0.1)
+                                for _r in _cr:
+                                    _rt = (_r.get("title") or "").strip().lower()
+                                    if _rt and _rt not in _cloud_seen:
+                                        _cloud_seen.add(_rt)
+                                        _cloud_merged.append(_r)
+                            except Exception:
+                                pass
+                        if _cloud_merged:
+                            # Merge cloud results with existing RAG results:
+                            # cloud-specific knowledge about privilege
+                            # escalation and multi-service exploration
+                            # should appear alongside service-specific
+                            # exploitation techniques.
+                            _existing_titles = {
+                                (r.get("title") or "").strip().lower()
+                                for r in results
+                            }
+                            for _cr in _cloud_merged:
+                                _crt = (_cr.get("title") or "").strip().lower()
+                                if _crt and _crt not in _existing_titles:
+                                    results.append(_cr)
+                                    _existing_titles.add(_crt)
+                            log.info(
+                                "Cloud Platform RAG: %d results for platform %s",
+                                len(_cloud_merged),
+                                "AWS" if "aws" in _pd_evidence else
+                                "K8s" if "kubernetes" in _pd_evidence else "generic",
+                            )
+
                     if results:
                         # ── Probe RAG-suggested endpoints ─────────────────
                         # RAG technique entries often contain concrete paths
@@ -5402,7 +5576,7 @@ Output ONLY valid JSON:
                         task.get("id"), task["attempts"])
         else:
             task["status"] = "failed"
-        task["result_summary"] = task_result[:500]
+        task["result_summary"] = task_result[:2000]
 
         # Build prompt: what just happened + current plan + new DKG state
         state = self._get_state()
@@ -5547,7 +5721,7 @@ Output ONLY valid JSON:
             f"Just completed: {task.get('instruction','')}\n"
             f"Tool: {task.get('tool','')}\n"
             f"Result: {success and 'SUCCESS' or 'FAILED'}\n"
-            f"Output: {task_result[:1500]}\n"
+            f"Output: {task_result[:4000]}\n"
             f"{cred_reminder}"
             f"{api_reminder}"
             f"{unexpected_data}"
