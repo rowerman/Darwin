@@ -359,8 +359,8 @@ def register_recon_tools(gateway: MCPGateway) -> MCPGateway:
     # ── gobuster: Fast directory enumeration ─────────────────────
     gateway.register_shell_tool(
         name="gobuster_dir",
-        command_template="gobuster dir -u {target_url} -w {wordlist} -q 2>&1",
-        description="Fast directory brute-force using gobuster. Uses raft-large-directories.txt wordlist by default. Target URL must include scheme (e.g. http://host:port).",
+        command_template="gobuster -u {target_url} -w {wordlist} -m dir -k -q 2>&1",
+        description="Fast directory brute-force using gobuster. Uses raft-large-directories.txt wordlist by default. Automatically skips TLS verification (-k) for self-signed certs. Target URL must include scheme (e.g. https://host:port).",
         parameters={
             "target_url": {"type": "string", "description": "Target URL with scheme (e.g. http://host:port)"},
             "url": {"type": "string", "description": "Alias for target_url — same as target_url parameter"},

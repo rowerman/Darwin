@@ -823,47 +823,128 @@ class Orchestrator:
                     "discovered_by": "bootstrap-nmap",
                 })
 
-        # ── Identify unknown TLS services via certificate CN ─────
+        # ── Identify unknown services via API probing ────────────
         # nmap cannot fingerprint etcd (0 entries in service-probes).
-        # For SSL-wrapped unknown ports, openssl s_client extracts the
-        # TLS certificate CN which reliably identifies the service.
+        # Two-phase identification: (1) openssl CN for TLS services,
+        # (2) HTTP GET to /version for plain-HTTP API services.
+        #
+        # Known API fingerprints — add new services here as needed.
+        # Each entry: (path, response_substring, service_name, proto)
+        # API fingerprints: (path, needle, service_name, proto, method, post_body)
+        # method and post_body are optional — defaults to GET with no body.
+        _API_FINGERPRINTS: list[tuple] = [
+            ("/version", '"etcdserver"', "etcd", "etcd", "GET", ""),
+            ("/version", '"etcdcluster"', "etcd", "etcd", "GET", ""),
+            ("/health", '{"health":"true"}', "etcd", "etcd", "GET", ""),
+            # K8s admission webhook: POST /validate with minimal AdmissionReview.
+            # A response (even an error) means this is a K8s admission controller
+            # — pure TLS services or generic HTTPS servers return nothing or 404.
+            ("/validate", "admission", "kubernetes-admission",
+             "kubernetes", "POST",
+             '{"apiVersion":"admission.k8s.io/v1","kind":"AdmissionReview","request":{"uid":"probe"}}'),
+        ]
+
         for p in discovered_ports:
             _svc = (p.get("service", "") or "").lower()
             if "unknown" not in _svc and "tcpwrapped" not in _svc:
                 continue
+            _port = p["port"]
+            _identified = False
+
+            # Phase 1: TLS cert field extraction (works for HTTPS services)
+            # Extracts CN, O, OU from the subject line and Subject
+            # Alternative Names.  Matches against a broader keyword set
+            # than just etcd/k8s — ingress-nginx admission controllers
+            # use minimal test certs (O=nil2) but other deployments may
+            # have identifiable fields.
             try:
                 proc = await asyncio.create_subprocess_shell(
-                    f"echo '' | openssl s_client -connect {host}:{p['port']} "
+                    f"echo '' | openssl s_client -connect {host}:{_port} "
                     f"-servername {host} 2>&1",
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
                 )
                 stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=8)
                 out = stdout.decode("utf-8", errors="replace")
-                # Extract CN from subject line: "CN = etcd" or "CN = k8s-..."
+                # Extract all cert identity: CN, O, OU, and the full subject line
                 cn_match = re.search(r"\bCN\s*=\s*(\S+)", out)
                 cn = cn_match.group(1) if cn_match else ""
-                cn_lower = cn.lower()
-                if any(kw in cn_lower for kw in ("etcd", "k8s", "kubernetes")):
-                    _name = "etcd" if "etcd" in cn_lower else "kubernetes"
-                    _proto = "etcd" if "etcd" in cn_lower else "kubernetes"
+                o_match = re.search(r"\bO\s*=\s*(\S+)", out)
+                org = o_match.group(1) if o_match else ""
+                # Subject line for broader matching
+                subj_match = re.search(r"subject\s*=\s*(.+?)(?:\n|$)", out)
+                subj = subj_match.group(1) if subj_match else ""
+                _cert_text = f"{cn} {org} {subj}".lower()
+                _name = ""
+                if "etcd" in _cert_text:
+                    _name = "etcd"
+                elif any(kw in _cert_text for kw in ("k8s", "kubernetes")):
+                    _name = "kubernetes"
+                elif any(kw in _cert_text for kw in ("ingress", "nginx")):
+                    _name = "ingress-nginx"
+                if _name:
                     self.dkg.add_node("Service",
-                        f"svc-{host}-{p['port']}", {
-                            "port": p["port"], "protocol": "tcp",
+                        f"svc-{host}-{_port}", {
+                            "port": _port, "protocol": "tcp",
                             "version": _name, "service_name": _name,
                             "banner": f"CN={cn}",
                     })
                     self.dkg.add_node("Endpoint",
-                        f"endpoint-{host}-{p['port']}-{_proto}", {
-                            "url": f"https://{host}:{p['port']}",
+                        f"endpoint-{host}-{_port}-{_name}", {
+                            "url": f"https://{host}:{_port}",
                             "method": "GET", "params": "",
-                            "proto": _proto,
+                            "proto": _name,
                             "discovered_by": "bootstrap-openssl",
                     })
-                    log.info("openssl s_client CN=%s → identified as %s on port %d",
-                             cn, _name, p["port"])
+                    log.info("openssl s_client cert=%s → identified as %s on port %d",
+                             cn, _name, _port)
+                    _identified = True
             except Exception:
                 pass
+
+            # Phase 2: HTTP API probe for unknown services (both HTTP
+            # and HTTPS — tries HTTPS first for TLS ports, HTTP fallback).
+            # Uses GET by default; POST with JSON body for endpoints
+            # like K8s admission webhooks that only respond to POST.
+            if not _identified:
+                for _path, _needle, _svc_name, _proto, _method, _post_body in _API_FINGERPRINTS:
+                    try:
+                        _method_flag = "-X POST" if _method == "POST" else ""
+                        _body_flag = f"-H 'Content-Type: application/json' -d '{_post_body}'" if _post_body else ""
+                        _url = f"https://{host}:{_port}{_path}"
+                        proc = await asyncio.create_subprocess_shell(
+                            f"curl -sk --connect-timeout 3 {_method_flag} {_body_flag} '{_url}' 2>&1",
+                            stdout=asyncio.subprocess.PIPE,
+                            stderr=asyncio.subprocess.PIPE,
+                        )
+                        stdout, _ = await asyncio.wait_for(
+                            proc.communicate(), timeout=5)
+                        _body = stdout.decode("utf-8", errors="replace")
+                        # POST probes match on HTTP success (server responded)
+                        # rather than body content — admission webhooks return
+                        # 500 with empty body for invalid AdmissionReviews.
+                        _match = (proc.returncode == 0) if _method == "POST" else (_needle in _body)
+                        if _match:
+                            self.dkg.add_node("Service",
+                                f"svc-{host}-{_port}", {
+                                    "port": _port, "protocol": "tcp",
+                                    "version": _svc_name,
+                                    "service_name": _svc_name,
+                                    "banner": _body[:200],
+                            })
+                            self.dkg.add_node("Endpoint",
+                                f"endpoint-{host}-{_port}-{_proto}", {
+                                    "url": f"https://{host}:{_port}",
+                                    "method": "GET", "params": "",
+                                    "proto": _proto,
+                                    "discovered_by": "bootstrap-api-probe",
+                            })
+                            log.info("API probe %s → identified as %s on port %d",
+                                     _path, _svc_name, _port)
+                            _identified = True
+                            break
+                    except Exception:
+                        continue
 
         # Probe HTTP ports discovered by nmap (parallel)
         # Exclude SSH, AD, and DB ports (not HTTP)
@@ -1268,7 +1349,14 @@ class Orchestrator:
                             pts = fl.split()
                             if len(pts) >= 2 and pts[1].isdigit():
                                 st = int(pts[1])
-                        if st != 404 and len(out) > 50:
+                        # Only register CMS endpoints that return actual content
+                        # (2xx/3xx) or auth-required responses (401/403).
+                        # Exclude 400, 404, 405, 5xx — these are error pages, not
+                        # real CMS endpoints (e.g. ingress-nginx returns 400 for
+                        # unrecognized paths, which looks like a hit but isn't).
+                        _is_content = 200 <= st < 400
+                        _is_auth_wall = st in (401, 403)
+                        if (_is_content or _is_auth_wall) and len(out) > 50:
                             self.dkg.add_node("Endpoint", f"ep-cms-{path.replace('/','-')[:30]}", {
                                 "url": f"{base}{path}", "method": "GET", "params": "",
                                 "sample_status": st, "sample_response": out[:2000],
@@ -2759,6 +2847,19 @@ class Orchestrator:
                         return {"shell_exec"}
                     if "memcached" in svc_name:
                         return {"shell_exec"}
+                    # K8s / cloud services — recognized with dedicated tools.
+                    # Service names come from nmap fingerprints, openssl CN
+                    # probes, or API fingerprint matching.
+                    # IMPORTANT: check more-specific names BEFORE broader ones
+                    # (kubernetes-admission before kubernetes).
+                    if "etcd" in svc_name:
+                        return {"etcdctl_get", "k8s_etcd_keys", "shell_exec"}
+                    if "kubernetes-admission" in svc_name:
+                        # Admission webhook: HTTP endpoint accepting AdmissionReview
+                        # JSON. Uses send_payload/curl_get, not kubectl tools.
+                        return {"send_payload", "curl_get", "shell_exec"}
+                    if "kubernetes" in svc_name or "kubelet" in svc_name:
+                        return {"kubectl_auth_check", "kubelet_probe", "k8s_kubelet_exec", "shell_exec"}
                     # Active Directory / Windows services — recognizable but no
                     # generic protocol tools in the current VULN_TOOL_MAP.
                     # Return empty set so systematic pass skips these vulns
@@ -2790,16 +2891,15 @@ class Orchestrator:
             if jar:
                 session_cookies = "; ".join(f"{c.key}={c.value}" for c in jar)
 
-        # Sort vulns: mapped first, then unmapped, so useful ones get processed
-        mapped_vulns = []
-        unmapped_vulns = []
-        for v in vulns:
-            vt = (v.get("vuln_type") or "").lower()
-            if _resolve_tools(vt):
-                mapped_vulns.append(v)
-            else:
-                unmapped_vulns.append(v)
-        vulns_sorted = mapped_vulns + unmapped_vulns
+        # Sort vulns: LLM-suggested tools first (they have correct args),
+        # then other mapped vulns, then unmapped. This prevents vulns
+        # without tool_args from poisoning the dedup cache before vulns
+        # that DO have LLM-provided args get a chance to run.
+        llm_vulns = [v for v in vulns if v.get("suggested_tool")]
+        other_mapped = [v for v in vulns if v not in llm_vulns
+                       and _resolve_tools((v.get("vuln_type") or "").lower())]
+        unmapped_vulns = [v for v in vulns if v not in llm_vulns and v not in other_mapped]
+        vulns_sorted = llm_vulns + other_mapped + unmapped_vulns
 
         # Summarize
         vuln_type_counts: dict[str, int] = {}
@@ -2809,7 +2909,7 @@ class Orchestrator:
                 vuln_type_counts[vt] = vuln_type_counts.get(vt, 0) + 1
         mapped_counts = {vt: c for vt, c in vuln_type_counts.items() if _resolve_tools(vt)}
         unmapped_counts = {vt: c for vt, c in vuln_type_counts.items() if not _resolve_tools(vt)}
-        print(f"[systematic] {len(vulns)} vulns: {len(mapped_vulns)} mapped, {len(unmapped_vulns)} unmapped")
+        print(f"[systematic] {len(vulns)} vulns: {len(llm_vulns) + len(other_mapped)} mapped ({len(llm_vulns)} LLM-suggested), {len(unmapped_vulns)} unmapped")
         print(f"[systematic]   mapped types: {mapped_counts}")
         print(f"[systematic]   unmapped types: {unmapped_counts}")
         if session_cookies:
@@ -2836,8 +2936,19 @@ class Orchestrator:
                 continue
 
             tools = _resolve_tools(vt)
-            # For non-HTTP endpoints, filter to protocol-matching tools only
-            if not endpoint.startswith("http://") and not endpoint.startswith("https://"):
+
+            # Always check protocol detection first — this handles services
+            # that use HTTP-like URIs but aren't web servers (etcd, K8S API,
+            # kubelet). Protocol detection is driven by DKG Service node names,
+            # which come from nmap fingerprints / openssl CN probes, so it
+            # works regardless of port number.
+            # When detection succeeds, use protocol-specific tools INSTEAD of
+            # the generic VULN_TOOL_MAP list (not intersected — the protocol
+            # detection is more specific and authoritative).
+            detected = _detect_proto_from_service(endpoint, self.dkg)
+            if detected is not None:
+                tools = sorted(detected)
+            elif not endpoint.startswith("http://") and not endpoint.startswith("https://"):
                 # Map endpoint proto to matching tools
                 _ALL_PROTOCOL_TOOLS = {"redis_cmd", "ssh_exec", "ssh_key_exec",
                                        "mysql_query", "psql_query", "mssql_query",
@@ -2861,16 +2972,11 @@ class Orchestrator:
                 if matched is not None:
                     tools = [t for t in tools if t in matched]
                 else:
-                    # No URI scheme — detect protocol from DKG Service node by port
-                    detected = _detect_proto_from_service(endpoint, self.dkg)
-                    if detected is not None:
-                        tools = [t for t in tools if t in detected]
-                    else:
-                        # Unknown protocol (not in the 8 known service types).
-                        # Strip ALL protocol-specific tools — only keep generic
-                        # shell_exec which can run arbitrary commands. Prevents
-                        # mysql_query on Kerberos, redis_cmd on LDAP, etc.
-                        tools = [t for t in tools if t == "shell_exec"]
+                    # Unknown protocol (not in the 8 known service types).
+                    # Strip ALL protocol-specific tools — only keep generic
+                    # shell_exec which can run arbitrary commands. Prevents
+                    # mysql_query on Kerberos, redis_cmd on LDAP, etc.
+                    tools = [t for t in tools if t == "shell_exec"]
                 if not tools:
                     continue
             else:
@@ -2883,11 +2989,15 @@ class Orchestrator:
                 }
                 tools = [t for t in tools if t not in _NON_HTTP_PROTOCOL_TOOLS]
 
-            # LLM-suggested tool from analysis — always extract, use if present
+            # Inject LLM-suggested tool from vulnerability analysis if present.
+            # The LLM may have correctly identified a tool that VULN_TOOL_MAP
+            # doesn't know about (e.g. etcdctl_get for etcd AuthBypass).
             llm_tool = v.get("suggested_tool", "") or ""
             llm_args = v.get("tool_args", {}) or {}
             if not isinstance(llm_args, dict):
                 llm_args = {}
+            if llm_tool and llm_tool not in tools:
+                tools = [llm_tool] + list(tools)
             if not tools:
                 # No hardcoded mapping — use LLM suggestion as primary
                 if llm_tool:
@@ -2903,8 +3013,6 @@ class Orchestrator:
                 dedup_key = (tool_name, endpoint, param)
                 if dedup_key in tried:
                     continue
-                tried.add(dedup_key)
-                tested_count += 1
 
                 # Build args: start with defaults, merge LLM-suggested overrides
                 args: dict = {}
@@ -2989,6 +3097,13 @@ class Orchestrator:
                             f"got {sorted(_arg_keys)})"
                         )
                         continue
+
+                # Only count as tried once schema check passes — prevents
+                # vulns without LLM args from poisoning the dedup cache for
+                # vulns that DO have correct args (e.g. XSS vuln processed
+                # before AuthBypass vuln, both on same etcd endpoint).
+                tried.add(dedup_key)
+                tested_count += 1
 
                 try:
                     cookie_note = " [with auth]" if session_cookies else ""
@@ -4532,6 +4647,60 @@ class Orchestrator:
             if not isinstance(t, dict):
                 continue
             tool = str(t.get("tool", "")).strip()
+
+            # ── Post-generation tool inference ─────────────────────
+            # When the plan LLM leaves tool empty, infer the correct
+            # dedicated tool from the DKG service name.  This prevents
+            # the execution LLM from defaulting to shell_exec for tasks
+            # that have a clearly matching service (etcd, K8S, etc.).
+            if not tool:
+                _instr = (t.get("instruction", "") or "").lower()
+                for _svc in self.dkg.query_nodes("Service"):
+                    _svc_name = (_svc.get("service_name", "") or "").lower()
+                    _svc_port = str(_svc.get("port", ""))
+                    if not _svc_name:
+                        continue
+                    # Build params from DKG service data
+                    _svc_params: dict = {}
+                    if _svc_port:
+                        _ep = f"localhost:{_svc_port}"
+                        _svc_params["host"] = "localhost"
+                        _svc_params["port"] = int(_svc_port)
+                    if "etcd" in _svc_name:
+                        # Pick most specific tool: key listing vs value reading
+                        if any(kw in _instr for kw in ("key", "enum", "list", "all", "prefix")):
+                            tool = "k8s_etcd_keys"
+                        else:
+                            tool = "etcdctl_get"
+                        _svc_params["endpoint"] = f"https://{_ep}"
+                        _svc_params["insecure"] = True
+                        _svc_params["key"] = "/"
+                    elif "kubernetes-admission" in _svc_name:
+                        # Admission webhook — HTTP JSON API, not kubectl
+                        tool = "send_payload"
+                        _svc_params["url"] = f"https://{_ep}"
+                    elif "kubernetes" in _svc_name:
+                        if "secret" in _instr:
+                            tool = "kubectl_get_secrets"
+                        elif "pod" in _instr:
+                            tool = "kubectl_get_pods"
+                        else:
+                            tool = "kubectl_auth_check"
+                    elif "kubelet" in _svc_name:
+                        if "exec" in _instr or "command" in _instr:
+                            tool = "k8s_kubelet_exec"
+                        else:
+                            tool = "kubelet_probe"
+                    # Merge inferred params into existing params (don't overwrite)
+                    if _svc_params:
+                        _existing = dict(t.get("params", {}) if isinstance(t.get("params"), dict) else {})
+                        for _k, _v in _svc_params.items():
+                            _existing.setdefault(_k, _v)
+                        t["params"] = _existing
+                    if tool:
+                        t["tool"] = tool
+                        break  # first matching service wins
+
             _params = t.get("params", {}) if isinstance(t.get("params"), dict) else {}
             _task_port = str(_params.get("port", ""))
             # LLM sometimes puts port in host (e.g. "localhost:10119")

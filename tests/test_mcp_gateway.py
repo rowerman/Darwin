@@ -9,22 +9,25 @@ class TestParamAliasesConstant:
 
     def test_all_aliases_are_string_pairs(self):
         """Every entry maps a string alias to a string canonical."""
-        for alias, canonical in _PARAM_ALIASES.items():
+        for alias, canonical_list in _PARAM_ALIASES.items():
             assert isinstance(alias, str)
-            assert isinstance(canonical, str)
-            assert alias != canonical, f"Alias '{alias}' must differ from canonical"
+            assert isinstance(canonical_list, list), \
+                f"Alias '{alias}' value must be a list, got {type(canonical_list)}"
+            for c in canonical_list:
+                assert isinstance(c, str)
+                assert alias != c, f"Alias '{alias}' must differ from canonical '{c}'"
 
     def test_host_to_target_alias(self):
-        assert _PARAM_ALIASES["host"] == "target"
+        assert _PARAM_ALIASES["host"] == ["target"]
 
     def test_url_to_target_url_alias(self):
-        assert _PARAM_ALIASES["url"] == "target_url"
+        assert "target_url" in _PARAM_ALIASES["url"]
 
     def test_username_to_user_alias(self):
-        assert _PARAM_ALIASES["username"] == "user"
+        assert _PARAM_ALIASES["username"] == ["user"]
 
     def test_pass_to_password_alias(self):
-        assert _PARAM_ALIASES["pass"] == "password"
+        assert _PARAM_ALIASES["pass"] == ["password"]
 
     def test_no_command_query_alias(self):
         """command and query are semantically different — no alias between them."""

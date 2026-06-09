@@ -21,31 +21,33 @@ from typing import Any, Callable, Dict, List, Optional
 # An alias is ONLY applied when the canonical name exists in the tool's
 # declared parameter schema, preventing false matches (e.g. command→query
 # on ssh_exec, which legitimately expects 'command').
-_PARAM_ALIASES: Dict[str, str] = {
-    # URL / target concept — 4 LLM names for the same thing
-    "url":        "target_url",
-    "ssrf_url":   "target_url",
-    "endpoint":   "target_url",
+_PARAM_ALIASES: Dict[str, list[str]] = {
+    # URL / target concept — 4 LLM names for the same thing.
+    # Each alias maps to a PRIORITY-ORDERED list — first canonical
+    # that exists in the tool's declared parameters wins.
+    "url":        ["target_url", "file_path"],
+    "ssrf_url":   ["target_url"],
+    "endpoint":   ["target_url"],
 
     # Host / target concept
-    "host":       "target",
-    "server":     "host",
-    "hostname":   "host",
-    "dc_ip":      "target",
+    "host":       ["target"],
+    "server":     ["host"],
+    "hostname":   ["host"],
+    "dc_ip":      ["target"],
 
     # Username concept
-    "username":   "user",
-    "login":      "user",
+    "username":   ["user"],
+    "login":      ["user"],
 
     # Password concept
-    "pass":       "password",
-    "passwd":     "password",
-    "pwd":        "password",
+    "pass":       ["password"],
+    "passwd":     ["password"],
+    "pwd":        ["password"],
 
     # Request body / data
-    "body":       "data",
-    "post_data":  "data",
-    "json_body":  "data",
+    "body":       ["data"],
+    "post_data":  ["data"],
+    "json_body":  ["data"],
 }
 
 # Substring auto-correction thresholds
@@ -226,17 +228,22 @@ class MCPGateway:
         tool_params = entry.parameters  # declared parameter schema dict
 
         # Phase 1: apply explicit aliases
-        for alias, canonical in _PARAM_ALIASES.items():
-            if (
-                canonical in tool_params
-                and canonical not in normalized
-                and alias in normalized
-            ):
-                val = normalized[alias]
-                # Compose host:port → target when both are provided
-                if alias == "host" and "port" in normalized:
-                    val = f"{val}:{normalized['port']}"
-                normalized[canonical] = val
+        for alias, canonical_list in _PARAM_ALIASES.items():
+            if alias not in normalized:
+                continue
+            # Try each canonical name in priority order — first one
+            # that exists in the tool's declared parameters wins.
+            for canonical in canonical_list:
+                if (
+                    canonical in tool_params
+                    and canonical not in normalized
+                ):
+                    val = normalized[alias]
+                    # Compose host:port → target when both are provided
+                    if alias == "host" and "port" in normalized:
+                        val = f"{val}:{normalized['port']}"
+                    normalized[canonical] = val
+                    break  # only apply the first matching canonical
 
         # Phase 2: handle 'anonymous' flag — set empty credentials
         if normalized.pop("anonymous", None) is True:
@@ -251,18 +258,24 @@ class MCPGateway:
         #     e.g.  provided "url"  →  declared "target_url"
         #     (only when key ≥ _SUBSTRING_MIN_LEN chars AND
         #      key ≥ _SUBSTRING_MIN_RATIO of declared param length)
+        #
+        # CRITICAL: skip candidates that are themselves declared params
+        # of this tool.  Otherwise "key" (etcd key path) matches "tls_key"
+        # (TLS key file path) and corrupts the etcd call.
         for declared_param in list(tool_params.keys()):
             if declared_param not in normalized:
                 # Direction 1: declared param is substring of provided key
                 candidates = [
                     k for k in normalized
                     if declared_param in k and k != declared_param
+                    and k not in tool_params
                 ]
                 # Direction 2: provided key is substring of declared param
                 if not candidates:
                     candidates = [
                         k for k in normalized
                         if k in declared_param and k != declared_param
+                        and k not in tool_params
                         and len(k) >= _SUBSTRING_MIN_LEN
                         and len(k) >= len(declared_param) * _SUBSTRING_MIN_RATIO
                     ]

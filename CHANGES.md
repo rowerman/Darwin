@@ -1,3 +1,73 @@
+## 2026-06-09 (CVE-2025-1974 RAG precision + kubernetes-admission tool set fix)
+
+- **knowledge/cloud/k8s_networking_exploitation.json** `k8s-ingress-nginx-rce`: RAG 条目从概念性描述升级为精确利用指南。新增：具体的 `nginx.ingress.kubernetes.io/ssl-engine` 注解键名、`data:application/octet-stream;base64,{B64}` 编码格式、完整 AdmissionReview JSON 结构（uid/kind/operation=CREATE/oldObject=null）、.so 编译与 base64 编码命令、/tmp/flag.txt flag 位置。Techniques 从 5 条扩展到 8 条精确步骤。Tools 从 `kubectl_auth_check` 改为 `send_payload`。
+- **darwin/orchestrator.py** `_detect_proto_from_service` + `_sanitize_plan_tools`: 新增 `kubernetes-admission` 服务名优先匹配（在 `kubernetes` 之前），返回 `{send_payload, curl_get, shell_exec}` 而非 kubectl 工具集。修复 admission webhook 被分配 kubectl/kubelet 工具导致的 systematic pass schema mismatch。
+- **验证**: pytest 147 passed, import OK, RAG 检索验证通过
+
+## 2026-06-09 (admission webhook API probe + POST-based service identification)
+
+- **darwin/orchestrator.py** `_bootstrap_scan` Phase 2: API 指纹系统从纯 GET 扩展为支持 HTTP method + POST body。`_API_FINGERPRINTS` 新增 admission webhook 条目：POST `/validate` 发送 `AdmissionReview` JSON，服务器响应即识别为 `kubernetes-admission`。K8S-20 场景的 `O=nil2` 占位证书无法通过 CN 识别，依赖此 POST 探针。
+- **darwin/orchestrator.py** `_bootstrap_scan` Phase 1: openssl 证书探测扩展到提取 CN/O/OU/subject line，新增 `ingress`/`nginx` 关键词匹配→识别为 `ingress-nginx`。
+- **darwin/tools/recon_server.py** `gobuster_dir`: 从 v3.x 语法 `gobuster dir -u` 改为 v1.x 语法 `gobuster -u -m dir`，匹配系统实际安装版本。添加 `-k`。
+- **验证**: pytest 147 passed, import OK, gobuster exit 0, admission webhook POST probe 确认可用
+
+## 2026-06-09 (openssl cert: broaden K8S service identification)
+
+- **darwin/orchestrator.py** `_bootstrap_scan` Phase 1: openssl 证书探测从仅匹配 `CN=` 扩展到提取 O=/OU=/完整 subject line，新增 `ingress`/`nginx` 关键词匹配→识别为 `ingress-nginx`。修复 K8S-20 (ingress-nginx admission controller) 证书被标记为 "ssl/unknown" → RAG 查询关键词不包含 K8S/ingress → CVE-2025-1974 知识无法检索的问题。注意：使用占位证书 (`O=nil2`) 的部署场景仍需额外机制。
+- **darwin/tools/recon_server.py** `gobuster_dir`: 从 v3.x 语法 `gobuster dir -u` 改为 v1.x 语法 `gobuster -u -m dir`，匹配系统实际安装版本。添加 `-k`。
+
+## 2026-06-09 (fix CMS false positives + param aliases + gobuster TLS)
+
+- **darwin/orchestrator.py** `_deep_recon._probe_cms`: CMS 路径探测改为只注册返回实际内容（2xx/3xx）或需要认证（401/403）的端点。排除 400/404/405/5xx 错误页。修复 ingress-nginx admission controller 返回 400 时 `/wp-admin/` 等路径被注册为有效 WordPress 端点的误报——LLM 据此错误推断目标是 WordPress，生成 12 个无效 task。
+- **darwin/tools/mcp_gateway.py** `_PARAM_ALIASES`: 从 `Dict[str, str]` 改为 `Dict[str, list[str]]`——每个别名映射到优先级排序的 canonical 名列表。`url` 现在映射到 `["target_url", "file_path"]`，先匹配 `target_url`（web 工具），回退到 `file_path`（php_filter_chain）。修复 php_filter_chain 的 Template format error（LLM 传 `url` 但工具需要 `file_path`）。
+- **darwin/tools/recon_server.py** `gobuster_dir`: 命令模板从 v3.x 语法 `gobuster dir -u ... -w ...` 改为 v1.x 语法 `gobuster -u ... -w ... -m dir`，匹配系统实际安装的 gobuster 版本。添加 `-k` 跳过 TLS 验证。修复 gobuster 被 blacklist 的问题（两个版本 CLI 参数格式完全不兼容）。
+- **darwin/tests/test_mcp_gateway.py**: 测试断言适配新的 list 格式。
+- **验证**: pytest 147 passed, import OK
+
+## 2026-06-09 (bootstrap: HTTP API probe for unknown services)
+
+- **darwin/orchestrator.py** `_bootstrap_scan`: openssl CN 探测扩展为两阶段服务识别——Phase 1 保留 TLS CN 提取（HTTPS etcd/K8S），Phase 2 新增 HTTP API 指纹探测（plain-HTTP etcd）。对于 nmap 报告 "unknown" 的端口，先尝试 openssl，失败后 curl GET `/version` 检查 `"etcdserver"`/`"etcdcluster"` 响应。`_API_FINGERPRINTS` 列表支持扩展新服务类型。修复 K8S-08 改用非 TLS etcd 后 nmap 无法识别、DKG service_name 为空的问题。泛用：基于 HTTP API 响应特征匹配，不硬编码端口。
+- **验证**: pytest 147 passed, import OK
+
+## 2026-06-09 (fix substring param corruption: key→tls_key)
+
+- **darwin/tools/mcp_gateway.py** `_normalize_params` Phase 3: 子串模糊匹配新增 `k not in tool_params` 守卫——防止已存在于工具声明参数中的 key 名被错误映射到包含它的其他声明参数。修复了 `etcdctl_get` 的 `key="/"`（etcd key 路径）被映射到 `tls_key="/"`（TLS 密钥文件路径），导致 etcdctl 报错 "KeyFile and CertFile must both be present" 的 bug。泛用：防止所有工具的 `key`/`host`/`port` 等短参数名被误匹配到 `tls_key`/`hostname`/`report` 等长参数名。
+- **验证**: pytest 147 passed, import OK, 手动验证 normalized params 不再含 tls_key
+
+## 2026-06-09 (fix LLM shell_exec overuse — description + tool inference)
+
+- **darwin/tools/attack_server.py** `shell_exec`: 修改描述——删除 "any task not covered by specialized tools"，明确标注 "LOCAL DARWIN host (NOT the target)"，加入 "Do NOT substitute shell_exec to run etcdctl/kubectl/ssh locally"。修复 LLM 在执行 etcd 等远程服务 task 时回退到 shell_exec 搜索本地文件系统的问题。
+- **darwin/orchestrator.py** `_sanitize_plan_tools`: 新增 post-generation 工具推断——当 plan 中 task 的 `tool` 字段为空时，从 DKG Service 节点的 service_name 推断正确的专用工具。etcd→k8s_etcd_keys/etcdctl_get, kubernetes→kubectl_get_secrets/kubectl_get_pods, kubelet→kubelet_probe/k8s_kubelet_exec。自动填充 params（endpoint, insecure, key, host, port）。泛用：基于服务名而非场景。
+- **darwin/orchestrator.py** `_systematic_exploit_pass`: 修复 dedup 缓存污染——`tried.add()` 移到 schema 检查之后。Vuln 排序改为 LLM 建议工具优先。
+- **验证**: pytest 147 passed, import OK
+
+## 2026-06-09 (systematic pass: add etcd/K8S protocol detection + LLM tool injection)
+
+- **darwin/orchestrator.py** `_systematic_exploit_pass`: 修复 dedup 缓存污染 bug——`tried.add()` 从 schema 检查之前移到之后。之前：无 LLM args 的 XSS vuln 先被处理→协议检测返回 etcd 工具→schema mismatch skip→但已加入 `tried`→后续有正确 llm_args 的 AuthBypass vuln 被 dedup 跳过。现在只在 schema 检查通过后才标记为已尝试。
+- **darwin/orchestrator.py** `_systematic_exploit_pass`: vuln 排序改为 LLM 建议工具优先→其他已映射→未映射。确保有正确 `tool_args` 的 vuln 先执行。
+- **验证**: pytest 147 passed, import OK
+
+## 2026-06-09 (systematic pass: add etcd/K8S protocol detection + LLM tool injection)
+
+- **darwin/orchestrator.py** `_detect_proto_from_service`: 新增 etcd/kubernetes/kubelet 服务名检测——从 DKG Service 节点获取 nmap/openssl CN 识别到的服务名，返回对应专用工具集。etcd→`{etcdctl_get, k8s_etcd_keys, shell_exec}`，kubernetes/kubelet→`{kubectl_auth_check, kubelet_probe, k8s_kubelet_exec, shell_exec}`。基于服务名而非端口号，适应 1xxxx benchmark 端口映射。
+- **darwin/orchestrator.py** `_systematic_exploit_pass`: 协议检测提升到 HTTP/non-HTTP 分支之前——修复了 `https://` scheme 的 etcd/K8S API 端点被错误识别为 HTTP 服务器、过滤掉 `shell_exec`/`etcdctl_get` 等专用工具的 bug。LLM 建议的工具（`suggested_tool`）现在被注入到工具列表首位，不再仅在 VULN_TOOL_MAP 为空时才生效。
+- **验证**: pytest 147 passed, import OK
+
+## 2026-06-09 (NET/K8S 工具与知识缺口补齐)
+
+- **darwin/tools/attack_server.py** `tcpdump_capture`: 新增网络包捕获工具——封装 tcpdump 支持 BPF 过滤器。覆盖 NET-01 (ARP spoofing, filter='arp'), NET-02 (DNS exfiltration, filter='udp port 53'), NET-03 (credential sniffing, filter='tcp port 80'), K8S-22 (ExternalIP hijack), K8S-24 (kube-proxy bypass)。默认 30 秒捕获、ASCII 输出。
+- **darwin/tools/attack_server.py** `crictl_cmd`: 新增 CRI 运行时交互工具——封装 crictl 操作 containerd/CRI-O。覆盖 K8S-16 (CRI socket escape)。支持 actions: pods/ps/inspect/exec/images/pull。
+- **darwin/tools/attack_server.py** `nsenter_exec`: 新增主机命名空间逃逸工具——封装 nsenter 进入 host namespace 执行命令。覆盖 K8S-11 (privileged breakout), K8S-14 (CAP_SYS_ADMIN), K8S-23 (hostPID)。默认 target_pid=1。
+- **knowledge/network/dns_exfiltration.json** (新建): 3 个知识条目——DNS 数据外泄检测 (hex 解码还原)、Docker bridge 网络 Token 嗅探与重放、ARP 欺骗 MITM 凭据拦截。覆盖 NET-01/02/03 场景的知识缺口。
+- **验证**: pytest 147 passed, JSON valid, import OK, 3 新工具全部注册成功 (总工具数 100→103)
+
+## 2026-06-09 (etcd TLS support + knowledge update)
+
+- **darwin/tools/attack_server.py** `etcdctl_get`: 从 `register_shell_tool` 转换为 `register` Python 函数，添加 TLS 支持。HTTPS 端点自动追加 `--insecure-skip-tls-verify`（可设 `insecure=false` 关闭）。新增 `cacert`/`cert`/`tls_key` 参数支持 mutual TLS。解决 K8S-08 实验中 etcd TLS 导致工具无法连接的问题。
+- **darwin/tools/attack_server.py** `k8s_etcd_keys`: 添加相同的 TLS 参数支持（`insecure`/`cacert`/`cert`/`tls_key`）。修复 `success` 始终为 True 的 bug——现在反映实际 exit code。
+- **knowledge/cloud/k8s_escape_techniques.json** `k8s-etcd-navigation`: 更新 etcd 知识条目——添加 `--insecure-skip-tls-verify` 技术用于无客户端证书的 HTTPS etcd，添加 HTTPS probe 命令（`curl -sk`），添加回退技术（搜索文件系统上的 etcd 证书，通过 kubeconfig 使用 kubectl）。
+- **验证**: pytest 147 passed, import OK
+
 ## 2026-06-08 (pivot threshold fix + plan exhaustion IAM escalation context)
 
 - **darwin/orchestrator.py** `_review_and_update_plan`: pivot 条件新增 `_all_clean` OR 分支——当所有 task 完成（≥7）且零失败但无 flag 时也触发 ATTACK SURFACE EXHAUSTION。修复了 CLOUD-02 实验中 8/8 tasks 全部成功导致 pivot 从未触发（原条件要求 ≥3 failures）的 bug。通用：纯定量统计。

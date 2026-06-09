@@ -6,35 +6,52 @@
       "is_reachable": true,
       "is_internal": false,
       "type": "Host",
-      "created_at": "2026-06-08T15:47:54.253644",
-      "updated_at": "2026-06-08T15:47:54.253658",
+      "created_at": "2026-06-09T16:39:26.753954",
+      "updated_at": "2026-06-09T16:39:26.753981",
       "_version": 1
     },
     {
-      "id": "svc-localhost-11379",
-      "port": 11379,
+      "id": "svc-localhost-10443",
+      "port": 10443,
       "protocol": "tcp",
-      "version": "etcd",
-      "banner": "CN=cve-k8s-08-etcd-control-plane",
-      "service_name": "etcd",
+      "version": "kubernetes-admission",
+      "banner": "",
+      "service_name": "kubernetes-admission",
       "type": "Service",
-      "created_at": "2026-06-08T15:47:54.282704",
-      "updated_at": "2026-06-08T15:47:54.282723",
-      "_version": 2
+      "created_at": "2026-06-09T16:39:26.864837",
+      "updated_at": "2026-06-09T16:39:29.647303",
+      "_version": 3,
+      "fingerprint": [
+        "127.0.0.1"
+      ]
     },
     {
-      "id": "endpoint-localhost-11379-etcd",
-      "url": "https://localhost:11379",
+      "id": "endpoint-localhost-10443-kubernetes",
+      "url": "https://localhost:10443",
       "method": "GET",
       "params": "",
-      "proto": "etcd",
-      "discovered_by": "bootstrap-openssl",
+      "proto": "kubernetes",
+      "discovered_by": "bootstrap-api-probe",
       "type": "Endpoint",
-      "created_at": "2026-06-08T15:47:54.282764",
-      "updated_at": "2026-06-08T15:47:54.282767",
+      "created_at": "2026-06-09T16:39:26.864958",
+      "updated_at": "2026-06-09T16:39:26.864966",
+      "_version": 1
+    },
+    {
+      "id": "ep-http://localhost:10443",
+      "url": "http://localhost:10443",
+      "method": "GET",
+      "params": "",
+      "sample_status": 400,
+      "sample_response": "HTTP/1.0 400 Bad Request\r\n\r\nClient sent an HTTP request to an HTTPS server.\n",
+      "response_size": 76,
+      "discovered_by": "bootstrap",
+      "type": "Endpoint",
+      "created_at": "2026-06-09T16:39:29.615446",
+      "updated_at": "2026-06-09T16:39:29.615476",
       "_version": 1
     }
   ],
   "edges": [],
-  "created_at": "2026-06-08T15:47:33.908627"
+  "created_at": "2026-06-09T16:37:52.681694"
 }
