@@ -1,3 +1,59 @@
+## 2026-06-10 (reliable ssh_exec→shell_exec + CVE-2024-6387 block)
+
+- **darwin/orchestrator.py** `_sanitize_plan_tools` ssh_exec→shell_exec: 检测从仅检查 command 内容扩展为同时检查 instruction 关键词（batch-test, credential, sshpass, brute force 等）。LLM 有时把脚本放在 instruction 中而 command 简短，仅检查 command 内容无法命中。现在 instruction 含凭证测试信号即无条件切换。
+- **darwin/orchestrator.py** `_sanitize_plan_tools`: 新增 CVE-2024-6387 (regreSSHion) 任务屏蔽。此漏洞是复杂的 pre-auth 竞态条件利用，在每个 SSH 场景上浪费 5+ 分钟。task instruction 含 "cve-2024-6387" 或 "regresshion" 即标记 skipped。
+- **验证**: pytest 147 passed, import OK
+
+## 2026-06-10 (K8S cluster discovery: data_model preserves all Host fields + Analysis node fix)
+
+- **darwin/data_model.py** `normalize_dkg_state`: Host 节点提取从白名单三字段（ip/os/is_internal）改为**泛用透传所有字段**（排除 type/id）。K8S/AD/cloud 等发现模块添加的任何元数据现在都会自动出现在 PipelineState 中，无需修改此函数。
+- **darwin/data_model.py** `to_prompt_context` Hosts 渲染：改为泛用模式——标准字段（ip/os/is_internal）内联显示，所有非标准字段以 key=value 列表形式追加。K8S node labels/taints/name、AD domain 角色等元数据自动可见。
+- **darwin/orchestrator.py** `_k8s_cluster_discovery` Analysis 节点：`detail` → `content`，新增 `phase: "analyze"`。之前 `normalize_dkg_state` 只提取 `phase in ("analyze", "service_research")` 的 `content` 字段——K8S 集群摘要被静默丢弃，LLM 在 analyze 阶段看不到任何 K8S 上下文。
+- **darwin/orchestrator.py** `_bootstrap_scan`: 新增 `_BOOTSTRAP_PORT_BLACKLIST` 端口黑名单机制——nmap 结果在写入 DKG 前过滤。当前黑名单：`12149`（VS Code port forwarding）。黑名单端口不创建 Host/Service/Endpoint 节点，不对 LLM 暴露。
+- **验证**: pytest 147 passed, K8S node labels 确认出现在 to_prompt_context 输出中
+
+## 2026-06-10 (ssh_exec port param + fix-and-retry params merge)
+
+- **darwin/tools/attack_server.py** `ssh_exec`: 命令模板新增 `-p {port}`，参数新增 `port`（integer, default 22）。之前 `ssh_exec` 永远连接默认端口 22——当靶机 SSH 在非标准端口（如 NET-03:10903）时，`ssh_exec` 连错端口，"Permission denied" 来自错误的宿主机 SSH 而非靶机。`shell_exec`（python+sshpass）能手动指定端口所以 task-1 成功发现凭证，但 task-2 的 `ssh_exec` 无 port 参数所以失败。
+- **darwin/orchestrator.py** `_analyze_and_fix_task`: `corrected_params` 从**替换全部**改为**合并到现有 params**（`{**task["params"], **fix["corrected_params"]}`）。之前 LLM 返回只含被纠正字段（如 username/password），替换导致 host/command 等字段丢失，retry 连目标主机都找不到。
+- **验证**: pytest 147 passed, import OK, ssh_exec 模板确认 `-p 10903 attacker@localhost` 正确生成
+
+## 2026-06-10 (block brute-force in systematic pass + prevent SSH-in-shell_exec hangs)
+
+- **darwin/orchestrator.py** `_systematic_exploit_pass`: LLM-suggested tool 注入前检查 `_BLACKLISTED_TOOLS`。之前 `hydra_ssh_brute`/`hydra_http_brute` 被 LLM 放入 `suggested_tool` 字段后，直接被 prepend 到 tools list 并执行——systematic pass 没有走 `_sanitize_plan_tools` 的黑名单过滤路径。120s 超时 + 1 次 180s retry 共浪费 5 分钟。
+- **darwin/orchestrator.py** `_sanitize_plan_tools`: 新增 `shell_exec` 命令内容检测——当 `command` 以 `ssh`/`sshpass`/`ssh-copy-id` 开头时，解析连接参数（host/port/user/password）并替换为 `ssh_exec`。之前 LLM 在 task 中用 `shell_exec` 跑原始 `ssh` 命令，触发交互式密码提示导致工具 60s 超时 hang。此 bug 之前多次修复但因缺乏代码层拦截反复出现。
+- **验证**: pytest 147 passed, import OK, SSH 检测逻辑通过单测
+
+## 2026-06-10 (auto-extract credentials from task stdout → DKG)
+
+- **darwin/orchestrator.py** 新增 `_extract_credentials_from_task()`: task 成功后自动扫描 stdout，regex 预过滤凭证模式（`SUCCESS user:pass` 等），命中后用 isolated classifier LLM session（deepseek-v4-flash, temp=0.1）提取结构化凭证对，写入 DKG Credential 节点 + CTEG。只处理 `shell_exec`/`ssh_exec`/`test_credential` 三种工具。修复 NET-03 场景 task-1 批量 SSH 测试发现 `attacker:password123` 后凭证留在非结构化 stdout 中、后续 task 无法通过 `$credentials.*` 占位符引用的问题。
+- **darwin/orchestrator.py** `_unified_llm_loop`: 新增 `_raw_task_stdouts` 列表收集完整 stdout（非截断），在 fix-and-retry 后、`_review_and_update_plan` 前调用凭证提取。
+- **验证**: pytest 147 passed, import OK, regex 预过滤确认捕获 `attacker:password123`
+
+## 2026-06-10 (SSH detection anywhere in command + session-aware network hint)
+
+- **darwin/orchestrator.py** `_sanitize_plan_tools` SSH-in-shell_exec 检测: 从仅检查首词改为 `\bssh\b` 正则扫描**全命令**。LLM 常在复合命令中嵌入 SSH（`cd X && ssh Y`、`bash -c 'ssh Y'`），之前只匹配首词导致遗漏。排除 echo/which/apt 等假阳性。
+- **darwin/orchestrator.py** `_sanitize_plan_tools`: 新增 Session-aware 网络发现提示。检测到 DKG 中有 Session 节点（SSH 已通）但 plan 中无网络发现任务（tcpdump/ip addr/ss/arp）时，自动注入一条 `ssh_exec` 任务：先执行 `ip addr && ss -tlnp`，并在 instruction 中提示"容器常共享 bridge 网络，flag 可能在其他容器间传输而非本地磁盘"。解决 NET-03 SSH 后 LLM 默认 `find / -name flag*` 而从不尝试 tcpdump 的问题。Session/Credential 参数自动从 DKG 查找。
+- **验证**: pytest 147 passed, import OK, 注入逻辑确认
+
+## 2026-06-10 (ssh_exec→shell_exec auto-correct for credential scripts)
+
+- **darwin/orchestrator.py** `_sanitize_plan_tools`: 新增 `ssh_exec→shell_exec` 自动纠正。当 `ssh_exec` 命令含 `sshpass`（本地凭证测试）或超过 200 字符且含 Python 关键字时，切换为 `shell_exec`。原因：`ssh_exec` 模板 `sshpass ... '{command}'` 把命令包在单引号里，Python 字符串常量（含引号）被 shell 破坏。LKX-03 task-1 批量 SSH 凭证测试因 `ssh_exec` 单引号包裹导致 Python 脚本语法错误，exit 2 无输出。（后被更泛用的检测替换）
+- **验证**: pytest 147 passed, import OK
+
+## 2026-06-10 (ssh_exec vs shell_exec tool selection — source fix + reliable safety net)
+
+- **darwin/prompts/orchestrator.py** Tool Selection Rules: 新增 Rule 6 — `ssh_exec` vs `shell_exec` 明确分工。`ssh_exec` 仅用于已有凭证的远程简单命令；`shell_exec` 用于本地凭证批量测试脚本。从源头阻止 plan LLM 在不知道凭证时把任务分配给 `ssh_exec`。
+- **darwin/orchestrator.py** `_sanitize_plan_tools`: 简化 `ssh_exec→shell_exec` 兜底检测，替换之前的 python/sshpass 关键词方案。新条件：命令含换行符（`\n`）、`sshpass`、或超 500 字符。三个信号可靠覆盖所有脚本类型，不依赖关键词猜测。
+- **验证**: pytest 147 passed, import OK
+
+## 2026-06-10 (K8S cluster discovery: kubectl enumeration in parallel with nmap)
+
+- **darwin/orchestrator.py** 新增 `_k8s_cluster_discovery()`: 无条件与 nmap 并行运行 kubectl 命令枚举 K8S 集群拓扑（nodes/pods/services/namespaces/permissions）。每次 bootstrap 都启动，无集群时静默跳过（<2s）。填充 DKG Host（含 labels/taints）、Service（ClusterIP）、Endpoint（API server）、Analysis 节点。修复 KIND 集群场景中 worker node 无端口映射导致 nmap 无法感知集群拓扑的问题。
+- **darwin/orchestrator.py** `_bootstrap_scan`: 新增 `asyncio.create_task(self._k8s_cluster_discovery())` 在 nmap 调用前启动，HTTP probe 完成后 await。两个数据源（nmap 端口映射 vs kubectl 集群拓扑）并行收集，互不阻塞。
+- **Fix**: 去掉 kubectl 命令中的 `| head -N` 管道——`kubectl get nodes/pods -o json` 输出被 head 截断（3 节点 JSON 24KB >150行），json.loads 静默失败导致 nodes/pods/namespaces 全部返回 0。仅 services（4KB）侥幸成功。只依赖 timeout 保护。
+- **验证**: pytest 147 passed, import OK, K8S-28 环境验证 nodes=3, pods=15, namespaces=6
+
 ## 2026-06-09 (CVE-2025-1974 RAG precision + kubernetes-admission tool set fix)
 
 - **knowledge/cloud/k8s_networking_exploitation.json** `k8s-ingress-nginx-rce`: RAG 条目从概念性描述升级为精确利用指南。新增：具体的 `nginx.ingress.kubernetes.io/ssl-engine` 注解键名、`data:application/octet-stream;base64,{B64}` 编码格式、完整 AdmissionReview JSON 结构（uid/kind/operation=CREATE/oldObject=null）、.so 编译与 base64 编码命令、/tmp/flag.txt flag 位置。Techniques 从 5 条扩展到 8 条精确步骤。Tools 从 `kubectl_auth_check` 改为 `send_payload`。

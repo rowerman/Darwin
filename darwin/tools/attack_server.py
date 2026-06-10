@@ -891,10 +891,11 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
 
     gateway.register_shell_tool(
         name="ssh_exec",
-        command_template="sshpass -p '{password}' ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 {username}@{host} '{command}' 2>&1",
+        command_template="sshpass -p '{password}' ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 -p {port} {username}@{host} '{command}' 2>&1",
         description="Execute a command on a remote host via SSH (requires username + password). Use for Linux privilege escalation checks (sudo -l, uname -a, id), file listing, flag hunting, and post-exploitation.",
         parameters={
             "host": {"type": "string", "description": "SSH target hostname or IP"},
+            "port": {"type": "integer", "description": "SSH port", "default": 22},
             "username": {"type": "string", "description": "SSH username", "default": "root"},
             "password": {"type": "string", "description": "SSH password", "default": ""},
             "command": {"type": "string", "description": "Command to execute on the remote host", "default": "id"},

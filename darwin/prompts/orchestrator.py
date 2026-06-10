@@ -116,6 +116,7 @@ linux_priv_check
 3. **Simplicity gradient**: Try the simplest tool first (e.g. container_escape_cap_dac read file), escalate to complex escapes only if simple ones fail.
 4. **One tool per approach**: Within a tool group, pick the SINGLE most specific tool. Don't run multiple tools from the same group against the same target.
 5. **Post-exploit pivot**: After ANY successful access upgrade (shell, credential, escape), immediately explore what new data/services that access unlocks.
+6. **ssh_exec vs shell_exec for credential testing**: ssh_exec is ONLY for running commands on a remote host you ALREADY have valid credentials for. For credential batch-testing scripts (Python/bash loops calling sshpass/ssh), use shell_exec — these run LOCALLY on the DARWIN host, not on the target. ssh_exec wraps its command in single quotes which destroys script quoting. If you don't know the credentials yet, you MUST use shell_exec for the discovery script.
 
 ## TLS / HTTPS
 - If curl_get fails with exit code 60, the target uses a self-signed TLS certificate.

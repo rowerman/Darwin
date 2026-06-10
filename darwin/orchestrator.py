@@ -662,6 +662,12 @@ class Orchestrator:
         self.target_host = host
 
         self._task_log_event("info", "bootstrap_nmap", host=host, port_range=port_range)
+        # Launch K8S cluster discovery in parallel with nmap.
+        # Both are independent data sources — nmap sees port mappings,
+        # kubectl sees cluster topology. Runs unconditionally; fails
+        # silently in <2s if no cluster exists.
+        k8s_discovery_task = asyncio.create_task(self._k8s_cluster_discovery())
+
         # Always include the target URL's port in the scan range
         target_port = parsed.port or (443 if parsed.scheme == "https" else 80)
         if port_range:
@@ -685,6 +691,20 @@ class Orchestrator:
                                 for p in common_ports]
             log.warning("nmap failed for %s, probing %d common HTTP ports",
                        host, len(common_ports))
+
+        # ── Port blacklist ────────────────────────────────────────────
+        # Filter out infrastructure ports (IDE port forwarding, SSH tunnels,
+        # debug proxies, etc.) that nmap discovers on localhost but are not
+        # part of the target scenario.
+        _BOOTSTRAP_PORT_BLACKLIST: set[int] = {
+            12149,  # VS Code port forwarding
+        }
+        _before = len(discovered_ports)
+        discovered_ports = [p for p in discovered_ports
+                            if p.get("port") not in _BOOTSTRAP_PORT_BLACKLIST]
+        if len(discovered_ports) < _before:
+            log.info("bootstrap: filtered %d blacklisted port(s), %d remaining",
+                     _before - len(discovered_ports), len(discovered_ports))
 
         # When nmap returns tcpwrapped for all ports (common in Docker
         # port-forwarding setups), detect whether the ports share a
@@ -1125,6 +1145,12 @@ class Orchestrator:
                          for u in api_endpoints_to_probe[:30]]
             await asyncio.gather(*api_tasks, return_exceptions=True)
 
+        # Wait for K8S cluster discovery (launched in parallel with nmap)
+        try:
+            await k8s_discovery_task
+        except Exception:
+            pass  # K8S discovery failure is non-fatal
+
         self._discovered_ports = discovered_ports
 
         # ── Bootstrap summary ─────────────────────────────────────────
@@ -1159,6 +1185,279 @@ class Orchestrator:
                 print(f"  DB credentials provided for: {', '.join(cred_parts)}")
 
         self.step_count += 1
+
+    # ── K8s Cluster Discovery (runs in parallel with nmap) ─────────
+
+    async def _k8s_cluster_discovery(self) -> None:
+        """Discover local K8S cluster topology independently of nmap.
+
+        Runs kubectl commands to enumerate nodes, pods, services, and
+        namespaces. Populates DKG with Host/Service/Endpoint/Analysis
+        nodes for discovered cluster resources. This is critical for
+        KIND-based scenarios where only the API server port is mapped
+        to localhost and the rest of the cluster is invisible to nmap.
+
+        Runs unconditionally — if kubectl is unavailable or no cluster
+        exists, fails silently in <2s. All commands have 8s timeouts.
+        """
+        import json as _json
+
+        # ── Step 1: Verify kubectl is available and a cluster is reachable ──
+        try:
+            proc = await asyncio.create_subprocess_shell(
+                "kubectl cluster-info 2>&1",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=8)
+            out = stdout.decode("utf-8", errors="replace")
+            if proc.returncode != 0 or "is running at" not in out:
+                return  # No K8S cluster available or kubectl not installed
+            api_match = re.search(r"is running at (https?://\S+)", out)
+            api_url = api_match.group(1) if api_match else ""
+            log.info("K8S cluster discovery: cluster reachable at %s", api_url)
+        except Exception:
+            return
+
+        # ── Step 2: Enumerate nodes (name, IP, labels, taints) ──
+        nodes_data: dict = {}
+        try:
+            proc = await asyncio.create_subprocess_shell(
+                "kubectl get nodes -o json 2>&1",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=8)
+            out = stdout.decode("utf-8", errors="replace")
+            if proc.returncode == 0:
+                nodes_data = _json.loads(out) if out.strip().startswith("{") else {}
+        except Exception:
+            pass
+
+        k8s_nodes: list[dict] = []
+        for item in nodes_data.get("items", []):
+            meta = item.get("metadata", {})
+            status = item.get("status", {})
+            node_info: dict = {
+                "name": meta.get("name", ""),
+                "labels": meta.get("labels", {}),
+                "taints": [],
+                "is_control_plane": False,
+                "internal_ip": "",
+            }
+            # Extract node IP
+            for addr in status.get("addresses", []):
+                if addr.get("type") == "InternalIP":
+                    node_info["internal_ip"] = addr.get("address", "")
+                    break
+            # Extract taints
+            for taint in item.get("spec", {}).get("taints", []):
+                node_info["taints"].append(
+                    f"{taint.get('key','')}={taint.get('value','')}:{taint.get('effect','')}"
+                )
+            # Detect control-plane role
+            for label in node_info["labels"]:
+                if "control-plane" in label or label == "node-role.kubernetes.io/master":
+                    node_info["is_control_plane"] = True
+            k8s_nodes.append(node_info)
+
+        # ── Step 3: Enumerate pods (name, namespace, node, labels, status) ──
+        pods_data: dict = {}
+        try:
+            proc = await asyncio.create_subprocess_shell(
+                "kubectl get pods -A -o json 2>&1",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=8)
+            out = stdout.decode("utf-8", errors="replace")
+            if proc.returncode == 0:
+                pods_data = _json.loads(out) if out.strip().startswith("{") else {}
+        except Exception:
+            pass
+
+        k8s_pods: list[dict] = []
+        for item in pods_data.get("items", []):
+            meta = item.get("metadata", {})
+            spec = item.get("spec", {})
+            k8s_pods.append({
+                "name": meta.get("name", ""),
+                "namespace": meta.get("namespace", ""),
+                "node_name": spec.get("nodeName", ""),
+                "labels": meta.get("labels", {}),
+                "phase": item.get("status", {}).get("phase", "Unknown"),
+                "containers": [
+                    c.get("image", "") for c in spec.get("containers", [])
+                ],
+            })
+
+        # ── Step 4: Enumerate services (name, namespace, clusterIP, ports) ──
+        svcs_data: dict = {}
+        try:
+            proc = await asyncio.create_subprocess_shell(
+                "kubectl get svc -A -o json 2>&1",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=8)
+            out = stdout.decode("utf-8", errors="replace")
+            if proc.returncode == 0:
+                svcs_data = _json.loads(out) if out.strip().startswith("{") else {}
+        except Exception:
+            pass
+
+        k8s_svcs: list[dict] = []
+        for item in svcs_data.get("items", []):
+            meta = item.get("metadata", {})
+            spec = item.get("spec", {})
+            ports = spec.get("ports", [])
+            k8s_svcs.append({
+                "name": meta.get("name", ""),
+                "namespace": meta.get("namespace", ""),
+                "cluster_ip": spec.get("clusterIP", ""),
+                "ports": [{"port": p.get("port", 0), "protocol": p.get("protocol", "TCP"),
+                           "target_port": p.get("targetPort", "")} for p in ports],
+                "selector": spec.get("selector", {}),
+                "type": spec.get("type", "ClusterIP"),
+            })
+
+        # ── Step 5: Enumerate namespaces ──
+        ns_list: list[str] = []
+        try:
+            proc = await asyncio.create_subprocess_shell(
+                "kubectl get namespaces -o json 2>&1",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=8)
+            out = stdout.decode("utf-8", errors="replace")
+            if proc.returncode == 0 and out.strip().startswith("{"):
+                ns_data = _json.loads(out)
+                ns_list = [i.get("metadata", {}).get("name", "")
+                           for i in ns_data.get("items", [])]
+        except Exception:
+            pass
+
+        # ── Step 6: Check current permissions ──
+        permissions: list[str] = []
+        try:
+            proc = await asyncio.create_subprocess_shell(
+                "kubectl auth can-i --list -A 2>&1 | head -60",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=8)
+            out = stdout.decode("utf-8", errors="replace")
+            if proc.returncode == 0:
+                for line in out.split("\n"):
+                    line = line.strip()
+                    if line and not line.startswith("Resources") and "yes" in line.lower():
+                        permissions.append(line)
+        except Exception:
+            pass
+
+        # ── Write DKG nodes ───────────────────────────────────────────
+
+        # Host nodes for each K8S node
+        for node in k8s_nodes:
+            node_id = f"host-k8s-{node['name']}"
+            self.dkg.add_node("Host", node_id, {
+                "ip": node["internal_ip"] or node["name"],
+                "is_reachable": True,
+                "is_internal": True,
+                "k8s_node_name": node["name"],
+                "k8s_node_labels": node["labels"],
+                "k8s_node_taints": node["taints"],
+                "is_control_plane": node["is_control_plane"],
+                "discovered_by": "k8s-cluster-discovery",
+            })
+
+        # Endpoint for the K8S API server
+        if api_url:
+            self.dkg.add_node("Endpoint", f"endpoint-k8s-api", {
+                "url": api_url,
+                "method": "GET",
+                "params": "",
+                "proto": "kubernetes",
+                "discovered_by": "k8s-cluster-discovery",
+            })
+
+        # Service nodes for each K8S service (ClusterIP only)
+        for svc in k8s_svcs:
+            for port_info in svc["ports"]:
+                svc_id = f"svc-k8s-{svc['namespace']}-{svc['name']}-{port_info['port']}"
+                self.dkg.add_node("Service", svc_id, {
+                    "port": port_info["port"],
+                    "protocol": port_info["protocol"].lower(),
+                    "service_name": f"k8s-{svc['name']}",
+                    "version": f"ClusterIP {svc['cluster_ip']}:{port_info['port']}",
+                    "banner": f"K8s Service {svc['name']}.{svc['namespace']}.svc.cluster.local",
+                    "k8s_namespace": svc["namespace"],
+                    "k8s_cluster_ip": svc["cluster_ip"],
+                    "k8s_selector": svc["selector"],
+                    "discovered_by": "k8s-cluster-discovery",
+                })
+
+        # Analysis node with cluster summary
+        analysis_parts: list[str] = []
+        analysis_parts.append(f"K8S cluster discovered with {len(k8s_nodes)} node(s)")
+        for node in k8s_nodes:
+            role = "control-plane" if node["is_control_plane"] else "worker"
+            label_str = ", ".join(
+                f"{k}={v}" for k, v in node["labels"].items()
+                if k not in ("kubernetes.io/hostname", "kubernetes.io/os",
+                             "kubernetes.io/arch", "beta.kubernetes.io/os",
+                             "beta.kubernetes.io/arch", "node.kubernetes.io/instance-type")
+            )
+            analysis_parts.append(
+                f"  Node {node['name']} ({role}): IP={node['internal_ip']}, labels={{ {label_str} }}"
+            )
+            if node["taints"]:
+                analysis_parts.append(f"    taints: {', '.join(node['taints'])}")
+
+        if k8s_pods:
+            analysis_parts.append(f"{len(k8s_pods)} pod(s) running:")
+            for pod in k8s_pods[:20]:
+                analysis_parts.append(
+                    f"  {pod['namespace']}/{pod['name']} [{pod['phase']}] "
+                    f"on {pod['node_name']} images={pod['containers']}"
+                )
+
+        if k8s_svcs:
+            analysis_parts.append(f"{len(k8s_svcs)} service(s):")
+            for svc in k8s_svcs[:20]:
+                port_str = ", ".join(
+                    f"{p['port']}/{p['protocol']}" for p in svc["ports"]
+                )
+                analysis_parts.append(
+                    f"  {svc['namespace']}/{svc['name']} "
+                    f"type={svc['type']} clusterIP={svc['cluster_ip']} ports={port_str}"
+                )
+
+        if ns_list:
+            analysis_parts.append(f"Namespaces: {', '.join(ns_list)}")
+
+        if permissions:
+            analysis_parts.append(f"Current permissions ({len(permissions)} allowed):")
+            for perm in permissions[:20]:
+                analysis_parts.append(f"  {perm}")
+
+        if analysis_parts:
+            self.dkg.add_node("Analysis", "analysis-k8s-cluster", {
+                "content": "\n".join(analysis_parts),
+                "source": "k8s-cluster-discovery",
+                "phase": "analyze",
+            })
+
+        total_nodes = len(k8s_nodes)
+        total_pods = len(k8s_pods)
+        total_svcs = len(k8s_svcs)
+        log.info(
+            "K8S cluster discovery: %d nodes, %d pods, %d services, %d namespaces",
+            total_nodes, total_pods, total_svcs, len(ns_list),
+        )
+        print(f"\n[K8S DISCOVERY] {total_nodes} node(s), {total_pods} pod(s), "
+              f"{total_svcs} service(s), {len(ns_list)} namespace(s)")
 
     # ── Deep Recon (after bootstrap, before service research) ───────
 
@@ -2311,7 +2610,8 @@ class Orchestrator:
             task_success = False  # at least one tool must succeed
             _any_success = False
             task_summary = ""
-            _all_task_stdouts: list[str] = []  # accumulate all tool outputs
+            _all_task_stdouts: list[str] = []  # accumulate all tool outputs (truncated)
+            _raw_task_stdouts: list[str] = []  # full stdout for credential extraction
             _auto_test_negative = False  # track "no evidence" / "no flag"
 
             for tc in task_tool_calls:
@@ -2605,6 +2905,7 @@ class Orchestrator:
 
                 # CTEG tracking
                 raw_stdout = getattr(result, 'stdout', '') or ''
+                _raw_task_stdouts.append(raw_stdout)  # full, for credential extraction
                 _TOOL_VULN_MAP = {
                     "sqlmap_test": "SQLI", "xss_reflection_test": "XSS",
                     "command_injection_test": "CMDI", "ffuf_fuzz": "FUZZ",
@@ -2686,7 +2987,10 @@ class Orchestrator:
                     )
                     break
 
-                task["params"] = fix["corrected_params"]
+                # Merge corrected params into existing ones — the LLM
+                # returns only the fields that need correction, not the
+                # full parameter set. Replacing would drop host/command/etc.
+                task["params"] = {**task["params"], **fix["corrected_params"]}
                 reason = fix.get("reason", "corrected params")
                 print(f"  [FIX] {task.get('id')}: {reason[:120]}")
                 self.step_count += 1
@@ -2725,6 +3029,15 @@ class Orchestrator:
                         f"[{reason[:80]}]: {retry_stderr or retry_stdout or 'no output'}"
                     )
                 _fix_attempts += 1
+
+            # ── Auto-extract credentials from task output ────────────
+            # When a task discovers working credentials (e.g. batch SSH
+            # test via shell_exec), extract them into DKG Credential nodes
+            # so subsequent tasks can use $credentials.* placeholders.
+            if task_success and _raw_task_stdouts:
+                await self._extract_credentials_from_task(
+                    task, _raw_task_stdouts
+                )
 
             await self._review_and_update_plan(
                 task, task_success, task_result_text
@@ -2996,6 +3309,15 @@ class Orchestrator:
             llm_args = v.get("tool_args", {}) or {}
             if not isinstance(llm_args, dict):
                 llm_args = {}
+            # Filter blacklisted tools — brute-force tools (hydra_ssh_brute,
+            # hydra_http_brute) waste time and should never reach execution,
+            # even when the LLM explicitly suggests them.
+            if llm_tool in self._BLACKLISTED_TOOLS:
+                replacement = self._BLACKLISTED_TOOLS[llm_tool]
+                if replacement:
+                    llm_tool = replacement
+                else:
+                    llm_tool = ""  # Tool unavailable — drop it
             if llm_tool and llm_tool not in tools:
                 tools = [llm_tool] + list(tools)
             if not tools:
@@ -4600,11 +4922,26 @@ class Orchestrator:
         _dkg_creds = self.dkg.query_nodes("Credential")
         _resolved_user = ""
         _resolved_pass = ""
+        _resolved_host = ""
+        _resolved_port = 0
         for c in _dkg_creds:
             if c.get("username"):
                 _resolved_user = str(c.get("username"))
                 _resolved_pass = str(c.get("password", "") or "")
+                _resolved_host = str(c.get("host", "") or "")
+                _cp = c.get("port", 0)
+                if _cp:
+                    _resolved_port = int(_cp)
                 break
+        # If credential has no port, look up the SSH service port from DKG
+        if not _resolved_port:
+            for s in self.dkg.query_nodes("Service"):
+                _svc_name = (s.get("service_name", "") or "").lower()
+                if "ssh" in _svc_name or s.get("port") == 22:
+                    _p = s.get("port", 0)
+                    if _p and _p != 22:
+                        _resolved_port = int(_p)
+                        break
 
         # ── Protocol-aware tool validation ──
         # Build a set of VALID tools for each port discovered during bootstrap.
@@ -4783,6 +5120,102 @@ class Orchestrator:
                                 _rep_params["host"] = _target
                             _rep_params.pop("target", None)
                             t["params"] = _rep_params
+            # Block raw SSH in shell_exec — running "ssh" or "sshpass"
+            # triggers an interactive password prompt that hangs the tool.
+            # Scan the ENTIRE command for ssh/sshpass — LLMs often embed
+            # them inside compound commands (cd X && ssh Y, bash -c 'ssh Y').
+            if tool == "shell_exec":
+                _cmd = str(t.get("params", {}).get("command", ""))
+                # Find the last standalone "ssh" or "sshpass" in the command
+                # — the actual invocation, skipping comments and echo.
+                _ssh_match = list(re.finditer(
+                    r'\b(sshpass|ssh)\b(?![-\w]*=)', _cmd
+                ))
+                if _ssh_match:
+                    # Take the LAST match — most likely the actual ssh call
+                    _m = _ssh_match[-1]
+                    _ssh_start = _m.start()
+                    # Skip if preceded by echo/printf/which/apt/install/#
+                    _prefix = _cmd[:_ssh_start].strip()
+                    _prefix_last_line = _prefix.rsplit("\n", 1)[-1].rsplit(";", 1)[-1].rsplit("&&", 1)[-1].rsplit("||", 1)[-1]
+                    _pre_words = _prefix_last_line.strip().split()
+                    if _pre_words and _pre_words[-1] in (
+                        "echo", "printf", "which", "apt", "apt-get", "yum",
+                        "man", "help", "whereis", "type", "#",
+                    ):
+                        pass  # false positive — informational command
+                    else:
+                        # Parse arguments starting from the ssh/sshpass token
+                        _rest = _cmd[_ssh_start:]
+                        _cmd_words = _rest.split()
+                        _ssh_host = ""
+                        _ssh_port = 22
+                        _ssh_user = ""
+                        _ssh_cmd = "id"
+                        _ssh_pass = ""
+                        _is_sshpass = (_cmd_words[0] == "sshpass")
+                        for i, w in enumerate(_cmd_words):
+                            if w in ("sshpass", "ssh", "ssh-copy-id") and i == 0:
+                                continue
+                            if w == "-p" and i + 1 < len(_cmd_words):
+                                if _is_sshpass and i == 1:
+                                    _ssh_pass = _cmd_words[i + 1]
+                                else:
+                                    try:
+                                        _ssh_port = int(_cmd_words[i + 1])
+                                    except ValueError:
+                                        pass
+                            elif w == "-l" and i + 1 < len(_cmd_words):
+                                _ssh_user = _cmd_words[i + 1]
+                            elif "@" in w and not w.startswith("-"):
+                                _user_host = w.split("@")
+                                _ssh_user = _ssh_user or _user_host[0]
+                                _ssh_host = _user_host[-1]
+                            elif w == "-i":
+                                pass  # key-based — skip, can't auto-convert
+                        if _ssh_host:
+                            t["tool"] = "ssh_exec"
+                            _new_params: dict = {
+                                "host": _ssh_host,
+                                "port": _ssh_port,
+                                "username": _ssh_user or "root",
+                                "password": _ssh_pass,
+                                "command": _ssh_cmd,
+                            }
+                            t["params"] = _new_params
+                            t["instruction"] = (
+                                t.get("instruction", "")
+                                + " [auto-corrected: shell_exec→ssh_exec (SSH in shell_exec triggers interactive prompt)]"
+                            )
+
+            # ssh_exec is for simple remote commands, not local scripts.
+            # Redirect when the instruction describes credential testing
+            # or the command contains scripts (newlines, sshpass, python).
+            if tool == "ssh_exec":
+                _instr = str(t.get("instruction", "")).lower()
+                _cmd = str(t.get("params", {}).get("command", ""))
+                _is_cred_test = any(kw in _instr for kw in (
+                    "batch-test", "batch test",
+                    "brute force", "brute-force", "dictionary", "wordlist",
+                ))
+                _is_script = "\n" in _cmd or "sshpass" in _cmd or len(_cmd) > 500
+                if _is_cred_test or _is_script:
+                    t["tool"] = "shell_exec"
+                    t["params"] = {"command": _cmd}
+                    t["instruction"] = (
+                        t.get("instruction", "")
+                        + " [auto-corrected: ssh_exec→shell_exec (credential testing must run locally)]"
+                    )
+
+            # Block CVE-2024-6387 (regreSSHion) tasks — this is a complex
+            # pre-auth race condition exploit that requires ~10,000 attempts
+            # and specific glibc versions.  It wastes 5+ minutes on every SSH
+            # scenario and almost never succeeds in container environments.
+            _instr = str(t.get("instruction", "")).lower()
+            if "cve-2024-6387" in _instr or "regresshion" in _instr:
+                t["status"] = "skipped"
+                continue
+
             # Block local filesystem access via file:// URLs — flag must come
             # from the TARGET, not from searching the DARWIN host filesystem.
             _params = t.get("params", {})
@@ -4793,18 +5226,30 @@ class Orchestrator:
                     continue
             # Resolve $credentials.* placeholders in task params
             if isinstance(_params, dict):
-                for _key, _val in _params.items():
-                    if isinstance(_val, str) and "$credentials." in _val:
-                        if _resolved_user:
-                            _params[_key] = _val.replace(
-                                "$credentials.username", _resolved_user
-                            ).replace(
-                                "$credentials.password", _resolved_pass
-                            )
-                        else:
-                            # No credentials available — task can't run
-                            t["status"] = "skipped"
-                            break
+                _has_cred_ref = any(
+                    isinstance(v, str) and "$credentials." in v
+                    for v in _params.values()
+                )
+                if _has_cred_ref:
+                    if _resolved_user:
+                        for _key, _val in list(_params.items()):
+                            if isinstance(_val, str) and "$credentials." in _val:
+                                _params[_key] = _val.replace(
+                                    "$credentials.username", _resolved_user
+                                ).replace(
+                                    "$credentials.password", _resolved_pass
+                                )
+                        # Also inject host/port from credential — these
+                        # are commonly wrong (default port 22, etc.) when
+                        # the plan LLM lacks service context at gen time.
+                        if _resolved_host and not str(_params.get("host", "")).strip():
+                            _params["host"] = _resolved_host
+                        if _resolved_port and int(_params.get("port", 0) or 0) in (0, 22):
+                            _params["port"] = _resolved_port
+                    else:
+                        # No credentials available — task can't run
+                        t["status"] = "skipped"
+                        continue
 
         # ── Cascade skip to dependent tasks ──────────────────────
         # When a task is blacklisted or protocol-incompatible and
@@ -4825,6 +5270,102 @@ class Orchestrator:
                     t["status"] = "skipped"
                     _skipped_ids.add(t.get("id", ""))
                     _changed = True
+
+        # ── Credential-aware hint: use discovered credentials ─────
+        # When credentials were auto-extracted but no task uses them
+        # to log in, inject one.  Without this, the plan review LLM
+        # often adds more credential-guessing tasks instead of a simple
+        # "use what we already have" task.
+        if _resolved_user and _resolved_pass and tasks:
+            _has_login_task = any(
+                str(t.get("tool", "")) in ("ssh_exec", "ssh_key_exec")
+                and str(t.get("params", {}).get("username", "")) == _resolved_user
+                and t.get("status") == "pending"
+                for t in tasks
+            )
+            if not _has_login_task:
+                _login_host = _resolved_host or self.target_host
+                _login_port = _resolved_port or 22
+                tasks.append({
+                    "id": "task-ssh-login-discovered",
+                    "instruction": (
+                        f"SSH into {_login_host}:{_login_port} as {_resolved_user} "
+                        f"using the discovered password. Immediately hunt for flag: "
+                        f"cat /flag* /root/flag* /home/*/flag* /tmp/flag* 2>/dev/null; "
+                        f"find / -maxdepth 4 -name '*flag*' -type f 2>/dev/null | head -10"
+                    ),
+                    "tool": "ssh_exec",
+                    "params": {
+                        "host": _login_host,
+                        "port": _login_port,
+                        "username": _resolved_user,
+                        "password": _resolved_pass,
+                        "command": "cat /flag* /root/flag* /home/*/flag* /tmp/flag* 2>/dev/null; find / -maxdepth 4 -name '*flag*' -type f 2>/dev/null | head -10",
+                    },
+                    "dependent_task_ids": [],
+                    "status": "pending",
+                    "source": "credential-hint",
+                })
+
+        # ── Session-aware hint: suggest network discovery ─────────
+        # When SSH access was gained (Session nodes exist) but the plan
+        # has no network recon tasks, inject a hint.  Shared-network
+        # containers are common in Docker/K8S scenarios — sniffing the
+        # bridge network can capture credentials, tokens, and flags.
+        _sessions = self.dkg.query_nodes("Session")
+        if _sessions and tasks:
+            _has_net_task = any(
+                str(t.get("tool", "")).lower() in (
+                    "tcpdump_capture", "shell_exec",
+                ) and any(
+                    kw in str(t.get("instruction", "")).lower()
+                    for kw in ("tcpdump", "ip addr", "netstat", "ss ", "arp",
+                               "network", "sniff", "ngrep", "bridge")
+                )
+                for t in tasks
+            )
+            if not _has_net_task:
+                # Pull host/user from Session, password from Credential
+                _sess = _sessions[0]
+                _sess_host = _sess.get("host", self.target_host)
+                _sess_user = _sess.get("user", "")
+                _sess_port = 22
+                _sess_pass = _resolved_pass
+                # Try to get port and password from credentials
+                _creds = self.dkg.query_nodes("Credential")
+                for _c in _creds:
+                    if _c.get("username") == _sess_user or not _sess_user:
+                        _sess_user = _sess_user or _c.get("username", "")
+                        _sess_pass = _sess_pass or _c.get("password", "")
+                        _cp = _c.get("port", 0)
+                        if _cp:
+                            _sess_port = int(_cp)
+                        break
+                _net_hint = (
+                    "You have an active shell session. Before hunting for "
+                    "flags locally, check the NETWORK — containers often "
+                    "share a bridge network with other services. Run: "
+                    "ip addr (discover interfaces/gateways), "
+                    "ss -tlnp / netstat -tlnp (listening ports on other hosts), "
+                    "and tcpdump_capture with filter='tcp port 5000 or tcp port 80' "
+                    "(sniff HTTP traffic for tokens/credentials). "
+                    "The flag may be in transit between containers, not on disk."
+                )
+                tasks.append({
+                    "id": "task-net-discovery-hint",
+                    "instruction": _net_hint,
+                    "tool": "ssh_exec",
+                    "params": {
+                        "host": _sess_host,
+                        "port": _sess_port,
+                        "username": _sess_user or "root",
+                        "password": _sess_pass,
+                        "command": "ip addr && ss -tlnp 2>/dev/null || netstat -tlnp 2>/dev/null",
+                    },
+                    "dependent_task_ids": [],
+                    "status": "pending",
+                    "source": "session-hint",
+                })
 
     async def _generate_exploitation_plan(self, target_url: str, cteg_hints: dict | None = None) -> ExploitationPlan:
         """Generate a structured plan from bootstrap state (nmap results only).
@@ -5722,6 +6263,141 @@ Output ONLY valid JSON:
         except Exception:
             pass
         return None
+
+    async def _extract_credentials_from_task(
+        self, task: dict, raw_stdouts: list[str]
+    ) -> None:
+        """Extract discovered credentials from task stdout → DKG + CTEG.
+
+        Regex pre-filters for credential patterns, then uses a lightweight
+        LLM call (classifier profile, isolated session) to extract structured
+        username:password pairs. Only fires for tools that commonly discover
+        credentials (shell_exec, ssh_exec, test_credential).
+
+        Extracted credentials are stored as DKG Credential nodes and in CTEG,
+        making them available for $credentials.* placeholder resolution in
+        subsequent tasks.
+        """
+        tool = str(task.get("tool", "") or "")
+        if tool not in ("shell_exec", "ssh_exec", "test_credential"):
+            return
+
+        combined = "\n".join(raw_stdouts)
+        if len(combined) < 20:
+            return
+
+        # ── Regex pre-filter ────────────────────────────────────────
+        # Avoid LLM cost when stdout clearly doesn't contain credentials.
+        _has_success = bool(re.search(
+            r'(?i)(success|成功|working|valid|found|凭证|密码正确|login\s+ok|authenticated)',
+            combined,
+        ))
+        if not _has_success:
+            return
+
+        # Check for username:password or user/pass patterns near success
+        _cred_patterns = re.findall(
+            r'(?i)(?:SUCCESS|OK|working|valid|found)[^\n]{0,80}?'
+            r'(\w[\w.-]{1,30})\s*[:/]\s*(\S{1,50})',
+            combined,
+        )
+        if not _cred_patterns:
+            # Fallback: bare user:pass patterns anywhere in output
+            _cred_patterns = re.findall(
+                r'(?:^|\s)(\w{2,20}):(\S{3,50})(?:\s|$)',
+                combined,
+            )
+        if not _cred_patterns:
+            return
+
+        # ── LLM extraction (isolated session, classifier profile) ──
+        _port = ""
+        _svc_name = "ssh"
+        _task_params = task.get("params", {}) or {}
+        if isinstance(_task_params, dict):
+            _port = str(_task_params.get("port", ""))
+            _cmd = str(_task_params.get("command", ""))
+            if "mysql" in _cmd.lower():
+                _svc_name = "mysql"
+            elif "psql" in _cmd.lower() or "postgres" in _cmd.lower():
+                _svc_name = "postgres"
+            elif "redis" in _cmd.lower():
+                _svc_name = "redis"
+            elif "mssql" in _cmd.lower():
+                _svc_name = "mssql"
+        # Fallback: look up SSH port from DKG Service nodes
+        if not _port:
+            for s in self.dkg.query_nodes("Service"):
+                _svc_name_s = (s.get("service_name", "") or "").lower()
+                if "ssh" in _svc_name_s:
+                    _p = s.get("port", 0)
+                    if _p:
+                        _port = str(_p)
+                        break
+
+        _output_snippet = combined[:2000]
+        _candidates_str = ", ".join(
+            f"{u}:{p}" for u, p in _cred_patterns[:15]
+        )
+        prompt = (
+            f"A penetration testing task discovered working credentials. "
+            f"Extract ALL valid username:password pairs from the output.\n\n"
+            f"Task instruction: {task.get('instruction', '')[:200]}\n"
+            f"Service: {_svc_name}\n"
+            f"Regex candidates: {_candidates_str}\n\n"
+            f"Task output:\n{_output_snippet}\n\n"
+            f"Return ONLY valid JSON — an array of credential objects:\n"
+            f'[{{"username":"...", "password":"..."}}]\n'
+            f'If no valid credentials found, return: []'
+        )
+
+        try:
+            from darwin.utils.llm import LLMSession
+            _classifier = LLMSession.from_config("classifier")
+            content, _ = _classifier.generate(prompt=prompt)
+            if not content:
+                return
+            # Extract JSON from response
+            match = re.search(r"\[[\s\S]*?\]", content)
+            if not match:
+                return
+            creds_list = json.loads(match.group(0))
+            if not isinstance(creds_list, list) or not creds_list:
+                return
+        except Exception:
+            return
+
+        # ── Store in DKG + CTEG ─────────────────────────────────────
+        for cred in creds_list:
+            username = str(cred.get("username", "")).strip()
+            password = str(cred.get("password", "")).strip()
+            if not username or not password:
+                continue
+            _cred_id = f"cred-discovered-{username}-{int(time.time())}"
+            self.dkg.add_node("Credential", _cred_id, {
+                "username": username,
+                "password": password,
+                "host": self.target_host,
+                "port": int(_port) if _port and _port.isdigit() else 0,
+                "source_host": self.target_host,
+                "cred_type": _svc_name,
+                "source": "task_discovery",
+            })
+            try:
+                self.cteg.add_credential(
+                    host=self.target_host,
+                    port=int(_port) if _port and _port.isdigit() else 0,
+                    service_type=_svc_name,
+                    username=username, password=password,
+                    source="task_discovery",
+                )
+            except Exception:
+                pass
+            log.info(
+                "Credential extracted from task output: %s:*** → DKG + CTEG",
+                username,
+            )
+            print(f"\n[CRED] Discovered: {username}:**** → stored for subsequent tasks")
 
     async def _review_and_update_plan(
         self, task: dict, success: bool, task_result: str = ""

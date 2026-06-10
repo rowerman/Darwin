@@ -237,10 +237,37 @@ class PipelineState:
 
         if self.hosts:
             parts.append("## Hosts")
+            # Standard fields rendered inline; all other fields rendered
+            # as key=value pairs so discovery modules (K8S, AD, cloud)
+            # can surface metadata without modifying this function.
+            _HOST_STANDARD = {"ip", "os", "is_internal", "is_reachable",
+                              "type", "id", "discovered_by"}
             for h in self.hosts:
-                parts.append(f"- {h.get('ip','')}"
-                             + (f" [{h.get('os','')}]" if h.get('os') else "")
-                             + (" (internal)" if h.get('is_internal') else ""))
+                line = f"- {h.get('ip','')}"
+                if h.get("is_internal"):
+                    line += " (internal)"
+                # Render any non-standard fields
+                extras = []
+                for k, v in h.items():
+                    if k in _HOST_STANDARD or v is None:
+                        continue
+                    if isinstance(v, dict):
+                        # Flatten small dicts inline
+                        if v and len(str(v)) < 200:
+                            extras.append(f"{k}={v}")
+                    elif isinstance(v, list):
+                        if v and len(str(v)) < 200:
+                            extras.append(f"{k}={v}")
+                    elif isinstance(v, bool):
+                        if v:
+                            extras.append(k)
+                    elif isinstance(v, str) and v:
+                        extras.append(f"{k}={v[:120]}")
+                if extras:
+                    line += "  [" + ", ".join(extras) + "]"
+                elif h.get("os"):
+                    line += f" [{h['os']}]"
+                parts.append(line)
             parts.append("")
 
         if self.sessions:
@@ -371,12 +398,16 @@ def normalize_dkg_state(dkg: Any) -> PipelineState:
         if content and raw.get("phase") in ("analyze", "service_research"):
             state.analysis_notes.append(str(content))
 
-    # Hosts
+    # Hosts — pass through all fields so discovery modules (K8S, AD, cloud)
+    # can attach metadata without changing this function.
     for raw in dkg.query_nodes("Host"):
         try:
-            state.hosts.append({"ip": raw.get("ip", ""),
-                                "os": raw.get("os", ""),
-                                "is_internal": raw.get("is_internal", False)})
+            host_dict: dict = {}
+            for k, v in raw.items():
+                if k in ("type", "id"):
+                    continue
+                host_dict[k] = v
+            state.hosts.append(host_dict)
         except Exception:
             pass
 
