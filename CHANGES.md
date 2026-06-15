@@ -1,3 +1,16 @@
+## 2026-06-15 (Bug fixes round 2: gobuster timeout v2, ssrf_probe Docker IPs)
+
+- **darwin/orchestrator.py** `_deep_recon`: 修复 gobuster_dir/nikto_scan 在 IMDS/S3 模拟器等非目录型服务上的超时问题（v2）。改为仅在 nmap 发现的主端口（`discovered_by: "bootstrap-nmap"`）上运行重型目录爆破工具。通过 whatweb/API probe 发现的派生端点（模拟器、代理、内部 API）不再执行 gobuster/nikto/form_extract。根因：代理容器将端口 10701/10704 映射到了宿主机，pre-flight curl 可达性检查通过，但 gobuster 在这些非 HTTP 文件服务上 90s 超时。
+- **darwin/tools/attack_server.py** `ssrf_probe`: 扩展默认 `internal_hosts`，新增 Docker bridge IP（172.17.0.1-4, 172.18.0.1-3, host.docker.internal）。容器内 SSRF 攻击时，内部服务通常在 Docker bridge 网络而非 localhost。更新工具描述和参数描述以提醒 LLM 使用 Docker IP 范围。
+- **验证**: pytest 147 passed, import OK
+
+## 2026-06-15 (Bug fixes: ssrf_probe crash, dependency blocking, gobuster timeout)
+
+- **darwin/tools/attack_server.py** `ssrf_probe`: 修复 LLM 传入 list 类型参数时 `'list' object has no attribute 'split'` 崩溃。新增 list/tuple→逗号分隔字符串的归一化逻辑。根因：LLM analyze phase 生成的 `tool_args` 中 `internal_hosts`/`ports`/`paths` 可能是 JSON 数组而非字符串。
+- **darwin/orchestrator.py** `_review_and_update_plan`: 修复已完成任务的依赖未自动解除导致下游任务永久阻塞的 bug。在依赖解析逻辑中新增检查：如果依赖目标的 status 是 done/failed/skipped/exhausted，自动移除该依赖（不再阻塞下游）。根因：`_valid_ids` 检查仅判断 ID 是否存在，未判断任务是否已完成。
+- **darwin/orchestrator.py** `_deep_recon`: 修复 gobuster_dir 在不可达内部端口上 8×90s 超时的问题。新增 curl 预检（5s connect timeout）——如果 endpoint 不可直接访问（如仅通过 SSRF 可达的内部服务端口），跳过 gobuster/nikto/form_extract 等重型工具。
+- **验证**: pytest 147 passed, import OK, ssrf_probe list 参数测试通过
+
 ## 2026-06-15 (Cloud benchmark scenarios — knowledge base and tool gaps for 22 new CLOUD scenarios)
 
 - **knowledge/cloud/cloud_aws_iam_federation.json**: 新增 OIDC Federation Claim Mismatch (CLOUD-11) + Golden SAML (CLOUD-13) 两个知识条目。覆盖跨仓库 AssumeRoleWithWebIdentity 和 SAML 断言伪造。
