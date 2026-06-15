@@ -118,16 +118,16 @@ Orchestrator.run() → recon → analyze → exploit → bypass → verify
 
 The `run()` method (`orchestrator.py:212`) follows this linear phase pipeline for Solo mode. For Coordinated/Distributed modes, it dispatches to `_run_multi_agent_cycle()` (`orchestrator.py:6437`) based on the B dimension threshold from `dynamic_scaling.py`.
 
-Key `Orchestrator` method locations (~7258-line file; line numbers approximate):
+Key `Orchestrator` method locations (~8435-line file; line numbers approximate):
 - `run()` (line 212) — entry point, main loop with mode dispatch, termination conditions
-- `_unified_llm_loop()` (line 1761) — Solo mode LLM-driven ReAct loop
-- `_analyze_phase()` (line 2947) — vulnerability hypothesis generation
-- `_sanitize_plan_tools()` (line 4150) — filters/rewrites plan tasks (blacklist, fallback, credential placeholder resolution, file:// detection)
-- `_generate_exploitation_plan()` (line 4284) — LLM exploitation strategy
-- `_analyze_and_fix_task()` (line 5038) — LLM-based task failure classification and retry (up to 2 attempts)
-- `_review_and_update_plan()` (line 5119) — dedup merged plans (tool+endpoint matching + >75% word overlap), remap stale task ID references in dependencies
-- `_exploit_phase()` (line 5682) — tool execution and verification
-- `_run_multi_agent_cycle()` (line 6437) — Coordinated/Distributed dispatch
+- `_unified_llm_loop()` (line 2243) — Solo mode LLM-driven ReAct loop
+- `_analyze_phase()` (line 3560) — vulnerability hypothesis generation
+- `_sanitize_plan_tools()` (line 4914) — filters/rewrites plan tasks (blacklist, fallback, credential placeholder resolution, file:// detection)
+- `_generate_exploitation_plan()` (line 5370) — LLM exploitation strategy
+- `_analyze_and_fix_task()` (line 6186) — LLM-based task failure classification and retry (up to 2 attempts)
+- `_review_and_update_plan()` (line 6402) — dedup merged plans (tool+endpoint matching + >75% word overlap), remap stale task ID references in dependencies
+- `_exploit_phase()` (line 6983) — tool execution and verification
+- `_run_multi_agent_cycle()` (line 7738) — Coordinated/Distributed dispatch
 
 ### Module roles
 
@@ -236,11 +236,12 @@ Canonical implementation: `compute_task_breadth()` at `dynamic_scaling.py:118`. 
 ## Testing
 
 ### Current state
-Only 4 of ~25+ modules have tests, covering pure data-structure code:
-- `tests/test_dkg.py` — DKG node/edge CRUD, query, filter, serialization, save/load, reset. 8 test classes covering all node/edge types.
-- `tests/test_metrics.py` — ExperimentMetrics properties (TSR, token efficiency, avg steps, etc.) and Pass@k calculation.
-- `tests/test_analysis.py` — Statistical functions: McNemar, Cohen's g, paired t-test, bootstrap CI, Friedman, Cohen's κ, EMA.
-- `tests/test_dynamic_scaling.py` — B dimension formula (`compute_task_breadth()`), complexity hint detection, hysteresis voting. 28 test methods across 3 test classes.
+Only 5 of ~25+ modules have tests (151 total test methods), covering pure data-structure code:
+- `tests/test_dkg.py` — DKG node/edge CRUD, query, filter, serialization, save/load, reset. 8 test classes covering all node/edge types. (32 tests)
+- `tests/test_metrics.py` — ExperimentMetrics properties (TSR, token efficiency, avg steps, etc.) and Pass@k calculation. (19 tests)
+- `tests/test_analysis.py` — Statistical functions: McNemar, Cohen's g, paired t-test, bootstrap CI, Friedman, Cohen's κ, EMA. (33 tests)
+- `tests/test_dynamic_scaling.py` — B dimension formula (`compute_task_breadth()`), complexity hint detection, hysteresis voting. 28 test methods across 3 test classes. (32 tests)
+- `tests/test_mcp_gateway.py` — MCP gateway parameter aliasing (`host`→`target`, `url`→`target_url`, etc.), credential placeholder resolution, fuzzy matching. (35 tests)
 
 Core orchestrator, all agents, tools, RAG, DPM, CTEG, DAVE, and LLM utilities are **untested**.
 
@@ -282,8 +283,8 @@ Core orchestrator, all agents, tools, RAG, DPM, CTEG, DAVE, and LLM utilities ar
 - `install.sh` — Full system installation script (35KB). Automates dependency setup including external CLI tools.
 
 ### Claude Code integration (`.claude/`)
-- `settings.local.json` — Fine-grained Bash permission allowlist for Claude Code operations in this project.
-- `skills/darwin-experiment-driven-dev/SKILL.md` — 745-line experiment-driven development skill with diagnostic decision tree, module dependency maps, and verification checklist. Invoked via the Skill tool when debugging experiment failures or modifying DARWIN core modules.
+- `settings.local.json` — Fine-grained Bash permission allowlist for Claude Code operations in this project (e.g., pytest, git, docker, kubectl, nmap, gobuster). 200+ allowed patterns covering the full development workflow.
+- `skills/darwin-experiment-driven-dev/SKILL.md` — 745-line experiment-driven development skill with diagnostic decision tree, module dependency maps, and verification checklist. **Load this skill first** when debugging experiment failures or modifying DARWIN core modules (orchestrator, DKG, CTEG, RAG, DPM, prompts, sub-agents, tools). Invoke via `/darwin-experiment-driven-dev` or the Skill tool.
 
 ### Wordlists (`wordlists/`)
 Dictionary files used by fuzzing tools (ffuf, dirb, gobuster):

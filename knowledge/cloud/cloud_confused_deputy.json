@@ -1,0 +1,23 @@
+[
+  {
+    "id": "cloud-confused-deputy-proxy",
+    "category": "EXPLOIT",
+    "subcategory": "CLOUD",
+    "title": "Cloud Confused Deputy — Managed Identity Cross-Service Access via Proxy",
+    "description": "The confused deputy problem occurs when a service (the deputy) with elevated permissions can be tricked into acting on behalf of a lower-privileged caller. In cloud environments, managed identities attached to services act as deputies — if service-A proxies requests to service-B using its managed identity, service-B sees the identity's permissions, not the caller's. Attack: (1) Identify a cloud service that acts as a proxy/forwarder and has a managed identity attached (common in API gateways, load balancers, service mesh proxies). (2) Identify target internal services that trust the managed identity (e.g., svc-b internal API). (3) Send a request to the proxy service with routing/forwarding parameters pointing to the internal target. (4) The proxy forwards the request using its managed identity, which may have access the caller lacks. (5) In AWS: EC2 instance profiles forwarding requests via internal ALB. In Azure: Managed Identity on App Service/Function forwarding to Storage/Key Vault. In GCP: Service account impersonation via metadata server proxy. (6) Extract credentials from the managed identity's metadata endpoint if accessible via proxy. (7) Use the managed identity token to access additional services: curl -H 'Metadata:true' 'http://169.254.169.254/metadata/identity/oauth2/token?resource=https://management.azure.com/'.",
+    "techniques": [
+      "Identify proxy services: check for services with forwarding/routing capabilities (API gateway, Nginx, Envoy)",
+      "Check for managed identity: check_cloud_metadata or env vars for MSI_ENDPOINT / AWS_CONTAINER_CREDENTIALS",
+      "Forward request to internal target: curl 'http://PROXY/forward?target=svc-b:5000'",
+      "Extract managed identity token: curl -H 'Metadata:true' 'http://169.254.169.254/metadata/identity/oauth2/token?api-version=2018-02-01&resource=RESOURCE'",
+      "Azure: curl 'http://169.254.169.254/metadata/identity/oauth2/token?api-version=2018-02-01&resource=https://management.azure.com/' -H 'Metadata:true'",
+      "GCP: curl 'http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token' -H 'Metadata-Flavor:Google'"
+    ],
+    "indicators": ["Service with managed identity or instance profile", "HTTP proxy/forwarding functionality", "Internal service accessible only via managed identity", "Metadata endpoint reachable from the proxy service", "Cross-service trust relationships not validating original caller"],
+    "prerequisites": ["Access to a cloud service that proxies requests", "Knowledge of internal service endpoints", "Managed identity attached to the proxy service", "Network path to internal services via the proxy"],
+    "tools": ["curl_get", "http_post", "check_cloud_metadata"],
+    "tags": ["cloud", "confused-deputy", "managed-identity", "proxy", "cross-service", "azure", "aws", "gcp", "metadata"],
+    "confidence": 0.80,
+    "mitre_attack": "T1550"
+  }
+]

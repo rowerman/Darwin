@@ -1,0 +1,25 @@
+[
+  {
+    "id": "cloud-scp-legacy-bypass",
+    "category": "EXPLOIT",
+    "subcategory": "AWS",
+    "title": "AWS Organizations SCP Bypass — Legacy API Version Evasion",
+    "description": "AWS Service Control Policies (SCPs) are organization-level guardrails that limit permissions even if IAM policies allow them. SCP enforcement depends on the API version used — pre-2017 XML-based API endpoints may not fully enforce SCPs. Attack: (1) Check if Organizations is configured: aws organizations describe-organization. (2) List SCPs: aws organizations list-policies --filter SERVICE_CONTROL_POLICY. (3) For each SCP, check targets: aws organizations list-targets-for-policy --policy-id POLICY_ID. (4) Describe SCP: aws organizations describe-policy --policy-id POLICY_ID to understand which actions are denied. (5) Attempt the denied action via standard API — it should fail with AccessDenied. (6) Retry the action using an older API version endpoint (e.g., pre-2017 IAM endpoint) or via a different AWS SDK version that may not support SCP. (7) Alternative: if iam:CreatePolicyVersion is allowed, create a new IAM policy that explicitly allows the denied action (IAM policies can't override SCP denies, but some legacy endpoints enforce IAM before SCP). (8) Alternative: if organizations:DetachPolicy is allowed: aws organizations detach-policy --policy-id SCP_ID --target-id ACCOUNT_ID to remove the SCP. (9) Verify bypass by checking resource access.",
+    "techniques": [
+      "Describe organization: aws organizations describe-organization",
+      "List SCPs: aws organizations list-policies --filter SERVICE_CONTROL_POLICY",
+      "List SCP targets: aws organizations list-targets-for-policy --policy-id POLICY_ID",
+      "Describe SCP: aws organizations describe-policy --policy-id POLICY_ID",
+      "Detach SCP: aws organizations detach-policy --policy-id POLICY_ID --target-id ACCOUNT_ID",
+      "Use legacy API version: set endpoint_url to older endpoint or use XML-based API call",
+      "Verify with: aws iam simulate-principal-policy --policy-source-arn ROLE_ARN --action-names ACTION",
+      "List accounts: aws organizations list-accounts"
+    ],
+    "indicators": ["AWS Organizations enabled", "SCP denying specific actions", "organizations:DescribeOrganization allowed", "organizations:ListPolicies allowed", "API call returns AccessDenied with SCP reference"],
+    "prerequisites": ["AWS credentials in an organization member account", "IAM permissions: organizations:ListPolicies, organizations:DescribePolicy", "Knowledge of which actions are SCP-denied", "Access to older API endpoint or SDK version"],
+    "tools": ["aws_cli"],
+    "tags": ["aws", "organizations", "scp", "bypass", "api-versioning", "policy", "service-control-policy", "evasion"],
+    "confidence": 0.80,
+    "mitre_attack": "T1562.007"
+  }
+]

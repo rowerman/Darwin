@@ -201,7 +201,8 @@
       "Bash(docker run *)",
       "Bash(git *)",
       "Bash(netexec --help)",
-      "Bash(pip show *)"
+      "Bash(pip show *)",
+      "Bash(awk -F: '{s+=$2} END {print s}')"
     ]
   }
 }

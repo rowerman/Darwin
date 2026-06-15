@@ -1,0 +1,24 @@
+[
+  {
+    "id": "cloud-service-tag-spoof",
+    "category": "EXPLOIT",
+    "subcategory": "AZURE",
+    "title": "Azure Service Tag Spoofing — Header-Based Firewall Bypass",
+    "description": "Azure Service Tags (e.g., AzureCloud, AzureLoadBalancer, Storage.WestUS) represent IP address ranges for Azure services, used in Network Security Group (NSG) rules and Firewall policies for access control. If an application trusts HTTP headers like X-Forwarded-For or X-Azure-Service-Tag for authorization, these headers can be spoofed to bypass IP-based restrictions. Attack: (1) Identify that the target uses Service Tags for access control — look for NSG rules allowing specific Service Tags, or application-layer checks based on headers. (2) Probe the protected endpoint directly — expect Access Denied or 403. (3) Forge headers: curl -H 'X-Forwarded-For: 10.0.0.1' TARGET/admin (internal IP), curl -H 'X-Azure-Service-Tag: AzureCloud' TARGET/admin (service tag). (4) Try multiple header variants: X-Real-IP, X-Client-IP, Forwarded (RFC 7239), X-Original-Forwarded-For. (5) If the application trusts the header without validating the actual network path, access is granted. (6) Service Tags can also be resolved to actual IP ranges: Azure publishes the IP ranges for each Service Tag — an attacker can spoof X-Forwarded-For with an IP from the published range to appear as a trusted service.",
+    "techniques": [
+      "Probe protected endpoint: curl TARGET/admin (expect 403)",
+      "Spoof internal IP: curl -H 'X-Forwarded-For: 10.0.0.1' TARGET/admin",
+      "Spoof Service Tag: curl -H 'X-Azure-Service-Tag: AzureCloud' TARGET/admin",
+      "Try alternative headers: X-Real-IP, X-Client-IP, Forwarded: for=10.0.0.1",
+      "Try multiple X-Forwarded-For headers (first vs last wins)",
+      "Enumerate with different trusted IPs: 127.0.0.1, 10.0.0.1, 192.168.0.1, 172.16.0.1",
+      "Test Azure-specific: X-Azure-ClientIP, X-Azure-Ref, X-Azure-RequestChain"
+    ],
+    "indicators": ["403 response on direct access", "NSG/Firewall rules referencing Service Tags", "Application checking X-Forwarded-For or similar headers for authorization", "Azure Load Balancer or Front Door in request path", "X-Azure-* headers present in legitimate responses"],
+    "prerequisites": ["Target application using IP-based access control", "Network path that doesn't validate source IP at TCP layer", "Understanding of HTTP header semantics for proxy trust chains"],
+    "tools": ["send_payload", "curl_get", "http_post"],
+    "tags": ["azure", "service-tag", "spoofing", "firewall", "bypass", "x-forwarded-for", "nsg", "header-injection"],
+    "confidence": 0.80,
+    "mitre_attack": "T1562.004"
+  }
+]

@@ -1,0 +1,25 @@
+[
+  {
+    "id": "cloud-cloudtrail-gap",
+    "category": "EXPLOIT",
+    "subcategory": "AWS",
+    "title": "CloudTrail Logging Gap — Unrecorded API Endpoint Exploitation",
+    "description": "AWS CloudTrail records API activity but certain API endpoints, regions, and event types may not be fully captured — creating logging gaps that attackers can exploit for silent enumeration and data access. Attack: (1) Check CloudTrail configuration: aws cloudtrail describe-trails to list trails and their status. (2) Get event selectors: aws cloudtrail get-event-selectors --trail-name TRAIL_NAME to see which events are logged (management vs data events). (3) Identify unrecorded API actions — data events (S3 object-level, DynamoDB streams, Lambda invocations) are often NOT logged by default, while management events (IAM, EC2 control plane) are logged. (4) Perform reconnaissance through unrecorded endpoints — e.g., S3 GetObject (data event) may not be in CloudTrail while S3 ListBuckets (management event) is. (5) If cloudtrail:StopLogging is allowed: aws cloudtrail stop-logging --name TRAIL_NAME to disable logging entirely. (6) If cloudtrail:DeleteTrail is allowed: aws cloudtrail delete-trail --name TRAIL_NAME to destroy evidence. (7) If cloudtrail:PutEventSelectors is allowed, modify selectors to exclude specific actions from logging. (8) Use IMDS credentials or role chaining for actions — the AssumeRole event is logged but subsequent actions with the assumed role may use different trails.",
+    "techniques": [
+      "List trails: aws cloudtrail describe-trails",
+      "Check trail status: aws cloudtrail get-trail-status --name TRAIL_NAME",
+      "Get event selectors: aws cloudtrail get-event-selectors --trail-name TRAIL_NAME",
+      "Identify gaps: management events logged, data events often not logged by default",
+      "Stop logging: aws cloudtrail stop-logging --name TRAIL_NAME (requires cloudtrail:StopLogging)",
+      "Delete trail: aws cloudtrail delete-trail --name TRAIL_NAME (requires cloudtrail:DeleteTrail)",
+      "Modify selectors: aws cloudtrail put-event-selectors --trail-name TRAIL_NAME --event-selectors file://selectors.json",
+      "S3 data events: aws s3 cp s3://bucket/flag.txt - (may not be logged as data event)"
+    ],
+    "indicators": ["CloudTrail enabled in account", "Data events not configured for S3/DynamoDB/Lambda", "cloudtrail:DescribeTrails allowed", "cloudtrail:StopLogging or cloudtrail:DeleteTrail permission exists", "Multi-region trail vs single-region trail gaps"],
+    "prerequisites": ["AWS credentials with cloudtrail:DescribeTrails permission", "Understanding of management vs data event logging", "Knowledge of target resources to enumerate silently"],
+    "tools": ["aws_cli", "curl_get"],
+    "tags": ["aws", "cloudtrail", "logging", "evasion", "forensics", "detection", "data-events", "stop-logging"],
+    "confidence": 0.85,
+    "mitre_attack": "T1562.008"
+  }
+]

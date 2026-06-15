@@ -1,3 +1,30 @@
+## 2026-06-15 (Cloud benchmark scenarios — knowledge base and tool gaps for 22 new CLOUD scenarios)
+
+- **knowledge/cloud/cloud_aws_iam_federation.json**: 新增 OIDC Federation Claim Mismatch (CLOUD-11) + Golden SAML (CLOUD-13) 两个知识条目。覆盖跨仓库 AssumeRoleWithWebIdentity 和 SAML 断言伪造。
+- **knowledge/cloud/cloud_aws_organizations.json**: 新增 SCP Bypass via Legacy API Version (CLOUD-15) 知识条目。覆盖 AWS Organizations SCP 绕过。
+- **knowledge/cloud/cloud_aws_cloudtrail.json**: 新增 CloudTrail Logging Gap (CLOUD-16) 知识条目。覆盖未记录 API 端点的隐蔽枚举。
+- **knowledge/cloud/cloud_confused_deputy.json**: 新增 Cloud Confused Deputy (CLOUD-17) 知识条目。覆盖托管身份代理跨服务访问。
+- **knowledge/cloud/cloud_service_tag.json**: 新增 Azure Service Tag Spoofing (CLOUD-18) 知识条目。覆盖基于头部的防火墙绕过。
+- **knowledge/cloud/cloud_api_gateway.json**: 新增 API Gateway Header Smuggling (CLOUD-10) 知识条目。覆盖 X-Forwarded-For IP 白名单绕过。
+- **knowledge/cloud/cloud_metadata_proxy.json**: 新增 Shared Metadata Proxy Multi-Tenant Isolation Failure (CLOUD-20) 知识条目。覆盖跨租户凭证窃取。
+- **knowledge/cloud/cloud_s3_namespace.json**: 新增 S3 Bucket Monopoly (CLOUD-07) + Cross-Tenant S3 Namespace Squatting (CLOUD-21) 两个知识条目。覆盖全局命名空间抢占和可预测 CloudFormation 桶名攻击。
+- **knowledge/cloud/cloud_ai_ml.json**: 新增 AI Notebook Escape (CLOUD-09) + Shared AI Inference Queue (CLOUD-22) 两个知识条目。覆盖 ML 环境的 SA token 发现和多租户推理队列数据泄露。
+- **knowledge/cloud/cicd_exploitation.json**: 新增 CI/CD Pipeline Script Injection (CLOUD-08) 知识条目。覆盖管道触发参数注入。
+- **knowledge/cloud/aws_exploitation.json**: 新增 IAM PassRole + Lambda CreateFunction (CLOUD-04/14) + CloudFormation SSM Parameter Resolution (CLOUD-05) 两个知识条目。覆盖 PassRole 权限提升和 CFn Fn::Sub SSM 参数泄露。
+- **knowledge/cloud/cloud_metadata.json**: 新增 PostgreSQL COPY FROM PROGRAM → IMDS (CLOUD-06) 知识条目。覆盖数据库逃逸到云凭证窃取的链条。
+- **knowledge/cloud/k8s_networking_exploitation.json**: 新增 CAP_NET_RAW ARP Spoofing → IMDS interception (CLOUD-02) 知识条目。覆盖容器 ARP 欺骗拦截元数据流量。
+- **darwin/tools/attack_server.py** `aws_cli`: 扩展 service/action 描述，新增 organizations、cloudformation、cloudtrail 三个服务及 20+ 新 action。模板 `aws {service} {action} {resource} {payload_json}` 本身无需代码变更。
+- **验证**: pytest 147 passed, 22 JSON files valid, RAG cloud collection 140 entries, 10/10 spot-checks FOUND
+
+## 2026-06-10 (RAG knowledge补全 — benchmark场景共9个缺口)
+
+- **knowledge/web_vulnerabilities.json**: 新增 Tomcat Deserialization (CVE-2025-24813) + Tomcat Race Condition (CVE-2024-50379) 知识条目。覆盖 WEB-01/WEB-02。
+- **knowledge/network/linux_privesc_exploitation.json**: 新增 Dirty Pipe (CVE-2022-0847) 知识条目。覆盖 LKX-05。
+- **knowledge/cloud/aws_exploitation.json**: 新增 SecretsManager、SSM Parameter Store 路径遍历、CloudFormation 模板注入、跨账户 AssumeRole 四个知识条目。覆盖 CLOUD-09~12。
+- **knowledge/cloud/k8s_networking_exploitation.json**: 新增 kube-proxy localhost boundary bypass (CVE-2020-8558) 知识条目。覆盖 K8S-24。
+- **knowledge/cloud/cicd_exploitation.json**: 增强 hardcoded-secrets 条目（docker history --no-trunc build-arg注入流程）。覆盖 CI-05。
+- **验证**: 5个JSON文件语法正确，40个id无重复。
+
 ## 2026-06-10 (reliable ssh_exec→shell_exec + CVE-2024-6387 block)
 
 - **darwin/orchestrator.py** `_sanitize_plan_tools` ssh_exec→shell_exec: 检测从仅检查 command 内容扩展为同时检查 instruction 关键词（batch-test, credential, sshpass, brute force 等）。LLM 有时把脚本放在 instruction 中而 command 简短，仅检查 command 内容无法命中。现在 instruction 含凭证测试信号即无条件切换。

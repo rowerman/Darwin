@@ -1,0 +1,24 @@
+[
+  {
+    "id": "cloud-multitenant-metadata-proxy",
+    "category": "EXPLOIT",
+    "subcategory": "CLOUD",
+    "title": "Shared Metadata Proxy — Multi-Tenant Isolation Failure via Tenant Header",
+    "description": "In multi-tenant cloud environments, a shared metadata proxy provides instance metadata (credentials, configuration) to tenants. Tenant isolation relies on request headers (e.g., X-Tenant-ID, X-Project-ID). If the header is attacker-controlled and not independently validated, cross-tenant credential theft is possible. Attack: (1) Discover the metadata proxy endpoint — common at dedicated metadata IPs (169.254.169.254) or internal service URLs in multi-tenant setups. (2) Probe with your own tenant ID to confirm functionality: curl -H 'X-Tenant-ID: my-tenant' http://PROXY/latest/meta-data/. (3) Enumerate other tenants: brute force or enumerate tenant IDs from other sources (error messages, shared dashboards, naming conventions). (4) Access another tenant's metadata: curl -H 'X-Tenant-ID: other-tenant' http://PROXY/latest/meta-data/iam/security-credentials/. (5) Extract other tenant's cloud credentials (AWS AccessKeyId/SecretAccessKey, Azure MSI token, GCP SA token). (6) Use stolen credentials to access the victim tenant's cloud resources: S3, RDS, DynamoDB, etc. (7) This attack is effective against multi-tenant platforms that share a metadata proxy between tenants and rely on HTTP headers for tenant routing.",
+    "techniques": [
+      "Discover metadata proxy: probe 169.254.169.254, metadata.internal, or discover from service documentation",
+      "Probe with tenant header: curl -H 'X-Tenant-ID: my-tenant' http://PROXY/latest/meta-data/",
+      "Enumerate tenants: brute-force tenant IDs from predictable patterns (tenant-001, tenant-002, ...)",
+      "Steal cross-tenant credentials: curl -H 'X-Tenant-ID: victim-tenant' http://PROXY/latest/meta-data/iam/security-credentials/",
+      "Use stolen credentials: export AWS_ACCESS_KEY_ID=... AWS_SECRET_ACCESS_KEY=... AWS_SESSION_TOKEN=...",
+      "Verify cross-tenant access: aws sts get-caller-identity, aws s3 ls",
+      "Try different header names: X-Project-ID, X-Tenant-Name, X-Account-ID, X-Subscription-ID"
+    ],
+    "indicators": ["Multi-tenant environment (shared IP space, tenant portals)", "Metadata proxy endpoint accessible from multiple tenants", "X-Tenant-ID or similar tenant routing header in requests", "No authentication beyond tenant header", "IMDS or WireServer accessible with different tenant IDs"],
+    "prerequisites": ["Access to a tenant in the multi-tenant environment", "Knowledge of metadata proxy endpoint", "Ability to set custom HTTP headers in requests", "Target tenant ID or predictable tenant naming scheme"],
+    "tools": ["curl_get", "http_post", "check_cloud_metadata"],
+    "tags": ["cloud", "multi-tenant", "metadata", "isolation-failure", "cross-tenant", "credentials", "proxy", "tenant-header"],
+    "confidence": 0.80,
+    "mitre_attack": "T1522"
+  }
+]

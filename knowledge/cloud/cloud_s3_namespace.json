@@ -1,0 +1,47 @@
+[
+  {
+    "id": "cloud-s3-bucket-monopoly",
+    "category": "EXPLOIT",
+    "subcategory": "AWS",
+    "title": "S3 Bucket Monopoly — Global Namespace Exploitation and Bucket Squatting",
+    "description": "AWS S3 bucket names are globally unique across all AWS accounts. Attackers can predict bucket names that applications will reference (from source code, documentation, DNS, error messages) and register them before the legitimate owner — a technique called bucket monopoly or bucket squatting. Attack: (1) Identify predictable S3 bucket naming patterns from application source code, CloudFormation templates, Terraform configs, or documentation. Common patterns: company-assets, app-logs-ENV, company-static, app-uploads-REGION. (2) Check if the predicted bucket exists: aws s3 ls s3://predicted-bucket-name --no-sign-request. (3) If accessible, list and read objects: aws s3 ls --recursive s3://predicted-bucket-name --no-sign-request, aws s3 cp s3://predicted-bucket-name/flag.txt - --no-sign-request. (4) If bucket does not exist, register it before the application: aws s3 mb s3://predicted-bucket-name --region REGION. (5) If the application uses the bucket name as a domain endpoint (e.g., bucket.s3-website-REGION.amazonaws.com), the squatting bucket can serve malicious content to users of the legitimate application. (6) For CloudFormation/template scenarios, check for auto-generated bucket names: cf-templates-HASH-REGION, aws-cloudformation-HASH.",
+    "techniques": [
+      "Identify bucket naming patterns from source code, error messages, DNS records, or documentation",
+      "Test bucket existence: aws s3 ls s3://BUCKET --no-sign-request",
+      "List bucket contents: aws s3 ls --recursive s3://BUCKET --no-sign-request",
+      "Download objects: aws s3 cp s3://BUCKET/path/file . --no-sign-request",
+      "URL-based access: curl https://BUCKET.s3.amazonaws.com/flag.txt",
+      "Register bucket: aws s3 mb s3://BUCKET --region REGION",
+      "Set bucket website: aws s3 website s3://BUCKET --index-document index.html",
+      "Check bucket region: curl -I https://BUCKET.s3.amazonaws.com (x-amz-bucket-region header)"
+    ],
+    "indicators": ["Bucket name discovered in source code, DNS, or error messages", "Predictable naming pattern (company-env, app-component-region)", "Application referencing S3 bucket at runtime", "aws s3 ls returns bucket contents without authentication"],
+    "prerequisites": ["S3 bucket name or predictable naming pattern", "Network access to AWS S3 endpoint", "aws CLI or curl for HTTP requests"],
+    "tools": ["aws_cli", "curl_get"],
+    "tags": ["aws", "s3", "bucket-monopoly", "namespace", "squatting", "predictable-names", "data-exfiltration", "shadow-resource"],
+    "confidence": 0.85,
+    "mitre_attack": "T1530"
+  },
+  {
+    "id": "cloud-cfn-bucket-squatting",
+    "category": "EXPLOIT",
+    "subcategory": "AWS",
+    "title": "Cross-Tenant S3 Namespace Squatting — Predictable CloudFormation Bucket Names",
+    "description": "AWS CloudFormation auto-generates S3 bucket names with predictable patterns when storing templates (e.g., cf-templates-HASH-REGION). If an attacker can predict the hash, they can pre-create the bucket in a cross-tenant scenario and read the victim's template data or inject malicious templates. Attack: (1) Identify that CloudFormation is used — check for stack names in application responses, error messages, or source code. (2) Enumerate existing S3 buckets with CloudFormation naming patterns: aws s3 ls s3://cf-templates-PREDICTED_HASH-REGION --no-sign-request. (3) Predict bucket names using common hash patterns, account IDs, and region suffixes. (4) If bucket exists but has no explicit permissions set, read its contents: aws s3 cp s3://cf-templates-HASH-REGION/flag.txt -. (5) Cross-tenant: the bucket may belong to a different tenant/account. If the bucket policy is permissive (allowing Principal: * for GetObject), read contents from any account. (6) Alternative: enumerate other auto-generated bucket patterns: elasticbeanstalk-REGION-HASH, aws-logs-ACCOUNT-REGION, serverlessrepo-REGION-HASH.",
+    "techniques": [
+      "Identify CloudFormation usage: check for stack IDs, CFN outputs, or CloudFormation URLs in responses",
+      "Enumerate CFN buckets: aws s3 ls s3://cf-templates-HASH-REGION --no-sign-request",
+      "Predict bucket name: cf-templates-{MD5 of stack name}-{region}",
+      "Read from squatted bucket: aws s3 cp s3://cf-templates-HASH-REGION/flag.txt - --no-sign-request",
+      "Check other auto-generated patterns: elasticbeanstalk-REGION-HASH, aws-logs-ACCOUNT-REGION",
+      "Cross-tenant enumeration: aws s3 ls s3://BUCKET --no-sign-request from different account context",
+      "URL access: curl https://cf-templates-HASH-REGION.s3.amazonaws.com/flag.txt"
+    ],
+    "indicators": ["CloudFormation in use (stack IDs in responses)", "S3 buckets with cf-templates- prefix", "Permissive bucket policy (Principal: * or anonymous GetObject)", "Auto-generated bucket naming patterns discoverable"],
+    "prerequisites": ["CloudFormation-generating S3 bucket pattern identified", "Cross-tenant or anonymous S3 access", "aws CLI for bucket enumeration"],
+    "tools": ["aws_cli"],
+    "tags": ["aws", "s3", "cloudformation", "namespace-squatting", "cross-tenant", "predictable-names", "data-theft"],
+    "confidence": 0.80,
+    "mitre_attack": "T1530"
+  }
+]

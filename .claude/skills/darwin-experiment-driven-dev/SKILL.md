@@ -1,6 +1,6 @@
 ---
 name: darwin-experiment-driven-dev
-description: Use when debugging DARWIN experiment failures, modifying orchestrator/DKG/CTEG/RAG/DPM/prompt/sub-agent code, analyzing why an LLM-driven pentest didn't capture a flag, adding tools to recon_server or attack_server, using web-search for exploitation research, changing Solo/Multi-agent mode behavior, or working with new vuln types (SSRF/SSTI/NoSQLi/Linux privesc/K8s networking/Cloud chains/AD DACL/RBCD) in the DARWIN penetration testing framework
+description: Use when debugging DARWIN experiment failures, modifying orchestrator/DKG/CTEG/RAG/DPM/prompt/sub-agent code, analyzing why an LLM-driven pentest didn't capture a flag, adding tools to recon_server or attack_server, using web-search for exploitation research, changing Solo/Multi-agent mode behavior, or working with new domains (CLOUD IAM/IMDS/cross-account, CI/CD pipeline, kernel exploits/eBPF, network attacks) in the DARWIN penetration testing framework
 ---
 
 # DARWIN Experiment-Driven Development
@@ -83,23 +83,27 @@ docker ps --format "table {{.Names}}\t{{.Ports}}" | grep <scenario-id>
 ```
 
 **参考文档**：
-- `/home/kianabin/benchmark_design/benchmarks/cve_challenges/README.md` — 场景总览（57 个场景 + 34 条攻击链，覆盖 10 个领域）
+- `/home/kianabin/benchmark_design/benchmarks/cve_challenges/README.md` — 场景总览（115+ 场景 + 43 条攻击链，覆盖 10 个领域）
 - `/home/kianabin/benchmark_design/benchmarks/cve_challenges/docs/LEARNING_PATH.md` — 按难度和攻击路径的场景推荐
-- `/home/kianabin/benchmark_design/benchmarks/cve_challenges/docs/scenarios/` — 逐个场景详细利用流程（K8s/AD/Web/DB/Linux 共 50+ 文档）
+- `/home/kianabin/benchmark_design/benchmarks/cve_challenges/docs/scenarios/` — 逐个场景详细利用流程（K8s/AD/Web/DB/Linux/Cloud 共 70+ 文档）
 - `/home/kianabin/benchmark_design/benchmarks/cve_challenges/docs/chains/` — 每条攻击链的完整利用步骤
 - `/home/kianabin/benchmark_design/benchmarks/CLAUDE.md` — Benchmark 架构和操作指南
-- `/home/kianabin/benchmark_design/benchmarks/BENCHMARK_SUMMARY.md` — 最详尽的利用命令参考（~7900 行）
+- `/home/kianabin/benchmark_design/benchmarks/BENCHMARK_SUMMARY.md` — 最详尽的利用命令参考
+- `/home/kianabin/benchmark_design/benchmarks/BENCHMARK_SCENARIOS_OVERVIEW.md` — 场景一览表
 
 选靶机顺序建议（从简单到复杂，渐进发现框架泛化问题）：
 1. **L1 Web 基础**（web-03 WordPress, web-04 WPBookit）→ Solo 模式基础链路
-2. **L2 Web + 新漏洞类型**（web-01 Tomcat, web-02 Tomcat Race, web-10 SSRF, web-12 SSTI）→ 多步骤利用 + 新 vuln 类别（SSRF/SSTI）
-3. **L1 DB + NoSQL**（db-05 Redis, db-06 MongoDB）→ 非 HTTP + NoSQL 数据库
-4. **Defense 变体**（def-waf）→ DPM 检测和 bypass
-5. **L2 DB 传统 + NoSQL**（db-01~04 SQL, db-07 Elasticsearch, db-08 CouchDB）→ 数据库利用多样性
-6. **Linux 提权**（lnx-05 sudo chroot; lnx-06~13: SUID/Docker socket/CAP_DAC/Cron/Polkit/LD_PRELOAD/etc/passwd）→ 后渗透提权技术覆盖
-7. **K8s 全场景**（26 个：容器逃逸 + RBAC + hostPath + CRI/Docker Socket + Ingress/ExternalIP/Webhook/NetworkPolicy 网络攻击）→ CloudAgent + multi-agent
-8. **AD 全场景**（14 个 Samba-compatible：经典 Kerberoasting/AS-REP/PTH/DCSync/Golden + GPP/Silver/ACL Kerb/Constrained Deleg + RBCD/Shadow Credentials/WriteOwner/ForceChangePass/Unconstrained Deleg）→ ADAgent
-9. **攻击链全类型**（34 条：纯 K8s + 纯 AD + Web→DB + Web→Linux→AD + Web→Cloud + DB→Cloud + 纯 Cloud）→ 跨域 + DKG 跨步骤复用
+2. **L2 Web + 新漏洞类型**（web-01 Tomcat, web-02 Tomcat Race, web-10 SSRF, web-12 SSTI）→ 多步骤利用 + SSRF/SSTI
+3. **L1 DB + NoSQL**（db-05 Redis, db-06 MongoDB）→ 非 HTTP + NoSQL
+4. **Defense 变体**（DEF-01~05：WAF + Process Hiding + Anti-Forensics + LOTL）→ DPM 检测和 bypass
+5. **L2 DB**（db-01~04 SQL, db-07 Elasticsearch, db-08 CouchDB）→ 数据库利用多样性
+6. **Linux 提权 + 内核**（LNX-05~13: SUID/Docker socket/CAP/Cron/Polkit/LD_PRELOAD; LKX-01~05: kernel UAF/eBPF/Dirty Pipe）→ 后渗透 + 内核 exploit
+7. **CI/CD**（CI-01~05：Poisoned Pipeline/.git/Secrets/Webhook/Build Arg）→ 供应链攻击面
+8. **NET 网络攻击**（NET-01~03：ARP spoofing/DNS exfil/Container sniffing）→ 网络层横向移动
+9. **K8s 全场景**（29 个：容器逃逸 + RBAC + 网络攻击 + Node Selector/Toleration/CNI spoof）→ CloudAgent + multi-agent
+10. **AD 全场景**（16 个 Samba-compatible：经典 + 高级 DACL + Cross-Forest/AdminSDHolder 持久化）→ ADAgent
+11. **CLOUD 全场景**（22 个：IMDS/跨账号/联合身份/Lambda PassRole/S3 独占/Notebook 逃逸/OIDC/SCP 绕过等）→ Cloud 渗透
+12. **攻击链全类型**（43 条：纯 K8s + 纯 AD + Web→DB + Web→Cloud + DB→Cloud + Cloud→Cloud 跨账号 + Cross-Forest AD）→ 跨域 + 跨账号
 
 ### 阶段 2：运行实验
 
@@ -307,7 +311,7 @@ run.py / experiments/runner.py
 | **修改影响面** | 新增工具：需要同时在 server 注册 + prompt 模板中告知 LLM。修改输出解析：影响下游所有依赖该工具输出的逻辑。 |
 | **近期新增** | impacket_silver_ticket, tomcat_exploit, wpscan_enum, wp_xmlrpc_brute, oracle_tns_poison, nmap_port_range, searchsploit_copy, php_filter_chain, impacket_ntlmrelayx, web-search |
 | **近期改进** | oracle_query: heredoc→printf（单引号修复）；jwt_forge: claims→claims_b64（base64 编码防单引号破坏）；wp_xmlrpc_brute: 用户列表字符串分割；oracle_tns_poison: PORT 模板变量 + 包长度含 header；gobuster_dir: 自定义 wordlist；ssh_key_exec: BatchMode；mcp_gateway: 自动填充参数默认值 |
-| **Benchmark Phase 10-12** | 场景 ~44→57 含新类别：SSRF/SSTI（WEB-10~12）、NoSQL（DB-06~09 MongoDB/Elasticsearch/CouchDB）、Linux 提权（LNX-06~13 SUID/Docker Socket/CAP/Cron/Polkit/LD_PRELOAD）、K8s 网络攻击（K8S-20~27 Ingress/ExternalIP/Webhook/NetworkPolicy）、AD 高级（AD-17~21 RBCD/Shadow Credentials/WriteOwner/ForceChangePass/Unconstrained Deleg）、Cloud 链（s3-to-kms/sqs-to-lambda/ssti-to-cloud/xss-to-cloud）。需确认以下工具类别是否在 attack_server 中注册：NoSQL client（MongoDB/Elasticsearch/CouchDB）、Linux 提权 exploit（SUID/CAP/cron/Polkit）、K8s 网络操作（Ingress TLS/ExternalIP/Webhook）、Cloud CLI（AWS S3/IAM/STS/KMS/Lambda/SQS + IMDS metadata） |
+| **Benchmark Phase 10-13** | 场景 ~57→115+，新增 4 个领域：**CLOUD** (22: IMDS/跨账号/OIDC/PassRole/S3/SCP bypass)、**CI/CD** (5: Poisoned Pipeline/.git/Secrets/Webhook/Build Arg)、**NET** (3: ARP spoofing/DNS exfil/Container sniffing)、**LKX** (5: kernel UAF/eBPF/Dirty Pipe)。Web 12→22、AD 14→16 (Cross-Forest/AdminSDHolder)、K8s 26→29 (Node Selector/Toleration/CNI spoof)、DEF 2→5。攻击链 34→43，Cloud 链从旧版完全替换为跨账号/SCP/OIDC/Federation 主题。DARWIN CloudAgent 需确认覆盖：**Cloud 工具**（AWS CLI — STS AssumeRole/IMDS metadata/S3/Lambda/IAM/Organizations SCP）、**CI/CD 工具**（.git 提取/Pipeline YAML 解析/Webhook 利用）、**内核 exploit 工具**（eBPF 程序加载/kernel module 编译/Dirty Pipe）、**网络攻击工具**（ARP spoofing/DNS tunneling/packet capture） |
 
 #### LLM Session (`darwin/utils/llm.py`)
 | 维度 | 详情 |
@@ -446,10 +450,15 @@ _analyze_phase 正确识别了漏洞，但 exploit 阶段失败
     │   │   ├── SSTI → send_payload (Jinja2/Twig ${7*7} / {{7*7}} 检测)
     │   │   ├── NoSQLi → MongoDB $regex injection, Elasticsearch script query
     │   │   ├── Linux 提权 → SUID binary, Docker socket, capsh, cron, Polkit exploit
-    │   │   ├── K8s 网络 → kubectl (Ingress), ExternalIP service, Webhook admission
-    │   │   ├── Cloud → AWS CLI (S3/IAM/STS/KMS), IMDS metadata (169.254.169.254)
+    │   │   ├── K8s 网络 → kubectl (Ingress), ExternalIP, Webhook, Toleration, CNI
+    │   │   ├── Cloud IAM → AWS STS AssumeRole, IMDS metadata (169.254.169.254),
+    │   │   │   Lambda PassRole, S3 bucket policy, SCP evaluation, OIDC federation
+    │   │   ├── CI/CD → .git extraction, Pipeline YAML parsing, Webhook forgery,
+    │   │   │   Dockerfile Build Arg injection
+    │   │   ├── 内核 exploit → kernel module 编译, eBPF 程序加载, Dirty Pipe
+    │   │   ├── NET 网络 → ARP spoofing, DNS tunneling, packet capture (tcpdump)
     │   │   ├── 非 HTTP 服务 → VULN_TOOL_MAP: authbypass/weakauth → redis_cmd 等
-    │   │   └── AD 高级 → impacket (RBCD/KeyCredentialLink/DACL/Unconstrained Deleg)
+    │   │   └── AD 高级 → impacket (RBCD/KeyCredentialLink/DACL/Cross-Forest Trust)
     │   └── ExploitAgent 能识别 15 种漏洞类型——如果 LLM 无法评估工具输出，
     │       检查 exploit_agent prompt 的 Key indicators 是否覆盖了当前漏洞类型
     │
