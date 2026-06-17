@@ -133,9 +133,12 @@ linux_priv_check
 2. **Handle TLS failures**: retry with insecure=true if you get SSL errors
 3. **Handle auth failures**: read credentials from local config files, try common passwords
 4. **Fingerprint**: use whatweb_scan to identify frameworks and versions
-5. **Enumerate (MANDATORY — never skip)**: use dirb_scan or gobuster_dir on EVERY HTTP
-   service to discover hidden endpoints. Also curl_get common paths (/api, /admin, /.git,
-   /robots.txt) and framework-specific paths based on the detected technology stack.
+5. **Enumerate (MANDATORY — never skip)**: use dirb_scan or gobuster_dir on the PRIMARY
+   web application (the main HTTP service) to discover hidden endpoints. Do NOT run
+   gobuster/dirb on cloud API simulators (IMDS, S3, STS, Lambda endpoints) — these are
+   REST APIs, not directory-browsable web applications. For cloud APIs, use curl_get to
+   probe specific paths (/latest/meta-data/, /bucket/, /objects/) instead. Also curl_get
+   common paths (/api, /admin, /.git, /robots.txt) and framework-specific paths.
    A plain index page often hides a complex application behind other paths —
    do NOT assume the target is simple just because the root page looks empty or
    returns an error. Enumeration MUST happen BEFORE exploitation.

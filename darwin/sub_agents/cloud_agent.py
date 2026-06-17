@@ -59,7 +59,8 @@ Targets: {self.task_scope.target_hosts if self.task_scope else []}
 Tools: {', '.join(tools)}
 
 Generate a cloud/K8s attack plan as JSON array. Each task: id, instruction, tool, params, dependent_task_ids, reason.
-Prioritize: 1) capability/mount checks, 2) service account enumeration, 3) RBAC analysis, 4) escape attempts.
+If pod_info shows "Not yet enumerated" (Docker cloud, no K8s): 1) check_cloud_metadata, 2) aws_cli for S3/IAM/STS, 3) curl_get for cloud APIs.
+If K8s environment: 1) capability/mounts, 2) SA enumeration, 3) RBAC, 4) escape.
 Output ONLY valid JSON array. 3-6 tasks."""
         self._maybe_compress()
         content, _ = self.llm.generate(prompt=prompt, system_prompt=self._system_prompt.format(
@@ -75,6 +76,17 @@ Output ONLY valid JSON array. 3-6 tasks."""
             plan = json.loads(match.group(0)) if match else []
             if plan: return plan
         except Exception: pass
+        # For non-K8s environments (pod_info not enumerated = Docker cloud),
+        # prioritize cloud API tasks over container escape checks.
+        _pod_info = self.cloud_context.get("pod_info", "")
+        if _pod_info and "not yet" in _pod_info.lower():
+            return [{"id": "check-1", "instruction": "Check for cloud metadata access (IMDS)",
+                     "tool": "check_cloud_metadata", "params": {}, "dependent_task_ids": [],
+                     "reason": "Non-K8s cloud environment — IMDS may expose AWS credentials"},
+                    {"id": "check-2", "instruction": "Enumerate cloud services with aws_cli",
+                     "tool": "aws_cli", "params": {"service": "sts", "action": "get-caller-identity",
+                     "resource": "", "payload_json": ""}, "dependent_task_ids": ["check-1"],
+                     "reason": "Cloud credentials from IMDS enable AWS service access"}]
         return [{"id": "check-1", "instruction": "Check container capabilities and mounts",
                  "tool": "check_capabilities", "params": {}, "dependent_task_ids": [],
                  "reason": "Assess container escape potential"},

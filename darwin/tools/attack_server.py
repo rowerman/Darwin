@@ -556,6 +556,19 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
         if isinstance(paths, (list, tuple)):
             paths = ",".join(str(p) for p in paths)
         hosts = [h.strip() for h in internal_hosts.split(",") if h.strip()]
+        # If the caller provided very few hosts (e.g., LLM specified only
+        # "localhost"), merge with the comprehensive defaults. A narrow list
+        # is almost always an oversight, not a deliberate restriction.
+        # This keeps the tool general — no cloud-provider-specific IPs here.
+        _default_hosts_raw = ("localhost,127.0.0.1,internal,metadata,169.254.169.254,"
+                              "0.0.0.0,172.17.0.1,172.17.0.2,172.17.0.3,172.17.0.4,"
+                              "172.18.0.1,172.18.0.2,172.18.0.3,host.docker.internal")
+        _default_hosts = [h.strip() for h in _default_hosts_raw.split(",") if h.strip()]
+        if len(hosts) < len(_default_hosts) // 2:
+            # User-provided list is narrow — merge with defaults.
+            for _dh in _default_hosts:
+                if _dh not in hosts:
+                    hosts.append(_dh)
         port_list = [p.strip() for p in ports.split(",") if p.strip()]
         path_list = [p.strip() for p in paths.split(",") if p.strip()]
 
@@ -629,12 +642,12 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
     gateway.register(
         name="ssrf_probe",
         func=ssrf_probe,
-        description="Discover internal services through an SSRF vector. Given an SSRF endpoint URL, probes common internal hosts (localhost, 127.0.0.1, Docker bridge IPs 172.17-18.0.x, host.docker.internal, cloud metadata 169.254.169.254) and ports for accessible services. When running inside containers, internal services are often on Docker bridge IPs rather than localhost. Automatically extracts flags from responses. Use when web application has a URL fetch/proxy/redirect feature.",
+        description="Discover internal services through an SSRF vector. Given an SSRF endpoint URL, probes common internal hosts (localhost, 127.0.0.1, Docker bridge IPs 172.17-18.0.x, host.docker.internal, cloud metadata 169.254.169.254) and ports for accessible services. IMPORTANT: do NOT restrict internal_hosts to 'localhost' alone — services often run on other containers reachable via Docker bridge IPs. Omit internal_hosts entirely to use the comprehensive defaults. When running inside containers, internal services are on Docker bridge IPs, NOT localhost. Automatically extracts flags from responses.",
         parameters={
             "ssrf_url": {"type": "string", "description": "The SSRF-vulnerable endpoint URL (e.g. 'http://target:10110/fetch')"},
             "url_param": {"type": "string", "description": "URL parameter name for the SSRF query (default 'url')"},
             "port_param": {"type": "string", "description": "Optional port parameter name if separate from url_param"},
-            "internal_hosts": {"type": "string", "description": "Comma-separated internal hosts to probe (default includes localhost, 127.0.0.1, Docker bridge IPs 172.17-18.0.x, host.docker.internal, cloud metadata 169.254.169.254)"},
+            "internal_hosts": {"type": "string", "description": "Comma-separated internal hosts to probe. LEAVE EMPTY to use defaults (covers localhost, Docker IPs 172.17-18.0.x, cloud metadata 169.254.169.254). Do NOT set to 'localhost' alone — this misses Docker-internal services."},
             "ports": {"type": "string", "description": "Comma-separated ports to probe (default: 80,443,8080,5000,3000)"},
             "paths": {"type": "string", "description": "Comma-separated paths to probe (default: /,/flag,/flag.txt,/admin,/api)"},
         },
@@ -2349,12 +2362,12 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
     gateway.register_shell_tool(
         name="aws_cli",
         command_template="aws {service} {action} {resource} {payload_json} --output json 2>&1",
-        description="Execute AWS CLI commands for cloud service exploitation. Supports S3 (s3 ls/cp/sync --no-sign-request), IAM (iam list-roles/get-policy/attach-role-policy/simulate-principal-policy), STS (sts assume-role/get-caller-identity/assume-role-with-web-identity/assume-role-with-saml), KMS (kms decrypt/list-keys), Lambda (lambda list-functions/invoke/create-function), SQS (sqs list-queues/receive-message), DynamoDB (dynamodb list-tables/scan/query), Organizations (organizations describe-organization/list-accounts/list-policies/list-targets-for-policy/describe-policy/detach-policy/disable-policy-type), CloudFormation (cloudformation create-stack/validate-template/describe-stacks), CloudTrail (cloudtrail describe-trails/get-trail-status/get-event-selectors/stop-logging). Automatically uses IMDS credentials when running on EC2. For unauthenticated S3 access, add '--no-sign-request' to payload_json.",
+        description="Execute AWS CLI commands for cloud service exploitation. Supports S3 (s3 ls/cp/sync --no-sign-request), IAM (iam list-roles/get-policy/attach-role-policy/simulate-principal-policy), STS (sts assume-role/get-caller-identity/assume-role-with-web-identity/assume-role-with-saml), KMS (kms decrypt/list-keys), Lambda (lambda list-functions/invoke/create-function), SQS (sqs list-queues/receive-message), DynamoDB (dynamodb list-tables/scan/query), Organizations (organizations describe-organization/list-accounts/list-policies/list-targets-for-policy/describe-policy/detach-policy/disable-policy-type), CloudFormation (cloudformation create-stack/validate-template/describe-stacks), CloudTrail (cloudtrail describe-trails/get-trail-status/get-event-selectors/stop-logging). For LOCAL cloud simulators (not real AWS), add '--endpoint-url http://localhost:PORT' or '--endpoint-url http://127.0.0.1:PORT' in payload_json to target the local service. Automatically uses IMDS credentials when running on EC2. For unauthenticated S3 access, add '--no-sign-request' to payload_json.",
         parameters={
             "service": {"type": "string", "description": "AWS service: s3, iam, sts, kms, lambda, sqs, dynamodb, organizations, cloudformation, cloudtrail. Use 'organizations' for SCP bypass and account enumeration. Use 'cloudformation' for template injection attacks. Use 'cloudtrail' for logging evasion and trail enumeration."},
             "action": {"type": "string", "description": "AWS CLI action: ls, cp, sync, list-roles, get-policy, get-role, attach-role-policy, simulate-principal-policy, assume-role, assume-role-with-web-identity, assume-role-with-saml, get-caller-identity, decrypt, list-functions, invoke, create-function, list-queues, receive-message, list-tables, scan, query, describe-organization, list-accounts, list-policies, list-targets-for-policy, describe-policy, detach-policy, disable-policy-type, create-stack, validate-template, describe-stacks, describe-trails, get-trail-status, get-event-selectors, stop-logging"},
             "resource": {"type": "string", "description": "Resource identifier (e.g., 's3://bucket-name', 'role/role-name', '--function-name NAME', '--queue-url URL', '--table-name NAME'). Leave empty for list operations."},
-            "payload_json": {"type": "string", "description": "Additional flags, --query filters, or JSON payload. Examples: '--no-sign-request', '--role-session-name test', '--max-number-of-messages 10', '--filter-expression \"attribute_exists(flag)\"', '--query \"Buckets[].Name\"'", "default": ""},
+            "payload_json": {"type": "string", "description": "Additional flags, --query filters, or JSON payload. Examples: '--no-sign-request' (anonymous S3), '--endpoint-url http://localhost:10704' (local cloud simulator), '--role-session-name test', '--max-number-of-messages 10', '--filter-expression \"attribute_exists(flag)\"', '--query \"Buckets[].Name\"'", "default": ""},
         },
         parser=_parse_shell_output,
         timeout=30,

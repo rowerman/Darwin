@@ -862,6 +862,11 @@ class Orchestrator:
             ("/validate", "admission", "kubernetes-admission",
              "kubernetes", "POST",
              '{"apiVersion":"admission.k8s.io/v1","kind":"AdmissionReview","request":{"uid":"probe"}}'),
+            # S3-compatible object storage API probes.
+            # MinIO and other S3-compatible services expose REST paths.
+            ("/minio/webrpc", "minio", "minio-s3", "s3", "GET", ""),
+            ("/bucket", '"objects"', "s3-api", "s3", "GET", ""),
+            ("/v1/objects", '"objects"', "s3-api", "s3", "GET", ""),
         ]
 
         for p in discovered_ports:
@@ -1526,14 +1531,26 @@ class Orchestrator:
                 # Small/medium HTML page — full recon: gobuster + nikto + form_extract
                 # Threshold raised from 200K to 500K to cover medium pages (200-500KB)
                 # that previously fell into a gap and received no recon at all.
-                # Only run expensive tools on nmap-discovered primary ports.
-                # Endpoints discovered through whatweb/internal-probes (simulators,
-                # API services, SSRF targets) don't have directory structures to
-                # brute-force — gobuster/nikto waste 90-180s each on them.
+                # Only run expensive tools on primary HTTP endpoints discovered
+                # by nmap or bootstrap whatweb. Skip derived/internal endpoints
+                # (API probes, path probes, deep recon follow-ups, simulators)
+                # that don't have directory structures to brute-force.
                 _disc = endpoint.get("discovered_by", "")
-                if not _disc.startswith("bootstrap-nmap"):
+                _is_primary = (
+                    _disc == "bootstrap-nmap"      # nmap-discovered port
+                    or _disc == "bootstrap"         # bootstrap whatweb on primary port
+                    or _disc == ""                  # legacy endpoint without tag
+                )
+                if not _is_primary:
                     log.info("_deep_recon: skipping non-primary endpoint %s (discovered_by=%s)", url, _disc)
                     return  # skip gobuster/nikto/form for derived endpoints
+                # Skip gobuster on REST API / JSON endpoints — these don't have
+                # directory structures to brute-force. A JSON response means
+                # this is a programmatic API, not a directory-browsable web app.
+                _sample = endpoint.get("sample_response", "")
+                if _sample.strip().startswith("{") or _sample.strip().startswith("["):
+                    log.info("_deep_recon: skipping JSON/API endpoint %s", url)
+                    return
                 try:
                     bust_result = await self.recon_gateway.call("gobuster_dir",
                         {"target_url": url})
@@ -3091,19 +3108,22 @@ class Orchestrator:
             "auth": ["curl_get"],
             "csrf": ["curl_get"],
             "deserialization": ["send_payload", "shell_exec"],
-            "ssrf": ["curl_get"],
+            "ssrf": ["ssrf_probe"],
             "xxe": ["send_payload"],
             "jwt": ["jwt_forge"],
             "race condition": ["send_payload", "shell_exec"],
-            "informationdisclosure": ["curl_get"],
+            "informationdisclosure": ["curl_get"],  # metadata/API endpoints should use curl_get, not send_payload
+            "unauthenticatedaccess": ["curl_get", "aws_cli"],  # open S3 buckets, unauthenticated APIs
             "privilege_escalation": ["shell_exec", "linux_priv_check"],
             "container_escape": ["check_capabilities", "check_mounts", "shell_exec"],
             "mysql_file_write": ["mysql_file_write"],
             "mysql_udf": ["mysql_query", "mysql_file_write", "shell_exec"],
             "postgres_rce": ["psql_query", "shell_exec"],
-            "authbypass": ["curl_get", "aws_cli", "test_credential", "ssh_exec", "shell_exec",
+            "authbypass": ["curl_get", "test_credential", "ssh_exec", "shell_exec",
                           "redis_cmd", "mysql_query", "psql_query", "mssql_query",
                           "mssqlclient_query", "oracle_query"],
+            # NOTE: aws_cli removed from authbypass — it requires service+action
+            # params that the systematic pass cannot populate from vuln context
             "weakauth": ["mssqlclient_query", "mssql_query", "mysql_query",
                         "psql_query", "redis_cmd", "oracle_query",
                         "test_credential", "ssh_exec"],
@@ -3117,7 +3137,7 @@ class Orchestrator:
             "idor": ["curl_get"],
             "auth": ["curl_get"],
             "deserialization": ["send_payload"],
-            "ssrf": ["curl_get"],
+            "ssrf": ["ssrf_probe"],
             "xxe": ["send_payload"],
             "jwt": ["jwt_forge"],
             "privilege": ["shell_exec", "linux_priv_check"],
@@ -3701,6 +3721,27 @@ class Orchestrator:
                         "endpoint_count": len(self.dkg.query_nodes("Endpoint")),
                     })
                 vulns_json = parsed.get("vulnerabilities", [])
+                # Parse attack_paths: multi-step chains that structure the exploit order.
+                # The plan generation prompt references attack_paths for task dependency
+                # ordering — storing them as DKG Analysis nodes makes them visible to the
+                # plan LLM and sub-agents.
+                attack_paths = parsed.get("attack_paths", [])
+                if attack_paths and isinstance(attack_paths, list):
+                    for ap in attack_paths[:5]:
+                        if isinstance(ap, dict):
+                            ap_id = ap.get("id", f"path-{int(time.time()*1000)%100000}")
+                            ap_steps = ap.get("steps", [])
+                            ap_desc = ap.get("description", "")
+                            self.dkg.add_node("Analysis", f"attack-path-{ap_id}", {
+                                "phase": "analyze",
+                                "type": "attack_path",
+                                "content": ap_desc,
+                                "path_id": ap_id,
+                                "steps": ap_steps,
+                                "step_count": len(ap_steps),
+                            })
+                    log.info("_analyze_phase: stored %d attack paths in DKG",
+                             len([ap for ap in attack_paths if isinstance(ap, dict)]))
             else:
                 vulns_json = parsed if isinstance(parsed, list) else []
             print(f"[ANALYZE] Parsed {len(vulns_json)} vulnerability hypotheses from LLM")
@@ -5525,10 +5566,22 @@ class Orchestrator:
                         v for v in self.dkg.query_nodes("Vulnerability")
                         if v.get("vuln_type") == "PlatformDiscovery"
                     ]
+                    # Also detect cloud platforms from DKG Service nodes even if
+                    # no PlatformDiscovery vuln was explicitly created. Cloud
+                    # service banners (IMDS, S3, STS) are reliable signals.
+                    if not _pd_vulns:
+                        _cloud_svc_sigs = any(
+                            cs in str(s).lower()
+                            for cs in ("imds", "ec2 metadata", "s3-compatible",
+                                       "aws sts", "lambda", "amazon ec2")
+                            for s in self.dkg.query_nodes("Service")
+                        )
+                        if _cloud_svc_sigs:
+                            _pd_vulns = [{"evidence": "cloud-service-banner-detected"}]
                     if _pd_vulns:
                         _pd_evidence = (_pd_vulns[0].get("evidence", "") or "").lower()
                         _platform_queries: list[str] = []
-                        if "aws" in _pd_evidence or "s3" in _pd_evidence:
+                        if "aws" in _pd_evidence or "s3" in _pd_evidence or "cloud-service" in _pd_evidence:
                             _platform_queries = [
                                 "AWS IAM privilege escalation enumeration techniques",
                                 "AWS cloud service discovery STS Lambda after S3 access",
@@ -6287,11 +6340,47 @@ Output ONLY valid JSON:
         subsequent tasks.
         """
         tool = str(task.get("tool", "") or "")
-        if tool not in ("shell_exec", "ssh_exec", "test_credential"):
+        if tool not in ("shell_exec", "ssh_exec", "test_credential",
+                        "aws_cli", "curl_get", "ssrf_probe"):
             return
 
         combined = "\n".join(raw_stdouts)
         if len(combined) < 20:
+            return
+
+        # ── AWS credential extraction ──────────────────────────────
+        # IMDS returns AccessKeyId/SecretAccessKey/Token — extract these
+        # directly without requiring an LLM call (format is well-known).
+        _aws_json_match = re.search(
+            r'"AccessKeyId"\s*:\s*"([^"]+)"\s*,\s*"SecretAccessKey"\s*:\s*"([^"]+)"'
+            r'(?:,\s*"Token"\s*:\s*"([^"]+)")?',
+            combined,
+        )
+        if _aws_json_match:
+            _ak = _aws_json_match.group(1)
+            _sk = _aws_json_match.group(2)
+            _token = _aws_json_match.group(3) or ""
+            _host = ""
+            _port = ""
+            for s in self.dkg.query_nodes("Service"):
+                _p = s.get("port", 0)
+                if _p:
+                    _host = "localhost"
+                    _port = str(_p)
+                    break
+            cred_id = f"cred-aws-{_ak[:8]}-{int(time.time()) % 100000}"
+            self.dkg.add_node("Credential", cred_id, {
+                "username": _ak, "password": _sk,
+                "access_key": _ak, "secret_key": _sk, "session_token": _token,
+                "cred_type": "aws", "source_host": _host or "localhost",
+                "port": int(_port) if _port else 0,
+                "source": "imds_extracted",
+            })
+            log.info("Extracted AWS credentials: AccessKeyId=%s... SecretAccessKey=%s...",
+                     _ak[:12], _sk[:8])
+            # CTEG task recording is handled by the orchestrator's main loop
+            # at orchestrator.py:630 via TaskRecord dataclass — no explicit
+            # commit_task call needed here.
             return
 
         # ── Regex pre-filter ────────────────────────────────────────
@@ -6467,6 +6556,32 @@ Output ONLY valid JSON:
                     "Send authenticated requests with curl_get: "
                     'headers="Authorization: Bearer <token>", insecure=true.\n'
                 )
+                # AWS/cloud credential detection
+                if any(kw in task_result_lower for kw in
+                       ("accesskeyid", "secretaccesskey", "sessiontoken",
+                        "aws_access_key", "iam/security-credentials",
+                        "assumerole", "temporary credential")):
+                    cred_reminder += (
+                        "\nCLOUD CREDENTIALS FOUND: The output contains AWS IAM "
+                        "credentials (AccessKeyId/SecretAccessKey/Token). IMMEDIATELY "
+                        "add tasks to use these with aws_cli:\n"
+                        "  - aws sts get-caller-identity\n"
+                        "  - aws s3 ls (for data access)\n"
+                        "  - aws iam list-roles (for privilege escalation)\n"
+                        "For local cloud simulators, use "
+                        "--endpoint-url http://localhost:PORT in payload_json.\n"
+                    )
+                # S3 / object storage detection
+                if any(kw in task_result_lower for kw in
+                       ("s3", "bucket", "object storage", "listobjects",
+                        "getobject", ".s3.")):
+                    cred_reminder += (
+                        "\nS3 / OBJECT STORAGE DETECTED: Try accessing with aws_cli:\n"
+                        "  - aws s3 ls --no-sign-request (unauthenticated)\n"
+                        "  - aws s3 cp s3://bucket/flag.txt - --no-sign-request\n"
+                        "For local S3 simulators, add "
+                        "--endpoint-url http://localhost:PORT to payload_json.\n"
+                    )
             # Detect REST API / OpenAPI discovery
             if any(kw in task_result_lower for kw in
                    ("openapi", "swagger", "\"kind\"", "\"apiVersion\"",
@@ -8055,6 +8170,8 @@ Respond ONLY with a JSON array of next steps (max 5)."""
                                                  if t.get("status") == "done"]
                                     self.exploitation_plan.tasks = done_tasks
                                     for nt in new_tasks:
+                                        if not isinstance(nt, dict):
+                                            continue  # skip non-dict entries
                                         nt.setdefault("status", "pending")
                                         nt.setdefault("dependent_task_ids", nt.pop("dependencies", []))
                                         if not any(t["id"] == nt["id"] for t in self.exploitation_plan.tasks):
@@ -8192,6 +8309,21 @@ Respond ONLY with a JSON array of next steps (max 5)."""
         is_cloud_env = any(
             s.get("port") in (6443, 10250, 2379) for s in self.dkg.query_nodes("Service")
         ) or "kube" in str(self.dkg.summary()).lower()
+        # Also detect non-K8s cloud platforms — IMDS, S3, STS, Lambda, etc.
+        # These don't run on K8s ports but are cloud-native services.
+        if not is_cloud_env:
+            _cloud_sigs = {"imds", "ec2 metadata", "s3", "aws", "sts",
+                           "lambda", "iam", "cloud", "amazon"}
+            is_cloud_env = any(
+                any(cs in str(s).lower() for cs in _cloud_sigs)
+                for s in self.dkg.query_nodes("Service")
+            ) or any(
+                any(cs in str(e).lower() for cs in _cloud_sigs)
+                for e in self.dkg.query_nodes("Endpoint")
+            ) or any(
+                v.get("vuln_type") == "PlatformDiscovery"
+                for v in self.dkg.query_nodes("Vulnerability")
+            )
 
         if is_ad_env and "ad-primary" not in getattr(pool, '_agents', {}):
             try:
@@ -8349,6 +8481,20 @@ Respond ONLY with a JSON array of next steps (max 5)."""
             s.get("port") in (6443, 10250, 2379, 10255)
             for s in self.dkg.query_nodes("Service")
         )
+        # Also detect non-K8s cloud platforms.
+        if not is_cloud_env:
+            _cloud_sigs = {"imds", "ec2 metadata", "s3", "aws", "sts",
+                           "lambda", "iam", "cloud", "amazon"}
+            is_cloud_env = any(
+                any(cs in str(s).lower() for cs in _cloud_sigs)
+                for s in self.dkg.query_nodes("Service")
+            ) or any(
+                any(cs in str(e).lower() for cs in _cloud_sigs)
+                for e in self.dkg.query_nodes("Endpoint")
+            ) or any(
+                v.get("vuln_type") == "PlatformDiscovery"
+                for v in self.dkg.query_nodes("Vulnerability")
+            )
 
         if is_ad_env and "ad-primary" not in existing:
             try:

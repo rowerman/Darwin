@@ -170,6 +170,15 @@ def compute_task_breadth(dkg: DKG, defense_state: DefenseStateVector | None = No
     is_cloud = any(
         s.get("port") in (6443, 10250, 10255) for s in dkg.query_nodes("Service")
     )
+    # Also detect non-K8s cloud platforms: IMDS, S3, STS, Lambda services
+    # are cloud-native but don't run on K8s API ports.
+    if not is_cloud:
+        _cloud_sigs = {"imds", "ec2 metadata", "s3-compatible", "aws sts",
+                       "lambda", "iam role", "cloudformation", "amazon"}
+        is_cloud = any(
+            any(cs in str(s).lower() for cs in _cloud_sigs)
+            for s in dkg.query_nodes("Service")
+        )
     env_complexity = 0.0
     if is_ad: env_complexity = 1.0   # AD requires multi-agent
     elif is_cloud: env_complexity = 0.8  # K8s benefits from coordination
