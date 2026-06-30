@@ -1,0 +1,6 @@
+{"phase": "bootstrap", "timestamp": "2026-06-25T16:21:57", "run_id": "20260625_162027", "elapsed_s": "N/A", "hosts": 1, "services": 3, "endpoints": 17}
+---CONTENT---
+[BOOTSTRAP] 1 host(s), 3 service(s), 17 endpoint(s)
+10601/tcp http Werkzeug httpd (Python Flask dev server) http
+10701/tcp ec2-imds Amazon EC2 Instance Metadata Service (IMDS v1-v2 simulator) ec2-imds
+10704/tcp s3-storage S3-compatible Object Storage (DARWIN S3 simulator API) s3-storage

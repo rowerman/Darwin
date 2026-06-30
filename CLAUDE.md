@@ -118,7 +118,7 @@ Orchestrator.run() → recon → analyze → exploit → bypass → verify
 
 The `run()` method (`orchestrator.py:212`) follows this linear phase pipeline for Solo mode. For Coordinated/Distributed modes, it dispatches to `_run_multi_agent_cycle()` (`orchestrator.py:6437`) based on the B dimension threshold from `dynamic_scaling.py`.
 
-Key `Orchestrator` method locations (~8435-line file; line numbers approximate):
+Key `Orchestrator` method locations (~8916-line file; line numbers approximate):
 - `run()` (line 212) — entry point, main loop with mode dispatch, termination conditions
 - `_unified_llm_loop()` (line 2243) — Solo mode LLM-driven ReAct loop
 - `_analyze_phase()` (line 3560) — vulnerability hypothesis generation
@@ -155,6 +155,8 @@ Key `Orchestrator` method locations (~8435-line file; line numbers approximate):
 | `darwin/prompts/` | System prompt templates per agent: `orchestrator.py`, `recon_agent.py`, `exploit_agent.py`, `pivot_agent.py`, `ad_agent.py`, `cloud_agent.py`, `dpm_classifier.py`. The `__init__.py` is archived (not imported). |
 | `darwin/utils/llm.py` | LiteLLM wrapper with conversation history, token counting, context compression (`compress()` method), and `LLMFunctionMapping`. |
 | `darwin/utils/http_client.py` | Async HTTP client (aiohttp) with A-E WAF probe classes and baseline comparison. `ProbeClient` extends `HTTPClient`. |
+| `darwin/utils/phase_logger.py` | Structured per-phase file logging. Creates `log/<phase>/<run_id>_<phase>.log` files at phase boundaries (scan/recon/research/plan/exploit/replan/summary). Phase timing, metadata, and summary generation. Configurable via `config/darwin.yaml` (`log_dir`, `log_level`). Zero new dependencies (stdlib only). |
+| `run.py` | CLI entry point. Bootstraps the `Orchestrator` from command-line args (`--username`, `--password`, `--time-budget`, `--token-budget`). Handles MCP server startup, LLM config loading, and graceful shutdown. |
 | `experiments/runner.py` | Experiment runner supporting both pilot (single PACEBench D-CVE challenge) and CVE benchmark modes. Run `python experiments/runner.py` for pilot or `python experiments/runner.py cve [scenario_id...]` for benchmarks against a hardcoded 21-challenge list. Also supports attack chains via `run_chains()`. |
 | `experiments/parallel_runner.py` | Parallel experiment runner for Docker and K8s benchmark scenarios. Groups by infrastructure type with configurable parallelism. |
 | `experiments/lifecycle_manager.py` | Scenario lifecycle manager: START → wait-for-readiness → (DARWIN runs) → STOP for Docker and K8s. |
@@ -236,12 +238,13 @@ Canonical implementation: `compute_task_breadth()` at `dynamic_scaling.py:118`. 
 ## Testing
 
 ### Current state
-Only 5 of ~25+ modules have tests (151 total test methods), covering pure data-structure code:
-- `tests/test_dkg.py` — DKG node/edge CRUD, query, filter, serialization, save/load, reset. 8 test classes covering all node/edge types. (32 tests)
-- `tests/test_metrics.py` — ExperimentMetrics properties (TSR, token efficiency, avg steps, etc.) and Pass@k calculation. (19 tests)
-- `tests/test_analysis.py` — Statistical functions: McNemar, Cohen's g, paired t-test, bootstrap CI, Friedman, Cohen's κ, EMA. (33 tests)
-- `tests/test_dynamic_scaling.py` — B dimension formula (`compute_task_breadth()`), complexity hint detection, hysteresis voting. 28 test methods across 3 test classes. (32 tests)
-- `tests/test_mcp_gateway.py` — MCP gateway parameter aliasing (`host`→`target`, `url`→`target_url`, etc.), credential placeholder resolution, fuzzy matching. (35 tests)
+Only 6 of ~25+ modules have tests (183 total test methods), covering pure data-structure code:
+- `tests/test_dkg.py` — DKG node/edge CRUD, query, filter, serialization, save/load, reset. 8 test classes covering all node/edge types.
+- `tests/test_metrics.py` — ExperimentMetrics properties (TSR, token efficiency, avg steps, etc.) and Pass@k calculation.
+- `tests/test_analysis.py` — Statistical functions: McNemar, Cohen's g, paired t-test, bootstrap CI, Friedman, Cohen's κ, EMA.
+- `tests/test_dynamic_scaling.py` — B dimension formula (`compute_task_breadth()`), complexity hint detection, hysteresis voting.
+- `tests/test_mcp_gateway.py` — MCP gateway parameter aliasing (`host`→`target`, `url`→`target_url`, etc.), credential placeholder resolution, fuzzy matching.
+- `tests/test_phase_logger.py` — PhaseLogger file-based phase logging, directory mapping, timing, summary generation, metadata handling.
 
 Core orchestrator, all agents, tools, RAG, DPM, CTEG, DAVE, and LLM utilities are **untested**.
 
@@ -295,6 +298,7 @@ Dictionary files used by fuzzing tools (ffuf, dirb, gobuster):
 
 - **`checkpoints/`** — LangGraph checkpoint JSON files (bootstrap + per-loop snapshots). DKG state is persisted at the end of each loop iteration. Critical for debugging failed runs. **Note**: despite the `.gitignore` `checkpoint/` pattern (singular), `checkpoints/` (plural) is tracked by git — local run artifacts may appear in `git status`.
 - **`cteg_state.json`** — Persisted CTEG graph (bypass/exploit patterns with half-life decay). Accumulates across runs. Also tracked by git.
+- **`log/`** — PhaseLogger output directory (when enabled). Contains per-phase subdirectories (`scan/`, `recon/`, `research/`, `plan/`, `exploit/`, `replan/`, `summary/`) each holding timestamped `<run_id>_<phase>.log` files. Created at runtime; in `.gitignore` but may appear in `git status` during development.
 - **DKG persistence**: `dkg.save()` is called each loop iteration via `_checkpoint_path()`. On crash, the last checkpoint preserves all reconnaissance/exploitation state.
 
 ## Flag format
@@ -307,4 +311,4 @@ Dictionary files used by fuzzing tools (ffuf, dirb, gobuster):
 - No Claude Code baseline adapter (only PentestAgent exists at `experiments/baselines/pentest_agent.py`)
 - `experiments/failure_analysis.py` — not yet created
 - `paper_analysis/` directory — not yet created
-- Core orchestrator, all agents, tools, RAG, DPM, CTEG, DAVE, and LLM utilities are untested (only 4 modules — DKG, metrics, analysis, dynamic_scaling — have test coverage via 119 tests)
+- Core orchestrator, all agents, tools, RAG, DPM, CTEG, DAVE, and LLM utilities are untested (only 6 modules — DKG, metrics, analysis, dynamic_scaling, MCP gateway, phase_logger — have test coverage via 183 tests)

@@ -25,9 +25,10 @@ SYSTEM_PROMPT_COMPRESS = """You are a context compressor. Summarize the conversa
 3. **Current State**: active sessions, captured flags, detected defenses, known vulnerabilities
 4. **Failed Attempts**: what was tried and why it failed (to avoid repetition)
 5. **Defense Intelligence**: any WAF/IDS/honeypot behavior observed
+6. **Intermediate Artifacts**: credentials obtained (type, username, host, confirmed?), active sessions (method, target, privilege), internal hosts discovered (IP, hostname, role), flags/tokens captured, exploitation techniques that WORKED (tool, payload pattern, encoding) and those that FAILED
 
 Output ONLY the compressed summary. Do NOT include greetings, explanations, or meta-commentary.
-Do NOT use JSON — use concise bullet points grouped under the 5 headings above."""
+Do NOT use JSON — use concise bullet points grouped under the 6 headings above."""
 
 
 class LLMSession:
@@ -277,6 +278,7 @@ class LLMSession:
         keep_recent: int = 6,
         max_context_tokens: int = 180000,
         compression_threshold: float = 0.4,
+        truncation_context: str = "",
     ) -> int:
         """Compress conversation history by summarizing older messages.
 
@@ -286,6 +288,12 @@ class LLMSession:
 
         Only compresses if context_load exceeds compression_threshold.
         Limits cascading re-compression to _max_compressions passes.
+
+        Args:
+            truncation_context: Optional structured summary injected when
+                max compressions reached and oldest messages are truncated.
+                Should contain DKG-derived facts (flags, creds, sessions,
+                services) so the LLM has critical state even after truncation.
         """
         if self.context_load < compression_threshold:
             return 0
@@ -295,17 +303,21 @@ class LLMSession:
 
         if self._compressed_count >= self._max_compressions:
             # Already compressed too many times — truncate oldest messages instead.
-            # Inject a minimal summary so the LLM knows context was dropped.
+            # Inject a structured summary so the LLM knows context was dropped.
             overflow = len(self.conversation_history) - keep_recent - 2
             if overflow > 0:
                 truncated_count = overflow
                 self.conversation_history = self.conversation_history[overflow:]
-                # Inject a brief truncation notice
+                # Inject a brief truncation notice, with optional DKG state snapshot
                 notice = (
                     f"[CONTEXT TRUNCATED] {truncated_count} oldest messages were dropped "
                     f"to stay within context limits. Earlier actions and discoveries "
-                    f"may no longer be visible. Current DKG state has the structured facts."
+                    f"may no longer be visible."
                 )
+                if truncation_context:
+                    notice += f"\n\n{truncation_context}"
+                else:
+                    notice += " Current DKG state has the structured facts."
                 self.conversation_history.insert(0, {"role": "user", "content": notice})
             return 0
 
