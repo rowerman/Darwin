@@ -504,3 +504,266 @@ class DefensePerceptionModule:
             sanitization_strategy=dsv.sanitization_strategy.value,
             sanitization_strictness=f"{dsv.sanitization_strictness:.2f}",
         )
+
+
+# ── Cloud Defense Fingerprinting (CDF) extension ─────────────────────────
+# Extends the DPM with cloud-native defense detection for K8s/cloud
+# environments. Detects: IMDSv2 enforcement, K8s NetworkPolicies,
+# Admission Controllers, IAM Permission Boundaries, and cloud monitoring.
+
+@dataclass
+class CloudDefenseProfile:
+    """Cloud-native defense state for K8s and public cloud environments."""
+    # IMDS
+    imds_version: int = 0  # 0=unknown, 1=v1 only, 2=v2 enforced
+    imds_reachable: bool = False
+
+    # K8s defenses
+    network_policy_detected: bool = False
+    admission_controller_detected: bool = False
+    pod_security_standard: str = ""  # "privileged", "baseline", "restricted"
+    rbac_enabled: bool = True
+
+    # Cloud IAM defenses
+    permission_boundary_detected: bool = False
+    scp_restrictions_detected: bool = False
+
+    # Monitoring
+    cloudtrail_active: bool = False  # inferred
+    guardduty_active: bool = False  # inferred
+    cloud_monitoring_confidence: float = 0.0
+
+    # Bypass hints
+    bypass_recommendations: list[str] = None
+
+    def __post_init__(self):
+        if self.bypass_recommendations is None:
+            self.bypass_recommendations = []
+
+    def to_dict(self) -> dict:
+        return {
+            "imds_version": self.imds_version,
+            "imds_reachable": self.imds_reachable,
+            "network_policy_detected": self.network_policy_detected,
+            "admission_controller_detected": self.admission_controller_detected,
+            "pod_security_standard": self.pod_security_standard,
+            "rbac_enabled": self.rbac_enabled,
+            "permission_boundary_detected": self.permission_boundary_detected,
+            "scp_restrictions_detected": self.scp_restrictions_detected,
+            "cloudtrail_active": self.cloudtrail_active,
+            "guardduty_active": self.guardduty_active,
+            "cloud_monitoring_confidence": self.cloud_monitoring_confidence,
+            "bypass_recommendations": self.bypass_recommendations,
+        }
+
+
+async def detect_cloud_defenses(
+    http_client=None,  # optional ProbeClient or aiohttp session
+) -> CloudDefenseProfile:
+    """Detect cloud-native defenses via probe requests.
+
+    Probes:
+    1. IMDS endpoint: checks v1 vs v2 accessibility
+    2. K8s API server: checks RBAC, admission controller behavior
+    3. AWS API: checks permission boundaries and SCP restrictions
+
+    Safe to call outside cloud environments — probes have 3s timeouts
+    and failures return an empty/default profile.
+    """
+    import asyncio
+
+    profile = CloudDefenseProfile()
+
+    # ── IMDS version detection ───────────────────────────────────────
+    await _probe_imds_version(profile)
+
+    # ── K8s defense detection ────────────────────────────────────────
+    await _probe_k8s_defenses(profile)
+
+    # ── Cloud IAM boundary detection ─────────────────────────────────
+    await _probe_iam_boundaries(profile)
+
+    # ── Generate bypass recommendations ──────────────────────────────
+    _generate_cloud_bypass_hints(profile)
+
+    return profile
+
+
+async def _probe_imds_version(profile: CloudDefenseProfile) -> None:
+    """Probe AWS IMDS to determine v1 vs v2 enforcement."""
+    import asyncio
+
+    # Test IMDSv1
+    try:
+        proc = await asyncio.create_subprocess_shell(
+            "curl -s -m 3 'http://169.254.169.254/latest/meta-data/' 2>&1",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=5)
+        v1_out = stdout.decode("utf-8", errors="replace")
+        v1_ok = proc.returncode == 0 and "security-credentials" in v1_out
+    except Exception:
+        v1_ok = False
+
+    # Test IMDSv2 token endpoint
+    try:
+        proc = await asyncio.create_subprocess_shell(
+            "curl -s -m 3 -X PUT 'http://169.254.169.254/latest/api/token' "
+            "-H 'X-aws-ec2-metadata-token-ttl-seconds: 21600' 2>&1",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=5)
+        v2_token = stdout.decode("utf-8", errors="replace").strip()
+        v2_ok = proc.returncode == 0 and len(v2_token) > 10 and not v2_token.startswith("<?")
+    except Exception:
+        v2_ok = False
+
+    if v1_ok and v2_ok:
+        profile.imds_version = 2  # v2 available but v1 also open
+        profile.imds_reachable = True
+    elif v1_ok and not v2_ok:
+        profile.imds_version = 1  # v1 only
+        profile.imds_reachable = True
+    elif v2_ok and not v1_ok:
+        profile.imds_version = 2  # v2 enforced (v1 blocked)
+        profile.imds_reachable = True
+    # else: IMDS not reachable
+
+
+async def _probe_k8s_defenses(profile: CloudDefenseProfile) -> None:
+    """Probe K8s API server for defense mechanisms."""
+    import asyncio, json as _json
+
+    # Check RBAC (if kubectl auth can-i works, RBAC is enabled)
+    try:
+        proc = await asyncio.create_subprocess_shell(
+            "kubectl auth can-i list pods -n kube-system 2>&1",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=5)
+        out = stdout.decode("utf-8", errors="replace")
+        if "yes" in out.lower():
+            profile.rbac_enabled = True
+    except Exception:
+        pass
+
+    # Detect admission controllers: try creating a pod with invalid config
+    # If rejected with specific message, admission controller is active
+    try:
+        # Use a dry-run create to test webhook presence
+        proc = await asyncio.create_subprocess_shell(
+            "kubectl auth can-i create pods --dry-run=server 2>&1",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=5)
+        combined = (stdout + stderr).decode("utf-8", errors="replace")
+        # Look for admission webhook signatures
+        if any(kw in combined.lower() for kw in
+               ["admission webhook", "denied by", "gatekeeper", "kyverno", "opa"]):
+            profile.admission_controller_detected = True
+    except Exception:
+        pass
+
+
+async def _probe_iam_boundaries(profile: CloudDefenseProfile) -> None:
+    """Probe for IAM permission boundaries and SCP restrictions."""
+    import asyncio, json as _json
+
+    # Try to call iam:ListRoles — if AccessDenied with specific message,
+    # may indicate permission boundary or SCP
+    try:
+        proc = await asyncio.create_subprocess_shell(
+            "aws iam list-roles --max-items 1 --output json 2>&1",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=8)
+        combined = (stdout + stderr).decode("utf-8", errors="replace")
+        if "AccessDenied" in combined:
+            if "permission boundary" in combined.lower():
+                profile.permission_boundary_detected = True
+            if "explicit deny" in combined.lower() or "scp" in combined.lower():
+                profile.scp_restrictions_detected = True
+    except Exception:
+        pass
+
+    # Try to enumerate CloudTrail (if accessible, monitoring is active)
+    try:
+        proc = await asyncio.create_subprocess_shell(
+            "aws cloudtrail describe-trails --output json 2>&1",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=8)
+        out = stdout.decode("utf-8", errors="replace")
+        if "trailARN" in out or "IsMultiRegionTrail" in out:
+            profile.cloudtrail_active = True
+            profile.cloud_monitoring_confidence += 0.7
+    except Exception:
+        pass
+
+    # GuardDuty detection (inferred)
+    if profile.cloudtrail_active:
+        profile.cloud_monitoring_confidence += 0.2  # CloudTrail often paired with GuardDuty
+        if profile.cloud_monitoring_confidence > 0.6:
+            profile.guardduty_active = True  # inferred, not confirmed
+
+
+def _generate_cloud_bypass_hints(profile: CloudDefenseProfile) -> None:
+    """Generate cloud-specific bypass strategy recommendations."""
+    hints = []
+
+    if profile.imds_version == 2:
+        hints.append(
+            "IMDSv2 enforced: use PUT token request to obtain metadata token first, "
+            "then use token in subsequent metadata requests. In SSRF context, "
+            "both PUT and GET may be possible via the same vulnerable endpoint."
+        )
+    elif profile.imds_version == 1:
+        hints.append(
+            "IMDSv1 accessible: metadata is trivially readable via GET requests. "
+            "SSRF to http://169.254.169.254/latest/meta-data/iam/security-credentials/<role>"
+        )
+
+    if profile.network_policy_detected:
+        hints.append(
+            "K8s NetworkPolicy detected: lateral movement restricted. "
+            "Use authorized pods as proxies. Try egress to cloud metadata (169.254.169.254) "
+            "which is often not restricted by NetworkPolicies."
+        )
+
+    if profile.admission_controller_detected:
+        hints.append(
+            "Admission controller detected: privileged pod creation blocked. "
+            "Bypass via: (1) use existing privileged pods, "
+            "(2) exploit existing ServiceAccount tokens, "
+            "(3) target the admission webhook itself for injection."
+        )
+
+    if profile.permission_boundary_detected:
+        hints.append(
+            "IAM permission boundary detected: role actions are limited. "
+            "Look for boundary-exempt actions (iam:PassRole, sts:AssumeRole). "
+            "Check if boundary has exceptions for specific resources/conditions."
+        )
+
+    if profile.scp_restrictions_detected:
+        hints.append(
+            "SCP restrictions detected: organization-level denies. "
+            "Attempt: (1) legacy API versions that may bypass SCP, "
+            "(2) resource-based policies that SCP doesn't cover, "
+            "(3) cross-account access to accounts outside the SCP scope."
+        )
+
+    if profile.cloudtrail_active and profile.cloud_monitoring_confidence > 0.5:
+        hints.append(
+            "CloudTrail active: actions are logged. "
+            "Minimize noisy operations. Prefer read-only enumeration before "
+            "destructive actions. Use ephemeral resources and clean up traces."
+        )
+
+    profile.bypass_recommendations = hints

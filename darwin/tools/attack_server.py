@@ -4617,7 +4617,88 @@ spec:
     return gateway
 
 
+# ── Domain-based tool classification ──────────────────────────────────
+# Tools are classified by domain for filtering via config/darwin.yaml
+# tools.enabled_domains. When a domain is not in enabled_domains,
+# its tools are removed from the registry after registration.
+
+_AD_TOOLS = {
+    # Impacket suite (AD exploitation)
+    "impacket_secretsdump", "impacket_psexec", "impacket_wmiexec",
+    "impacket_GetUserSPNs", "impacket_GetNPUsers", "impacket_secretsdump_dcsync",
+    "impacket_pth", "impacket_ticketer", "impacket_silver_ticket",
+    "impacket_ntlmrelayx", "impacket_getST",
+    # NetExec suite (AD enumeration & exploitation)
+    "netexec_enum", "netexec_ldap_enum", "netexec_smb_shares",
+    "netexec_smb_users", "netexec_kerberoasting", "netexec_smb_sam",
+    # AD CS / Certificate attacks
+    "certipy_adcs", "certipy_req", "pywhisker", "bloodyad_dacl",
+    # Kerberos attacks
+    "getnthash", "gettgtpkinit", "krbrelayx",
+    # LDAP / SMB
+    "ldapsearch_ad", "smb_client", "smbmap_enum",
+}
+
+_LNX_TOOLS = {"linux_priv_check"}
+
+# Cloud CLI tools with no corresponding benchmark scenarios
+_CLOUD_EXTRA_TOOLS = {"az_cli", "gcloud_cli"}
+
+# Map domain name -> set of tool names to remove when domain is disabled
+_DOMAIN_TOOL_MAP = {
+    "ad": _AD_TOOLS,
+    "lnx": _LNX_TOOLS,
+    "cloud_extra": _CLOUD_EXTRA_TOOLS,
+}
+
+
+def _apply_domain_filter(gateway: MCPGateway, enabled_domains: set[str] | None) -> None:
+    """Remove tools whose domain is not in enabled_domains.
+
+    If enabled_domains is None (default), no filtering is applied.
+    Tools not in _DOMAIN_TOOL_MAP are always kept.
+    """
+    if enabled_domains is None:
+        return
+
+    import logging
+    _log = logging.getLogger(__name__)
+
+    for domain, tool_set in _DOMAIN_TOOL_MAP.items():
+        if domain not in enabled_domains:
+            removed = []
+            for tool_name in tool_set:
+                if tool_name in gateway._registry:
+                    del gateway._registry[tool_name]
+                    removed.append(tool_name)
+            if removed:
+                _log.info("Domain '%s' disabled: removed %d tools: %s",
+                          domain, len(removed), ", ".join(sorted(removed)))
+
+
 def create_attack_gateway() -> MCPGateway:
-    """Factory: create a gateway with all attack tools registered."""
+    """Factory: create a gateway with all attack tools registered.
+
+    Reads tools.enabled_domains from config/darwin.yaml and removes
+    tools from disabled domains. By default all domains are enabled.
+    """
     gateway = MCPGateway()
-    return register_attack_tools(gateway)
+    gateway = register_attack_tools(gateway)
+
+    # Load domain filter from config
+    _enabled_domains = None
+    try:
+        import yaml, os
+        _config_path = os.path.join(os.path.dirname(__file__), "..", "..", "config", "darwin.yaml")
+        _config_path = os.path.abspath(_config_path)
+        if os.path.exists(_config_path):
+            with open(_config_path) as _fh:
+                _cfg = yaml.safe_load(_fh) or {}
+            _domains = _cfg.get("tools", {}).get("enabled_domains", None)
+            if _domains is not None and isinstance(_domains, list):
+                _enabled_domains = set(_domains)
+    except Exception:
+        pass
+
+    _apply_domain_filter(gateway, _enabled_domains)
+    return gateway

@@ -35,6 +35,17 @@ NODE_TYPES = [
     "Task",           # plan_id, instruction, tool, params, status, dependencies, attempts
     "PlanSummary",    # source_plan_id, phase, completed_tasks, key_findings, failed_approaches
     "Analysis",       # phase, type, content — application understanding from analyze phase
+
+    # ── Cloud-native node types (CTAGE module) ──────────────────────
+    "CloudAccount",     # provider, account_id, region — cloud account entity
+    "IAMRole",          # name, arn, trust_policy, permissions_boundary
+    "IAMPolicy",        # name, arn, actions, resources, effect
+    "K8sCluster",       # name, api_url, version, node_count
+    "K8sNode",          # name, cluster, internal_ip, is_control_plane, labels, taints
+    "K8sNamespace",     # name, cluster, labels
+    "K8sPod",           # name, namespace, node, sa_name, privileged, capabilities, host_pid, phase
+    "K8sSA",            # name, namespace, secrets, annotations
+    "TrustRelationship",# source_account, target_account, principal, condition, type
 ]
 
 # Edge types
@@ -51,6 +62,26 @@ EDGE_TYPES = [
     "plan_contains_task",    # Plan → Task
     "task_depends_on",       # Task → Task
     "plan_successor",        # Plan → PlanSummary
+
+    # ── Cloud-native edge types (CTAGE module) ──────────────────────
+    # K8s hierarchy
+    "cluster_contains_node",       # K8sCluster → K8sNode
+    "cluster_contains_namespace",  # K8sCluster → K8sNamespace
+    "namespace_contains_pod",      # K8sNamespace → K8sPod
+    "node_hosts_pod",              # K8sNode → K8sPod
+    # K8s RBAC
+    "pod_mounts_sa",               # K8sPod → K8sSA
+    "sa_bound_to_role",            # K8sSA → IAMRole (via RBAC binding)
+    # Cloud IAM
+    "role_has_policy",             # IAMRole → IAMPolicy
+    "policy_grants_access",        # IAMPolicy → CloudAccount (or resource)
+    "role_can_assume",             # IAMRole → IAMRole (trust chain)
+    # Cross-account / cross-layer
+    "account_contains_role",       # CloudAccount → IAMRole
+    "account_trusts",              # CloudAccount → CloudAccount (via TrustRelationship)
+    # Session / credential access
+    "session_has_cloud_cred",      # Session → Credential (cloud-specific: IAM keys, SA tokens)
+    "credential_for_role",         # Credential → IAMRole
 ]
 
 

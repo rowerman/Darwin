@@ -1310,6 +1310,24 @@ class Orchestrator:
         except Exception:
             pass  # K8S discovery failure is non-fatal
 
+        # CTAGE: Cloud Topology & Attack Graph Engine — extend K8s discovery
+        # with RBAC mapping, pod security analysis, and IAM enumeration.
+        try:
+            from darwin.cloud_topology import discover_cloud_topology
+            self._cloud_topology = await discover_cloud_topology(self.dkg)
+            log.info("CTAGE: cloud topology mapped — %d pods, %d RBAC bindings, %d IAM roles",
+                     len(self._cloud_topology.pods) if self._cloud_topology else 0,
+                     len(self._cloud_topology.rbac_bindings) if self._cloud_topology else 0,
+                     len(self._cloud_topology.iam_roles) if self._cloud_topology else 0)
+            if self._cloud_topology and self._cloud_topology.high_risk_pods:
+                log.info("CTAGE: %d high-risk pods identified", len(self._cloud_topology.high_risk_pods))
+                for profile in self._cloud_topology.high_risk_pods[:5]:
+                    log.info("  CTAGE high-risk: %s/%s risk=%.2f vectors=%s",
+                             profile.namespace, profile.pod_name,
+                             profile.risk_score, profile.escape_vectors)
+        except Exception as e:
+            log.debug("CTAGE: cloud topology mapping skipped (%s)", e)
+
         self._discovered_ports = discovered_ports
 
         # ── Bootstrap summary ─────────────────────────────────────────
@@ -3874,11 +3892,8 @@ class Orchestrator:
                 # ── Schema-based tool compatibility check ─────────
                 # Verify that the args we constructed for this endpoint
                 # have at least one key matching the tool's declared
-                # parameters.  If zero overlap, the tool cannot work on
-                # this endpoint (e.g. aws_cli on HTTP, test_credential
-                # on HTTP, mssqlclient_query on HTTP).
-                # This is a general safety net — it does not depend on
-                # any hardcoded tool-name list.
+                # parameters.  If zero overlap, try generic parameter
+                # name remapping before skipping.
                 _tool_entry = (
                     self.attack_gateway._registry.get(tool_name)
                     or self.recon_gateway._registry.get(tool_name)
@@ -3886,6 +3901,29 @@ class Orchestrator:
                 if _tool_entry is not None:
                     _tool_params = set(_tool_entry.parameters.keys())
                     _arg_keys = set(args.keys())
+                    if _tool_params and not (_tool_params & _arg_keys):
+                        # ── Generic parameter name remapping ──
+                        # Vulnerabilities store param names like 'url'/'param'/'endpoint',
+                        # but tools may expect 'ssrf_url'/'url_param'/'target_url'.
+                        # Remap based on common aliases — no hardcoded tool names.
+                        _REMAP_TABLE: dict[str, list[str]] = {
+                            "url":         ["ssrf_url", "target_url", "url"],
+                            "endpoint":    ["url", "ssrf_url", "target_url"],
+                            "param":       ["url_param", "param_name"],
+                            "target_url":  ["url", "ssrf_url"],
+                            "host":        ["target", "host"],
+                        }
+                        _remapped: dict[str, object] = {}
+                        for _arg_key, _arg_val in args.items():
+                            if _arg_key in _REMAP_TABLE:
+                                for _candidate in _REMAP_TABLE[_arg_key]:
+                                    if _candidate in _tool_params and _candidate not in _remapped:
+                                        _remapped[_candidate] = _arg_val
+                                        break
+                        if _remapped:
+                            args.update(_remapped)
+                            _arg_keys = set(args.keys())
+
                     if _tool_params and not (_tool_params & _arg_keys):
                         print(
                             f"[systematic] skip {tool_name}: schema mismatch "
@@ -4100,11 +4138,63 @@ class Orchestrator:
         # Use canonical prompt format from PipelineState
         state_context = state.to_prompt_context()
 
+        # CTAGE: cloud topology context for analyze phase
+        cloud_topology_context = ""
+        if hasattr(self, "_cloud_topology") and self._cloud_topology:
+            ct = self._cloud_topology
+            if ct.clusters or ct.high_risk_pods:
+                lines = ["\n## Cloud/K8s Topology (CTAGE)"]
+                if ct.clusters:
+                    for c in ct.clusters:
+                        lines.append(f"- Cluster: {c.get('name','')} ({c.get('version','')})")
+                if ct.nodes:
+                    lines.append(f"- Nodes: {len(ct.nodes)} ({sum(1 for n in ct.nodes if n.get('is_control_plane'))} control-plane, {sum(1 for n in ct.nodes if not n.get('is_control_plane'))} worker)")
+                if ct.namespaces:
+                    lines.append(f"- Namespaces: {len(ct.namespaces)}")
+                if ct.pods:
+                    lines.append(f"- Pods: {len(ct.pods)}")
+                if ct.service_accounts:
+                    lines.append(f"- ServiceAccounts: {len(ct.service_accounts)}")
+                if ct.rbac_bindings:
+                    lines.append(f"- RBAC Bindings: {len(ct.rbac_bindings)}")
+                if ct.high_risk_pods:
+                    lines.append(f"\n### High-Risk Pods ({len(ct.high_risk_pods)})")
+                    for profile in ct.high_risk_pods[:10]:
+                        lines.append(
+                            f"- {profile.namespace}/{profile.pod_name}: "
+                            f"risk={profile.risk_score:.2f}, "
+                            f"vectors={profile.escape_vectors}, "
+                            f"sa={profile.service_account}"
+                        )
+                if ct.iam_roles:
+                    lines.append(f"\n### IAM Roles ({len(ct.iam_roles)})")
+                    for role in ct.iam_roles[:5]:
+                        lines.append(f"- {role.get('role_name','')} ({role.get('provider','')})")
+                if ct.cross_account_trusts:
+                    lines.append(f"\n### Cross-Account Trusts ({len(ct.cross_account_trusts)})")
+                    for trust in ct.cross_account_trusts[:5]:
+                        lines.append(f"- {trust.get('source_role','')} → account {trust.get('target_account','')}")
+                cloud_topology_context = "\n".join(lines) + "\n"
+
+        # CTAGE: compute attack paths from cloud topology
+        cloud_attack_paths_context = ""
+        try:
+            from darwin.cloud_attack_path import compute_attack_paths
+            attack_path_report = compute_attack_paths(self.dkg)
+            if attack_path_report.paths:
+                cloud_attack_paths_context = attack_path_report.to_prompt_context() + "\n"
+                log.info("CTAGE Reasoner: %d attack paths injected into analyze prompt",
+                         len(attack_path_report.paths))
+        except Exception as e:
+            log.debug("CTAGE Reasoner: attack path computation skipped (%s)", e)
+
         prompt = (
             f"## Mission\n{self._task_description}\n\n"
             f"Target information:\n"
             f"{unreachable_warning}"
             f"{app_context}"
+            f"{cloud_topology_context}"
+            f"{cloud_attack_paths_context}"
             f"{state_context}\n\n"
             f"## Instructions\n"
             f"1. First, understand what this application DOES based on the endpoint responses above.\n"

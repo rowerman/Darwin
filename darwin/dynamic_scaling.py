@@ -163,7 +163,11 @@ def compute_task_breadth(dkg: DKG, defense_state: DefenseStateVector | None = No
     if defense_state is not None:
         D_present = 1.0 if defense_state.defense_complexity > 0.1 else 0.0
 
-    # Environment complexity boost: AD/cloud environments trigger higher B
+    # Environment complexity boost: AD/cloud environments trigger higher B.
+    # CADS (Cloud-Aware Dynamic Scaling): when CTAGE topology data is available,
+    # env_complexity is continuous based on cluster scale, namespace diversity,
+    # IAM role count, cross-account trust, and multi-cluster presence.
+    # Falls back to binary values when CTAGE data is unavailable.
     is_ad = bool(domains) or any(
         s.get("port") in (445, 389, 636, 3268, 3269) for s in dkg.query_nodes("Service")
     )
@@ -179,9 +183,42 @@ def compute_task_breadth(dkg: DKG, defense_state: DefenseStateVector | None = No
             any(cs in str(s).lower() for cs in _cloud_sigs)
             for s in dkg.query_nodes("Service")
         )
+
     env_complexity = 0.0
-    if is_ad: env_complexity = 1.0   # AD requires multi-agent
-    elif is_cloud: env_complexity = 0.8  # K8s benefits from coordination
+    if is_ad:
+        env_complexity = 1.0   # AD requires multi-agent
+    elif is_cloud:
+        # CADS: continuous cloud complexity based on CTAGE topology data
+        ctage_nodes = {
+            "clusters": dkg.query_nodes("K8sCluster"),
+            "nodes": dkg.query_nodes("K8sNode"),
+            "namespaces": dkg.query_nodes("K8sNamespace"),
+            "iam_roles": dkg.query_nodes("IAMRole"),
+            "trusts": dkg.query_nodes("TrustRelationship"),
+        }
+        has_ctage_data = any(len(v) > 0 for v in ctage_nodes.values())
+
+        if has_ctage_data:
+            n_clusters = len(ctage_nodes["clusters"])
+            n_k8s_nodes = len(ctage_nodes["nodes"])
+            n_namespaces = len(ctage_nodes["namespaces"])
+            n_iam_roles = len(ctage_nodes["iam_roles"])
+            has_cross_account = 1.0 if len(ctage_nodes["trusts"]) > 0 else 0.0
+            has_multi_cluster = 1.0 if n_clusters > 1 else 0.0
+
+            env_complexity = min(
+                0.30 * min(n_k8s_nodes / 5.0, 1.0)    # cluster scale (5+ nodes = max)
+                + 0.20 * min(n_namespaces / 4.0, 1.0)  # namespace diversity (4+ = max)
+                + 0.20 * min(n_iam_roles / 4.0, 1.0)   # IAM role complexity (4+ = max)
+                + 0.15 * has_cross_account              # cross-account trust
+                + 0.15 * has_multi_cluster,             # multi-cluster
+                1.0,
+            )
+            # Floor: single-pod KIND cluster still gets minimum 0.5
+            # to ensure cloud scenarios hit Coordinated threshold
+            env_complexity = max(env_complexity, 0.5)
+        else:
+            env_complexity = 0.8  # K8s benefits from coordination (legacy binary)
 
     # B with environment-aware boost
     b_raw = (

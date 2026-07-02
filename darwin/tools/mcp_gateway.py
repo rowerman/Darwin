@@ -77,6 +77,16 @@ class MCPGateway:
     def __init__(self):
         self._registry: Dict[str, _ToolEntry] = {}
         self._execution_log: List[ToolResult] = []
+        self._enabled_domains: set[str] | None = None  # None = all domains enabled
+
+    def set_enabled_domains(self, domains: set[str] | None) -> None:
+        """Set which tool domains are enabled. None = all domains enabled.
+
+        When set, tools with a domain not in the set are silently skipped
+        during registration. Tools without a domain (domain=None) are
+        always registered regardless of the filter.
+        """
+        self._enabled_domains = domains
 
     def register(
         self,
@@ -84,19 +94,32 @@ class MCPGateway:
         func: Callable,
         description: str,
         parameters: Dict[str, Any],
+        domain: str | None = None,
     ) -> None:
-        """Register a tool with its schema."""
+        """Register a tool with its schema.
+
+        Args:
+            domain: Optional domain tag for filtering (e.g. 'web', 'k8s', 'cloud', 'ad').
+                    Tools without a domain are always registered.
+        """
+        # Domain filter: skip if domain is set and not in enabled_domains
+        if domain is not None and self._enabled_domains is not None:
+            if domain not in self._enabled_domains:
+                return  # silently skip
+
         self._registry[name] = _ToolEntry(
             name=name,
             func=func,
             description=description,
             parameters=parameters,
+            domain=domain,
         )
 
     def register_shell_tool(
         self, name: str, command_template: str, description: str,
         parameters: Dict[str, Any], parser: Callable | None = None,
         timeout: int = 60, retries: int = 1,
+        domain: str | None = None,
     ) -> None:
         """Register a shell command as a tool.
 
@@ -108,7 +131,13 @@ class MCPGateway:
             parser: Optional output parser function
             timeout: Per-attempt timeout in seconds (default 60)
             retries: Number of retries after timeout (default 1, timeout multiplier 1.5x)
+            domain: Optional domain tag for filtering (e.g. 'web', 'k8s', 'cloud', 'ad').
+                    Tools without a domain are always registered.
         """
+        # Domain filter: skip if domain is set and not in enabled_domains
+        if domain is not None and self._enabled_domains is not None:
+            if domain not in self._enabled_domains:
+                return  # silently skip
         import logging
         _log = logging.getLogger(__name__)
 
@@ -207,6 +236,7 @@ class MCPGateway:
 
         self._registry[name] = _ToolEntry(
             name=name, func=_execute, description=description, parameters=parameters,
+            domain=domain,
         )
 
     def _normalize_params(
@@ -361,8 +391,10 @@ class MCPGateway:
 
 class _ToolEntry:
     """Internal registry entry for a tool."""
-    def __init__(self, name: str, func: Callable, description: str, parameters: Dict[str, Any]):
+    def __init__(self, name: str, func: Callable, description: str, parameters: Dict[str, Any],
+                 domain: str | None = None):
         self.name = name
         self.func = func
         self.description = description
         self.parameters = parameters
+        self.domain = domain

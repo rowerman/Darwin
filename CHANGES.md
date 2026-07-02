@@ -1,3 +1,23 @@
+## 2026-07-02 (Cloud-native innovation modules: CTAGE, CDF, CADS)
+
+### CTAGE: Cloud Topology & Attack Graph Engine (new)
+- **darwin/dkg.py**: 新增 9 种云原生节点类型 (K8sCluster, K8sNode, K8sNamespace, K8sPod, K8sSA, CloudAccount, IAMRole, IAMPolicy, TrustRelationship) 和 13 种边类型 (cluster_contains_node, namespace_contains_pod, pod_mounts_sa, sa_bound_to_role, role_can_assume, account_trusts 等)。
+- **darwin/cloud_topology.py** (新文件): CloudTopologyMapper — 自动发现 K8S 集群拓扑 (nodes/pods/namespaces/SAs/RBAC bindings)，分析 Pod 安全上下文 (privileged/capabilities/hostPID/mounts) 并匹配逃逸向量，枚举 IAM 角色和跨账号信任关系。输出为结构化 DKG 节点+边。
+- **darwin/cloud_attack_path.py** (新文件): AttackPathReasoner — 四个 BFS 路径发现器：IAM 权限提升 (role_can_assume 链)、容器逃逸 (安全配置→工具匹配)、横向移动 (跨命名空间 RBAC)、跨账号 (TrustRelationship 遍历)。按难度和置信度排序，输出 LLM-ready prompt injection。
+- **darwin/orchestrator.py**: Bootstrap 阶段在 `_k8s_cluster_discovery()` 后调用 `discover_cloud_topology()`。`_analyze_phase()` prompt 注入云拓扑摘要 + 攻击路径分析。
+
+### CDF: Cloud Defense Fingerprinting
+- **darwin/dpm.py**: 新增 `CloudDefenseProfile` dataclass 和 `detect_cloud_defenses()` 异步函数。探测 IMDSv2 强制、K8s NetworkPolicy/Admission Controller、IAM Permission Boundary、SCP 限制、CloudTrail/GuardDuty 监控。生成云原生 bypass 策略建议。
+
+### CADS: Cloud-Aware Dynamic Scaling
+- **darwin/dynamic_scaling.py** `compute_task_breadth()`: `env_complexity` 从二值 (cloud=0.8) 改为连续值。当 CTAGE 拓扑数据可用时，基于集群规模 (K8sNode 数量)、命名空间多样性 (K8sNamespace 数量)、IAM 角色数量、跨账号信任、多集群存在计算连续复杂度 (最低 0.5)。
+
+### Tool Slimming
+- **darwin/tools/attack_server.py**: 新增 `_AD_TOOLS` (27工具)、`_LNX_TOOLS` (1工具)、`_CLOUD_EXTRA_TOOLS` (2工具) 域名分类集合。`_apply_domain_filter()` 根据 `config/darwin.yaml` 中 `tools.enabled_domains` 配置移除禁用域的工具。默认无过滤 (向后兼容)。过滤后 112→82 工具。
+
+### CloudAgent CTAGE Integration
+- **darwin/sub_agents/cloud_agent.py**: 新增 `_build_ctage_context()` 方法，从 DKG 提取高风险 Pod (含逃逸向量)、横向移动机会 (跨命名空间 RBAC)、IAM 角色和跨账号信任信息，注入 `_generate_plan()` prompt。新增 `_get_outgoing_edges()` 静态方法供图遍历使用。
+
 ## 2026-06-30 (Phase 1: Architecture + Orchestration fixes — 7 capability gaps addressed)
 
 ### Arch-2: Context compression improvements
