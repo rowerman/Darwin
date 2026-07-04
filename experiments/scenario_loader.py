@@ -10,11 +10,19 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+import os
 import yaml
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
-SCENARIOS_YAML = ROOT_DIR / "benchmarks" / "cve_challenges" / "scripts" / "scenarios.yaml"
-CVE_CHALLENGES_DIR = ROOT_DIR / "benchmarks" / "cve_challenges"
+
+# Benchmark infrastructure moved to /home/kianabin/benchmark_design/benchmarks/
+# Prefer env var BENCHMARK_DIR, fallback to known absolute path
+_BENCHMARK_BASE = os.environ.get(
+    "BENCHMARK_DIR",
+    str(Path.home() / "benchmark_design" / "benchmarks")
+)
+SCENARIOS_YAML = Path(_BENCHMARK_BASE) / "cve_challenges" / "scripts" / "scenarios.yaml"
+CVE_CHALLENGES_DIR = Path(_BENCHMARK_BASE) / "cve_challenges"
 
 
 # ── K8s target URL mapping ───────────────────────────────────────────

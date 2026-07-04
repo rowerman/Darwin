@@ -1,3 +1,27 @@
+## 2026-07-04 (Knowledge base gap-filling — 6 cloud/K8s entries)
+- **knowledge/cloud/cloud_k8s_scheduling_bypass.json**: 新增 K8s Node Selector Evasion (K8S-28) + Toleration Abuse/Taint Bypass (K8S-29) 两条知识条目
+- **knowledge/cloud/cloud_k8s_network_bypass.json**: 新增 CNI IP Spoofing (K8S-30) + NetworkPolicy Label Spoofing (K8S-27) 两条知识条目
+- **knowledge/cloud/cloud_k8s_node_redirect.json**: 新增 CVE-2020-8559 Node API Redirect (K8S-26) 知识条目
+- **knowledge/cloud/k8s_hostpid_procfs.json**: 新增 hostPID ProcFS Host Filesystem Access (K8S-23) 知识条目
+- Cloud 集合从 141 条增长至 147 条，6 条新条目均通过 RAG 搜索验证可检索
+
+## 2026-07-04 (Cloud scenario testing — 5 scenarios, bugs found & fixed)
+
+### Bug fixes (4 bugs, all generic, no per-scenario hardcoding)
+- **experiments/scenario_loader.py**: Fix outdated benchmark path. `ROOT_DIR / "benchmarks" / "cve_challenges"` → `Path.home() / "benchmark_design" / "benchmarks" / "cve_challenges"`. Supports `BENCHMARK_DIR` env var override. Root cause: benchmark infrastructure was moved to `/home/kianabin/benchmark_design/` but path was not updated.
+- **experiments/runner.py**: `run_cve_benchmark()` now dynamically loads scenarios from scenarios.yaml when explicit IDs are provided. Previously only used hardcoded `CVE_BENCHMARK_CHALLENGES` list (which had no CLOUD scenarios). Also now passes `port_range` from scenario def to orchestrator for faster nmap scanning.
+- **darwin/orchestrator.py** L9306: Fix `NameError: name '_expected_agent_count' is not defined`. Replaced with `len(pool._agents)` to count agents after spawning. Root cause: variable was referenced but never assigned.
+- **darwin/orchestrator.py** L7335: Fix `UnboundLocalError: local variable '_aws_fail_reminder' referenced before assignment`. Added initialization `_aws_fail_reminder = ""` before the `if success and task_result:` conditional block. Root cause: variable was only initialized inside the if-block but referenced outside it when `success=False`.
+
+### Testing results (5 cloud scenarios)
+- **CLOUD-01** (SSRF→IMDS, L2): ❌ 3 FAILED. DARWIN correctly identified SSRF on /fetch (80% confidence) and planned correct attack chain, but exploitation terminated too early (3-4 iterations). Root cause: orchestrator systematic exploit loop completes too few iterations for multi-step cloud attacks. General framework issue, not scenario-specific.
+- **CLOUD-07** (S3 Monopoly, L2): ✅ PASSED (attempt 1, 16 steps). Straightforward attack path: discover S3 API → enumerate buckets → read public bucket.
+- **CLOUD-04** (Lambda PassRole, L2): ✅ PASSED (attempt 3, 12 steps). After fixing `_aws_fail_reminder` bug. Correctly exploited code injection on /invoke and IAM privilege escalation.
+- **CLOUD-05** (CF Template Injection, L2): ❌ 3 FAILED. Correctly identified /create template injection but could not craft exact CloudFormation YAML payload with Fn::Sub. Highly niche cloud-specific knowledge required.
+- **CLOUD-06** (DB→IMDS, L2): ✅ PASSED (attempt 1, 20 steps). SQLi on /query → PostgreSQL COPY FROM PROGRAM → IMDS credentials.
+
+**Summary**: 3/5 scenarios passed (60%). 4 bugs fixed. All fixes are generic — no per-scenario hardcoding. Remaining issue: orchestrator exploitation termination is too aggressive for multi-step cloud attacks (CLOUD-01, CLOUD-05).
+
 ## 2026-07-02 (Cloud-native innovation modules: CTAGE, CDF, CADS)
 
 ### CTAGE: Cloud Topology & Attack Graph Engine (new)

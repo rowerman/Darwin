@@ -7332,6 +7332,7 @@ Output ONLY valid JSON:
         cred_reminder = ""
         api_reminder = ""
         unexpected_data = ""
+        _aws_fail_reminder = ""
         if success and task_result:
             task_result_lower = task_result.lower()
             if any(kw in task_result_lower for kw in
@@ -9303,7 +9304,9 @@ Respond ONLY with a JSON array of next steps (max 5)."""
         # Scale agent budgets based on remaining orchestrator tokens
         # so a single verbose agent doesn't starve others.
         _remaining_tokens = max(0, self.token_budget - self.llm.token_count)
-        _num_agents = _expected_agent_count  # from above analysis
+        # Count agents in pool after spawning AD/cloud agents above
+        _pool_agents = getattr(pool, '_agents', {})
+        _num_agents = len(_pool_agents) if _pool_agents else 0
         if _num_agents > 0:
             _tokens_per_agent = _remaining_tokens // (_num_agents + 1)  # +1 for orchestrator
         else:

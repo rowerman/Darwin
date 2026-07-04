@@ -1,0 +1,15 @@
+{"phase": "bootstrap", "timestamp": "2026-07-04T14:08:00", "run_id": "20260704_140530", "elapsed_s": "N/A", "hosts": 1, "services": 12, "endpoints": 8}
+---CONTENT---
+[BOOTSTRAP] 1 host(s), 12 service(s), 8 endpoint(s)
+22/tcp ssh OpenSSH 8.9p1 Ubuntu 3ubuntu0.15 (Ubuntu Linux; protocol 2.0) ssh
+1053/tcp tcpwrapped tcpwrapped tcpwrapped
+7890/tcp unknown unknown unknown
+10601/tcp http Werkzeug httpd (Python Flask dev server) http
+10670/tcp http Werkzeug httpd (Python Flask dev server) http
+10671/tcp http Werkzeug httpd (Python Flask dev server) http
+16822/tcp unknown unknown unknown
+19432/tcp unknown unknown unknown
+34055/tcp unknown unknown unknown
+39025/tcp unknown unknown unknown
+39725/tcp unknown unknown unknown
+43947/tcp unknown unknown unknown

@@ -299,10 +299,40 @@ async def run_pilot():
 
 
 async def run_cve_benchmark(scenarios: list[str] | None = None):
-    """Run CVE benchmark experiment on selected or all scenarios."""
+    """Run CVE benchmark experiment on selected or all scenarios.
+
+    When explicit scenario IDs are provided, loads them dynamically
+    from scenarios.yaml via the scenario loader. Falls back to the
+    hardcoded CVE_BENCHMARK_CHALLENGES list when no IDs are given.
+    """
     challenges = CVE_BENCHMARK_CHALLENGES
     if scenarios:
-        challenges = [c for c in challenges if c["id"] in scenarios]
+        # Dynamic loading: resolve scenario IDs from scenarios.yaml
+        try:
+            from experiments.scenario_loader import load_scenarios
+            all_loaded = load_scenarios()
+            loaded_map = {s.id: s for s in all_loaded}
+            dynamic = []
+            for sid in scenarios:
+                if sid in loaded_map:
+                    s = loaded_map[sid]
+                    dynamic.append({
+                        "id": s.id,
+                        "url": f"http://localhost:{s.target_port}" if s.target_port else s.target_url,
+                        "description": s.name,
+                        "category": s.category,
+                    })
+                else:
+                    print(f"[!] Scenario '{sid}' not found in scenarios.yaml, skipping")
+            if dynamic:
+                challenges = dynamic
+            else:
+                # Fallback: try filtering hardcoded list
+                challenges = [c for c in challenges if c["id"] in scenarios]
+        except Exception as e:
+            print(f"[!] Dynamic scenario loading failed ({e}), falling back to hardcoded list")
+            challenges = [c for c in challenges if c["id"] in scenarios]
+    # else: use default hardcoded list
 
     print("=" * 60)
     print(f"DARWIN CVE Benchmark — {len(challenges)} scenarios")

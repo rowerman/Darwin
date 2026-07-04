@@ -1,0 +1,6 @@
+{"phase": "analyze", "timestamp": "2026-07-04T17:13:18", "run_id": "20260704_170626", "elapsed_s": "N/A", "vuln_count": 4}
+---CONTENT---
+[SQLi] http://localhost:10606/query param=sql conf=95%
+[PlatformDiscovery] http://localhost:10701/latest/meta-data/iam/security-credentials/ param= conf=80%
+[WeakAuth] localhost:10706 param= conf=30%
+[XSS] http://localhost:10606 param= conf=30%

@@ -1,0 +1,59 @@
+DARWIN Run Summary — 20260704_150743
+Timestamp: 2026-07-04T15:16:22
+============================================================
+phase_at_end: analyze
+loop_count: 1
+solo_iterations: 1
+step_count: 7
+
+DKG Summary:
+Host: 1
+  - id=host-localhost: {'ip': 'localhost', 'is_reachable': True, 'is_internal': False, '_version': 3}
+Service: 3
+  - id=svc-localhost-10601: {'port': 10601, 'protocol': 'tcp', 'version': 'Werkzeug httpd (Python Flask dev server)', 'banner': 'http', 'service_name': 'http', '_version': 2, 'fingerprint': ['Werkzeug/3.1.8 Python/3.11.15', '127.0.0.1', '3.11.15', 'Cloud Dashboard', '3.1.8']}
+  - id=svc-localhost-10670: {'port': 10670, 'protocol': 'tcp', 'version': 'Werkzeug httpd (Python Flask dev server)', 'banner': 'http', 'service_name': 'http', '_version': 2, 'fingerprint': ['Werkzeug/3.1.8 Python/3.11.15, EC2ws', '127.0.0.1', '3.11.15,', '3.1.8']}
+  - id=svc-localhost-10671: {'port': 10671, 'protocol': 'tcp', 'version': 'Werkzeug httpd (Python Flask dev server)', 'banner': 'http', 'service_name': 'http', '_version': 2, 'fingerprint': ['Werkzeug/3.1.8 Python/3.11.15', '127.0.0.1', '3.11.15', '3.1.8']}
+Endpoint: 18
+  - id=ep-http://localhost:10601: {'url': 'http://localhost:10601', 'method': 'GET', 'params': '', 'sample_status': 200, 'sample_response': '<!DOCTYPE html>\n<html>\n<head><title>Cloud Dashboard</title></head>\n<body>\n<h1>Cloud Dashboard</h1>\n<p>Welcome to the internal dashboard. Use the URL fetcher to retrieve\nconfiguration from remote endpoints.</p>\n<form action="/fetch" method="get">\n  <input type="text" name="url" placeholder="https://example.com/config" size="50">\n  <button type="submit">Fetch</button>\n</form>\n<p><small>Environment: production | Instance: i-0abc123def</small></p>\n</body>\n</html>', 'response_size': 638, '_version': 3, 'deep_recon_done': True, 'sample_content_type': 'text/html; charset=utf-8'}
+  - id=ep-http://localhost:10670: {'url': 'http://localhost:10670', 'method': 'GET', 'params': '', 'sample_status': 200, 'sample_response': '1.0/\nlatest/', 'response_size': 187, '_version': 2, 'sample_content_type': 'text/plain'}
+  - id=ep-path--health: {'url': 'http://localhost:10670/health', 'method': 'GET', 'params': '', 'sample_status': 200, 'sample_response': '{"status":"ok","v1_enabled":true,"v2_required":false}\n', 'response_size': 220, '_version': 2, 'sample_content_type': 'application/json'}
+  - id=ep-http://localhost:10671: {'url': 'http://localhost:10671', 'method': 'GET', 'params': '', 'sample_status': 200, 'sample_response': '{"objects":["flag.txt","readme.txt"]}\n', 'response_size': 204, '_version': 2, 'sample_content_type': 'application/json'}
+  - id=ep-path--: {'url': 'http://localhost:10671/', 'method': 'GET', 'params': '', 'sample_status': 200, 'sample_response': '{"objects":["flag.txt","readme.txt"]}\n', 'response_size': 204, '_version': 2, 'sample_content_type': 'application/json'}
+  - id=ep-path--status: {'url': 'http://localhost:10671/status', 'method': 'GET', 'params': '', 'sample_status': 200, 'sample_response': 'HTTP/1.1 404 NOT FOUND\r\nServer: Werkzeug/3.1.8 Python/3.11.15\r\nDate: Sat, 04 Jul 2026 07:09:14 GMT\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: 207\r\nConnection: close\r\n\r\n<!doctype html>\n<html lang=en>\n<title>404 Not Found</title>\n<h1>Not Found</h1>\n<p>The requested URL was not found on the server. If you entered the URL manually please check your spelling and try again.</p>\n', 'response_size': 389, '_version': 1}
+  - id=ep-path--api: {'url': 'http://localhost:10671/api', 'method': 'GET', 'params': '', 'sample_status': 200, 'sample_response': 'HTTP/1.1 404 NOT FOUND\r\nServer: Werkzeug/3.1.8 Python/3.11.15\r\nDate: Sat, 04 Jul 2026 07:09:14 GMT\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: 207\r\nConnection: close\r\n\r\n<!doctype html>\n<html lang=en>\n<title>404 Not Found</title>\n<h1>Not Found</h1>\n<p>The requested URL was not found on the server. If you entered the URL manually please check your spelling and try again.</p>\n', 'response_size': 389, '_version': 1}
+  - id=ep-path--admin: {'url': 'http://localhost:10671/admin', 'method': 'GET', 'params': '', 'sample_status': 200, 'sample_response': 'HTTP/1.1 404 NOT FOUND\r\nServer: Werkzeug/3.1.8 Python/3.11.15\r\nDate: Sat, 04 Jul 2026 07:09:14 GMT\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: 207\r\nConnection: close\r\n\r\n<!doctype html>\n<html lang=en>\n<title>404 Not Found</title>\n<h1>Not Found</h1>\n<p>The requested URL was not found on the server. If you entered the URL manually please check your spelling and try again.</p>\n', 'response_size': 389, '_version': 1}
+  ... and 10 more
+Vulnerability: 6
+  - id=vuln-nikto-14: {'vuln_type': 'XSS', 'endpoint': 'http://localhost:10601', 'parameter': '', 'severity': 'low', 'source': 'nikto', 'detail': '- Nikto v2.1.5', '_version': 1}
+  - id=vuln-nikto-20: {'vuln_type': 'XSS', 'endpoint': 'http://localhost:10601', 'parameter': '', 'severity': 'low', 'source': 'nikto', 'detail': "+ No CGI Directories found (use '-C all' to force check all possible dirs)", '_version': 9}
+  - id=vuln-1: {'vuln_type': 'SSRF', 'endpoint': 'http://localhost:10601/fetch', 'parameter': 'url', 'severity': 'unknown', 'source': 'llm_analysis', 'suggested_tool': 'ssrf_probe', 'tool_args': {'ssrf_url': 'http://localhost:10601/fetch?url=', 'url_param': 'url', 'internal_hosts': ['localhost', '127.0.0.1'], 'ports': [10670, 10671], 'paths': ['/', '/flag.txt', '/health']}, '_version': 2, 'tested_at': '15:16:02', 'test_result': 'SSRF probe complete: 8 responses, 0 flags found\n[\n  {\n    "probe": "http://localhost:10601/fetch?url=&url=http%3A//localhost%3A10670/",\n    "response_len": 29,\n    "response_preview": "Error: url para', 'test_tool': 'ssrf_probe'}
+  - id=vuln-2: {'vuln_type': 'AuthBypass', 'endpoint': 'http://localhost:10671/flag.txt', 'parameter': '', 'severity': 'unknown', 'source': 'llm_analysis', 'suggested_tool': 'curl_get', 'tool_args': {'url': 'http://localhost:10671/flag.txt'}, '_version': 2, 'tested_at': '15:16:02', 'test_result': 'HTTP/1.1 404 NOT FOUND\r\nServer: Werkzeug/3.1.8 Python/3.11.15\r\nDate: Sat, 04 Jul 2026 07:16:02 GMT\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: 207\r\nConnection: close\r\n\r\n<!doctype html>\n<h', 'test_tool': 'curl_get'}
+  - id=vuln-3: {'vuln_type': 'XSS', 'endpoint': 'http://localhost:10601', 'parameter': '', 'severity': 'low', 'source': 'llm_classified', 'detail': '- Nikto v2.1.5', 'suggested_tool': 'curl_get', '_version': 3, 'tested_at': '15:16:02', 'test_result': 'BLOCKED: <script>alert(1)</script>... (not found)\nBLOCKED: <img src=x onerror=alert(1)>... (not found)\nBLOCKED: "><script>alert(1)</script>... (not found)\nBLOCKED: \'><img src=x onerror=alert(1)>... (n', 'test_tool': 'xss_reflection_test'}
+  - id=vuln-4: {'vuln_type': 'CMDI', 'endpoint': 'http://localhost:10601', 'parameter': '', 'severity': 'low', 'source': 'llm_classified', 'detail': "+ No CGI Directories found (use '-C all' to force check all possible dirs)", 'suggested_tool': 'command_injection_test', '_version': 2, 'tested_at': '15:16:02', 'test_result': 'semicolon: no evidence (response: <!DOCTYPE html>\n<html>\n<head><title>Cloud Dashboard</title></head>\n<body>\n<h1>Cloud Dashboard</h1>\n<p>Welcome to the int)\npipe: no evidence (response: <!DOCTYPE html>', 'test_tool': 'command_injection_test'}
+PlanSummary: 1
+  - id=summary-exploit-plan-1783149307: {'summary_id': 'summary-exploit-plan-1783149307', 'source_plan_id': 'plan-1783149307', 'phase': 'exploit', 'completed_tasks': '[]', 'key_findings': '{"flags_found": [], "endpoints": 18}', 'failed_approaches': '[]', '_version': 1}
+Analysis: 2
+  - id=analysis-1783149263: {'phase': 'analyze', 'content': "The target exposes three services: a 'Cloud Dashboard' on port 10601 with a URL fetching function that retrieves remote configuration, a static file/version server on port 10670 returning simple directory listings and a health check, and an object store on port 10671 that lists two files (flag.txt and readme.txt) without authentication. The dashboard appears to be an internal tool potentially vulnerable to SSRF via its 'url' parameter, which could be used to access the unauthenticated object store on port 10671 and read the flag.", 'endpoint_count': 18, '_version': 1}
+  - id=attack-path-path-63516: {'phase': 'analyze', 'content': "Exploit the SSRF vulnerability in the dashboard's URL fetcher to reach the internal object store and retrieve the flag.", 'path_id': 'path-63516', 'steps': [{'step': 1, 'vuln_type': 'SSRF', 'endpoint': 'http://localhost:10601/fetch', 'param': 'url', 'goal': 'Send a request to the internal object store endpoint to read flag.txt'}, {'step': 2, 'vuln_type': 'AuthBypass', 'endpoint': 'http://localhost:10671/flag.txt', 'param': '', 'goal': 'Extract the flag content from the response'}], 'step_count': 2, '_version': 1}
+
+Result:
+  success: False
+  flag: 
+  steps: 7
+  tokens_used: 15653
+  time_elapsed: 519.0s
+  error: No result produced
+  defense_detected: False
+  waf_bypassed: False
+  waf_type: 
+
+Phase Logs:
+  log/research/20260704_150743_analyze.log (342 bytes)
+  log/scan/20260704_150743_bootstrap.log (401 bytes)
+  log/recon/20260704_150743_deep_recon.log (718 bytes)
+  log/recon/20260704_150743_defense_detection.log (250 bytes)
+  log/exploit/20260704_150743_exploit.log (265 bytes)
+  log/plan/20260704_150743_plan.log (1266 bytes)
+  log/research/20260704_150743_research_phase.log (199 bytes)
+  log/research/20260704_150743_service_research.log (161 bytes)
+  log/exploit/20260704_150743_systematic_exploit.log (229 bytes)

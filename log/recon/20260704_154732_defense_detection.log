@@ -1,0 +1,3 @@
+{"phase": "defense_detection", "timestamp": "2026-07-04T15:53:21", "run_id": "20260704_154732", "elapsed_s": "N/A", "waf_type": "unknown", "complexity": 0.15, "has_honeypot": false}
+---CONTENT---
+WAF: unknown | complexity: 0.15 | has_honeypot: False

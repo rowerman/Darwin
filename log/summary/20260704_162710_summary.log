@@ -1,0 +1,51 @@
+DARWIN Run Summary — 20260704_162710
+Timestamp: 2026-07-04T16:38:02
+============================================================
+phase_at_end: analyze
+loop_count: 1
+solo_iterations: 1
+step_count: 7
+
+DKG Summary:
+Host: 1
+  - id=host-localhost: {'ip': 'localhost', 'is_reachable': True, 'is_internal': False, '_version': 1}
+Service: 1
+  - id=svc-localhost-10605: {'port': 10605, 'protocol': 'tcp', 'version': 'Werkzeug httpd (Python Flask dev server)', 'banner': 'http', 'service_name': 'http', '_version': 2, 'fingerprint': ['Werkzeug/3.1.8 Python/3.11.15', '127.0.0.1', '3.11.15', 'CloudFormation Console', '3.1.8']}
+Endpoint: 1
+  - id=ep-http://localhost:10605: {'url': 'http://localhost:10605', 'method': 'GET', 'params': '', 'sample_status': 200, 'sample_response': '[PAGE_SIZE 776 bytes] [TITLE] CloudFormation Console | [TEXT] CloudFormation Console CloudFormation Stack Creator Available Exports (use Fn::ImportValue or Fn::Sub to reference) AppDatabasePassword → /secure/app/db-password AppApiKey → /secure/app/api-key LogBucketName → logs-bucket-2024 CacheEndpoint → redis-cluster.prod.internal Supports: Ref, Fn::Sub, Fn::I\n[RAW_PREFIX] <!DOCTYPE html><html><head><title>CloudFormation Console</title></head><body>\n<h1>CloudFormation Stack Creator</h1>\n<h3>Available Exports (use Fn::ImportValue or Fn::Sub to reference)</h3>\n<pre>  AppDatabasePassword → /secure/app/db-password\n  AppApiKey → /secure/app/api-key\n  LogBucketName → logs-bucket-2024\n  CacheEndpoint → redis-cluster.prod.internal</pre>\n<p>Supports: Ref, Fn::Sub, Fn::ImportValue, Fn::Join</p>\n<form method=post action=/create>\n<textarea name=template rows=12 cols=70 placeh', 'response_size': 951, '_version': 3, 'deep_recon_done': True, 'sample_content_type': 'text/html; charset=utf-8'}
+Vulnerability: 5
+  - id=vuln-nikto-14: {'vuln_type': 'XSS', 'endpoint': 'http://localhost:10605', 'parameter': '', 'severity': 'low', 'source': 'nikto', 'detail': '- Nikto v2.1.5', '_version': 2, 'tested_at': '16:36:24', 'test_result': 'BLOCKED: <script>alert(1)</script>... (not found)\nBLOCKED: <img src=x onerror=alert(1)>... (not found)\nBLOCKED: "><script>alert(1)</script>... (not found)\nBLOCKED: \'><img src=x onerror=alert(1)>... (n', 'test_tool': 'xss_reflection_test'}
+  - id=vuln-nikto-20: {'vuln_type': 'XSS', 'endpoint': 'http://localhost:10605', 'parameter': '', 'severity': 'low', 'source': 'nikto', 'detail': "+ No CGI Directories found (use '-C all' to force check all possible dirs)", '_version': 9}
+  - id=vuln-1: {'vuln_type': 'InsecureDeserialization', 'endpoint': 'http://localhost:10605/create', 'parameter': 'template', 'severity': 'unknown', 'source': 'llm_analysis', 'suggested_tool': 'send_payload', 'tool_args': {'url': 'http://localhost:10605/create', 'param': 'template', 'payload': '!!python/object/apply:os.system ["sleep 5"]', 'method': 'POST', 'encode_type': 'form', 'body_format': 'raw'}, '_version': 2, 'tested_at': '16:36:24', 'test_result': 'STATUS:200\nHEADER:Server:Werkzeug/3.1.8 Python/3.11.15\nHEADER:Date:Sat, 04 Jul 2026 08:36:24 GMT\nHEADER:Content-Type:text/html; charset=utf-8\nHEADER:Content-Length:601\nHEADER:Connection:close\nBODY_STA', 'test_tool': 'send_payload'}
+  - id=vuln-2: {'vuln_type': 'SSTI', 'endpoint': 'http://localhost:10605/create', 'parameter': 'template', 'severity': 'unknown', 'source': 'llm_analysis', 'suggested_tool': 'ssti_inject', 'tool_args': {'target_url': 'http://localhost:10605/create', 'param_name': 'template', 'method': 'POST', 'template_engine': 'auto'}, '_version': 2, 'tested_at': '16:36:24', 'test_result': '[\n  {\n    "phase": "detect",\n    "engine": "auto",\n    "payload": "{{7*7}}",\n    "result": "no reflection"\n  }\n]', 'test_tool': 'ssti_inject'}
+  - id=vuln-3: {'vuln_type': 'XSS', 'endpoint': 'http://localhost:10605', 'parameter': '', 'severity': 'low', 'source': 'llm_classified', 'detail': '- Nikto v2.1.5', '_version': 1}
+Plan: 1
+  - id=plan-1783154068: {'plan_id': 'plan-1783154068', 'phase': 'explore', 'goal': 'Capture flag on http://localhost:10605', 'total_tasks': 10, 'completed': 1, 'failed': 1, 'status': 'in_progress', '_version': 1}
+PlanSummary: 1
+  - id=summary-exploit-plan-1783154068: {'summary_id': 'summary-exploit-plan-1783154068', 'source_plan_id': 'plan-1783154068', 'phase': 'exploit', 'completed_tasks': '["Test YAML deserialization RCE with time-based blind detection. Send !!python/object/apply:time.sleep [5] payload. If response delays ~5 seconds, unsafe YAML loading is confirmed."]', 'key_findings': '{"flags_found": [], "endpoints": 1}', 'failed_approaches': '["Use known valid export AppDatabasePassword via Fn::ImportValue in a CloudFormation JSON template. Observe what value the server returns to understand resolution behavior (file content vs literal path string)."]', '_version': 1}
+Analysis: 2
+  - id=analysis-1783154027: {'phase': 'analyze', 'content': 'This is a CloudFormation template processing console. The GET / page displays a form allowing users to submit CloudFormation templates (likely YAML/JSON) via POST /create. It lists available exports like AppDatabasePassword and AppApiKey that can be referenced in templates, suggesting the app resolves CloudFormation intrinsic functions (Ref, Fn::Sub, etc.). The server is Python Flask (Werkzeug).', 'endpoint_count': 1, '_version': 1}
+  - id=attack-path-path-27383: {'phase': 'analyze', 'content': 'Exploit YAML deserialization to achieve remote code execution, then locate and retrieve the flag from the container filesystem or environment.', 'path_id': 'path-27383', 'steps': [{'step': 1, 'vuln_type': 'InsecureDeserialization', 'endpoint': 'http://localhost:10605/create', 'param': 'template', 'goal': 'Achieve remote code execution on the Flask server via a malicious YAML payload (e.g., using os.system or subprocess).'}, {'step': 2, 'vuln_type': 'PostExploitation', 'endpoint': 'N/A', 'param': '', 'goal': 'Use the shell access to locate the flag (likely in /flag.txt or environment variable).'}], 'step_count': 2, '_version': 1}
+
+Result:
+  success: False
+  flag: 
+  steps: 7
+  tokens_used: 17657
+  time_elapsed: 651.9s
+  error: No result produced
+  defense_detected: False
+  waf_bypassed: False
+  waf_type: 
+
+Phase Logs:
+  log/research/20260704_162710_analyze.log (323 bytes)
+  log/scan/20260704_162710_bootstrap.log (277 bytes)
+  log/recon/20260704_162710_deep_recon.log (195 bytes)
+  log/recon/20260704_162710_defense_detection.log (249 bytes)
+  log/exploit/20260704_162710_exploit.log (267 bytes)
+  log/plan/20260704_162710_plan.log (1512 bytes)
+  log/replan/20260704_162710_plan_review.log (261 bytes)
+  log/research/20260704_162710_research_phase.log (199 bytes)
+  log/research/20260704_162710_service_research.log (161 bytes)
+  log/exploit/20260704_162710_systematic_exploit.log (229 bytes)

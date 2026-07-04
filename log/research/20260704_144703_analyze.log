@@ -1,0 +1,4 @@
+{"phase": "analyze", "timestamp": "2026-07-04T14:57:06", "run_id": "20260704_144703", "elapsed_s": "N/A", "vuln_count": 2}
+---CONTENT---
+[SSRF] http://localhost:10601/fetch param=url conf=90%
+[XSS] http://localhost:10601 param= conf=30%

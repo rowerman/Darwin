@@ -1,0 +1,6 @@
+{"phase": "bootstrap", "timestamp": "2026-07-04T17:08:00", "run_id": "20260704_170626", "elapsed_s": "N/A", "hosts": 1, "services": 3, "endpoints": 3}
+---CONTENT---
+[BOOTSTRAP] 1 host(s), 3 service(s), 3 endpoint(s)
+10606/tcp http Werkzeug httpd (Python Flask dev server) http
+10701/tcp ec2-imds Amazon EC2 Instance Metadata Service (IMDS v1-v2 simulator) ec2-imds
+10706/tcp postgresql PostgreSQL DB 9.6.0 or later postgresql
