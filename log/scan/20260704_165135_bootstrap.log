@@ -1,4 +1,0 @@
-{"phase": "bootstrap", "timestamp": "2026-07-04T16:53:14", "run_id": "20260704_165135", "elapsed_s": "N/A", "hosts": 1, "services": 1, "endpoints": 1}
----CONTENT---
-[BOOTSTRAP] 1 host(s), 1 service(s), 1 endpoint(s)
-10605/tcp http Werkzeug httpd (Python Flask dev server) http

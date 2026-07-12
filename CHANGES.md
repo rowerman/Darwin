@@ -1,3 +1,22 @@
+## 2026-07-11
+
+- **darwin/orchestrator.py** `_resolve_tools()` L3606: 未识别的漏洞类型不再返回空列表，改为返回通用 HTTP fallback 工具集 `[http_post, send_payload, curl_get]`。修复 cloud 原生漏洞类型（OIDC/IAM/PassRole/SCP bypass）在 systematic pass 中被标记为 unmapped 直接跳过的问题。泛用性修复。
+- **darwin/orchestrator.py** `_EXPLOIT_PRIORITY` L6669: 添加 `http_post`、`form_extract` 到优先级列表。这两个 HTTP 利用工具之前被归类为 probe，导致利用任务排到侦察任务之后。
+- **darwin/orchestrator.py** `_select_next_plan_task()` L6741: 新增语义关键词匹配（bypass/exploit/assume/escalate/inject/takeover 等），任务描述包含这些词的自动提升为 exploit 优先级，无论 tool 类型。
+- **darwin/orchestrator.py** `_review_and_update_plan()` L7645: LLM plan review 不能再追溯修改独立 PENDING 任务的依赖关系。原行为允许 LLM 在任务失败后将失败任务 ID 添加为独立下游任务的依赖，导致可执行任务被永久阻塞。现在只允许为原本无依赖的任务添加新依赖，或缩减排现有依赖。
+
+## 2026-07-08
+
+- **darwin/tools/recon_server.py**: `curl_get` headers 参数现在同时接受 string 和 dict 类型。LLM 通过 function calling 传入 dict 时不再报 `'dict' object has no attribute 'split'`。泛用性修复，惠及所有场景。
+- **darwin/tools/attack_server.py**: `ssh_key_exec` 的 `key_path` 参数添加默认值 `~/.ssh/id_rsa`。修复 systematic pass 调用时因缺 key_path 导致的 Template format error。
+- **darwin/tools/recon_server.py**: `gobuster_dir` 超时时间从 90s 降到 45s。原超时太长导致 DEEP RECON 在 unreachable 端口上浪费大量时间（每个端口最多 225s=90s×1.5×2次重试）。泛用性优化。
+- **darwin/tools/attack_server.py**: `ssh_key_exec` 的 `user` 参数添加默认值 `root`。修复 systematic pass 调用时因缺 user 导致的 Template format error。
+- **benchmark**: CLOUD-12 (`cross-account-trust`) 和 CLOUD-14 (`passrole-abuse`) 的 docker-compose.yml 中内部容器 FLAG 从硬编码改为 `${CVE_FLAG}`，使动态 flag 能正确传递。
+
+## 2026-07-06
+
+- **darwin/orchestrator.py**: `_get_next_ready_task()` 中的 `_EXPLOIT_PRIORITY` 集合补充了 K8s/容器逃逸/Cloud/后渗透等工具（container_escape_*, kubectl_*, k8s_*, aws_cli, check_capabilities, check_mounts, ssh_exec, shell_exec 等）。原因是容器逃逸等高价值利用任务原本不在高优先级列表中，被大量低置信度 Web 探测任务（XSS/SQLI/IDOR）排在后面，导致时间预算耗尽前无法执行到真正的利用链。这是一个通用架构修复，惠及所有 K8s 和 Cloud 场景。
+
 ## 2026-07-04 (Knowledge base gap-filling — 6 cloud/K8s entries)
 - **knowledge/cloud/cloud_k8s_scheduling_bypass.json**: 新增 K8s Node Selector Evasion (K8S-28) + Toleration Abuse/Taint Bypass (K8S-29) 两条知识条目
 - **knowledge/cloud/cloud_k8s_network_bypass.json**: 新增 CNI IP Spoofing (K8S-30) + NetworkPolicy Label Spoofing (K8S-27) 两条知识条目

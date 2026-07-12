@@ -6,6 +6,7 @@ __pycache__/
 
 # Virtual environment
 venv/
+log/
 
 # checkpoint
 checkpoints/
@@ -18,3 +19,8 @@ config/
 # IDE
 .idea/
 .vscode/
+.reasonix/
+
+# log
+log/
+experiments_results/

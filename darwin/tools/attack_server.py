@@ -1079,8 +1079,8 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
         command_template="ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 -o PasswordAuthentication=no -o BatchMode=yes -p {port} -i {key_path} {user}@{host} '{command}' 2>&1",
         description="Execute a command on a remote host using SSH key authentication (no password needed). Always specify port — default SSH port is 22, but many targets use non-standard ports.",
         parameters={
-            "key_path": {"type": "string", "description": "Path to SSH private key file"},
-            "user": {"type": "string", "description": "SSH username"},
+            "key_path": {"type": "string", "description": "Path to SSH private key file", "default": "~/.ssh/id_rsa"},
+            "user": {"type": "string", "description": "SSH username", "default": "root"},
             "host": {"type": "string", "description": "Target host IP or hostname"},
             "port": {"type": "integer", "description": "SSH port (e.g. 10222)", "default": 22},
             "command": {"type": "string", "description": "Command to execute on the remote host"},

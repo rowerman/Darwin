@@ -1,5 +1,0 @@
-{"phase": "analyze", "timestamp": "2026-07-04T16:33:51", "run_id": "20260704_162710", "elapsed_s": "N/A", "vuln_count": 3}
----CONTENT---
-[InsecureDeserialization] http://localhost:10605/create param=template conf=70%
-[SSTI] http://localhost:10605/create param=template conf=50%
-[XSS] http://localhost:10605 param= conf=30%

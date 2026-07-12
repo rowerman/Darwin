@@ -367,7 +367,7 @@ def register_recon_tools(gateway: MCPGateway) -> MCPGateway:
             "wordlist": {"type": "string", "description": "Wordlist path", "default": "/home/kianabin/Darwin/wordlists/raft-large-directories.txt"},
         },
         parser=_parse_gobuster_output,
-        timeout=90,
+        timeout=45,
     )
 
     # ── nikto: Web server scanner ───────────────────────────────
@@ -400,8 +400,13 @@ def register_recon_tools(gateway: MCPGateway) -> MCPGateway:
             _ck = cookie.strip().rstrip(";")
             cmd += f" -H 'Cookie: {_ck}'"
         if headers:
-            for h in headers.split(","):
-                cmd += f" -H '{h.strip()}'"
+            # Accept both string ("Key: val, Key2: val2") and dict ({"Key": "val"})
+            if isinstance(headers, dict):
+                for k, v in headers.items():
+                    cmd += f" -H '{k}: {v}'"
+            else:
+                for h in str(headers).split(","):
+                    cmd += f" -H '{h.strip()}'"
         cmd += f" '{url}'"
 
         proc = await asyncio.create_subprocess_shell(

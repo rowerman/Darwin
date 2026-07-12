@@ -1,5 +1,0 @@
-{"phase": "analyze", "timestamp": "2026-07-04T15:42:10", "run_id": "20260704_153510", "elapsed_s": "N/A", "vuln_count": 3}
----CONTENT---
-[CMDi] http://localhost:10604/invoke param=code conf=95%
-[CMDi] http://localhost:10702/ param= conf=30%
-[XSS] http://localhost:10604 param= conf=30%

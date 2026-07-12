@@ -3603,7 +3603,12 @@ class Orchestrator:
             for keyword, tlist in FUZZY_MAP.items():
                 if keyword in vt_lower:
                     return tlist
-            return []
+            # Unknown/unmapped vuln types: provide generic HTTP exploitation
+            # tools as a fallback so the systematic pass doesn't skip them.
+            # These tools cover form-based API exploits, auth bypass, and
+            # parameter injection — the most common HTTP-based attack vectors.
+            _FALLBACK_HTTP_TOOLS = ["http_post", "send_payload", "curl_get"]
+            return _FALLBACK_HTTP_TOOLS
 
         def _detect_proto_from_service(endpoint: str, dkg: DKG) -> set[str] | None:
             """Detect protocol tool set from DKG Service node by port.
@@ -6669,12 +6674,42 @@ Output ONLY valid JSON array (3-20 tasks depending on complexity. More tasks =\=
         _EXPLOIT_PRIORITY = {
             "command_injection_test", "sqlmap_test", "send_payload",
             "xss_reflection_test", "ffuf_fuzz",
+            # HTTP exploitation (form-based API exploits, auth bypass, etc.)
+            "http_post", "form_extract",
             "redis_cmd", "mysql_query", "psql_query", "mssql_query", "mssqlclient_query",
             "oracle_query", "tomcat_exploit", "php_filter_chain",
             "jwt_forge", "impacket_psexec", "impacket_wmiexec",
             "impacket_pth", "impacket_ticketer", "impacket_silver_ticket",
             "impacket_secretsdump", "impacket_secretsdump_dcsync",
             "impacket_GetUserSPNs", "impacket_GetNPUsers",
+            # Container escape tools
+            "container_escape_docker_sock", "container_escape_docker_api",
+            "container_escape_cgroup", "container_escape_mount_disk",
+            "container_escape_cap_dac", "container_escape_procfs",
+            "container_escape_runc", "nsenter_exec", "crictl_cmd",
+            # Container recon (prerequisite for escape)
+            "check_capabilities", "check_mounts",
+            "container_find_sockets", "container_find_docker", "container_recon_env",
+            # K8s exploitation and post-exploitation
+            "kubectl_exec", "kubectl_run",
+            "k8s_secret_dump", "k8s_configmap_dump", "k8s_sa_token_steal",
+            "k8s_kubelet_exec", "k8s_etcd_keys", "etcdctl_get",
+            "k8s_backdoor_daemonset", "k8s_backdoor_cronjob",
+            # K8s enumeration (prerequisite for exploitation)
+            "kubectl_get_pods", "kubectl_get_secrets",
+            "kubectl_get_clusterrolebindings", "kubectl_auth_check",
+            "sa_token_read", "kubelet_probe",
+            # Cloud exploitation
+            "aws_cli", "aws_iam_federation", "check_cloud_metadata",
+            "ssrf_probe",
+            # Post-exploitation and lateral movement
+            "ssh_exec", "shell_exec", "ssh_key_exec",
+            "linux_priv_check", "file_upload",
+            # Additional exploit tools
+            "xxe_inject", "ssti_inject", "graphql_introspect",
+            "wpscan_enum", "oracle_tns_poison", "smbmap_enum",
+            "gpp_decrypt", "hash_crack", "smb_client",
+            "test_credential",
         }
         _LOW_PRIORITY = {
             "hydra_http_brute", "hydra_ssh_brute",
@@ -6706,10 +6741,22 @@ Output ONLY valid JSON array (3-20 tasks depending on complexity. More tasks =\=
             if deps_met:
                 tool = task.get("tool", "")
                 source = task.get("source", "")
+                # Semantic priority: task instructions containing exploit
+                # keywords (bypass, exploit, assume, inject, takeover, etc.)
+                # are exploitation tasks regardless of their declared tool.
+                _EXPLOIT_KEYWORDS = [
+                    "bypass", "exploit", "assume", "escalat",
+                    "inject", "takeover", "token", "flag",
+                    " privilege", "admin role", "forgery",
+                ]
+                def _has_exploit_semantics(t: dict) -> bool:
+                    inst = (t.get("instruction") or "").lower()
+                    return any(kw in inst for kw in _EXPLOIT_KEYWORDS)
                 # Credential-hint tasks unlock downstream exploitation and
                 # should execute ASAP — treat them as exploit-priority
                 # regardless of their tool type.
-                if source == "credential-hint" or tool in _EXPLOIT_PRIORITY:
+                if (source == "credential-hint" or tool in _EXPLOIT_PRIORITY
+                        or _has_exploit_semantics(task)):
                     ready_exploit.append(task)
                 elif tool in _LOW_PRIORITY:
                     ready_low.append(task)
@@ -7596,9 +7643,23 @@ Output ONLY valid JSON:
                         preserved.append(nt)
                         existing_ids.add(nt["id"])
                     else:
-                        # LLM updated an existing task — capture its dependency changes
+                        # LLM updated an existing task — capture its dependency changes,
+                        # but only if the update doesn't block a previously-independent task.
                         if "dependent_task_ids" in nt:
-                            llm_dep_updates[nt["id"]] = nt["dependent_task_ids"]
+                            pt = next((t for t in preserved if t.get("id") == nt["id"]), None)
+                            if pt and pt.get("status") == "pending":
+                                _orig_deps = pt.get("dependent_task_ids") or []
+                                _new_deps = nt["dependent_task_ids"]
+                                # Allow: (a) task was already independent, or
+                                #        (b) new deps are a subset of original (trimming)
+                                if not _orig_deps or set(_new_deps).issubset(set(_orig_deps)):
+                                    llm_dep_updates[nt["id"]] = _new_deps
+                                # Otherwise: ignore LLM's dependency change —
+                                # retroactively adding blocking dependencies
+                                # to independent tasks breaks plan execution.
+                            else:
+                                # Done/failed tasks can have their deps updated freely
+                                llm_dep_updates[nt["id"]] = nt["dependent_task_ids"]
                 # Apply LLM's dependency updates to preserved tasks
                 for t in preserved:
                     tid = t.get("id", "")
