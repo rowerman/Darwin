@@ -1,3 +1,45 @@
+## 2026-07-19
+
+- **Bug C — darwin/tools/attack_server.py** (`object_store_get`): 扩展 S3 API 路径模式列表（+6 个新 pattern: `/object/`, `/storage/`, `/?id=`, `/?path=`, `/api/v1/objects/`, `/api/`），bucket 循环追加 `/{bucket}/objects/{o}` 模式，失败诊断输出改进（含状态码统计）。修复 CLOUD-01 S3 simulator 路径不匹配问题。
+- **Bug D — darwin/orchestrator.py** (`_detect_proto_from_service` + `_sanitize_plan_tools`): 添加 Tiller 服务（Helm v2）到 helm 工具的映射。`_detect_proto_from_service()` 检测 "tiller" 服务名返回 `{"helm", "shell_exec"}`；`_sanitize_plan_tools()` 含 "tiller" 时 auto-assign `helm` 工具 + `command="list --all"`；`_PORT_PROTO` 新增端口 44134。修复 K8S-10 Tiller 服务未被识别问题。
+- **Bug A — darwin/orchestrator.py** (Plan 任务膨胀修复): 多层防御机制 —
+  1. 提取共享去重方法 `_is_duplicate_task()`（tool+endpoint 精确匹配 + instruction 词重叠 >75%），应用于全部三个代码路径；
+  2. 每轮新增任务数限制：`_review_and_update_plan()` 每轮最多 +8 个，`_replan_after_failure()` 每次最多 +5 个，multi-agent update 最多 +15 个；
+  3. 智能裁剪：提取 `_cap_pending_tasks()` 方法，max_total=20，优先保留带 tool 的任务（exploit/probe），裁剪无 tool 的推测性任务，自动打印裁剪日志 `[PLAN-CAP]`。
+  修复 CLOUD-05/16 等场景的 plan 膨胀问题（35→105 tasks → ≤20 pending）。
+- **Bug B — darwin/orchestrator.py** (知识→执行转化桥梁):
+  1. `VulnerabilityHypothesis` 新增 `suggested_payloads: list[str]` 字段；
+  2. `_generate_exploitation_plan()` 中从 RAG 结果提取含 `${...}`/`Fn::`/`{{}}` 模式的 payload，注入 "Extracted Payloads" 段到 Attack Pattern Knowledge；
+  3. `_format_vulnerability_summary()` 展示 `Payloads:` 行；
+  4. Plan prompt 新增 "Payload injection" CRITICAL 指令；
+  5. Plan fallback 将 `suggested_payloads` 映射到 `params["payload"]`。
+  修复 CLOUD-05 CloudFormation 注入场景中 RAG 命中但 LLM 未使用 `${/secure/flag}` 的问题。
+- **experiment_progress.md**: 新建实验进度追踪文档，含绝对约束、51 个场景清单、实验结果记录模板。
+
+## 2026-07-16
+
+- **darwin/tools/attack_server.py** (`object_store_get`): 新增工具 — 通用对象存储客户端，自动探测 S3-like API 的文件下载路径。解决 CLOUD-01 等场景中端口返回对象列表但无法下载文件的问题。
+- **darwin/tools/attack_server.py** (`saml_forge`): 新增工具 — SAML 2.0 assertion 构造器，生成 base64 编码的 SAML assertion 用于 AssumeRoleWithSAML 等云联合身份攻击。解决 CLOUD-13 Golden SAML 场景的工具缺失。
+- **knowledge/cloud/cloudformation_injection.json**: 新增知识文件 — AWS CloudFormation Fn::Sub 注入模式（SSM 参数解析、Fn::ImportValue 跨栈泄露）。RAG rebuild 后生效（云集合已有 150 条覆盖此内容）。
+
+- **darwin/tools/attack_server.py** (`object_store_get`): 新增工具 — 通用对象存储客户端，自动探测 S3-like API 的文件下载路径。解决 CLOUD-01 等场景中端口返回对象列表但无法下载文件的问题。
+- **darwin/tools/attack_server.py** (`saml_forge`): 新增工具 — SAML 2.0 assertion 构造器，生成 base64 编码的 SAML assertion 用于 AssumeRoleWithSAML 等云联合身份攻击。解决 CLOUD-13 Golden SAML 场景的工具缺失。
+- **knowledge/cloud/cloudformation_injection.json**: 新增知识文件 — AWS CloudFormation Fn::Sub 注入模式（SSM 参数解析、Fn::ImportValue 跨栈泄露）。RAG rebuild 后生效（云集合已有 150 条覆盖此内容）。
+- **darwin/tools/attack_server.py** (`ssrf_probe`): 函数签名添加 `method: str = "GET"` 参数，与 gateway.register 的声明一致。修复 LLM 传 method 参数时 `unexpected keyword argument 'method'` 错误。curl 命令支持 -X POST。
+
+## 2026-07-15
+
+- **experiments/runner.py**: `time_budget` 默认值 600→480 (8分钟), `pass_at_k` 默认值 3→2。CVE benchmark 和 pilot 模式的硬编码值同步更新。限制单次实验最大时长，避免长时间无效等待。
+- **test_results_cloud_k8s_round3.md**: 删除（未按要求执行的实验记录）。
+- **test_results_cloud_k8s_round4.md**: 新建 — K8S+Cloud 全覆盖测试追踪文件，包含 49 个场景的详细任务清单和断点重启说明。
+
+## 2026-07-12
+
+- **darwin/orchestrator.py**: bootstrap 路径探测列表 `_WEB_PATHS` 新增 `/files`、`/objects`、`/buckets`。修复 S3/对象存储 API 模拟器在 gobuster 被跳过（非 HTML 响应）时关键路径无法被发现的问题，导致如 `/files/flag.txt` 这样的路径在 exploit 阶段永远不可达。泛用性修复 — 这些是通用对象存储 API 路径前缀。
+- **darwin/tools/attack_server.py**: 新增 `aws_sts_query` 工具 — 直接通过 HTTP POST 向 STS 兼容端点发送 AWS STS Query API 请求（无需 AWS CLI）。接受标准 STS 参数（action/access_key_id/secret_access_key/role_arn/api_version），自动解析 XML 响应提取凭证。填补了 cloud 场景 Flask 模拟器需要特定 STS 查询格式而 send_payload/http_post 无法正确构造的空白。`api_version` 参数支持 SCP 绕过的版本切换（2010-05-08 vs 2011-06-15）。
+- **darwin/prompts/orchestrator.py**: Cloud Exploitation 工具列表添加 `aws_sts_query`。
+- **darwin/prompts/cloud_agent.py**: AWS CLOUD 工具列表添加 `aws_sts_query`。
+
 ## 2026-07-11
 
 - **darwin/orchestrator.py** `_resolve_tools()` L3606: 未识别的漏洞类型不再返回空列表，改为返回通用 HTTP fallback 工具集 `[http_post, send_payload, curl_get]`。修复 cloud 原生漏洞类型（OIDC/IAM/PassRole/SCP bypass）在 systematic pass 中被标记为 unmapped 直接跳过的问题。泛用性修复。

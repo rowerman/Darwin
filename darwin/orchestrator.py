@@ -77,6 +77,7 @@ class VulnerabilityHypothesis:
     evidence: str
     suggested_tool: str = ""
     tool_args: dict = field(default_factory=dict)
+    suggested_payloads: list[str] = field(default_factory=list)
     research_techniques: list = field(default_factory=list)
     research_cves: list = field(default_factory=list)
 
@@ -1236,7 +1237,8 @@ class Orchestrator:
             if resp_len < 500 and len(discovered_ports) <= 3:
                 _WEB_PATHS = ["/", "/index.html", "/home", "/login", "/admin",
                               "/api", "/app", "/status", "/health", "/metrics",
-                              "/fetch", "/upload", "/dashboard", "/console"]
+                              "/fetch", "/upload", "/dashboard", "/console",
+                              "/files", "/objects", "/buckets"]
                 async def _probe_web_path(path: str):
                     try:
                         r = await self.recon_gateway.call("curl_get",
@@ -2892,17 +2894,19 @@ class Orchestrator:
                 self.step_count += 1
 
                 # Auto-inject body_format for POST endpoints.
-                # send_payload defaults to form-encoded which fails on
-                # JSON-only endpoints. Any DKG endpoint with method=POST
-                # gets JSON body — modern APIs use JSON by default.
+                # Only default to JSON when the endpoint's sample response
+                # starts with { or [ (indicating a JSON API). Otherwise
+                # keep the LLM's choice — cloud simulators (AWS STS/IAM)
+                # and OIDC endpoints typically expect form-encoded data.
                 if tc_name == "send_payload" and tc_args.get("method", "GET").upper() == "POST":
                     if not tc_args.get("body_format"):
                         url = tc_args.get("url", "")
                         dkg_eps = [e for e in self.dkg.query_nodes("Endpoint")
                                    if e.get("url", "") == url]
-                        ep_method = dkg_eps[0].get("method", "GET") if dkg_eps else "GET"
-                        if ep_method == "POST":
-                            tc_args["body_format"] = "json"
+                        if dkg_eps:
+                            _sample = (dkg_eps[0].get("sample_response") or "").strip()
+                            if _sample.startswith("{") or _sample.startswith("["):
+                                tc_args["body_format"] = "json"
 
                 # Block local filesystem access — flag must come from the target
                 if tc_name in ("curl_get", "http_post") and str(tc_args.get("url", "")).startswith("file://"):
@@ -2947,6 +2951,38 @@ class Orchestrator:
                             stdout="", stderr=str(e),
                             exit_code=1, elapsed_ms=0,
                         )
+
+                # ── Adaptive format retry ──────────────────────────
+                # When send_payload/http_post gets HTTP 400 with one body
+                # format, automatically retry with the opposite format.
+                # Cloud API simulators (AWS STS/IAM/OIDC) often expect
+                # form-encoded data while the LLM may have chosen JSON
+                # (or vice versa). One retry costs ~2-5s but resolves
+                # format mismatches without requiring the LLM to guess.
+                if tc_name in ("send_payload", "http_post") and not result.success:
+                    _res_stderr = (getattr(result, 'stderr', '') or '').lower()
+                    _res_stdout = (getattr(result, 'stdout', '') or '').lower()
+                    if ("400" in _res_stderr or "bad request" in _res_stderr
+                            or "400" in _res_stdout or "bad request" in _res_stdout):
+                        _cur_format = tc_args.get("body_format", "")
+                        if _cur_format == "json":
+                            tc_args["body_format"] = "form"
+                            try:
+                                if tc_name in self.attack_gateway.get_tool_names():
+                                    result = await self.attack_gateway.call(tc_name, tc_args)
+                                elif tc_name in self.recon_gateway.get_tool_names():
+                                    result = await self.recon_gateway.call(tc_name, tc_args)
+                            except Exception:
+                                pass  # retry failed — keep original error
+                        elif _cur_format in ("form", ""):
+                            tc_args["body_format"] = "json"
+                            try:
+                                if tc_name in self.attack_gateway.get_tool_names():
+                                    result = await self.attack_gateway.call(tc_name, tc_args)
+                                elif tc_name in self.recon_gateway.get_tool_names():
+                                    result = await self.recon_gateway.call(tc_name, tc_args)
+                            except Exception:
+                                pass  # retry failed — keep original error
 
                 # ── Runtime tool blacklist & absent-service tracking ──
                 _exit_code = getattr(result, 'exit_code', 0)
@@ -3649,6 +3685,9 @@ class Orchestrator:
                     # (kubernetes-admission before kubernetes).
                     if "etcd" in svc_name:
                         return {"etcdctl_get", "k8s_etcd_keys", "shell_exec"}
+                    if "tiller" in svc_name:
+                        # Helm v2 Tiller service — gRPC API on port 44134
+                        return {"helm", "shell_exec"}
                     if "kubernetes-admission" in svc_name:
                         # Admission webhook: HTTP endpoint accepting AdmissionReview
                         # JSON. Uses send_payload/curl_get, not kubectl tools.
@@ -3672,6 +3711,7 @@ class Orchestrator:
                         "1521": {"oracle_query", "shell_exec"},
                         "27017": {"shell_exec"},
                         "11211": {"shell_exec"},
+                        "44134": {"helm", "shell_exec"},  # Helm v2 Tiller
                         # AD ports — recognized but no generic tools
                         "88": set(), "389": set(), "636": set(), "445": set(),
                         "139": set(), "135": set(), "3268": set(), "3269": set(),
@@ -5478,6 +5518,8 @@ class Orchestrator:
                 line += f"\n     Tool: {v.suggested_tool}"
                 if v.tool_args:
                     line += f" args={json.dumps(v.tool_args)[:200]}"
+            if v.suggested_payloads:
+                line += f"\n     Payloads: {'; '.join(v.suggested_payloads[:5])}"
             lines.append(line)
         return "\n".join(lines)
 
@@ -5620,6 +5662,19 @@ class Orchestrator:
                             tool = "k8s_kubelet_exec"
                         else:
                             tool = "kubelet_probe"
+                    elif "tiller" in _svc_name:
+                        tool = "helm"
+                        # Build --host from DKG service data:
+                        # svc_name="k8s-tiller-deploy", banner="...tiller-deploy.kube-system.svc.cluster.local"
+                        _tiller_host = (_svc.get("k8s_cluster_ip", "") or "")
+                        _tiller_ns = (_svc.get("k8s_namespace", "") or "kube-system")
+                        _tiller_name = (_svc_name.replace("k8s-", "") if _svc_name.startswith("k8s-") else _svc_name)
+                        if _tiller_name and _tiller_ns:
+                            _tiller_host = f"{_tiller_name}.{_tiller_ns}:44134"
+                        _svc_params["command"] = (
+                            f"--host {_tiller_host} ls --all"
+                            if _tiller_host else "ls --all"
+                        )
                     # Merge inferred params into existing params (don't overwrite)
                     if _svc_params:
                         _existing = dict(t.get("params", {}) if isinstance(t.get("params"), dict) else {})
@@ -6358,6 +6413,28 @@ class Orchestrator:
                                      "and specific credentials listed MUST be used in your tasks. "
                                      "Only discard entries whose software/service type clearly does "
                                      "not match the target (e.g., MySQL techniques for a PostgreSQL target).")
+
+                        # Extract concrete payload patterns from RAG results
+                        _rag_payloads: list[str] = []
+                        for r in results[:4]:
+                            for tech in (r.get("techniques", []) or []):
+                                tech_str = str(tech)
+                                # Match payload-like patterns: ${...}, Fn::..., {{...}}
+                                if (_re.search(r'\$\{[^}]+\}', tech_str)
+                                        or 'Fn::' in tech_str
+                                        or '{{' in tech_str):
+                                    _rag_payloads.append(tech_str[:200])
+                            # Also check description for payload patterns
+                            desc = r.get("description", "") or ""
+                            if _re.search(r'\$\{[^}]+\}', desc):
+                                _rag_payloads.append(desc[:200])
+                        if _rag_payloads:
+                            _deduped = list(dict.fromkeys(_rag_payloads))  # preserve order, remove dups
+                            lines.append("")
+                            lines.append("**Extracted Payloads (use verbatim in tasks):**")
+                            for _p in _deduped[:5]:
+                                lines.append(f"  - `{_p}`")
+
                         rag_context = "\n".join(lines)
         except Exception:
             pass
@@ -6401,6 +6478,7 @@ combinations (username:password pairs), you MUST include EVERY listed combinatio
 batch credential test. Do NOT rely on your own memory of "common passwords" — the RAG
 entries are the authoritative source for service-specific defaults.
 - When an attack pattern matches a discovered service: use the pattern's technique as the task's approach. The RAG result title and techniques field tell you exactly what to do.
+- **Payload injection**: If a vulnerability lists "Payloads:" in its summary or the Attack Pattern Knowledge section contains "Extracted Payloads", those are proven exploitation strings validated against the target's technology. Include them verbatim in the corresponding task's params["data"] or params["payload"]. Do NOT modify or truncate them.
 - When patterns do NOT match: rely on general vulnerability exploitation principles for that vulnerability type.
 - Service versions are primary signals: an outdated service with known weaknesses should generate high-priority exploitation tasks targeting those specific weaknesses.
 - If the analyze phase produced attack_paths, translate each path into a chain of tasks with dependent_task_ids reflecting the path's step ordering. A 4-step path becomes 4 tasks where each depends on the previous one.
@@ -6543,6 +6621,11 @@ Output ONLY valid JSON array (3-20 tasks depending on complexity. More tasks =\=
                     "dependent_task_ids": [],
                     "status": "pending",
                 }
+                # Inject suggested payloads from RAG analysis
+                if v.suggested_payloads:
+                    task["params"]["payload"] = v.suggested_payloads[0]
+                    if len(v.suggested_payloads) > 1:
+                        task["params"]["payload_batch"] = v.suggested_payloads
                 plan.tasks.append(task)
 
         plan.updated_at = time.strftime("%Y-%m-%dT%H:%M:%S")
@@ -7336,6 +7419,93 @@ Output ONLY valid JSON:
             )
             print(f"\n[CRED] Discovered: {username}:**** → stored for subsequent tasks")
 
+    # ── Plan task dedup + capping helpers ──────────────────────────────
+
+    @staticmethod
+    def _is_duplicate_task(new_task: dict, existing_tasks: list[dict]) -> bool:
+        """Check if *new_task* is a semantic duplicate of any pending task.
+
+        Two checks:
+        1. Same tool + same endpoint → definite duplicate
+        2. Instruction word overlap > 75% → near-duplicate
+        """
+        _nt_inst = (new_task.get("instruction") or "").lower()
+        _nt_tool = (new_task.get("tool") or "").lower()
+        _nt_endpoint = (
+            new_task.get("endpoint")
+            or new_task.get("params", {}).get("target_url", "")
+            or new_task.get("params", {}).get("url", "")
+            or new_task.get("params", {}).get("target", "")
+            or new_task.get("params", {}).get("host", "")
+        ).lower()
+
+        for pt in existing_tasks:
+            if not isinstance(pt, dict):
+                continue
+            if pt.get("status") != "pending":
+                continue
+            # Same tool + same endpoint = definite duplicate
+            _pt_tool = (pt.get("tool") or "").lower()
+            _pt_endpoint = (
+                pt.get("endpoint")
+                or pt.get("params", {}).get("target_url", "")
+                or pt.get("params", {}).get("url", "")
+                or pt.get("params", {}).get("target", "")
+                or pt.get("params", {}).get("host", "")
+            ).lower()
+            if _nt_tool and _pt_tool and _nt_endpoint and _pt_endpoint:
+                if _nt_tool == _pt_tool and _nt_endpoint == _pt_endpoint:
+                    return True
+            # Word overlap ratio check (fallback)
+            _pt_inst = (pt.get("instruction") or "").lower()
+            if _nt_inst and _pt_inst:
+                _nt_words = set(_nt_inst.split())
+                _pt_words = set(_pt_inst.split())
+                if _nt_words and _pt_words:
+                    _overlap = len(_nt_words & _pt_words) / min(len(_nt_words), len(_pt_words))
+                    if _overlap > 0.75:
+                        return True
+        return False
+
+    def _cap_pending_tasks(self, tasks: list[dict], max_total: int = 20,
+                           max_new_this_cycle: int = 8) -> list[dict]:
+        """Trim lowest-quality pending tasks when plan exceeds *max_total*.
+
+        Quality heuristic (in priority order):
+        1. Tasks WITH a tool sort before tasks without (higher quality)
+        2. Tasks with fewer dependencies sort first
+        3. After sorting, keep at most *max_total* total tasks; excess
+           pending tasks are trimmed (done/failed are always preserved).
+
+        Returns the (possibly trimmed) task list.
+        """
+        if len(tasks) <= max_total:
+            return tasks
+
+        _pending = [t for t in tasks if t.get("status") == "pending"]
+        _non_pending = [t for t in tasks if t.get("status") != "pending"]
+        _keep_pending = max(0, max_total - len(_non_pending))
+
+        if len(_pending) <= _keep_pending:
+            return tasks
+
+        def _quality_key(t):
+            deps = len(t.get("dependent_task_ids", []))
+            has_tool = 1 if t.get("tool", "") else 0
+            # -has_tool: tasks WITH tool (key=-1) sort BEFORE tasks without (key=0)
+            return (deps, -has_tool)
+
+        _pending.sort(key=_quality_key)
+        _to_remove = set(t["id"] for t in _pending[_keep_pending:])
+        trimmed = _pending[:_keep_pending]
+        _removed_count = len(_to_remove)
+
+        if _removed_count > 0:
+            _removed_tools = [t.get("tool", "?") for t in _pending[_keep_pending:]]
+            print(f"\n[PLAN-CAP] Trimmed {_removed_count} low-quality pending task(s): {_removed_tools}")
+
+        return [t for t in tasks if t.get("id") not in _to_remove]
+
     async def _review_and_update_plan(
         self, task: dict, success: bool, task_result: str = ""
     ) -> None:
@@ -7601,47 +7771,27 @@ Output ONLY valid JSON:
                 existing_ids = {t["id"] for t in preserved}
                 # Collect LLM's dependency updates for existing tasks
                 llm_dep_updates: dict[str, list] = {}
+                _new_added_this_cycle = 0
+                _MAX_NEW_PER_CYCLE = 8
                 for nt in new_tasks:
                     if not isinstance(nt, dict):
                         continue
                     nt.setdefault("status", "pending")
                     nt.setdefault("dependent_task_ids", nt.pop("dependencies", []))
                     if nt["id"] not in existing_ids:
-                        # Dedup: skip if duplicate of an existing pending task
-                        _nt_inst = (nt.get("instruction") or "").lower()
-                        _nt_tool = (nt.get("tool") or "").lower()
-                        _nt_endpoint = (nt.get("endpoint") or nt.get("params", {}).get("target_url", "") or
-                                       nt.get("params", {}).get("url", "") or
-                                       nt.get("params", {}).get("target", "") or
-                                       nt.get("params", {}).get("host", "")).lower()
-                        _is_dup = False
-                        for pt in preserved:
-                            if pt.get("status") != "pending":
-                                continue
-                            # Same tool + same endpoint = definite duplicate
-                            _pt_tool = (pt.get("tool") or "").lower()
-                            _pt_endpoint = (pt.get("endpoint") or pt.get("params", {}).get("target_url", "") or
-                                           pt.get("params", {}).get("url", "") or
-                                           pt.get("params", {}).get("target", "") or
-                                           pt.get("params", {}).get("host", "")).lower()
-                            if _nt_tool and _pt_tool and _nt_endpoint and _pt_endpoint:
-                                if _nt_tool == _pt_tool and _nt_endpoint == _pt_endpoint:
-                                    _is_dup = True
-                                    break
-                            # Word overlap ratio check (fallback)
-                            _pt_inst = (pt.get("instruction") or "").lower()
-                            if _nt_inst and _pt_inst:
-                                _nt_words = set(_nt_inst.split())
-                                _pt_words = set(_pt_inst.split())
-                                if _nt_words and _pt_words:
-                                    _overlap = len(_nt_words & _pt_words) / min(len(_nt_words), len(_pt_words))
-                                    if _overlap > 0.75:
-                                        _is_dup = True
-                                        break
-                        if _is_dup:
+                        # Dedup using shared helper
+                        if self._is_duplicate_task(nt, preserved):
                             continue
+                        # Per-cycle new task limit: prevent LLM from
+                        # explosive one-shot plan expansion.  The plan can
+                        # still grow across multiple review cycles.
+                        if _new_added_this_cycle >= _MAX_NEW_PER_CYCLE:
+                            print(f"\n[PLAN-CAP] Review cycle new-task limit reached "
+                                  f"({_MAX_NEW_PER_CYCLE}).  Additional tasks deferred.")
+                            break
                         preserved.append(nt)
                         existing_ids.add(nt["id"])
+                        _new_added_this_cycle += 1
                     else:
                         # LLM updated an existing task — capture its dependency changes,
                         # but only if the update doesn't block a previously-independent task.
@@ -7667,27 +7817,11 @@ Output ONLY valid JSON:
                         t["dependent_task_ids"] = llm_dep_updates[tid]
                 self.exploitation_plan.tasks = preserved
 
-                # Hard cap: trim lowest-quality pending tasks when plan
-                # inflates beyond 15.  Done/failed tasks are kept for history.
-                _MAX = 25
-                if len(preserved) > _MAX:
-                    _pending = [t for t in preserved if t.get("status") == "pending"]
-                    if len(_pending) > (_MAX - len([t for t in preserved if t.get("status") != "pending"])):
-                        # Sort pending by "quality": tasks with no dependencies
-                        # and tool specified are higher quality than those
-                        # with many dependencies or no tool.
-                        def _pending_key(t):
-                            deps = len(t.get("dependent_task_ids", []))
-                            has_tool = 1 if t.get("tool", "") else 0
-                            return (deps, -has_tool)
-                        _pending.sort(key=_pending_key)
-                        # Keep only the needed count of pending tasks.
-                        # Clamp to 0 — when done+failed already exceed _MAX,
-                        # all pending tasks must be removed.
-                        _keep_pending = max(0, _MAX - len([t for t in preserved if t.get("status") != "pending"]))
-                        _to_remove = set(t["id"] for t in _pending[_keep_pending:])
-                        preserved = [t for t in preserved if t.get("id") not in _to_remove]
-                    self.exploitation_plan.tasks = preserved
+                # Smart cap: trim lowest-quality pending tasks when plan
+                # inflates beyond 20.  Done/failed tasks are kept for history.
+                # Priority: tasks WITH tools (exploit/probe) are kept before
+                # tasks without tools (speculative recon).
+                self.exploitation_plan.tasks = self._cap_pending_tasks(preserved, max_total=20)
 
                 # ── Dependency resolution: rewrite stale references ──
                 # LLM may reference task IDs that were renamed or removed.
@@ -7814,10 +7948,23 @@ Output ONLY valid JSON array."""
                 self.exploitation_plan.tasks = [
                     t for t in self.exploitation_plan.tasks if t.get("id") != failed_task.get("id")
                 ]
+                # Dedup + per-failure cap: max 5 replacement tasks
+                _MAX_REPLACE = 5
+                _added = 0
                 for nt in new_tasks:
                     if nt.get("id") not in existing_ids:
+                        if _added >= _MAX_REPLACE:
+                            print(f"[REPLAN] Replacement limit reached ({_MAX_REPLACE}). Skipping: {nt.get('id','?')}")
+                            break
+                        if self._is_duplicate_task(nt, self.exploitation_plan.tasks):
+                            print(f"[REPLAN] Skipping duplicate: {nt.get('id','?')}")
+                            continue
                         self.exploitation_plan.tasks.append(nt)
                         existing_ids.add(nt.get("id"))
+                        _added += 1
+                # Apply shared cap after adding replacements
+                self.exploitation_plan.tasks = self._cap_pending_tasks(
+                    self.exploitation_plan.tasks, max_total=20)
                 # Sanitize: replace blacklisted tools in replanned tasks
                 self._sanitize_plan_tools(self.exploitation_plan.tasks)
                 print(f"[REPLAN] Added {len(new_tasks)} replacement task(s):")
@@ -9166,13 +9313,23 @@ Respond ONLY with a JSON array of next steps (max 5)."""
                                     done_tasks = [t for t in self.exploitation_plan.tasks
                                                  if t.get("status") == "done"]
                                     self.exploitation_plan.tasks = done_tasks
+                                    _MA_NEW_LIMIT = 15  # Multi-agent can add more in one cycle
+                                    _ma_added = 0
                                     for nt in new_tasks:
                                         if not isinstance(nt, dict):
                                             continue  # skip non-dict entries
                                         nt.setdefault("status", "pending")
                                         nt.setdefault("dependent_task_ids", nt.pop("dependencies", []))
                                         if not any(t["id"] == nt["id"] for t in self.exploitation_plan.tasks):
+                                            if self._is_duplicate_task(nt, self.exploitation_plan.tasks):
+                                                continue
+                                            if _ma_added >= _MA_NEW_LIMIT:
+                                                break
                                             self.exploitation_plan.tasks.append(nt)
+                                            _ma_added += 1
+                                    # Apply shared cap
+                                    self.exploitation_plan.tasks = self._cap_pending_tasks(
+                                        self.exploitation_plan.tasks, max_total=20)
                                     log.info("[PLAN] updated from multi-agent results: %d tasks",
                                              len(self.exploitation_plan.tasks))
                             except Exception as e:
@@ -9188,14 +9345,16 @@ Respond ONLY with a JSON array of next steps (max 5)."""
                                             tool = {"SQLI": "sqlmap_test", "XSS": "xss_reflection_test",
                                                     "CMDI": "command_injection_test"}.get(
                                                     vt.upper(), "send_payload")
-                                            self.exploitation_plan.tasks.append({
+                                            _fb_task = {
                                                 "id": f"fallback-{len(self.exploitation_plan.tasks)}",
                                                 "instruction": f"Exploit {vt} at {ep}",
                                                 "tool": tool,
                                                 "params": {"url": ep, "param": param or "q"},
                                                 "vuln_type": vt, "status": "pending",
                                                 "dependent_task_ids": [],
-                                            })
+                                            }
+                                            if not self._is_duplicate_task(_fb_task, self.exploitation_plan.tasks):
+                                                self.exploitation_plan.tasks.append(_fb_task)
                                 except Exception:
                                     pass
 

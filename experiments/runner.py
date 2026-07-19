@@ -25,10 +25,10 @@ class ExperimentRunner:
         self,
         config_name: str = "DARWIN",
         model: str = "gpt-4o",
-        time_budget: int = 600,
+        time_budget: int = 480,
         token_budget: int = 200000,
         output_dir: str = "experiment_results",
-        pass_at_k: int = 3,
+        pass_at_k: int = 2,
     ):
         self.config_name = config_name
         self.model = model
@@ -279,8 +279,8 @@ async def run_pilot():
 
     runner = ExperimentRunner(
         config_name="DARWIN-full",
-        time_budget=600,
-        pass_at_k=3,
+        time_budget=480,
+        pass_at_k=2,
         output_dir="experiment_results/pilot",
     )
 
@@ -340,8 +340,8 @@ async def run_cve_benchmark(scenarios: list[str] | None = None):
 
     runner = ExperimentRunner(
         config_name="DARWIN-CVE",
-        time_budget=600,
-        pass_at_k=3,
+        time_budget=480,
+        pass_at_k=2,
         output_dir="experiment_results/cve_benchmark",
     )
 

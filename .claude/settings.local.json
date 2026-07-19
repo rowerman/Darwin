@@ -203,7 +203,9 @@
       "Bash(netexec --help)",
       "Bash(pip show *)",
       "Bash(awk -F: '{s+=$2} END {print s}')",
-      "Bash(awk -F: '{sum+=$2} END {print sum \" total test methods\"}')"
+      "Bash(awk -F: '{sum+=$2} END {print sum \" total test methods\"}')",
+      "Read(//home/kianabin/benchmark_design/benchmarks/cve_challenges/scripts/**)",
+      "Bash(python3 -c ' *)"
     ]
   }
 }

@@ -39,7 +39,7 @@ Discovered Resources: {resources}
    /proc mounted → container_escape_procfs
 4. LATERAL: Abuse RBAC, steal SA tokens (k8s_sa_token_steal), dump secrets (k8s_secret_dump), dump configmaps (k8s_configmap_dump), kubelet exec (k8s_kubelet_exec), ETCD access (k8s_etcd_keys, etcdctl_get)
 5. NETWORK ATTACKS: Ingress NGINX RCE (CVE-2025-1974), ExternalIP hijack, webhook injection, NetworkPolicy bypass, Ingress snippet injection, node redirect
-6. AWS CLOUD: aws_cli for S3/IAM/STS/KMS/Lambda/SQS/DynamoDB exploitation. Access IMDS metadata (check_cloud_metadata). Extract IAM credentials from metadata, enumerate cloud resources
+6. AWS CLOUD: aws_cli for S3/IAM/STS/KMS/Lambda/SQS/DynamoDB exploitation, aws_sts_query for direct STS Query API calls (no AWS CLI needed — use for local cloud IAM simulators). Access IMDS metadata (check_cloud_metadata). Extract IAM credentials from metadata, enumerate cloud resources
 7. PERSIST: Deploy DaemonSet (k8s_backdoor_daemonset), CronJob (k8s_backdoor_cronjob), backdoor pods (kubectl_run), modify admission webhooks, registry poisoning (docker_registry)
 
 ## Known Attack Paths

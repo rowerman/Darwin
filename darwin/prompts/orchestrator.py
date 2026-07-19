@@ -95,7 +95,7 @@ k8s_backdoor_daemonset (all-node host access), k8s_backdoor_cronjob (periodic st
 
 ### Cloud Exploitation
 **When**: Cloud environment or metadata endpoints detected.
-aws_cli (S3/IAM/STS/KMS/Lambda/SQS/DynamoDB), check_cloud_metadata,
+aws_cli (S3/IAM/STS/KMS/Lambda/SQS/DynamoDB), aws_sts_query (direct HTTP STS Query API — for local simulators without AWS CLI), check_cloud_metadata,
 etcdctl_get, kubelet_probe, docker_registry, helm
 
 ### Active Directory

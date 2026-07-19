@@ -1,8 +1,10 @@
-# DARWIN Cloud K8S Benchmark 测试结果 (Round 2)
+# DARWIN Cloud K8S Benchmark 测试结果 (Round 2 + 修复后重测)
 
-日期: 2026-07-08 ~ 2026-07-11 (已完成)
+日期: 2026-07-08 ~ 2026-07-12
 
 ## 总览
+
+### Round 2 (修复前)
 
 | 场景 | 结果 | 尝试 | Flag | Steps | 诊断 |
 |------|------|------|------|-------|------|
@@ -12,7 +14,14 @@
 | CLOUD-14 | ❌ FAILED | 3 | - | - | PassRole 链(2步)，plan loop 未执行利用任务 |
 | CLOUD-15 | ❌ FAILED | 3 | - | - | SCP bypass(2步)，利用任务未被优先执行 |
 
-**总成功率: 2/5 (40%)**，但 CLOUD-12 的 flag 为硬编码默认值。
+**成功率: 2/5 (40%)**，但 CLOUD-12 的 flag 为硬编码默认值。
+
+### 修复后重测 (2026-07-12)
+
+| 场景 | 结果 | 尝试 | Flag | Steps | 诊断 |
+|------|------|------|------|-------|------|
+| CLOUD-14 | ✅ PASS | 1 | `flag{CLOUD-14-test}` | 20 | 修复后 PassRole 链成功。LLM 通过 console /step1 枚举角色，/step2 用 AdminRole 执行 Lambda 代码获取 flag |
+| CLOUD-15 | ❌ FAILED | 3 | - | 36/10/60 | aws_sts_query 工具已被 LLM 使用，但不稳定：有时用 aws_sts_query 成功提取凭证，有时用 http_post 失败（无法构造 STS 格式），有时猜错账号 ID |
 
 ## DARWIN 框架修复 (4 个)
 

