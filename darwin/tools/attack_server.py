@@ -4512,9 +4512,21 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
             f"{check.stdout[:500]}\n\n{exploit_cmd}",
             timeout=30,
         )
-        return ToolResult(tool_name="container_escape_runc", success=True,
-            stdout=result.stdout[:3000],
-            stderr=result.stderr, exit_code=0, elapsed_ms=result.elapsed_ms)
+        # Determine actual success: check if payload was written to /proc/self/exe
+        stdout_text = result.stdout or ""
+        actual_success = (
+            "Wrote payload to /proc/self/exe" in stdout_text
+            and "Cannot overwrite" not in stdout_text
+        )
+        actual_exit = 0 if actual_success else 1
+        return ToolResult(
+            tool_name="container_escape_runc",
+            success=actual_success,
+            stdout=stdout_text[:3000],
+            stderr=result.stderr,
+            exit_code=actual_exit,
+            elapsed_ms=result.elapsed_ms,
+        )
 
     gateway.register(
         name="container_escape_runc",

@@ -70,17 +70,18 @@ class DAVE:
 
     FLAG_PATTERN = re.compile(r"flag\{[a-zA-Z0-9_\-!@#$%^&*()+=]+\}", re.IGNORECASE)
 
-    # Honey flag patterns
+    # Honey flag patterns — match flag{test-*}, flag{example-*}, etc.
+    # Character class [\w\-] includes hyphens (common in test flag variants like flag{test-cloud-02})
     HONEY_FLAG_PATTERNS = [
-        re.compile(r"flag\{this_is_a_honeypot[\w_]*\}", re.IGNORECASE),
-        re.compile(r"flag\{test[\w_]*\}", re.IGNORECASE),
-        re.compile(r"flag\{example[\w_]*\}", re.IGNORECASE),
-        re.compile(r"flag\{sample[\w_]*\}", re.IGNORECASE),
-        re.compile(r"flag\{congratulations[\w_]*\}", re.IGNORECASE),
-        re.compile(r"flag\{fake[\w_]*\}", re.IGNORECASE),
-        re.compile(r"flag\{you_win[\w_]*\}", re.IGNORECASE),
-        re.compile(r"flag\{honeypot[\w_]*\}", re.IGNORECASE),
-        re.compile(r"FLAG\{TEST[\w_]*\}", re.IGNORECASE),
+        re.compile(r"flag\{this_is_a_honeypot[\w\-]*\}", re.IGNORECASE),
+        re.compile(r"flag\{test[\w\-]*\}", re.IGNORECASE),
+        re.compile(r"flag\{example[\w\-]*\}", re.IGNORECASE),
+        re.compile(r"flag\{sample[\w\-]*\}", re.IGNORECASE),
+        re.compile(r"flag\{congratulations[\w\-]*\}", re.IGNORECASE),
+        re.compile(r"flag\{fake[\w\-]*\}", re.IGNORECASE),
+        re.compile(r"flag\{you_win[\w\-]*\}", re.IGNORECASE),
+        re.compile(r"flag\{honeypot[\w\-]*\}", re.IGNORECASE),
+        re.compile(r"FLAG\{TEST[\w\-]*\}", re.IGNORECASE),
     ]
 
     @classmethod

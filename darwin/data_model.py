@@ -13,7 +13,66 @@ Usage:
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from enum import Enum
 from typing import Any, Dict, List, Optional
+
+
+# ── Core Orchestrator Types ─────────────────────────────────────────────
+
+class OrchestratorPhase(str, Enum):
+    INIT = "init"
+    BOOTSTRAP = "bootstrap"
+    EXPLOIT = "exploit"
+    DONE = "done"
+    FAILED = "failed"
+    RECON = "recon"
+    ANALYZE = "analyze"
+    BYPASS = "defense_bypass"
+    VERIFY = "verify"
+
+
+@dataclass
+class TaskResult:
+    """Result of an orchestrated penetration test task."""
+    success: bool
+    flag: str = ""
+    steps: int = 0
+    tokens_used: int = 0
+    time_elapsed: float = 0.0
+    phase_at_end: OrchestratorPhase = OrchestratorPhase.DONE
+    defense_detected: bool = False
+    waf_bypassed: bool = False
+    waf_type: str = ""
+    defense_complexity: float = 0.0
+    dkg_summary: str = ""
+    error: str = ""
+
+
+@dataclass
+class VulnerabilityHypothesis:
+    """A hypothesized vulnerability for testing."""
+    vuln_type: str
+    endpoint: str
+    param: str
+    confidence: float
+    evidence: str
+    suggested_tool: str = ""
+    tool_args: dict = field(default_factory=dict)
+    suggested_payloads: list[str] = field(default_factory=list)
+    research_techniques: list = field(default_factory=list)
+    research_cves: list = field(default_factory=list)
+
+
+@dataclass
+class ExploitationPlan:
+    """Structured penetration test plan with dynamic task tracking."""
+    plan_id: str
+    phase: str
+    goal: str
+    tasks: list = field(default_factory=list)
+    status: str = "pending"
+    created_at: str = ""
+    updated_at: str = ""
 
 
 # ── Core Data Types ──────────────────────────────────────────────────────

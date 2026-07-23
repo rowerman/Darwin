@@ -22,11 +22,13 @@ from typing import Any, Dict, List, Optional
 log = logging.getLogger(__name__)
 
 from darwin.cteg import CTEG, TaskRecord
-from darwin.data_model import normalize_dkg_state, PipelineState, EndpointInfo
+from darwin.data_model import (
+    normalize_dkg_state, PipelineState, EndpointInfo,
+    OrchestratorPhase, TaskResult, VulnerabilityHypothesis, ExploitationPlan,
+)
 from darwin.dkg import DKG
 from darwin.dpm import DefensePerceptionModule, DefenseStateVector
 from darwin.dave import DAVE, ExploitAttempt, parse_tool_stdout
-from darwin.dynamic_scaling import DynamicScalingEngine, ScalingLevel, compute_task_breadth
 from darwin.tools.mcp_client import MCPClientPool, load_mcp_config
 from darwin.tools.mcp_gateway import MCPGateway, ToolResult
 from darwin.tools.recon_server import create_recon_gateway, parse_response
@@ -34,69 +36,11 @@ from darwin.tools.attack_server import create_attack_gateway
 from darwin.utils.http_client import HTTPClient, ProbeClient, HTTPResponse
 from darwin.utils.llm import LLMSession
 from darwin.utils.phase_logger import PhaseLogger
-from darwin.sub_agents.base import SubAgentPool
 
-
-class OrchestratorPhase(str, Enum):
-    INIT = "init"
-    BOOTSTRAP = "bootstrap"
-    EXPLOIT = "exploit"      # unified: LLM drives recon + analyze + exploit
-    DONE = "done"
-    FAILED = "failed"
-    # Legacy phases kept for backward compat
-    RECON = "recon"
-    ANALYZE = "analyze"
-    BYPASS = "defense_bypass"
-    VERIFY = "verify"
-
-
-@dataclass
-class TaskResult:
-    """Result of an orchestrated penetration test task."""
-    success: bool
-    flag: str = ""
-    steps: int = 0
-    tokens_used: int = 0
-    time_elapsed: float = 0.0
-    phase_at_end: OrchestratorPhase = OrchestratorPhase.DONE
-    defense_detected: bool = False
-    waf_bypassed: bool = False
-    waf_type: str = ""
-    defense_complexity: float = 0.0
-    dkg_summary: str = ""
-    error: str = ""
-
-
-@dataclass
-class VulnerabilityHypothesis:
-    """A hypothesized vulnerability for testing."""
-    vuln_type: str  # XSS, SQLi, CMDi, SSTI, LFI, etc.
-    endpoint: str
-    param: str
-    confidence: float
-    evidence: str
-    suggested_tool: str = ""
-    tool_args: dict = field(default_factory=dict)
-    suggested_payloads: list[str] = field(default_factory=list)
-    research_techniques: list = field(default_factory=list)
-    research_cves: list = field(default_factory=list)
-
-
-@dataclass
-class ExploitationPlan:
-    """Structured penetration test plan with dynamic task tracking."""
-    plan_id: str
-    phase: str
-    goal: str
-    tasks: list = field(default_factory=list)
-    status: str = "pending"  # pending | in_progress | completed | stalled
-    created_at: str = ""
-    updated_at: str = ""
 
 
 # -- System Prompts (imported from darwin.prompts) --------------------------
 from darwin.prompts.orchestrator import (
-    SYSTEM_PROMPT_ORCHESTRATOR,
     SYSTEM_PROMPT_ORCHESTRATOR_UNIFIED,
     SYSTEM_PROMPT_ANALYZE,
     SYSTEM_PROMPT_LOGIN,
@@ -706,7 +650,9 @@ class Orchestrator:
                 phase_at_end=self.phase, error=error_msg,
             )
         except Exception as e:
+            import traceback
             log.warning("Task failed with error: %s", e)
+            log.warning("Traceback: %s", traceback.format_exc())
             result = TaskResult(
                 success=False, steps=self.step_count,
                 tokens_used=self.llm.token_count,
@@ -3255,7 +3201,7 @@ class Orchestrator:
 
                 # Partial success: auth worked, store credentials (Fix A)
                 if fix.get("partial_success"):
-                    creds = fix.get("credentials", {})
+                    creds = fix.get("credentials") or {}
                     if creds.get("username"):
                         _cred_id = f"cred-partial-{int(time.time())}"
                         _cred_port = int(task.get("params", {}).get("port", 0))
@@ -3612,7 +3558,17 @@ class Orchestrator:
             "weakauth": ["mssqlclient_query", "mssql_query", "mysql_query",
                         "psql_query", "redis_cmd", "oracle_query",
                         "test_credential", "ssh_exec"],
-            "platformdiscovery": ["aws_cli", "curl_get"],
+            "platformdiscovery": ["aws_cli", "curl_get", "aws_sts_query"],
+            # Cloud-native vuln types — systematic pass needs these to
+            # auto-select tools for IAM, federation, SCP, and OIDC/SAML
+            # scenarios that the generic "platformdiscovery" fallback
+            # cannot cover.
+            "cloud_iam": ["aws_sts_query", "aws_cli"],
+            "cloud_federation": ["saml_forge", "aws_cli"],
+            "cloud_token_exchange": ["aws_sts_query", "aws_cli"],
+            "cloud_scp_bypass": ["aws_sts_query", "aws_cli"],
+            "cloud_oidc": ["jwt_forge", "aws_iam_federation"],
+            "cloud_passrole": ["aws_cli", "send_payload"],
         }
         # Fuzzy match: if a vuln type CONTAINS one of these substrings, it maps
         FUZZY_MAP: dict[str, list[str]] = {
@@ -3627,6 +3583,17 @@ class Orchestrator:
             "jwt": ["jwt_forge"],
             "privilege": ["shell_exec", "linux_priv_check"],
             "escape": ["check_capabilities", "check_mounts", "shell_exec"],
+            # Cloud-native fuzzy matches — catch LLM-generated vuln types
+            # like "CloudFederation", "SCP Bypass Attack", "OIDC Token Abuse"
+            "federation": ["saml_forge", "aws_cli"],
+            "oidc": ["jwt_forge", "aws_cli"],
+            "saml": ["saml_forge", "aws_cli"],
+            "scp": ["aws_sts_query", "aws_cli"],
+            "passrole": ["aws_cli", "send_payload"],
+            "token_exchange": ["aws_sts_query", "aws_cli"],
+            "iam": ["aws_sts_query", "aws_cli"],
+            "registry": ["docker_registry", "kubectl_get_pods", "shell_exec"],
+            "docker_registry": ["docker_registry", "kubectl_get_pods", "shell_exec"],
         }
 
         def _resolve_tools(vt: str) -> list[str]:
@@ -4916,56 +4883,134 @@ class Orchestrator:
         vuln_text = self._format_vulnerability_summary()
 
         # ── Build service-specific search queries ──
+        # Cloud service keywords → RAG search query mapping.
+        # When DARWIN identifies a cloud-native technology (CloudFormation,
+        # OIDC, SAML, IAM, etc.) but _svc_name stays as "service", the RAG
+        # query "service exploitation default credentials weaknesses" cannot
+        # match cloud knowledge entries.  Detect cloud services from vuln
+        # hypotheses and DKG nodes so the RAG query targets the right domain.
+        _CLOUD_SVC_KEYWORDS: dict[str, str] = {
+            "cloudformation": "AWS CloudFormation template injection exploitation",
+            "oidc": "OIDC identity federation token exchange attack",
+            "saml": "SAML federation Golden SAML assertion forgery",
+            "sts": "AWS STS assume role privilege escalation",
+            "imds": "AWS IMDS cloud metadata credential theft",
+            "s3": "S3 object storage bucket enumeration exploitation",
+            "iam": "AWS IAM privilege escalation role enumeration",
+            "lambda": "AWS Lambda function exploitation PassRole",
+            "organizations": "AWS Organizations SCP bypass enumeration",
+            "scp": "AWS SCP service control policy bypass",
+            "federation": "cloud identity federation token exchange attack",
+            "kubernetes": "Kubernetes RBAC enumeration privilege escalation",
+            "k8s": "Kubernetes container escape exploitation",
+            "etcd": "etcd Kubernetes secrets enumeration",
+            "docker": "Docker socket container escape exploitation",
+        }
         _svc_name = "service"
+        _is_cloud_svc = False
+        # Phase A: Check ALL vulnerabilities for cloud keywords FIRST.
+        # Cloud detection takes priority over DB detection — if any vuln
+        # or DKG node contains a cloud keyword, it wins.
         for v in self.vulnerabilities:
             ep = (v.endpoint or "").lower()
             tool = (v.suggested_tool or "").lower()
-            # Try suggested_tool first (most reliable signal)
-            if "mssql" in tool or "mssql" in ep:
-                _svc_name = "Microsoft SQL Server"
-            elif "mysql" in tool or "mysql" in ep:
-                _svc_name = "MySQL"
-            elif "postgres" in tool or "psql" in tool or "postgres" in ep or "psql" in ep:
-                _svc_name = "PostgreSQL"
-            elif "redis" in tool or "redis" in ep:
-                _svc_name = "Redis"
-            elif "oracle" in tool or "oracle" in ep:
-                _svc_name = "Oracle"
-            elif "ssh" in tool or "ssh" in ep:
-                _svc_name = "SSH"
-            elif "smb" in tool or "smb" in ep:
-                _svc_name = "SMB"
-            # Fallback: check DKG services for protocol hints
-            if _svc_name == "service":
-                for s in self.dkg.query_nodes("Service"):
-                    svc_port = str(s.get("port", ""))
-                    vuln_port = str(v.tool_args.get("port", "")) if v.tool_args else ""
-                    if svc_port and vuln_port and svc_port == vuln_port:
-                        svc_data = (s.get("service_name", "") + " " + (s.get("version", "") or "")).lower()
-                        if "mssql" in svc_data or "sql server" in svc_data:
-                            _svc_name = "Microsoft SQL Server"
-                        elif "mysql" in svc_data:
-                            _svc_name = "MySQL"
-                        elif "postgres" in svc_data:
-                            _svc_name = "PostgreSQL"
-                        elif "redis" in svc_data:
-                            _svc_name = "Redis"
-                        elif "oracle" in svc_data:
-                            _svc_name = "Oracle"
+            vt = (v.vuln_type or "").lower()
+            ev = (v.evidence or "").lower()
+            _combined = f"{vt} {ep} {ev} {tool}"
+            for _kw, _label in _CLOUD_SVC_KEYWORDS.items():
+                if _kw in _combined:
+                    _svc_name = _label
+                    _is_cloud_svc = True
+                    log.info("[RAG-SVC] %s (matched keyword '%s' from vuln)", _label, _kw)
+                    break
+            if _is_cloud_svc:
+                break
+        # Phase B: Check DKG service banners for cloud fingerprints
+        if not _is_cloud_svc:
+            for s in self.dkg.query_nodes("Service"):
+                svc_data = (s.get("service_name", "") + " " + (s.get("version", "") or "") + " " + (s.get("banner", "") or "")).lower()
+                for _kw, _label in _CLOUD_SVC_KEYWORDS.items():
+                    if _kw in svc_data:
+                        _svc_name = _label
+                        _is_cloud_svc = True
+                        log.info("[RAG-SVC] %s (matched keyword '%s' from DKG service banner)", _label, _kw)
                         break
-            break
+                if _is_cloud_svc:
+                    break
+        # Phase C: Check DKG Analysis notes for cloud hints
+        if not _is_cloud_svc:
+            for note in self.dkg.query_nodes("Analysis"):
+                note_text = (str(note.get("summary", "")) + " " + str(note.get("findings", ""))).lower()
+                for _kw, _label in _CLOUD_SVC_KEYWORDS.items():
+                    if _kw in note_text:
+                        _svc_name = _label
+                        _is_cloud_svc = True
+                        log.info("[RAG-SVC] %s (matched keyword '%s' from DKG Analysis)", _label, _kw)
+                        break
+                if _is_cloud_svc:
+                    break
+        # Phase D: If still no cloud match, fall back to DB service detection
+        # from the first vulnerability's tool/endpoint hints
+        if not _is_cloud_svc:
+            for v in self.vulnerabilities:
+                ep = (v.endpoint or "").lower()
+                tool = (v.suggested_tool or "").lower()
+                # Try suggested_tool first (most reliable signal)
+                if "mssql" in tool or "mssql" in ep:
+                    _svc_name = "Microsoft SQL Server"
+                elif "mysql" in tool or "mysql" in ep:
+                    _svc_name = "MySQL"
+                elif "postgres" in tool or "psql" in tool or "postgres" in ep or "psql" in ep:
+                    _svc_name = "PostgreSQL"
+                elif "redis" in tool or "redis" in ep:
+                    _svc_name = "Redis"
+                elif "oracle" in tool or "oracle" in ep:
+                    _svc_name = "Oracle"
+                elif "ssh" in tool or "ssh" in ep:
+                    _svc_name = "SSH"
+                elif "smb" in tool or "smb" in ep:
+                    _svc_name = "SMB"
+                if _svc_name != "service":
+                    break
+            # Also check DKG services for DB matches
+            if _svc_name == "service":
+                for v in self.vulnerabilities:
+                    for s in self.dkg.query_nodes("Service"):
+                        svc_port = str(s.get("port", ""))
+                        vuln_port = str(v.tool_args.get("port", "")) if v.tool_args else ""
+                        svc_data = (s.get("service_name", "") + " " + (s.get("version", "") or "") + " " + (s.get("banner", "") or "")).lower()
+                        if svc_port and vuln_port and svc_port == vuln_port:
+                            if "mssql" in svc_data or "sql server" in svc_data:
+                                _svc_name = "Microsoft SQL Server"
+                            elif "mysql" in svc_data:
+                                _svc_name = "MySQL"
+                            elif "postgres" in svc_data:
+                                _svc_name = "PostgreSQL"
+                            elif "redis" in svc_data:
+                                _svc_name = "Redis"
+                            elif "oracle" in svc_data:
+                                _svc_name = "Oracle"
+                            break
+                    if _svc_name != "service":
+                        break
 
         _MCP_TIMEOUT_S = 45  # per-MCP-call cap
 
         # ── Round 1: Programmatic forced parallel search ──
         # Run ALL local tools + ddg_web_search in parallel. All are gateway-based
         # (no MCP dependency), fast and reliable.
+        # Cloud services have descriptive _svc_name labels (e.g. "AWS CloudFormation
+        # template injection exploitation").  Use them directly — appending
+        # "default credentials weaknesses" hurts precision for cloud topics.
+        _rag_query = _svc_name if _is_cloud_svc else f"{_svc_name} exploitation default credentials weaknesses"
+        _web_query = _svc_name if _is_cloud_svc else f"{_svc_name} default credentials common passwords exploitation techniques"
+        _web_alt = _svc_name if _is_cloud_svc else f"{_svc_name} alternative attack vectors privilege escalation misconfiguration"
         _queries = {
-            "rag": f"{_svc_name} exploitation default credentials weaknesses",
+            "rag": _rag_query,
             "exploitdb": _svc_name,
             "searchsploit": _svc_name,
-            "web": f"{_svc_name} default credentials common passwords exploitation techniques",
-            "web_alt": f"{_svc_name} alternative attack vectors privilege escalation misconfiguration",
+            "web": _web_query,
+            "web_alt": _web_alt,
         }
         _tasks: dict[str, asyncio.Task] = {}
 
@@ -6447,6 +6492,113 @@ class Orchestrator:
                            "technology stack. Use general exploitation knowledge "
                            "and web search for technique guidance.\n")
 
+        # ── Artifact → Tool Bridge ──────────────────────────────────
+        # Scan DKG for discovered artifacts (AWS credentials, private
+        # keys, cloud endpoints) and build explicit tool-to-artifact
+        # recommendations.  Without this structural bridge the LLM
+        # often fails to connect "found a private key" → "call
+        # saml_forge", or "STS endpoint" → "call aws_sts_query".
+        _artifact_lines: list[str] = []
+        _artifact_seen: set[str] = set()  # deduplicate by category
+        # (a) Credential nodes — check for cloud cred types
+        for cred in self.dkg.query_nodes("Credential"):
+            ct = str(cred.get("cred_type", "")).lower()
+            cuser = str(cred.get("username", "") or "")
+            cpass = str(cred.get("password", "") or "")
+            if ("aws" in ct or "iam" in ct) and "aws_creds" not in _artifact_seen:
+                _artifact_lines.append(
+                    "- **AWS credentials discovered** ("
+                    + (f"user={cuser}, " if cuser else "")
+                    + f"type={ct}): use `aws_cli` with `--endpoint-url` or "
+                    + "`aws_sts_query` to enumerate roles; "
+                    + "`aws_iam_federation` for assume-role")
+                _artifact_seen.add("aws_creds")
+            if "private_key" in ct and "private_key" not in _artifact_seen:
+                _artifact_lines.append(
+                    "- **Private key / PEM discovered**: use `saml_forge` to "
+                    + "build a SAML assertion, then `aws_cli` action=assume-role-with-saml "
+                    + "or `aws_iam_federation`")
+                _artifact_seen.add("private_key")
+            if ("token" in ct or "jwt" in ct or "bearer" in ct) and "token" not in _artifact_seen:
+                _artifact_lines.append(
+                    "- **Token / JWT discovered**: use `jwt_forge` to craft a "
+                    + "custom claim, then `aws_iam_federation` action=assume-role-with-web-identity")
+                _artifact_seen.add("token")
+        # (b) Endpoint nodes — check banners for cloud service signatures
+        for ep in self.dkg.query_nodes("Endpoint"):
+            banner = str(ep.get("banner", "") or ep.get("sample_response", "") or "").lower()
+            url = str(ep.get("url", "") or "").lower()
+            _ep_sig = f"{banner} {url}"
+            if ("s3" in _ep_sig or "object" in banner or "bucket" in banner) and "s3_endpoint" not in _artifact_seen:
+                _artifact_lines.append(
+                    "- **Object-storage / S3 endpoint detected**: use "
+                    + "`object_store_get` to enumerate and retrieve objects")
+                _artifact_seen.add("s3_endpoint")
+            if ("oidc" in _ep_sig or "openid" in _ep_sig) and "oidc_endpoint" not in _artifact_seen:
+                _artifact_lines.append(
+                    "- **OIDC IdP endpoint detected**: use `jwt_forge` with "
+                    + "wildcard/malformed claims, then `aws_iam_federation` "
+                    + "action=assume-role-with-web-identity")
+                _artifact_seen.add("oidc_endpoint")
+            if ("saml" in _ep_sig or "federation" in _ep_sig) and "saml_endpoint" not in _artifact_seen:
+                _artifact_lines.append(
+                    "- **SAML federation endpoint detected**: use `saml_forge` "
+                    + "to craft assertion, then `aws_iam_federation` "
+                    + "action=assume-role-with-saml")
+                _artifact_seen.add("saml_endpoint")
+            if "sts" in _ep_sig and "sts_endpoint" not in _artifact_seen:
+                _artifact_lines.append(
+                    "- **STS endpoint detected**: use `aws_sts_query` for "
+                    + "direct Query API calls (no AWS CLI needed). If SCP "
+                    + "blocks access, try `api_version=2010-05-08` (pre-SCP legacy)")
+                _artifact_seen.add("sts_endpoint")
+            if ("docker-distribution" in _ep_sig or "docker registry" in _ep_sig
+                    or "registry/2.0" in _ep_sig or "/v2/" in _ep_sig
+                    or "docker-registry" in _ep_sig) and "docker_registry" not in _artifact_seen:
+                _artifact_lines.append(
+                    "- **Docker Registry v2 API detected**: use `docker_registry` "
+                    + "to pull, modify (backdoor), and push images. Then use "
+                    + "`kubectl_get_pods` + `kubectl_exec` to trigger pod restart "
+                    + "and read flag from the compromised container.")
+                _artifact_seen.add("docker_registry")
+        # (c) Analysis / Vulnerability nodes — check for PEM keys in evidence
+        for an in self.dkg.query_nodes("Analysis"):
+            ev = str(an.get("evidence", "") or an.get("summary", "") or an.get("findings", "") or "")
+            if "-----BEGIN" in ev and "pem_key" not in _artifact_seen:
+                _artifact_lines.append(
+                    "- **PEM/private key found in analysis output**: use "
+                    + "`saml_forge` to build SAML assertion, then "
+                    + "`aws_cli` action=assume-role-with-saml")
+                _artifact_seen.add("pem_key")
+                break
+        # (d) Vulnerability nodes — type-based hints
+        for vn in self.dkg.query_nodes("Vulnerability"):
+            vt = str(vn.get("vuln_type", "") or "").lower()
+            if "ssrf" in vt and "ssrf_hint" not in _artifact_seen:
+                _artifact_lines.append(
+                    "- **SSRF vulnerability confirmed**: probe internal "
+                    + "services (IMDS 169.254.169.254, localhost, Docker "
+                    + "bridge). If credentials are returned, feed them to "
+                    + "`aws_cli` / `object_store_get` / `aws_sts_query`")
+                _artifact_seen.add("ssrf_hint")
+            if ("cloudformation" in vt or "template" in vt) and "cf_hint" not in _artifact_seen:
+                _artifact_lines.append(
+                    "- **CloudFormation / template injection**: test "
+                    + "Fn::Sub payloads like `${/secure/flag}` or "
+                    + "`{{resolve:ssm:/secure/flag}}` via `send_payload`")
+                _artifact_seen.add("cf_hint")
+
+        _artifact_bridge = ""
+        if _artifact_lines:
+            _artifact_bridge = (
+                "\n## Discovered Artifacts → Recommended Tools\n"
+                + "\n".join(_artifact_lines) + "\n"
+                + "**CRITICAL: These tool mappings are derived from artifacts "
+                + "you have ALREADY discovered.  Use them in your plan tasks.**\n"
+            )
+            log.info("[ARTIFACT-BRIDGE] %d recommendations: %s",
+                     len(_artifact_lines), ", ".join(sorted(_artifact_seen)))
+
         prompt = f"""Target: {target_url}
 
 ## Discovered Services (from nmap)
@@ -6460,6 +6612,7 @@ class Orchestrator:
 ## Analyzed Vulnerabilities
 {self._format_vulnerability_summary()}
 {rag_context}
+{_artifact_bridge}
 {self._build_defense_evasion_context()}
 ## Synthesizing Knowledge into Attack Tasks
 You have received multiple intelligence sources above:
@@ -6870,6 +7023,40 @@ Output ONLY valid JSON array (3-20 tasks depending on complexity. More tasks =\=
                             f"  {c.get('cred_type','?')} {c.get('username','?')}"
                             f" @ {c.get('source_host','?')}"
                         )
+                # Also surface unconfirmed AWS/cloud credentials — they are
+                # actionable even without explicit confirmation (e.g. IMDS
+                # metadata extraction yields access keys that DAVE cannot
+                # independently verify through a login test).
+                _aws_creds = [
+                    c for c in creds
+                    if not c.get("confirmed")
+                    and any(kw in str(c.get("cred_type", "")).lower()
+                           for kw in ("aws", "iam", "sts", "s3", "cloud"))
+                ]
+                for c in _aws_creds[-2:]:
+                    ct = c.get("cred_type", "cloud")
+                    cuser = c.get("username", "") or c.get("access_key_id", "") or ""
+                    chost = c.get("source_host", "") or c.get("host", "") or ""
+                    parts.append(
+                        f"  [UNCONFIRMED BUT ACTIONABLE] {ct} credential"
+                        + (f" {cuser}" if cuser else "")
+                        + (f" @ {chost}" if chost else "")
+                        + " — use with aws_cli / aws_sts_query / aws_iam_federation"
+                    )
+            # ── Cryptographic artifacts ──
+            # Scan Analysis nodes and Endpoint responses for private keys,
+            # PEM certificates, and JWT tokens that may enable federation
+            # attacks (SAML / OIDC).  These are often missed because the
+            # simple "credentials → test_credential" pipeline doesn't know
+            # what to do with raw key material.
+            for an in self.dkg.query_nodes("Analysis"):
+                ev = str(an.get("evidence", "") or an.get("summary", "") or an.get("findings", "") or "")
+                if "-----BEGIN" in ev:
+                    parts.append(
+                        "PEM / private key material found in analysis output"
+                        + " — consider saml_forge → aws_cli assume-role-with-saml"
+                    )
+                    break
 
             sessions = self.dkg.query_nodes("Session")
             if sessions:

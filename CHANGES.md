@@ -1,5 +1,44 @@
+## 2026-07-23 — Major Restructuring
+
+- **Multi-agent removal**: Deleted `darwin/dynamic_scaling.py`, `darwin/sub_agents/` (7 files), all sub-agent prompt files. Removed DynamicScalingEngine, B-dimension computation, Coordinated/Distributed mode dispatch, SubAgentPool. Solo mode only going forward.
+- **Orchestrator modularization**: Extracted ~4,000 lines from the 10,000-line `darwin/orchestrator.py` into focused modules:
+  - `darwin/state.py` (767 lines) — DKG state normalization, chain detection, checkpointing, logging
+  - `darwin/bootstrap.py` (1,349 lines) — nmap scanning, HTTP probing, deep recon, defense detection, auto-login
+  - `darwin/analyzer.py` (2,049 lines) — service research, vulnerability analysis, research phase
+  - `darwin/planner.py` (2,565 lines) — plan generation, task sanitization, topological sort, plan review, replan
+- **NEW: Rule-based plan validation** (`planner.py:validate_plan()`): Checks tool existence, dependency validity, port consistency, blacklisted tools, and cycle detection before execution. Zero token cost.
+- **NEW: Failure classification in replan** (`planner.py:classify_and_replan()`): Classifies failures as exploratory (keep chain alive, try alternatives), execution (fix params and retry), or dead-end (mark exhausted, move on). Prevents LLM from abandoning attack chains after exploratory failures.
+- **DKG simplification**: Removed async event notifications, endpoint claiming, scoped views, optimistic locking — all multi-agent-only features. `dkg.py` reduced from 509 to 297 lines.
+- **Prompt cleanup**: Removed legacy `SYSTEM_PROMPT_ORCHESTRATOR` (multi-agent with B-dimension/Coordinated/Distributed modes). Kept `SYSTEM_PROMPT_ORCHESTRATOR_UNIFIED` (already solo-only).
+- **Type consolidation**: Moved `OrchestratorPhase`, `TaskResult`, `VulnerabilityHypothesis`, `ExploitationPlan` from `orchestrator.py` to `darwin/data_model.py` to avoid circular imports.
+- **Directory cleanup**: Deleted `plan/`, `research/`, `UNKNOWN.egg-info/`, `experiments/baselines/`, root-level Oracle RPMs, `go-exploitdb.sqlite3`, `hydra.restore`. (Note: `tools/tools_open/` could not be deleted — files owned by root.)
+- **Entry point**: `run.py` now imports from `darwin.runner` (re-exports `Orchestrator` from `darwin.orchestrator`).
+- **Tests**: All 176 tests pass.
+
+## 2026-07-21
+
+- **darwin/sub_agents/cloud_agent.py** L134,139,171: 修复 CloudAgent `_get_outgoing_edges()` crash — `@staticmethod` 定义接收 `(dkg, node_id)` 但调用只传了 `(node_id)`（缺失 dkg）。3 处调用改为 `self._get_outgoing_edges(self.dkg, ...)`。在 K8S-09 的 Coordinated Mode 中触发。
+- **darwin/orchestrator.py** L3261: 修复 `'NoneType' object has no attribute 'get'` 崩溃。`fix.get("credentials", {})` 在 key 存在但值为 `None` 时返回 `None`（而非默认值 `{}`），改用 `fix.get("credentials") or {}`。该崩溃在 K8S-03 测试中触发于 `_unified_llm_loop` 的 `_analyze_and_fix_task` partial_success 处理路径。
+
+## 2026-07-20
+
+- **darwin/orchestrator.py** (`_research_phase` + `FUZZY_MAP` + ARTIFACT-BRIDGE): 新增 Docker Registry 支持 —
+  1. VULN_TOOL_MAP 新增 `container_registry_poison` 条目
+  2. FUZZY_MAP 新增 `registry`/`docker_registry` 子串匹配 → `docker_registry` + `kubectl_get_pods` + `shell_exec`
+  3. ARTIFACT-BRIDGE 端点检测新增 Docker Registry v2 API 识别（`/v2/`、`Docker-Distribution` banner）→ 推荐 `docker_registry` pull/build/push 攻击链
+  修复 K8S-09 Private Registry Poisoning 场景中 `docker_registry` 工具未被触发的问题。
+- **darwin/orchestrator.py** (`run()` L709): 异常处理新增 `traceback.format_exc()` 完整堆栈日志。修复间歇性 `'NoneType' object has no attribute 'get'` 崩溃无法定位的问题。
+- **darwin/dave.py** (`HONEY_FLAG_PATTERNS`): 扩展 honeypot flag 检测覆盖 `-` 连字符。所有模式从 `[\w_]*` 改为 `[\w\-]*`，使 `flag{test-cloud-02}`、`flag{example-01}` 等含连字符的测试 flag 变体被正确识别为假阳性。修复 K8S-02 假阳性问题。
+- **darwin/tools/attack_server.py** (`container_escape_runc` L4515): 修复 `success=True` 硬编码 bug。现在根据 `/proc/self/exe` 覆盖的实际结果判定 success（检测 "Wrote payload" vs "Cannot overwrite"）。修复前无论 exploit 是否成功都返回 success=True。
+- **darwin/orchestrator.py** (`VULN_TOOL_MAP` + `FUZZY_MAP`): 补全云原生漏洞类型映射 — VULN_TOOL_MAP 新增 `cloud_oidc`（→jwt_forge, aws_iam_federation）和 `cloud_passrole`（→aws_cli, send_payload）；FUZZY_MAP 新增 `token_exchange`（→aws_sts_query, aws_cli）和 `iam`（→aws_sts_query, aws_cli）子串匹配。修复 OIDC/IAM/passrole 等 LLM 生成的漏洞类型在 systematic pass 中无法匹配到正确工具的问题。
+- **darwin/orchestrator.py** (`_research_phase` L4960-5040): 重构云服务检测逻辑为四阶段（A→D），cloud 检测优先于 DB 检测。Phase A 遍历所有 vuln 查找云关键词（不再 break 在第一个 vuln）；Phase B/C 扫描 DKG Service/Analysis 节点；Phase D 回退到 DB 服务检测。修复了第一个 vuln 解析为 DB 服务名后阻止云关键词检测的 bug。
+
 ## 2026-07-19
 
+- **Action 2.1 — darwin/orchestrator.py** (`_research_phase` L4918-4956): 扩展 `_svc_name` 提取逻辑覆盖云服务。新增 `_CLOUD_SVC_KEYWORDS` 映射（cloudformation/oidc/saml/sts/imds/s3/iam/lambda/organizations/scp/federation/kubernetes/k8s/etcd/docker → 针对性 RAG 查询词）。从 vuln_type/endpoint/evidence/suggested_tool + DKG Service banner + DKG Analysis notes 三处检测云关键词。Cloud 服务使用精准查询词（非 "default credentials weaknesses" 后缀）。添加 `[RAG-SVC]` 诊断日志。
+- **Action 2.2 — darwin/orchestrator.py** (`VULN_TOOL_MAP`, FUZZY_MAP): 新增云原生漏洞类型映射 — VULN_TOOL_MAP: `cloud_iam`/`cloud_federation`/`cloud_token_exchange`/`cloud_scp_bypass` → `aws_sts_query`/`saml_forge`/`aws_cli`；`platformdiscovery` 追加 `aws_sts_query`。FUZZY_MAP: `federation`/`oidc`/`saml`/`scp`/`passrole` 子串匹配。修复 systematic exploit pass 无法为云漏洞类型选择专用工具的问题。
+- **Action 2.3 — darwin/orchestrator.py** (`_generate_exploitation_plan` + `_extract_recent_artifacts`): 添加 Artifact→Tool 桥接机制。Plan 生成前扫描 DKG Credential（AWS/private_key/token 类型）、Endpoint（S3/OIDC/SAML/STS banner）、Analysis（PEM key evidence）、Vulnerability（SSRF/CloudFormation 类型）节点，构建 `## Discovered Artifacts → Recommended Tools` 段注入 plan prompt。`_extract_recent_artifacts()` 新增未确认 AWS 凭据上报（标注 `UNCONFIRMED BUT ACTIONABLE`）和 PEM 密钥检测。添加 `[ARTIFACT-BRIDGE]` 诊断日志。
+- **Infrastructure — CLOUD-20 docker-compose.yml**: 修复 tenant-a 服务的空 `environment:` 映射导致 YAML 解析错误（`environment must be a mapping`）。
 - **Bug C — darwin/tools/attack_server.py** (`object_store_get`): 扩展 S3 API 路径模式列表（+6 个新 pattern: `/object/`, `/storage/`, `/?id=`, `/?path=`, `/api/v1/objects/`, `/api/`），bucket 循环追加 `/{bucket}/objects/{o}` 模式，失败诊断输出改进（含状态码统计）。修复 CLOUD-01 S3 simulator 路径不匹配问题。
 - **Bug D — darwin/orchestrator.py** (`_detect_proto_from_service` + `_sanitize_plan_tools`): 添加 Tiller 服务（Helm v2）到 helm 工具的映射。`_detect_proto_from_service()` 检测 "tiller" 服务名返回 `{"helm", "shell_exec"}`；`_sanitize_plan_tools()` 含 "tiller" 时 auto-assign `helm` 工具 + `command="list --all"`；`_PORT_PROTO` 新增端口 44134。修复 K8S-10 Tiller 服务未被识别问题。
 - **Bug A — darwin/orchestrator.py** (Plan 任务膨胀修复): 多层防御机制 —
