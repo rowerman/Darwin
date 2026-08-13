@@ -109,7 +109,6 @@ class Orchestrator:
         self.dpm = DefensePerceptionModule(llm_session=self.llm)
         self.dave = DAVE(browser_enabled=browser_enabled)
         self.cteg = CTEG(storage_path="cteg_state.json")
-        self.scaling_engine = DynamicScalingEngine(hysteresis=2)
 
         # Tool infrastructure
         self.recon_gateway = create_recon_gateway()
@@ -117,7 +116,6 @@ class Orchestrator:
         self.mcp_pool = MCPClientPool()
         self.client = HTTPClient()
         self.probe_client = ProbeClient()
-        self._multi_pool = None  # SubAgentPool, created on first multi-agent cycle
 
         # Task log — structured event log written to file
         self._task_log: List[Dict[str, Any]] = []
@@ -142,13 +140,8 @@ class Orchestrator:
         self._analyze_service_snapshot: int = 0
         self._reanalyze_count: int = 0
         self._max_reanalyze: int = 2
-        # DKG state snapshot for cross-agent coordination detection
-        # (ReconAgent discoveries → ExploitAgent replan trigger)
-        self._dkg_snapshot: dict[str, int] = {}
         self._solo_iterations = 0
-        self._multi_agent_iterations = 0
         self._solo_exhausted = False
-        self._multi_exhausted = False
         self._task_attempt_limit = 3
         self._exhausted_task_ids: set[str] = set()
         self._prev_endpoint_count = 0
@@ -474,162 +467,110 @@ class Orchestrator:
                     else:
                         break
 
-                # Re-compute B dimension each iteration (DKG may have changed)
-                B = compute_task_breadth(self.dkg, self.defense_state)
-                scaling_level = self.scaling_engine.decide(self.dkg, self.defense_state)
-                self._task_log_event("info", "loop_iteration",
-                    loop=self._loop_count, b_value=B, mode=scaling_level.value)
+                # Solo-only loop (single-agent control plane)
+                self._task_log_event("info", "loop_iteration", loop=self._loop_count)
 
-                if scaling_level == ScalingLevel.SOLO:
-                    # Skip if solo already exhausted — avoid wasted iterations
-                    if self._solo_exhausted:
-                        log.info("Solo mode exhausted, skipping loop %d", self._loop_count)
-                        continue
+                # Skip if solo already exhausted — avoid wasted iterations
+                if self._solo_exhausted:
+                    log.info("Solo mode exhausted, skipping loop %d", self._loop_count)
+                    continue
 
-                    # Phase 1: Service research → known CVEs for each service (once)
-                    # Re-trigger if new services discovered since last analysis
-                    if self._analyze_done and self._reanalyze_count < self._max_reanalyze:
-                        _current_svc = len(self.dkg.query_nodes("Service"))
-                        _current_eps = len(self.dkg.query_nodes("Endpoint"))
-                        _new_total = _current_svc + _current_eps
-                        if _new_total > self._analyze_service_snapshot + 2:
-                            log.info("New services/endpoints detected (%d→%d), re-running analysis",
-                                     self._analyze_service_snapshot, _new_total)
-                            self._analyze_done = False
-                            self._svc_research_done = False
-                            self._reanalyze_count += 1
+                # Phase 1: Service research → known CVEs for each service (once)
+                # Re-trigger if new services discovered since last analysis
+                if self._analyze_done and self._reanalyze_count < self._max_reanalyze:
+                    _current_svc = len(self.dkg.query_nodes("Service"))
+                    _current_eps = len(self.dkg.query_nodes("Endpoint"))
+                    _new_total = _current_svc + _current_eps
+                    if _new_total > self._analyze_service_snapshot + 2:
+                        log.info("New services/endpoints detected (%d→%d), re-running analysis",
+                                 self._analyze_service_snapshot, _new_total)
+                        self._analyze_done = False
+                        self._svc_research_done = False
+                        self._reanalyze_count += 1
 
-                    if not self._svc_research_done:
-                        await self._service_research()
-                        self._svc_research_done = True
+                if not self._svc_research_done:
+                    await self._service_research()
+                    self._svc_research_done = True
 
-                        # ── Phase log: service research ──
-                        if self.phase_logger:
-                            _cves = []
-                            for a in self.dkg.query_nodes("Analysis"):
-                                if a.get("type") == "cve_findings" and a.get("content"):
-                                    _cves.append(a.get("content", "")[:500])
-                            _cve_text = "\n".join(_cves[:10]) if _cves else "(no CVEs found)"
-                            self.phase_logger.log_phase("service_research", _cve_text,
-                                metadata={"cve_count": len(_cves)})
+                    # ── Phase log: service research ──
+                    if self.phase_logger:
+                        _cves = []
+                        for a in self.dkg.query_nodes("Analysis"):
+                            if a.get("type") == "cve_findings" and a.get("content"):
+                                _cves.append(a.get("content", "")[:500])
+                        _cve_text = "\n".join(_cves[:10]) if _cves else "(no CVEs found)"
+                        self.phase_logger.log_phase("service_research", _cve_text,
+                            metadata={"cve_count": len(_cves)})
 
-                    # Phase 2: Analyze recon data + service research → vuln hypotheses
-                    if not self._analyze_done:
-                        await self._analyze_phase()
-                        self._analyze_done = True
-                        # Snapshot current discovery count so we can detect
-                        # significant new services/endpoints for re-analysis
-                        self._analyze_service_snapshot = (
-                            len(self.dkg.query_nodes("Service"))
-                            + len(self.dkg.query_nodes("Endpoint"))
-                        )
-
-                        # ── Phase log: analyze ──
-                        if self.phase_logger:
-                            _vuln_lines = []
-                            for v in self.vulnerabilities[:20]:
-                                _vuln_lines.append(
-                                    f"[{v.vuln_type}] {v.endpoint} param={v.param} "
-                                    f"conf={v.confidence:.0%}"
-                                )
-                            _vuln_text = "\n".join(_vuln_lines) if _vuln_lines else "(no vulnerabilities)"
-                            if len(self.vulnerabilities) > 20:
-                                _vuln_text += f"\n... and {len(self.vulnerabilities) - 20} more"
-                            self.phase_logger.log_phase("analyze", _vuln_text,
-                                metadata={"vuln_count": len(self.vulnerabilities)})
-
-                    # Phase 3: Research each vulnerability with tools
-                    if self.vulnerabilities and not self._research_done:
-                        log.info("[PHASE] _research_phase START")
-                        await self._research_phase()
-                        self._research_done = True
-                        log.info("[PHASE] _research_phase DONE")
-
-                        # ── Phase log: research ──
-                        if self.phase_logger:
-                            _researched = sum(
-                                1 for v in self.vulnerabilities
-                                if v.research_techniques or v.research_cves
-                            )
-                            self.phase_logger.log_phase("research_phase",
-                                f"Researched {_researched}/{len(self.vulnerabilities)} vulnerabilities",
-                                metadata={"vulns_total": len(self.vulnerabilities),
-                                          "vulns_researched": _researched})
-
-                    # Phase 4: Unified LLM loop (plan → exploit → replan)
-                    result = await self._unified_llm_loop(target_url, cteg_hints)
-
-                    # Allow up to 3 solo iterations before marking exhausted
-                    self._solo_iterations += 1
-                    if result is None or not result.success:
-                        if self._solo_iterations >= 5:
-                            self._solo_exhausted = True
-                        # Fast exhaust: 2 consecutive plan-exhausted runs with 0 done tasks
-                        _done_count = sum(1 for t in (self.exploitation_plan.tasks if self.exploitation_plan else [])
-                                         if isinstance(t, dict) and t.get("status") == "done")
-                        _prev_done = getattr(self, '_prev_solo_done_count', -1)
-                        if result is None and _done_count == _prev_done:
-                            _empty_runs = getattr(self, '_solo_empty_runs', 0) + 1
-                            self._solo_empty_runs = _empty_runs
-                            if _empty_runs >= 2:
-                                log.info("Solo mode: 2 runs with no new progress — marking exhausted")
-                                self._solo_exhausted = True
-                        else:
-                            self._solo_empty_runs = 0
-                        self._prev_solo_done_count = _done_count
-                    else:
-                        self._solo_exhausted = True
-                else:
-                    # Coordinated or Distributed — dispatch to multi-agent cycle
-                    # with scaling_level and CTEG hints for mode-differentiated behavior
-                    log.info("Entering %s Mode (B=%.2f)", scaling_level.value.title(), B)
-                    result = await self._run_multi_agent_cycle(
-                        target_url,
-                        scaling_level=scaling_level,
-                        cteg_hints=cteg_hints,
+                # Phase 2: Analyze recon data + service research → vuln hypotheses
+                if not self._analyze_done:
+                    await self._analyze_phase()
+                    self._analyze_done = True
+                    # Snapshot current discovery count so we can detect
+                    # significant new services/endpoints for re-analysis
+                    self._analyze_service_snapshot = (
+                        len(self.dkg.query_nodes("Service"))
+                        + len(self.dkg.query_nodes("Endpoint"))
                     )
-                    if result is None:
-                        # Inject context so solo LLM knows why multi-agent was attempted
-                        # but produced no results (no agents spawned, or all found nothing)
-                        _ma_agents = getattr(self._multi_pool, '_agents', {}) if self._multi_pool else {}
-                        _ma_results = getattr(self._multi_pool, '_results', {}) if self._multi_pool else {}
-                        _ctx = (
-                            f"[Multi-Agent Cycle Summary] Scaling level: {scaling_level.value} "
-                            f"(B={B:.2f}). Agents spawned: {len(_ma_agents)}. "
-                            f"Results collected: {len(_ma_results)}. "
-                            f"No flag was captured by the multi-agent cycle. "
-                            f"Falling back to solo mode for continued exploitation."
-                        )
-                        self.llm.add_context_message(_ctx, "user")
-                        result = await self._unified_llm_loop(target_url, cteg_hints)
 
-                    self._multi_agent_iterations += 1
-                    if result is None or not result.success:
-                        if self._multi_agent_iterations >= 3:
-                            self._multi_exhausted = True
+                    # ── Phase log: analyze ──
+                    if self.phase_logger:
+                        _vuln_lines = []
+                        for v in self.vulnerabilities[:20]:
+                            _vuln_lines.append(
+                                f"[{v.vuln_type}] {v.endpoint} param={v.param} "
+                                f"conf={v.confidence:.0%}"
+                            )
+                        _vuln_text = "\n".join(_vuln_lines) if _vuln_lines else "(no vulnerabilities)"
+                        if len(self.vulnerabilities) > 20:
+                            _vuln_text += f"\n... and {len(self.vulnerabilities) - 20} more"
+                        self.phase_logger.log_phase("analyze", _vuln_text,
+                            metadata={"vuln_count": len(self.vulnerabilities)})
+
+                # Phase 3: Research each vulnerability with tools
+                if self.vulnerabilities and not self._research_done:
+                    log.info("[PHASE] _research_phase START")
+                    await self._research_phase()
+                    self._research_done = True
+                    log.info("[PHASE] _research_phase DONE")
+
+                    # ── Phase log: research ──
+                    if self.phase_logger:
+                        _researched = sum(
+                            1 for v in self.vulnerabilities
+                            if v.research_techniques or v.research_cves
+                        )
+                        self.phase_logger.log_phase("research_phase",
+                            f"Researched {_researched}/{len(self.vulnerabilities)} vulnerabilities",
+                            metadata={"vulns_total": len(self.vulnerabilities),
+                                      "vulns_researched": _researched})
+
+                # Phase 4: Unified LLM loop (plan → exploit → replan)
+                result = await self._unified_llm_loop(target_url, cteg_hints)
+
+                # Allow up to 3 solo iterations before marking exhausted
+                self._solo_iterations += 1
+                if result is None or not result.success:
+                    if self._solo_iterations >= 5:
+                        self._solo_exhausted = True
+                    # Fast exhaust: 2 consecutive plan-exhausted runs with 0 done tasks
+                    _done_count = sum(1 for t in (self.exploitation_plan.tasks if self.exploitation_plan else [])
+                                     if isinstance(t, dict) and t.get("status") == "done")
+                    _prev_done = getattr(self, '_prev_solo_done_count', -1)
+                    if result is None and _done_count == _prev_done:
+                        _empty_runs = getattr(self, '_solo_empty_runs', 0) + 1
+                        self._solo_empty_runs = _empty_runs
+                        if _empty_runs >= 2:
+                            log.info("Solo mode: 2 runs with no new progress — marking exhausted")
+                            self._solo_exhausted = True
                     else:
-                        # In chain mode, don't exhaust on first success — there may be
-                        # more flags to find. Only exhaust when chain is truly done.
-                        if not self._chain_mode:
-                            self._multi_exhausted = True
+                        self._solo_empty_runs = 0
+                    self._prev_solo_done_count = _done_count
+                else:
+                    self._solo_exhausted = True
 
                 # Checkpoint DKG after each loop iteration
                 self.dkg.save(self._checkpoint_path(f"loop_{self._loop_count}"))
-
-                # DKG re-scan each iteration: new hosts/creds enable collaboration
-                self._scan_collaboration_opportunities()
-
-                # Update TDA with latest state
-                try:
-                    self.scaling_engine.tda.update_all(
-                        token_count=self.llm.token_count,
-                        successes=1 if result and result.success else 0,
-                        attempts=1,
-                        defense_state=self.defense_state,
-                        dkg=self.dkg,
-                    )
-                except Exception:
-                    pass
 
             # ── Last resort: generic flag search ──────────────────
             if result is None or not result.success:
@@ -2091,18 +2032,12 @@ class Orchestrator:
             log.info("Max loops (%d) reached", max_loops)
             return True
         if getattr(self, '_solo_exhausted', False):
-            # Multi-agent mode also exhausted → terminate
-            if getattr(self, '_multi_exhausted', False):
-                log.info("All modes exhausted — terminating main loop")
-                return True
-            # Solo exhausted, multi never entered — track no-progress loops.
-            # In chain mode with multi-agent active, don't count solo stalls
-            # (multi-agent is the primary work mode for chain scenarios).
+            # Solo exhausted — track no-progress stalls before terminating.
             if not getattr(self, '_chain_mode', False):
                 _stalled = getattr(self, '_solo_exhausted_stall', 0) + 1
                 self._solo_exhausted_stall = _stalled
                 if _stalled >= 3:
-                    log.info("Solo mode exhausted, no multi-agent entry after %d loops — terminating", _stalled)
+                    log.info("Solo mode exhausted, no progress after %d loops — terminating", _stalled)
                     return True
         else:
             self._solo_exhausted_stall = 0
@@ -2406,18 +2341,6 @@ class Orchestrator:
             pass
         return ""
 
-    def _scan_collaboration_opportunities(self) -> None:
-        """Scan DKG for new collaboration opportunities (new hosts/creds)."""
-        try:
-            from darwin.dynamic_scaling import scan_collaboration_opportunities
-            opps = scan_collaboration_opportunities(self.dkg)
-            for opp in opps:
-                if opp.confidence > 0.6:
-                    log.info("Collaboration opportunity: %s (%.2f)",
-                             opp.opportunity_type, opp.confidence)
-        except Exception:
-            pass
-
     # ── Unified LLM-Driven Loop (v2: LLM drives EVERYTHING) ──────────
 
     async def _unified_llm_loop(
@@ -2467,6 +2390,14 @@ class Orchestrator:
                     _plan_text += f"  ... and {len(_plan.tasks) - 30} more tasks\n"
                 self.phase_logger.log_phase("plan", _plan_text,
                     metadata={"task_count": len(_plan.tasks), "plan_id": _plan.plan_id})
+
+            # ── Trace: plan generation event ──
+            self._task_log_event(
+                "info", "plan_generated",
+                plan_id=self.exploitation_plan.plan_id,
+                task_count=len(self.exploitation_plan.tasks),
+                goal=self.exploitation_plan.goal[:160],
+            )
 
         # Plan already generated before systematic exploit — skip duplicate
 
@@ -2720,6 +2651,14 @@ class Orchestrator:
                 self._generate_phase_summary("exploit")
                 log.info("Solo loop: plan exhausted after %d iterations", iteration - 1)
                 break
+
+            # ── Trace: task scheduling event ──
+            self._task_log_event(
+                "info", "task_scheduled",
+                task_id=task.get("id", ""),
+                tool=task.get("tool", ""),
+                iteration=iteration,
+            )
 
             task_instruction = task.get("instruction", "unknown")
             task_tool = task.get("tool", "")
@@ -3042,6 +2981,16 @@ class Orchestrator:
                                     defence_probe += f"\n[DEFENSE BYPASS — {strategy}] Payload accepted, no flag"
                             except Exception:
                                 pass
+
+                # ── Trace: record final tool result (Execution Memory seed) ──
+                self._task_log_event(
+                    "info", "tool_result",
+                    task_id=task.get("id", ""),
+                    tool=tc_name,
+                    success=bool(getattr(result, "success", False)),
+                    exit_code=getattr(result, "exit_code", -1),
+                    elapsed_ms=getattr(result, "elapsed_ms", 0),
+                )
 
                 # Logging
                 result_stdout = getattr(result, 'stdout', '') or ''
@@ -6714,7 +6663,7 @@ task-1 and task-2 run first (parallel, independent). task-3 waits for both.
 6. If a vulnerability's suggested tool is curl_get (for LFI/IDOR/SSRF), use
    curl_get with the exact URL and parameter.
 
-Output ONLY valid JSON array (3-20 tasks depending on complexity. More tasks =\= better — prefer focused, high-impact exploitation tasks over exhaustive probing)."""
+Output ONLY valid JSON array (3-20 tasks depending on complexity. More tasks != better — prefer focused, high-impact exploitation tasks over exhaustive probing)."""
 
         self._maybe_compress()
         try:
@@ -7087,36 +7036,6 @@ Output ONLY valid JSON array (3-20 tasks depending on complexity. More tasks =\=
             + "\n".join(parts)
             + "\nUse these in subsequent exploitation tasks."
         )
-
-    def _take_dkg_snapshot(self) -> None:
-        """Record current DKG node counts for cross-agent change detection."""
-        _types = ["Host", "Service", "Endpoint", "Credential", "Session",
-                  "Vulnerability", "Flag"]
-        self._dkg_snapshot = {
-            t: len(self.dkg.query_nodes(t)) for t in _types
-        }
-
-    def _detect_dkg_changes(self) -> dict[str, int] | None:
-        """Compare current DKG state to snapshot, returning changed types.
-
-        Returns dict of {node_type: delta}, or None if no snapshot or no change.
-        """
-        if not self._dkg_snapshot:
-            return None
-        changes: dict[str, int] = {}
-        for ntype, prev_count in self._dkg_snapshot.items():
-            current = len(self.dkg.query_nodes(ntype))
-            if current != prev_count:
-                changes[ntype] = current - prev_count
-        return changes if changes else None
-
-    def _summarize_dkg_changes(self, changes: dict[str, int]) -> str:
-        """Build a human-readable summary of DKG changes for LLM context."""
-        lines = ["[DKG CHANGES — cross-agent discovery]"]
-        for ntype, delta in sorted(changes.items()):
-            if delta > 0:
-                lines.append(f"  {ntype}: +{delta} new")
-        return "\n".join(lines)
 
     def _build_defense_evasion_context(self) -> str:
         """Build defense-aware evasion guidance for the plan generation prompt.
@@ -8868,13 +8787,11 @@ Respond ONLY with a JSON array of next steps (max 5)."""
             "start_time": self.start_time,
             "task_description": getattr(self, '_task_description', ''),
             "solo_iterations": self._solo_iterations,
-            "multi_agent_iterations": self._multi_agent_iterations,
             "analyze_done": self._analyze_done,
             "svc_research_done": self._svc_research_done,
             "research_done": self._research_done,
             "known_flags": list(self._known_flags) if hasattr(self, '_known_flags') else [],
             "solo_exhausted": getattr(self, '_solo_exhausted', False),
-            "multi_exhausted": getattr(self, '_multi_exhausted', False),
             "vulnerabilities": [
                 {"vuln_type": v.vuln_type, "endpoint": v.endpoint,
                  "param": v.param, "confidence": v.confidence,
@@ -8944,13 +8861,11 @@ Respond ONLY with a JSON array of next steps (max 5)."""
             self.start_time = checkpoint.get("start_time", time.time())
             self._task_description = checkpoint.get("task_description", "")
             self._solo_iterations = checkpoint.get("solo_iterations", 0)
-            self._multi_agent_iterations = checkpoint.get("multi_agent_iterations", 0)
             self._analyze_done = checkpoint.get("analyze_done", False)
             self._svc_research_done = checkpoint.get("svc_research_done", False)
             self._research_done = checkpoint.get("research_done", False)
             self._known_flags = set(checkpoint.get("known_flags", []))
             self._solo_exhausted = checkpoint.get("solo_exhausted", False)
-            self._multi_exhausted = checkpoint.get("multi_exhausted", False)
             self._exhausted_task_ids = set(checkpoint.get("exhausted_task_ids", []))
 
             # Restore chain / multi-flag mode state
@@ -9163,782 +9078,4 @@ Respond ONLY with a JSON array of next steps (max 5)."""
             except json.JSONDecodeError:
                 pass
         return {}
-
-    # ── Persistent Multi-Agent System ─────────────────────────────────
-
-    async def _run_multi_agent_cycle(
-        self, target_url: str,
-        scaling_level: "ScalingLevel | None" = None,
-        cteg_hints: dict | None = None,
-    ) -> TaskResult | None:
-        """Run persistent multi-agent exploitation with DKG monitoring.
-
-        Uses a persistent SubAgentPool (stored on self) that survives across
-        loop iterations. Agents are spawned incrementally based on DKG state,
-        and a background DKG monitor spawns follow-up agents when new
-        hosts/credentials appear.
-
-        Differentiates Coordinated vs Distributed mode via scaling_level:
-          - Coordinated (B 0.3-0.6): max 1 ReconAgent + 1 ExploitAgent
-          - Distributed (B >= 0.6): per-host ReconAgent + per-vuln ExploitAgent + PivotAgent
-        """
-        from darwin.sub_agents.base import SubAgentPool, SubAgentResult, TaskScope, TokenBudget, AgentType, SubAgentState
-        from darwin.sub_agents.recon_agent import ReconAgent
-        from darwin.sub_agents.exploit_agent import ExploitAgent
-        from darwin.sub_agents.pivot_agent import PivotAgent
-
-        # Create persistent pool if first call
-        if self._multi_pool is None:
-            self._multi_pool = SubAgentPool()
-
-        pool = self._multi_pool
-
-        # Determine which agents to spawn based on DKG state
-        spawned_any = await self._spawn_agents_from_dkg(target_url, pool, scaling_level, cteg_hints)
-
-        if not spawned_any and pool.active_count() == 0:
-            return None
-
-        # Run existing + new agents with DKG monitoring
-        log.info("Multi-agent: %d active agents", pool.active_count())
-
-        # Create a flag-detected event for early termination
-        flag_found = asyncio.Event()
-
-        async def _flag_watcher():
-            """Background: watch DKG for flag nodes via asyncio.Event + poll."""
-            flag_event = self.dkg.subscribe("Flag")
-            if not flag_event:
-                return
-            try:
-                while not flag_found.is_set():
-                    flags = self.dkg.query_nodes("Flag")
-                    for f in flags:
-                        fv = f.get("value", "")
-                        if fv and fv.startswith("flag{") and fv not in self._known_flags:
-                            self._known_flags.add(fv)
-                            if self._chain_mode:
-                                # Chain mode: record flag, continue unless chain exhausted
-                                self._captured_flags.append(fv)
-                                log.info("Chain mode: captured flag %s in multi-agent (%d/%d)",
-                                         fv[:40], len(self._captured_flags),
-                                         max(self._chain_services_total, 1))
-                                if self._count_unexploited_services() == 0:
-                                    self._chain_exhausted = True
-                                    self.__dict__['_multi_agent_flag'] = fv
-                                    flag_found.set()
-                                    return
-                                # Don't set flag_found — continue to next service
-                            else:
-                                # Original behavior: stop immediately
-                                self.__dict__['_multi_agent_flag'] = fv
-                                flag_found.set()
-                                return
-                    try:
-                        await asyncio.wait_for(flag_event.wait(), timeout=5.0)
-                    except asyncio.TimeoutError:
-                        pass
-            except asyncio.CancelledError:
-                pass
-
-        flag_task = asyncio.create_task(_flag_watcher())
-
-        try:
-            # Partition agents. ExploitAgent deferred until after analyze+research.
-            recon_agents = [a for a in pool._agents.values()
-                            if getattr(a, 'agent_type', None) == AgentType.RECON
-                            and getattr(a, 'state', None) != SubAgentState.DONE]
-            exploit_agents = [a for a in pool._agents.values()
-                              if getattr(a, 'agent_type', None) == AgentType.EXPLOIT
-                              and getattr(a, 'state', None) != SubAgentState.DONE]
-            other_agents = [a for a in pool._agents.values()
-                            if getattr(a, 'agent_type', None) not in (AgentType.RECON, AgentType.EXPLOIT)
-                            and getattr(a, 'state', None) != SubAgentState.DONE]
-
-            # Pause ExploitAgent (deferred until after analyze+research).
-            # Set state to WAITING instead of deleting — preserves plan, findings,
-            # iteration, _stale_iterations, and _completed_task_ids across phases.
-            for a in exploit_agents:
-                a._pre_wait_state = getattr(a, 'state', SubAgentState.SPAWNING)
-                a.state = SubAgentState.WAITING
-
-            # Phase 1: Recon agents first
-            # Snapshot DKG before recon so we can detect new discoveries
-            self._take_dkg_snapshot()
-            if recon_agents and not flag_found.is_set():
-                try:
-                    recon_results = await asyncio.wait_for(
-                        asyncio.gather(*[a.run() for a in recon_agents], return_exceptions=True),
-                        timeout=120.0,
-                    )
-                except asyncio.TimeoutError:
-                    # Preserve whatever completed before timeout
-                    recon_results = [a._build_result() for a in recon_agents
-                                     if getattr(a, 'state', None) == SubAgentState.DONE]
-                for i, r in enumerate(recon_results):
-                    if isinstance(r, SubAgentResult):
-                        pool._results[recon_agents[i].agent_id] = r
-
-            # ── Cross-agent coordination: ReconAgent discoveries ──
-            _recon_changes = self._detect_dkg_changes()
-            if _recon_changes:
-                _new_eps = _recon_changes.get("Endpoint", 0)
-                _new_svcs = _recon_changes.get("Service", 0)
-                _new_creds = _recon_changes.get("Credential", 0)
-                if _new_eps > 0 or _new_svcs > 0 or _new_creds > 0:
-                    log.info("Cross-agent: ReconAgent discovered +%d endpoints, +%d services, +%d creds",
-                             _new_eps, _new_svcs, _new_creds)
-                    # Inject DKG change summary into LLM context for plan generation
-                    _change_msg = self._summarize_dkg_changes(_recon_changes)
-                    self.llm.add_context_message(
-                        f"{_change_msg}\nReconAgent discoveries may open new attack paths. "
-                        f"Include these in your exploitation plan.",
-                        role="user",
-                    )
-
-            # Phase 2: Service research → Analyze → Vuln research → Plan
-            if not flag_found.is_set():
-                # Re-trigger analysis if new services discovered
-                if self._analyze_done and self._reanalyze_count < self._max_reanalyze:
-                    _current_svc = len(self.dkg.query_nodes("Service"))
-                    _current_eps = len(self.dkg.query_nodes("Endpoint"))
-                    if _current_svc + _current_eps > self._analyze_service_snapshot + 2:
-                        log.info("Multi-agent: new services detected, re-running analysis")
-                        self._analyze_done = False
-                        self._svc_research_done = False
-                        self._reanalyze_count += 1
-                if not self._svc_research_done:
-                    await self._service_research()
-                    self._svc_research_done = True
-                if not self._analyze_done:
-                    await self._analyze_phase()
-                    self._analyze_done = True
-                    self._analyze_service_snapshot = (
-                        len(self.dkg.query_nodes("Service"))
-                        + len(self.dkg.query_nodes("Endpoint"))
-                    )
-                if self.vulnerabilities and not self._research_done:
-                    await self._research_phase()
-                    self._research_done = True
-                self.exploitation_plan = await self._generate_exploitation_plan(
-                    target_url, cteg_hints)
-
-            # Phase 3: Resume ExploitAgent (now DKG has Vulnerability nodes).
-            # Restore previous state instead of recreating — preserves internal state.
-            if not flag_found.is_set():
-                exploit_agents = [a for a in pool._agents.values()
-                                  if getattr(a, 'agent_type', None) == AgentType.EXPLOIT
-                                  and getattr(a, 'state', None) == SubAgentState.WAITING]
-                for a in exploit_agents:
-                    a.state = getattr(a, '_pre_wait_state', SubAgentState.RUNNING)
-                exploit_agents = [a for a in pool._agents.values()
-                                  if getattr(a, 'agent_type', None) == AgentType.EXPLOIT
-                                  and getattr(a, 'state', None) != SubAgentState.DONE]
-
-            # Phase 4: Run Exploit agents
-            if exploit_agents and not flag_found.is_set():
-                try:
-                    exploit_results = await asyncio.wait_for(
-                        asyncio.gather(*[a.run() for a in exploit_agents], return_exceptions=True),
-                        timeout=120.0,
-                    )
-                except asyncio.TimeoutError:
-                    exploit_results = [a._build_result() for a in exploit_agents
-                                       if getattr(a, 'state', None) == SubAgentState.DONE]
-                for i, r in enumerate(exploit_results):
-                    if isinstance(r, SubAgentResult):
-                        pool._results[exploit_agents[i].agent_id] = r
-
-            # Phase 5: Other agents (AD, Cloud, Pivot)
-            if other_agents and not flag_found.is_set():
-                try:
-                    other_results = await asyncio.wait_for(
-                        asyncio.gather(*[a.run() for a in other_agents], return_exceptions=True),
-                        timeout=120.0,
-                    )
-                except asyncio.TimeoutError:
-                    other_results = [a._build_result() for a in other_agents
-                                     if getattr(a, 'state', None) == SubAgentState.DONE]
-                for i, r in enumerate(other_results):
-                    if isinstance(r, SubAgentResult):
-                        pool._results[other_agents[i].agent_id] = r
-
-            if flag_found.is_set():
-                for aid in list(getattr(pool, '_agents', {}).keys()):
-                    pool.terminate(agent_id=aid)
-
-            # Check results
-            results = getattr(pool, '_results', {})
-            self.step_count += len(results)
-
-            # Check for flag found by watcher (avoids _known_flags dedup skip)
-            watcher_flag = self.__dict__.pop('_multi_agent_flag', None)
-            if watcher_flag:
-                total_tokens = self.llm.token_count + sum(
-                    getattr(r, 'tokens_used', 0) for r in results.values()
-                )
-                if self._chain_mode:
-                    # In chain mode: flag_watcher only sets this when chain exhausted
-                    final_flag = self._captured_flags[-1] if self._captured_flags else watcher_flag
-                    result_task = TaskResult(
-                        success=True, flag=final_flag, steps=self.step_count,
-                        tokens_used=total_tokens,
-                        time_elapsed=time.time() - self.start_time,
-                    )
-                    result_task.all_flags = list(self._captured_flags)
-                    self.phase = OrchestratorPhase.DONE
-                    return result_task
-                else:
-                    self.phase = OrchestratorPhase.DONE
-                    return TaskResult(
-                        success=True, flag=watcher_flag, steps=self.step_count,
-                        tokens_used=total_tokens,
-                        time_elapsed=time.time() - self.start_time,
-                    )
-
-            # Query DKG for flags (fallback if watcher didn't catch it)
-            flags = self.dkg.query_nodes("Flag")
-            for flag in flags:
-                fv = flag.get("value", "")
-                if fv and fv.startswith("flag{") and fv not in self._known_flags:
-                    self._known_flags.add(fv)
-                    total_tokens = self.llm.token_count + sum(
-                        getattr(r, 'tokens_used', 0) for r in results.values()
-                    )
-                    if self._chain_mode:
-                        # Chain mode: record intermediate flag, only return if exhausted
-                        self._captured_flags.append(fv)
-                        if self._count_unexploited_services() == 0:
-                            self._chain_exhausted = True
-                            final_flag = self._captured_flags[-1] if self._captured_flags else fv
-                            result_task = TaskResult(
-                                success=True, flag=final_flag, steps=self.step_count,
-                                tokens_used=total_tokens,
-                                time_elapsed=time.time() - self.start_time,
-                            )
-                            result_task.all_flags = list(self._captured_flags)
-                            self.phase = OrchestratorPhase.DONE
-                            return result_task
-                        # Not exhausted: don't return, let loop continue
-                        log.info("Chain mode: captured flag %s in multi-agent fallback, continuing",
-                                 fv[:40])
-                    else:
-                        self.phase = OrchestratorPhase.DONE
-                        return TaskResult(
-                            success=True, flag=fv, steps=self.step_count,
-                            tokens_used=total_tokens,
-                            time_elapsed=time.time() - self.start_time,
-                        )
-
-            # Inject sub-agent results into orchestrator LLM context
-            if results:
-                report_parts = []
-                for agent_id, result in results.items():
-                    agent_type = getattr(result, 'agent_type', 'unknown')
-                    success = getattr(result, 'success', False)
-                    end_state = getattr(result, 'end_state', None)
-                    state_val = end_state.value if hasattr(end_state, 'value') else str(end_state)
-                    findings = getattr(result, 'findings_count', 0)
-                    status = "SUCCESS" if success else f"FAILED ({state_val})"
-                    summary = getattr(result, 'summary', '')
-                    tokens = getattr(result, 'tokens_used', 0)
-                    elapsed = getattr(result, 'time_elapsed', 0.0)
-                    report_parts.append(
-                        f"  [{agent_type}] {agent_id}: {status}, "
-                        f"{findings} findings, {tokens} tokens, {elapsed:.1f}s"
-                    )
-                    if summary:
-                        report_parts.append(f"    {summary}")
-                if report_parts:
-                    # Include specific DKG findings in the summary
-                    dkg_flags = self.dkg.query_nodes("Flag")
-                    dkg_creds = self.dkg.query_nodes("Credential")
-                    dkg_vulns = self.dkg.query_nodes("Vulnerability")
-                    finding_lines = []
-                    for f in dkg_flags:
-                        fv = f.get("value", "")
-                        if fv:
-                            finding_lines.append(f"  Flag: {fv[:60]}")
-                    for c in dkg_creds:
-                        finding_lines.append(
-                            f"  Credential: {c.get('username','?')}@{c.get('source_host','?')}"
-                        )
-                    for v in dkg_vulns[-5:]:
-                        finding_lines.append(
-                            f"  Vuln: {v.get('vuln_type','?')} at {v.get('endpoint','?')}"
-                        )
-                    findings_block = ""
-                    if finding_lines:
-                        findings_block = (
-                            f"\n## Specific Findings in DKG\n{chr(10).join(finding_lines[:12])}\n"
-                        )
-                    self.llm.add_context_message(
-                        f"[MULTI-AGENT CYCLE COMPLETE] {len(results)} agents finished:\n\n"
-                        f"{chr(10).join(report_parts)}"
-                        f"{findings_block}\n"
-                        f"Avoid re-trying failed approaches.",
-                        role="user",
-                    )
-                    # Update central plan based on sub-agent findings
-                    if self.exploitation_plan:
-                        self._maybe_compress()
-                        plan_content, _ = self.llm.generate(
-                            prompt=(
-                                f"Sub-agents completed. Results:\n"
-                                f"{chr(10).join(report_parts)}\n\n"
-                                f"Update the central exploitation plan based on these results. "
-                                f"Add tasks for newly discovered attack paths. "
-                                f"Mark tasks that sub-agents completed as done. "
-                                f"Output updated plan as JSON array."
-                            ),
-                            system_prompt=SYSTEM_PROMPT_ORCHESTRATOR_UNIFIED,
-                        )
-                        if plan_content:
-                            try:
-                                new_tasks = self._extract_json(plan_content)
-                                if isinstance(new_tasks, list) and new_tasks:
-                                    done_tasks = [t for t in self.exploitation_plan.tasks
-                                                 if t.get("status") == "done"]
-                                    self.exploitation_plan.tasks = done_tasks
-                                    _MA_NEW_LIMIT = 15  # Multi-agent can add more in one cycle
-                                    _ma_added = 0
-                                    for nt in new_tasks:
-                                        if not isinstance(nt, dict):
-                                            continue  # skip non-dict entries
-                                        nt.setdefault("status", "pending")
-                                        nt.setdefault("dependent_task_ids", nt.pop("dependencies", []))
-                                        if not any(t["id"] == nt["id"] for t in self.exploitation_plan.tasks):
-                                            if self._is_duplicate_task(nt, self.exploitation_plan.tasks):
-                                                continue
-                                            if _ma_added >= _MA_NEW_LIMIT:
-                                                break
-                                            self.exploitation_plan.tasks.append(nt)
-                                            _ma_added += 1
-                                    # Apply shared cap
-                                    self.exploitation_plan.tasks = self._cap_pending_tasks(
-                                        self.exploitation_plan.tasks, max_total=20)
-                                    log.info("[PLAN] updated from multi-agent results: %d tasks",
-                                             len(self.exploitation_plan.tasks))
-                            except Exception as e:
-                                log.warning("Multi-agent plan update failed: %s", e)
-                                # Fallback: create plan tasks directly from DKG findings
-                                try:
-                                    vulns = self.dkg.query_nodes("Vulnerability")
-                                    for v in vulns[-5:]:
-                                        vt = v.get("vuln_type", "")
-                                        ep = v.get("endpoint", "")
-                                        param = v.get("parameter", "")
-                                        if vt and ep:
-                                            tool = {"SQLI": "sqlmap_test", "XSS": "xss_reflection_test",
-                                                    "CMDI": "command_injection_test"}.get(
-                                                    vt.upper(), "send_payload")
-                                            _fb_task = {
-                                                "id": f"fallback-{len(self.exploitation_plan.tasks)}",
-                                                "instruction": f"Exploit {vt} at {ep}",
-                                                "tool": tool,
-                                                "params": {"url": ep, "param": param or "q"},
-                                                "vuln_type": vt, "status": "pending",
-                                                "dependent_task_ids": [],
-                                            }
-                                            if not self._is_duplicate_task(_fb_task, self.exploitation_plan.tasks):
-                                                self.exploitation_plan.tasks.append(_fb_task)
-                                except Exception:
-                                    pass
-
-            # Spawn follow-up agents based on new DKG data
-            await self._spawn_followup_agents(target_url, pool, cteg_hints)
-
-            # Clean up done agents
-            pool.cleanup()
-
-            return None
-
-        finally:
-            flag_task.cancel()
-            try:
-                await flag_task
-            except (asyncio.CancelledError, Exception):
-                pass
-
-    async def _analyze_from_recon_findings(self) -> None:
-        """Analyze DKG recon discoveries and create Vulnerability hypotheses.
-
-        Called after ReconAgent completes in multi-agent mode.
-        Reads Endpoint/Service nodes, asks LLM to hypothesize vulnerabilities,
-        and writes Vulnerability nodes to DKG for ExploitAgent to use.
-        """
-        endpoints = self.dkg.query_nodes("Endpoint")
-        services = self.dkg.query_nodes("Service")
-        if not endpoints and not services:
-            return
-
-        ep_lines = []
-        for ep in endpoints[:20]:
-            url = ep.get("url", "")
-            method = ep.get("method", "GET")
-            params = ep.get("params", "")
-            ep_lines.append(f"  {method} {url}" + (f" params={params}" if params else ""))
-        svc_lines = []
-        for s in services[:10]:
-            version = s.get("version", "") or s.get("banner", "")
-            port = s.get("port", 0)
-            if version and version not in ("http", "https", ""):
-                svc_lines.append(f"  port {port}: {version}")
-
-        self._maybe_compress()
-        try:
-            content, _ = self.llm.generate(
-                prompt=(
-                    f"## Discovered Endpoints\n" + "\n".join(ep_lines or ["(none)"]) + "\n\n"
-                    f"## Discovered Technologies\n" + "\n".join(svc_lines or ["(none)"]) + "\n\n"
-                    f"Analyze these findings and identify potential vulnerabilities.\n"
-                    f"For each vulnerability, specify: vuln_type (SQLI/XSS/CMDI/SSTI/LFI/IDOR), "
-                    f"endpoint URL, parameter name, severity (low/medium/high/critical), "
-                    f"and a brief reason.\n"
-                    f"Output as JSON array:\n"
-                    f'[{{"vuln_type": "SQLI", "endpoint": "...", "parameter": "...", '
-                    f'"severity": "high", "reason": "..."}}]'
-                ),
-                system_prompt=getattr(self, '_analyze_prompt_formatted', SYSTEM_PROMPT_ANALYZE),
-            )
-        except Exception as e:
-            log.warning("_analyze_from_recon_findings LLM call failed: %s", e)
-            return
-        try:
-            vulns = self._extract_json(content)
-            if isinstance(vulns, list):
-                for v in vulns:
-                    if isinstance(v, dict) and v.get("vuln_type"):
-                        self.dkg.add_node("Vulnerability",
-                            f"vuln-ma-{v.get('vuln_type','')}-{v.get('endpoint','')[:20]}", {
-                                "vuln_type": v.get("vuln_type", ""),
-                                "endpoint": v.get("endpoint", ""),
-                                "parameter": v.get("parameter", ""),
-                                "severity": v.get("severity", "medium"),
-                                "evidence": v.get("reason", ""),
-                                "discovered_by": "multi-agent-analyze",
-                            })
-        except Exception as e:
-            log.warning("_analyze_from_recon_findings parse failed: %s", e)
-
-    async def _spawn_agents_from_dkg(
-        self, target_url: str, pool,
-        scaling_level: "ScalingLevel | None" = None,
-        cteg_hints: dict | None = None,
-    ) -> bool:
-        """Spawn agents based on current DKG state. Returns True if any spawned.
-
-        Differentiates spawning strategy by scaling_level:
-          - Coordinated: max 1 ReconAgent + 1 ExploitAgent, no PivotAgent
-          - Distributed: per-host ReconAgent, per-vuln ExploitAgent (max 3),
-            PivotAgent if credentials + multi-host
-        """
-        from darwin.dynamic_scaling import ScalingLevel
-        from darwin.sub_agents.base import TaskScope, TokenBudget, AgentType
-        from darwin.sub_agents.recon_agent import ReconAgent
-        from darwin.sub_agents.exploit_agent import ExploitAgent
-        from darwin.sub_agents.pivot_agent import PivotAgent
-
-        spawned = False
-        hosts = self.dkg.query_nodes("Host")
-        vulns = self.dkg.query_nodes("Vulnerability")
-        creds = self.dkg.query_nodes("Credential")
-        domains = self.dkg.query_nodes("Domain")
-
-        # Environment detection: spawn specialized agents for AD/cloud
-        is_ad_env = bool(domains) or any(
-            s.get("port") in (445, 389, 636) for s in self.dkg.query_nodes("Service")
-        )
-        # For initial spawn, only trigger CloudAgent on K8s environments.
-        # Non-K8s cloud platforms (IMDS, S3, STS simulators) are better
-        # handled by Solo mode first — CloudAgent is spawned as follow-up
-        # in _spawn_followup_agents() if Solo fails.
-        is_cloud_env = any(
-            s.get("port") in (6443, 10250, 2379) for s in self.dkg.query_nodes("Service")
-        ) or "kube" in str(self.dkg.summary()).lower()
-
-        if is_ad_env and "ad-primary" not in getattr(pool, '_agents', {}):
-            try:
-                from darwin.sub_agents.ad_agent import ADAgent
-                dc_ip = ""
-                for h in hosts:
-                    for s in self.dkg.query_nodes("Service"):
-                        if s.get("port") in (445, 389) and s.get("host") == h.get("ip"):
-                            dc_ip = h.get("ip", "")
-                            break
-                domain_name = ""
-                for d in domains:
-                    domain_name = d.get("name", "")
-                    break
-                scope = TaskScope(target_hosts=[h.get("ip", h.get("id", "")) for h in hosts])
-                ad = ADAgent(agent_id="ad-primary", task_scope=scope, dkg=self.dkg,
-                            budget=TokenBudget(max_tokens=64000, max_iterations=20),
-                            domain_context={"domain_name": domain_name, "dc_ip": dc_ip,
-                                           "credentials": str([c.get("user","") for c in creds])})
-                pool.spawn(ad)
-                spawned = True
-                log.info("Spawned ADAgent for domain environment: %s", domain_name or dc_ip)
-            except ImportError:
-                pass
-
-        if is_cloud_env and "cloud-primary" not in getattr(pool, '_agents', {}):
-            try:
-                from darwin.sub_agents.cloud_agent import CloudAgent
-                scope = TaskScope(target_hosts=[h.get("ip", h.get("id", "")) for h in hosts])
-                # Build cloud_context from DKG discoveries
-                cloud_services = [s for s in self.dkg.query_nodes("Service")
-                                  if s.get("port") in (6443, 10250, 2379, 10255)]
-                cloud_context = {
-                    "cluster_info": ", ".join(
-                        f"port {s.get('port')}/{s.get('protocol','tcp')}: {s.get('version','') or s.get('banner','')}"
-                        for s in cloud_services[:5]
-                    ),
-                    "pod_info": "Not yet enumerated",
-                    "sa_info": "Not yet enumerated",
-                    "resources": [],
-                }
-                cloud = CloudAgent(agent_id="cloud-primary", task_scope=scope, dkg=self.dkg,
-                                  budget=TokenBudget(max_tokens=48000, max_iterations=15),
-                                  cloud_context=cloud_context)
-                pool.spawn(cloud)
-                spawned = True
-                log.info("Spawned CloudAgent for K8s/cloud environment")
-            except ImportError:
-                pass
-
-        # Determine max agents based on scaling level
-        # ── Dynamic per-agent token budget ──
-        # Scale agent budgets based on remaining orchestrator tokens
-        # so a single verbose agent doesn't starve others.
-        _remaining_tokens = max(0, self.token_budget - self.llm.token_count)
-        # Count agents in pool after spawning AD/cloud agents above
-        _pool_agents = getattr(pool, '_agents', {})
-        _num_agents = len(_pool_agents) if _pool_agents else 0
-        if _num_agents > 0:
-            _tokens_per_agent = _remaining_tokens // (_num_agents + 1)  # +1 for orchestrator
-        else:
-            _tokens_per_agent = _remaining_tokens // 2
-        _tokens_per_agent = max(_tokens_per_agent, 16000)  # floor: 16K
-        _tokens_per_agent = min(_tokens_per_agent, 64000)  # ceiling: 64K
-
-        if scaling_level == ScalingLevel.COORDINATED:
-            max_recon = 1
-            max_exploit = 1
-            allow_pivot = False
-            recon_budget = TokenBudget(max_tokens=_tokens_per_agent, max_iterations=10)
-            exploit_budget = TokenBudget(max_tokens=_tokens_per_agent, max_iterations=12)
-        else:  # DISTRIBUTED or default
-            max_recon = len(hosts) if hosts else 1
-            max_exploit = 3
-            allow_pivot = bool(creds and len(hosts) > 1)
-            recon_budget = TokenBudget(max_tokens=_tokens_per_agent, max_iterations=15)
-            exploit_budget = TokenBudget(max_tokens=_tokens_per_agent, max_iterations=12)
-
-        # ReconAgent per host (up to max_recon, skip if already running)
-        recon_count = 0
-        for h in hosts:
-            if recon_count >= max_recon:
-                break
-            agent_id = f"recon-{h.get('id', 'unknown')}"
-            if agent_id not in getattr(pool, '_agents', {}):
-                scope = TaskScope(target_hosts=[
-                    h.get("ip", "") or h.get("id", "")
-                ])
-                recon = ReconAgent(
-                    agent_id=agent_id, task_scope=scope,
-                    dkg=self.dkg,
-                    budget=recon_budget,
-                )
-                pool.spawn(recon)
-                spawned = True
-                recon_count += 1
-                log.info("Spawned ReconAgent: %s", agent_id)
-
-        # ExploitAgent per vuln type (dedup by type, up to max_exploit)
-        spawned_types: set[str] = set()
-        existing_agents = getattr(pool, '_agents', {})
-        exploit_count = sum(
-            1 for a in existing_agents.values()
-            if getattr(a, 'agent_type', None) == AgentType.EXPLOIT
-        )
-        for v in vulns[:6]:
-            vt = (v.get("vuln_type") or v.get("type") or "").lower()
-            if not vt or vt in spawned_types:
-                continue
-            if exploit_count >= max_exploit:
-                break
-            spawned_types.add(vt)
-            agent_id = f"exploit-{vt}"
-            if agent_id not in existing_agents:
-                endpoint = v.get("endpoint", target_url)
-                scope = TaskScope(target_hosts=[endpoint])
-                exploit = ExploitAgent(
-                    agent_id=agent_id, task_scope=scope,
-                    dkg=self.dkg, dpm=self.dpm, dave=self.dave,
-                    cteg=self.cteg,
-                    cteg_hints=cteg_hints,
-                    budget=exploit_budget,
-                )
-                pool.spawn(exploit)
-                spawned = True
-                exploit_count += 1
-                log.info("Spawned ExploitAgent: %s (type=%s)", agent_id, vt)
-
-        # PivotAgent if credentials + multi-host (Distributed mode only)
-        if allow_pivot:
-            agent_id = "pivot-primary"
-            if agent_id not in existing_agents:
-                scope = TaskScope(
-                    target_hosts=[h.get("ip", h.get("id", "")) for h in hosts],
-                )
-                pivot = PivotAgent(
-                    agent_id=agent_id, task_scope=scope,
-                    dkg=self.dkg,
-                    budget=TokenBudget(max_tokens=32000, max_iterations=15),
-                )
-                pool.spawn(pivot)
-                spawned = True
-                log.info("Spawned PivotAgent: %s", agent_id)
-
-        return spawned
-
-    async def _spawn_followup_agents(
-        self, target_url: str, pool, cteg_hints: dict | None = None,
-    ) -> None:
-        """Scan DKG for collaboration opportunities and spawn follow-up agents.
-
-        Re-evaluates AD/cloud environment detection — infrastructure discovered
-        mid-chain (after initial spawn) is handled here.
-        """
-        from darwin.sub_agents.base import TaskScope, TokenBudget, AgentType
-        from darwin.sub_agents.recon_agent import ReconAgent
-        from darwin.sub_agents.exploit_agent import ExploitAgent
-        from darwin.sub_agents.pivot_agent import PivotAgent
-
-        existing = getattr(pool, '_agents', {})
-
-        # Re-evaluate AD/cloud environment (may have been discovered mid-chain)
-        domains = self.dkg.query_nodes("Domain")
-        is_ad_env = bool(domains) or any(
-            s.get("port") in (445, 389, 636, 3268, 3269)
-            for s in self.dkg.query_nodes("Service")
-        )
-        is_cloud_env = any(
-            s.get("port") in (6443, 10250, 2379, 10255)
-            for s in self.dkg.query_nodes("Service")
-        )
-        # Also detect non-K8s cloud platforms.
-        if not is_cloud_env:
-            _cloud_sigs = {"imds", "ec2 metadata", "s3", "aws", "sts",
-                           "lambda", "iam", "cloud", "amazon"}
-            is_cloud_env = any(
-                any(cs in str(s).lower() for cs in _cloud_sigs)
-                for s in self.dkg.query_nodes("Service")
-            ) or any(
-                any(cs in str(e).lower() for cs in _cloud_sigs)
-                for e in self.dkg.query_nodes("Endpoint")
-            ) or any(
-                v.get("vuln_type") == "PlatformDiscovery"
-                for v in self.dkg.query_nodes("Vulnerability")
-            )
-
-        if is_ad_env and "ad-primary" not in existing:
-            try:
-                from darwin.sub_agents.ad_agent import ADAgent
-                hosts = self.dkg.query_nodes("Host")
-                scope = TaskScope(target_hosts=[h.get("ip", h.get("id", "")) for h in hosts])
-                ad = ADAgent(agent_id="ad-primary", task_scope=scope, dkg=self.dkg,
-                            budget=TokenBudget(max_tokens=64000, max_iterations=20),
-                            domain_context={"domain_name": "", "dc_ip": "",
-                                           "credentials": str([c.get("user","") for c in self.dkg.query_nodes("Credential")])})
-                pool.spawn(ad)
-                log.info("Spawned follow-up ADAgent for newly discovered AD environment")
-            except ImportError:
-                pass
-
-        if is_cloud_env and "cloud-primary" not in existing:
-            try:
-                from darwin.sub_agents.cloud_agent import CloudAgent
-                hosts = self.dkg.query_nodes("Host")
-                scope = TaskScope(target_hosts=[h.get("ip", h.get("id", "")) for h in hosts])
-                cloud_services = [s for s in self.dkg.query_nodes("Service")
-                                  if s.get("port") in (6443, 10250, 2379, 10255)]
-                cloud_context = {
-                    "cluster_info": ", ".join(
-                        f"port {s.get('port')}: {s.get('version','') or s.get('banner','')}"
-                        for s in cloud_services[:5]
-                    ),
-                    "pod_info": "Not yet enumerated",
-                    "sa_info": "Not yet enumerated",
-                }
-                cloud = CloudAgent(agent_id="cloud-primary", task_scope=scope, dkg=self.dkg,
-                                  budget=TokenBudget(max_tokens=48000, max_iterations=15),
-                                  cloud_context=cloud_context)
-                pool.spawn(cloud)
-                log.info("Spawned follow-up CloudAgent for newly discovered K8s/cloud environment")
-            except ImportError:
-                pass
-
-        # Check for new credentials → spawn PivotAgent
-        creds = self.dkg.query_nodes("Credential")
-        hosts = self.dkg.query_nodes("Host")
-        if creds and len(hosts) > 1 and "pivot-primary" not in existing:
-            scope = TaskScope(
-                target_hosts=[h.get("ip", h.get("id", "")) for h in hosts],
-            )
-            pivot = PivotAgent(
-                agent_id="pivot-followup", task_scope=scope,
-                dkg=self.dkg,
-                budget=TokenBudget(max_tokens=32000, max_iterations=15),
-            )
-            pool.spawn(pivot)
-            log.info("Spawned follow-up PivotAgent")
-
-        # Check for new internal hosts → spawn ReconAgent
-        internal_hosts = [h for h in hosts if h.get("is_internal")]
-        for h in internal_hosts:
-            agent_id = f"recon-internal-{h.get('id', h.get('ip', ''))}"
-            if agent_id not in existing:
-                scope = TaskScope(target_hosts=[
-                    h.get("ip", "") or h.get("id", "")
-                ])
-                recon = ReconAgent(
-                    agent_id=agent_id, task_scope=scope,
-                    dkg=self.dkg,
-                    budget=TokenBudget(max_tokens=32000, max_iterations=15),
-                )
-                pool.spawn(recon)
-                log.info("Spawned internal ReconAgent: %s", agent_id)
-
-        # Check for new vulns → spawn ExploitAgent (if not already targeting this type)
-        vulns = self.dkg.query_nodes("Vulnerability")
-        existing_vuln_types: set[str] = set()
-        for aid, agent in existing.items():
-            if getattr(agent, 'agent_type', None) == AgentType.EXPLOIT:
-                # Extract vuln type from agent_id
-                parts = aid.split("-", 1)
-                if len(parts) > 1:
-                    existing_vuln_types.add(parts[1])
-
-        exploit_count = sum(
-            1 for a in existing.values()
-            if getattr(a, 'agent_type', None) == AgentType.EXPLOIT
-        )
-        for v in vulns:
-            vt = (v.get("vuln_type") or v.get("type") or "").lower()
-            if vt and vt not in existing_vuln_types and exploit_count < 3:
-                agent_id = f"exploit-{vt}"
-                endpoint = v.get("endpoint", target_url)
-                scope = TaskScope(target_hosts=[endpoint])
-                exploit = ExploitAgent(
-                    agent_id=agent_id, task_scope=scope,
-                    dkg=self.dkg, dpm=self.dpm, dave=self.dave,
-                    cteg=self.cteg,
-                    cteg_hints=cteg_hints,
-                    budget=TokenBudget(max_tokens=48000, max_iterations=12),
-                )
-                pool.spawn(exploit)
-                exploit_count += 1
-                existing_vuln_types.add(vt)
-                log.info("Spawned follow-up ExploitAgent: %s", agent_id)
 

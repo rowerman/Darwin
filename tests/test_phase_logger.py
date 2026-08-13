@@ -33,7 +33,7 @@ class TestPhaseLoggerBasic:
         """The log file should start with a JSON header line."""
         logger.log_phase("analyze", "vuln data here", metadata={"vuln_count": 3})
         filepath = os.path.join(temp_log_dir, "research", "20260625_test_analyze.log")
-        with open(filepath) as f:
+        with open(filepath, encoding="utf-8") as f:
             first_line = f.readline().strip()
         header = json.loads(first_line)
         assert header["phase"] == "analyze"
@@ -44,7 +44,7 @@ class TestPhaseLoggerBasic:
         """The file should contain the ---CONTENT--- separator."""
         logger.log_phase("plan", "plan content")
         filepath = os.path.join(temp_log_dir, "plan", "20260625_test_plan.log")
-        content = open(filepath).read()
+        content = open(filepath, encoding="utf-8").read()
         assert "---CONTENT---" in content
         assert "plan content" in content
 
@@ -115,7 +115,7 @@ class TestPhaseLoggerTiming:
         assert filepath is not None
 
         # Read back the header
-        with open(filepath) as f:
+        with open(filepath, encoding="utf-8") as f:
             first_line = f.readline().strip()
         header = json.loads(first_line)
         assert "elapsed_s" in header
@@ -141,7 +141,7 @@ class TestPhaseLoggerSummary:
         assert os.path.exists(filepath)
         assert "summary" in filepath
 
-        content = open(filepath).read()
+        content = open(filepath, encoding="utf-8").read()
         assert "DARWIN Run Summary" in content
         assert "dkg data" in content
 
@@ -151,7 +151,7 @@ class TestPhaseLoggerSummary:
         logger.log_phase("deep_recon", "recon content")
 
         filepath = logger.write_summary(None)
-        content = open(filepath).read()
+        content = open(filepath, encoding="utf-8").read()
         assert "bootstrap" in content or "scan" in content
         assert "deep_recon" in content
 
@@ -179,7 +179,7 @@ class TestPhaseLoggerSummary:
 
         result = FakeResult()
         filepath = logger.write_summary(result)
-        content = open(filepath).read()
+        content = open(filepath, encoding="utf-8").read()
         assert "flag{test_123}" in content
         assert "steps: 5" in content
 
@@ -227,7 +227,7 @@ class TestPhaseLoggerEdgeCases:
                          metadata={"complex_obj": object()})
         filepath = os.path.join(temp_log_dir, "scan",
                                 "20260625_test_bootstrap.log")
-        with open(filepath) as f:
+        with open(filepath, encoding="utf-8") as f:
             first_line = f.readline().strip()
         header = json.loads(first_line)
         assert "complex_obj" in header
@@ -238,7 +238,7 @@ class TestPhaseLoggerEdgeCases:
         logger.log_phase("bootstrap", "no newline")
         filepath = os.path.join(temp_log_dir, "scan",
                                 "20260625_test_bootstrap.log")
-        content = open(filepath).read()
+        content = open(filepath, encoding="utf-8").read()
         assert content.endswith("\n")
 
     def test_custom_run_id(self, temp_log_dir):
