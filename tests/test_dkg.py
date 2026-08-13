@@ -231,6 +231,79 @@ class TestDKGReset:
         assert dkg.summary() == "DKG is empty"
 
 
+class TestDKGProvenance:
+    """P12: source/evidence/timestamp provenance metadata."""
+
+    def test_add_node_with_provenance(self):
+        dkg = DKG()
+        dkg.add_node(
+            "Endpoint",
+            "e1",
+            {"url": "http://x/login"},
+            source="curl_get",
+            evidence="HTTP 200 with login form",
+            timestamp="2026-08-13T10:00:00",
+        )
+        prov = dkg.get_provenance("e1")
+        assert prov["source"] == "curl_get"
+        assert prov["evidence"] == "HTTP 200 with login form"
+        assert prov["timestamp"] == "2026-08-13T10:00:00"
+
+    def test_provenance_does_not_collide_with_flat_source_property(self):
+        dkg = DKG()
+        # Existing call sites already use a flat "source" domain property.
+        dkg.add_node("Credential", "c1", {"source": "partial_success"})
+        node = dkg.get_node("c1")
+        assert node["source"] == "partial_success"
+        assert node.get("provenance") is None
+        assert dkg.get_provenance("c1")["source"] == "unknown"
+
+    def test_legacy_node_reports_unknown_provenance(self):
+        dkg = DKG()
+        dkg.add_node("Host", "h1", {"ip": "10.0.0.1"})
+        prov = dkg.get_provenance("h1")
+        assert prov == {"source": "unknown", "evidence": "", "timestamp": ""}
+
+    def test_get_provenance_missing_node_returns_none(self):
+        dkg = DKG()
+        assert dkg.get_provenance("nonexistent") is None
+
+    def test_query_nodes_with_provenance_fills_unknown(self):
+        dkg = DKG()
+        dkg.add_node("Host", "h1", {"ip": "10.0.0.1"})
+        dkg.add_node("Host", "h2", {"ip": "10.0.0.2"}, source="nmap_scan")
+
+        rows = dkg.query_nodes("Host", with_provenance=True)
+        by_id = {r["id"]: r["provenance"] for r in rows}
+        assert by_id["h1"] == {"source": "unknown", "evidence": "", "timestamp": ""}
+        assert by_id["h2"]["source"] == "nmap_scan"
+
+        # Without the flag, legacy nodes simply have no provenance key.
+        plain = dkg.query_nodes("Host")
+        assert "provenance" not in plain[0]
+
+    def test_provenance_survives_roundtrip(self):
+        dkg = DKG()
+        dkg.add_node(
+            "Vulnerability",
+            "v1",
+            {"severity": "critical"},
+            source="sqlmap_test",
+            evidence="error-based injection confirmed",
+        )
+        data = dkg.to_dict()
+        restored = DKG.from_dict(data)
+        prov = restored.get_provenance("v1")
+        assert prov["source"] == "sqlmap_test"
+        assert prov["evidence"] == "error-based injection confirmed"
+
+    def test_update_node_preserves_provenance(self):
+        dkg = DKG()
+        dkg.add_node("Host", "h1", {"ip": "10.0.0.1"}, source="nmap_scan")
+        dkg.update_node("h1", {"os": "linux"})
+        assert dkg.get_provenance("h1")["source"] == "nmap_scan"
+
+
 class TestDKGAllNodeTypes:
     """All 8 node types can be created."""
 

@@ -95,18 +95,42 @@ class DKG:
 
     # ── Node Operations ─────────────────────────────────────────────
 
+    # P12: provenance for nodes written without provenance metadata.
+    _UNKNOWN_PROVENANCE = {"source": "unknown", "evidence": "", "timestamp": ""}
+
     def add_node(
-        self, node_type: str, node_id: str, properties: Dict[str, Any] | None = None
+        self,
+        node_type: str,
+        node_id: str,
+        properties: Dict[str, Any] | None = None,
+        *,
+        source: str = "",
+        evidence: str = "",
+        timestamp: str | None = None,
     ) -> str:
         """Add or update a typed node. Returns node_id.
 
         New nodes start at _version=1; updates increment the counter.
+
+        P12: optional ``source`` / ``evidence`` / ``timestamp`` record who
+        discovered this fact and why. They are stored under a nested
+        ``provenance`` dict so they never collide with domain properties
+        (some call sites already use a flat "source" key).
         """
         if node_type not in NODE_TYPES:
             raise ValueError(f"Unknown node type: {node_type}. Valid: {NODE_TYPES}")
         with self._lock:
             is_new = node_id not in self.graph
             props = properties or {}
+            if source or evidence or timestamp:
+                provenance: Dict[str, str] = {}
+                if source:
+                    provenance["source"] = str(source)
+                if evidence:
+                    provenance["evidence"] = str(evidence)
+                if timestamp:
+                    provenance["timestamp"] = str(timestamp)
+                props["provenance"] = provenance
             props["type"] = node_type
             props.setdefault("created_at", datetime.now().isoformat())
             props["updated_at"] = datetime.now().isoformat()
@@ -119,6 +143,21 @@ class DKG:
 
         return node_id
 
+    def get_provenance(self, node_id: str) -> Dict[str, str] | None:
+        """Return the provenance dict for a node.
+
+        Nodes written before P12 (or without provenance metadata) report
+        ``{"source": "unknown", ...}`` instead of failing; a missing node
+        returns None.
+        """
+        with self._lock:
+            if node_id not in self.graph:
+                return None
+            prov = self.graph.nodes[node_id].get("provenance")
+            if isinstance(prov, dict) and prov:
+                return dict(prov)
+            return dict(self._UNKNOWN_PROVENANCE)
+
     def get_node(self, node_id: str) -> Dict[str, Any] | None:
         """Get a single node by ID."""
         with self._lock:
@@ -127,9 +166,17 @@ class DKG:
         return None
 
     def query_nodes(
-        self, node_type: str | None = None, filters: Dict[str, Any] | None = None
+        self,
+        node_type: str | None = None,
+        filters: Dict[str, Any] | None = None,
+        *,
+        with_provenance: bool = False,
     ) -> List[Dict[str, Any]]:
-        """Query nodes by type and optional property filters."""
+        """Query nodes by type and optional property filters.
+
+        P12: ``with_provenance=True`` guarantees every result carries a
+        ``provenance`` dict (unknown-shape for legacy nodes).
+        """
         results = []
         with self._lock:
             for nid, data in self.graph.nodes(data=True):
@@ -140,6 +187,11 @@ class DKG:
                 ):
                     continue
                 results.append({"id": nid, **data})
+        if with_provenance:
+            for result in results:
+                prov = result.get("provenance")
+                if not (isinstance(prov, dict) and prov):
+                    result["provenance"] = dict(self._UNKNOWN_PROVENANCE)
         return results
 
     def update_node(self, node_id: str, properties: Dict[str, Any]) -> bool:
