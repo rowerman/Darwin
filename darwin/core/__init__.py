@@ -17,7 +17,6 @@ from darwin.core.contracts import (
     Planner,
     ReplanRecommendation,
     Scheduler,
-    Task,
     TaskGraph,
     TaskOutcome,
     TaskStatus,
@@ -25,6 +24,7 @@ from darwin.core.contracts import (
 )
 from darwin.core.events import RuntimeEvent
 from darwin.core.runtime import Runtime
+from darwin.core.task import Task
 
 __all__ = [
     "Budget",
