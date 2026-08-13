@@ -27,6 +27,7 @@ from darwin.core.evaluator import (
     FailureType,
 )
 from darwin.core.executor import ExecutionResult, ToolExecutor
+from darwin.core.replan import LocalRepair, Replanner
 from darwin.core.runtime import Runtime
 from darwin.core.task import Task
 from darwin.core.task_graph import DependencyType, TaskGraph
@@ -41,9 +42,11 @@ __all__ = [
     "Executor",
     "FailureAnalyzer",
     "FailureType",
+    "LocalRepair",
     "Objective",
     "Planner",
     "ReplanRecommendation",
+    "Replanner",
     "Runtime",
     "RuntimeEvent",
     "Scheduler",

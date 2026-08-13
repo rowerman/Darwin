@@ -24,6 +24,7 @@ log = logging.getLogger(__name__)
 from darwin.cteg import CTEG, TaskRecord
 from darwin.core.evaluator import Evaluator as CoreEvaluator, FailureType
 from darwin.core.executor import ToolExecutor, ExecutionResult as CoreExecutionResult
+from darwin.core.replan import Replanner
 from darwin.core.task import Task
 from darwin.data_model import (
     normalize_dkg_state, PipelineState, EndpointInfo,
@@ -127,6 +128,8 @@ class Orchestrator:
         )
         # P6: rule-based Evaluator for structured failure classification
         self.evaluator = CoreEvaluator()
+        # P7: local-first replanner with duplicate-failure protection
+        self.replanner = Replanner()
 
         # Task log — structured event log written to file
         self._task_log: List[Dict[str, Any]] = []
@@ -3248,6 +3251,61 @@ class Orchestrator:
                 await self._extract_credentials_from_task(
                     task, _raw_task_stdouts
                 )
+
+            # ── P7: local-first replan (rule-based, before LLM plan review) ──
+            if not task_success:
+                _task_obj = Task.from_legacy_dict(task)
+                _core_res = CoreExecutionResult(
+                    task_id=task.get("id", ""),
+                    tool=task.get("tool", "") or "",
+                    planned_tool=task.get("tool", "") or "",
+                    adherence=True,
+                    success=False,
+                    stdout=task_result_text[:4000],
+                    stderr="",
+                    exit_code=-1,
+                    elapsed_ms=0.0,
+                )
+                _eval2 = await self.evaluator.evaluate(_task_obj, _core_res)
+                _repair = self.replanner.local_repair(_task_obj, _eval2)
+                self._task_log_event(
+                    "info", "replan_requested",
+                    task_id=task.get("id", ""),
+                    action=_repair.action,
+                    failure_type=(
+                        _eval2.failure_type.value if _eval2.failure_type else None
+                    ),
+                    reason=_repair.reason,
+                    rejected_duplicate=_repair.rejected_duplicate,
+                )
+                if _repair.action == "replace" and _repair.replacement is not None:
+                    _rep_legacy = _repair.replacement.to_legacy_dict()
+                    _rep_legacy["source"] = "replanner"
+                    _plan_tasks = (
+                        self.exploitation_plan.tasks
+                        if self.exploitation_plan
+                        else []
+                    )
+                    if not self._is_duplicate_task(_rep_legacy, _plan_tasks):
+                        _plan_tasks.append(_rep_legacy)
+                        print(
+                            f"[REPLAN] {task.get('id','')} → "
+                            f"{_repair.replacement.id} ({_repair.reason})"
+                        )
+                elif _repair.action == "invalidate":
+                    _failed_id = task.get("id", "")
+                    for _t in (
+                        self.exploitation_plan.tasks
+                        if self.exploitation_plan
+                        else []
+                    ):
+                        if isinstance(_t, dict) and _failed_id in (
+                            _t.get("dependent_task_ids") or []
+                        ):
+                            _t["status"] = "skipped"
+                            _t["result_summary"] = (
+                                f"invalidated: dependent task {_failed_id} failed (P7)"
+                            )
 
             await self._review_and_update_plan(
                 task, task_success, task_result_text
@@ -8041,71 +8099,6 @@ Output ONLY valid JSON:
             task["status"] = "failed"
         if result:
             task["result_summary"] = str(result)[:500]
-
-    async def _replan_after_failure(self, failed_task: dict, result: Any = None):
-        """LLM generates replacement tasks when a task fails."""
-        tid = failed_task.get("id", "?")
-        instr = failed_task.get("instruction", "")[:80]
-        print(f"\n[REPLAN] Task '{tid}' failed: {instr}")
-        print(f"  Generating alternative approaches...")
-
-        prompt = f"""Task failed: {failed_task.get('instruction','')}
-Tool: {failed_task.get('tool','')}
-Params: {json.dumps(failed_task.get('params',{}))}
-Result: {str(result)[:1000]}
-Current plan: {self._format_plan_status()}
-
-Generate replacement tasks as JSON array. Consider different tools, parameters, or endpoints.
-If defense was detected, prioritize bypass-first approaches.
-Output ONLY valid JSON array."""
-
-        try:
-            self._maybe_compress()
-            content, _ = self.llm.generate(prompt=prompt)
-            new_tasks = self._extract_json_array(content) or []
-            if new_tasks:
-                existing_ids = {t.get("id") for t in self.exploitation_plan.tasks if t.get("id") != failed_task.get("id")}
-                self.exploitation_plan.tasks = [
-                    t for t in self.exploitation_plan.tasks if t.get("id") != failed_task.get("id")
-                ]
-                # Dedup + per-failure cap: max 5 replacement tasks
-                _MAX_REPLACE = 5
-                _added = 0
-                for nt in new_tasks:
-                    if nt.get("id") not in existing_ids:
-                        if _added >= _MAX_REPLACE:
-                            print(f"[REPLAN] Replacement limit reached ({_MAX_REPLACE}). Skipping: {nt.get('id','?')}")
-                            break
-                        if self._is_duplicate_task(nt, self.exploitation_plan.tasks):
-                            print(f"[REPLAN] Skipping duplicate: {nt.get('id','?')}")
-                            continue
-                        self.exploitation_plan.tasks.append(nt)
-                        existing_ids.add(nt.get("id"))
-                        _added += 1
-                # Apply shared cap after adding replacements
-                self.exploitation_plan.tasks = self._cap_pending_tasks(
-                    self.exploitation_plan.tasks, max_total=20)
-                # Sanitize: replace blacklisted tools in replanned tasks
-                self._sanitize_plan_tools(self.exploitation_plan.tasks)
-                print(f"[REPLAN] Added {len(new_tasks)} replacement task(s):")
-                for nt in new_tasks[:5]:
-                    print(f"  + {nt.get('id','?')}: {nt.get('instruction','')[:100]}")
-                self._sync_plan_to_dkg()
-
-                # ── Phase log: replan ──
-                if self.phase_logger:
-                    _replan_text = f"Replan for failed task '{tid}': "
-                    _replan_text += f"added {len(new_tasks)} task(s)\n"
-                    for _nt in new_tasks[:10]:
-                        _replan_text += (
-                            f"  + {_nt.get('id','?')}: "
-                            f"{_nt.get('instruction','')[:120]}\n"
-                        )
-                    self.phase_logger.log_phase("replan", _replan_text,
-                        metadata={"failed_task": tid,
-                                  "new_tasks": len(new_tasks)})
-        except Exception:
-            failed_task["status"] = "skipped"
 
     def _sync_plan_to_dkg(self):
         """Sync in-memory plan state to DKG nodes."""
