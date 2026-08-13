@@ -35,3 +35,6 @@ include = ["darwin*"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+markers = [
+    "acceptance: milestone acceptance / failure-sample regression tests",
+]
