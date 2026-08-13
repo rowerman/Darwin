@@ -52,6 +52,8 @@ from darwin.prompts.orchestrator import (
     SYSTEM_PROMPT_LOGIN,
     SYSTEM_PROMPT_BYPASS,
 )
+from darwin.prompts.planner import SYSTEM_PROMPT_PLANNER
+from darwin.prompts.evaluator import SYSTEM_PROMPT_EVALUATOR
 
 # Version strings that carry no useful information for RAG lookup.
 # Filtering them avoids polluting LLM context with irrelevant matches.
@@ -7410,7 +7412,9 @@ Output ONLY valid JSON:
 {{"fixable": true/false, "corrected_params": {{...}}, "partial_success": true/false, "credentials": {{...}}, "reason": "..."}}"""
 
         try:
-            content, _ = self.llm.generate(prompt=prompt)
+            content, _ = self.llm.generate(
+                prompt=prompt, system_prompt=SYSTEM_PROMPT_EVALUATOR
+            )
             # Extract JSON from response
             match = re.search(r"\{[\s\S]*\}", content)
             if not match:
@@ -7955,7 +7959,7 @@ Output ONLY valid JSON:
             self._maybe_compress()
             content, _ = self.llm.generate(
                 prompt=prompt,
-                system_prompt=SYSTEM_PROMPT_ORCHESTRATOR_UNIFIED,
+                system_prompt=SYSTEM_PROMPT_PLANNER,
             )
             new_tasks = self._extract_json_array(content) or []
             if new_tasks and isinstance(new_tasks, list) and len(new_tasks) > 0:

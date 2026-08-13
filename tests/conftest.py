@@ -39,7 +39,7 @@ class FakeLLM:
     def generate(self, prompt, system_prompt=None, tools=None, temperature=None, timeout=180.0):
         if self.fail_on_generate:
             raise AssertionError("generate() must not be called on the direct path")
-        self.calls.append(("generate", prompt))
+        self.calls.append(("generate", prompt, system_prompt))
         return self.content, [dict(tc) for tc in self.tool_calls]
 
     def compress(self, **kwargs):
