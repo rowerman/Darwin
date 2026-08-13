@@ -11,7 +11,6 @@ from darwin.core.contracts import (
     Budget,
     Evaluation,
     Evaluator,
-    ExecutionResult,
     Executor,
     Objective,
     Planner,
@@ -22,6 +21,7 @@ from darwin.core.contracts import (
     WorldState,
 )
 from darwin.core.events import RuntimeEvent
+from darwin.core.executor import ExecutionResult, ToolExecutor
 from darwin.core.runtime import Runtime
 from darwin.core.task import Task
 from darwin.core.task_graph import DependencyType, TaskGraph
@@ -43,5 +43,6 @@ __all__ = [
     "TaskGraph",
     "TaskOutcome",
     "TaskStatus",
+    "ToolExecutor",
     "WorldState",
 ]

@@ -22,6 +22,8 @@ from typing import Any, Dict, List, Optional
 log = logging.getLogger(__name__)
 
 from darwin.cteg import CTEG, TaskRecord
+from darwin.core.executor import ToolExecutor
+from darwin.core.task import Task
 from darwin.data_model import (
     normalize_dkg_state, PipelineState, EndpointInfo,
     OrchestratorPhase, TaskResult, VulnerabilityHypothesis, ExploitationPlan,
@@ -116,6 +118,12 @@ class Orchestrator:
         self.mcp_pool = MCPClientPool()
         self.client = HTTPClient()
         self.probe_client = ProbeClient()
+        # P5: Task-based executor (fix-retry seam wired now; full migration in P5c)
+        self.executor = ToolExecutor(
+            attack_gateway=self.attack_gateway,
+            recon_gateway=self.recon_gateway,
+            mcp_pool=self.mcp_pool,
+        )
 
         # Task log — structured event log written to file
         self._task_log: List[Dict[str, Any]] = []
@@ -2987,6 +2995,8 @@ class Orchestrator:
                     "info", "tool_result",
                     task_id=task.get("id", ""),
                     tool=tc_name,
+                    planned_tool=task.get("tool", "") or "",
+                    adherence=(tc_name == task.get("tool", "")),
                     success=bool(getattr(result, "success", False)),
                     exit_code=getattr(result, "exit_code", -1),
                     elapsed_ms=getattr(result, "elapsed_ms", 0),
@@ -3192,8 +3202,8 @@ class Orchestrator:
                 print(f"  [FIX] {task.get('id')}: {reason[:120]}")
                 self.step_count += 1
 
-                retry_result = await self._execute_single_tool(
-                    _task_tool, task["params"]
+                retry_result = await self.executor.execute(
+                    Task.from_legacy_dict(task)
                 )
                 retry_stdout = retry_result.stdout or ""
                 retry_stderr = retry_result.stderr or ""
@@ -7198,47 +7208,6 @@ Output ONLY valid JSON array (3-20 tasks depending on complexity. More tasks != 
             active_sessions=[s.get("host", "") for s in self.dkg.query_nodes("Session")],
             highest_confidence_vuln=highest_vuln,
         )
-
-    async def _execute_single_tool(
-        self, tool_name: str, params: dict
-    ) -> "ToolResult":
-        """Execute one tool via the appropriate gateway.
-
-        Returns a ToolResult-compatible object with .success, .stdout, .stderr, .exit_code.
-        """
-        try:
-            if tool_name in self.attack_gateway.get_tool_names():
-                return await self.attack_gateway.call(tool_name, params)
-            elif tool_name in self.recon_gateway.get_tool_names():
-                return await self.recon_gateway.call(tool_name, params)
-            elif tool_name in self.mcp_pool.get_tool_names():
-                mcp_raw = await self.mcp_pool.call_tool(tool_name, params)
-                mcp_text = json.dumps(mcp_raw, ensure_ascii=False)
-                is_error = mcp_raw.get("isError", False)
-                error_text = ""
-                if is_error:
-                    content_list = mcp_raw.get("content", [])
-                    if content_list and isinstance(content_list[0], dict):
-                        error_text = content_list[0].get("text", "")
-                return ToolResult(
-                    tool_name=tool_name,
-                    success=not is_error,
-                    stdout=error_text if is_error else mcp_text,
-                    stderr=error_text,
-                    exit_code=1 if is_error else 0,
-                    elapsed_ms=0,
-                )
-            else:
-                return ToolResult(
-                    tool_name=tool_name, success=False,
-                    stdout=f"Unknown tool: {tool_name}", stderr="",
-                    exit_code=1, elapsed_ms=0,
-                )
-        except Exception as e:
-            return ToolResult(
-                tool_name=tool_name, success=False,
-                stdout="", stderr=str(e), exit_code=1, elapsed_ms=0,
-            )
 
     async def _analyze_and_fix_task(
         self, task: dict, output: str
