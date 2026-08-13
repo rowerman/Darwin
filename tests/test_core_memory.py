@@ -244,3 +244,26 @@ def test_manager_record_trace():
     )
     assert item.record.tool == "nmap_scan"
     assert item.importance is ImportanceClass.DISCARD  # empty output
+
+
+def test_manager_compression_view_splits_importance():
+    manager = MemoryManager()
+    manager.record_execution(sample_result(task_id="p1", stdout="password=secret"))
+    manager.record_execution(sample_result(task_id="p2", stdout="FLAG{keep}"))
+    manager.record_execution(sample_result(task_id="c1", stdout="routine page"))
+    manager.record_execution(sample_result(task_id="d1", stdout="", stderr=""))
+
+    view = manager.compression_view()
+    assert [r.task_id for r in view.preserved] == ["p1", "p2"]
+    assert [r.task_id for r in view.compressible] == ["c1"]
+    assert view.discarded_count == 1
+
+
+def test_compression_view_respects_limits():
+    manager = MemoryManager()
+    for i in range(5):
+        manager.record_execution(sample_result(task_id=f"p{i}", stdout="password=x"))
+        manager.record_execution(sample_result(task_id=f"c{i}", stdout="routine"))
+    view = manager.compression_view(max_preserved=2, max_compressible=2)
+    assert len(view.preserved) == 2
+    assert len(view.compressible) == 2

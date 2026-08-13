@@ -306,6 +306,19 @@ class ExecutionMemory:
 # ── Manager ─────────────────────────────────────────────────────────
 
 
+@dataclass
+class CompressionView:
+    """Compression-v2 consumption view (P11).
+
+    ``preserved`` stays verbatim; ``compressible`` may be LLM-summarized;
+    ``discarded_count`` is noise that can be dropped without review.
+    """
+
+    preserved: list[ExecutionRecord] = field(default_factory=list)
+    compressible: list[ExecutionRecord] = field(default_factory=list)
+    discarded_count: int = 0
+
+
 class MemoryManager:
     """Coordinates the four layers (P10: Plan + Execution concrete;
     Working/Experience passed in as existing stores, duck-typed)."""
@@ -360,3 +373,31 @@ class MemoryManager:
                 )
             parts.append("\n".join(exec_lines))
         return "\n".join(parts)
+
+    def compression_view(
+        self, max_preserved: int = 30, max_compressible: int = 30
+    ) -> CompressionView:
+        """Split the recent execution window into preserve/compress/discard.
+
+        P11 consumption API only — it does not modify ``_maybe_compress``;
+        the orchestrator's LLM summary flow is intentionally untouched.
+        """
+        items = self.execution.recent(500)
+        preserved = [
+            item.record
+            for item in items
+            if item.importance is ImportanceClass.PRESERVE
+        ][-max_preserved:]
+        compressible = [
+            item.record
+            for item in items
+            if item.importance is ImportanceClass.COMPRESS
+        ][-max_compressible:]
+        discarded_count = sum(
+            1 for item in items if item.importance is ImportanceClass.DISCARD
+        )
+        return CompressionView(
+            preserved=preserved,
+            compressible=compressible,
+            discarded_count=discarded_count,
+        )

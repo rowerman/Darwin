@@ -24,6 +24,7 @@ log = logging.getLogger(__name__)
 from darwin.cteg import CTEG, TaskRecord
 from darwin.core.evaluator import Evaluator as CoreEvaluator, FailureType
 from darwin.core.executor import ToolExecutor, ExecutionResult as CoreExecutionResult
+from darwin.core.memory import MemoryManager
 from darwin.core.replan import Replanner
 from darwin.core.task import Task
 from darwin.data_model import (
@@ -131,6 +132,9 @@ class Orchestrator:
         self.evaluator = CoreEvaluator()
         # P7: local-first replanner with duplicate-failure protection
         self.replanner = Replanner()
+        # P10/P11: Memory layers — plan rationale + execution history
+        # feed the global replan fallback and the compression view.
+        self.memory = MemoryManager()
 
         # Task log — structured event log written to file
         self._task_log: List[Dict[str, Any]] = []
@@ -2674,6 +2678,9 @@ class Orchestrator:
                 tool=task.get("tool", ""),
                 iteration=iteration,
             )
+            # P10/P11: persist plan rationale before execution so the
+            # replan fallback can see why this task exists.
+            self.memory.record_task(task)
 
             task_instruction = task.get("instruction", "unknown")
             task_tool = task.get("tool", "")
@@ -2844,6 +2851,10 @@ class Orchestrator:
                             exit_code=1,
                             elapsed_ms=0.0,
                         )
+
+                # P10/P11: execution history — feeds replan context and
+                # the compression view (preserve/compress/discard).
+                self.memory.record_execution(result)
 
                 # ── Adaptive format retry ──────────────────────────
                 # When send_payload/http_post gets HTTP 400 with one body
@@ -7882,9 +7893,22 @@ Output ONLY valid JSON:
                         f"/home/*/flag* /app/flag* 2>/dev/null\n"
                         f"  2. shell_exec: find / -maxdepth 4 -name '*flag*' -type f 2>/dev/null\n"
                         f"  3. shell_exec: env | grep -i flag; cat /etc/hostname\n"
-                        f"Flag files are the #1 CTF pattern. Do NOT enumerate databases or "
+                        f"Flag files are the #1 CTF pattern. Do NOT enumerate databases or " 
                         f"configure services before running these commands.\n"
                     )
+
+        # P10/P11: inject preserved memory (task rationale + execution
+        # history) so the replan LLM never loses decision provenance.
+        _memory_text = ""
+        try:
+            _mem_ctx = self.memory.replan_context(task.get("id", ""))
+            if _mem_ctx:
+                _memory_text = (
+                    f"## Preserved Memory (rationale & evidence)\n"
+                    f"{_mem_ctx[:2000]}\n"
+                )
+        except Exception:
+            pass
 
         prompt = (
             f"Just completed: {task.get('instruction','')}\n"
@@ -7900,6 +7924,7 @@ Output ONLY valid JSON:
             f"{self._format_plan_status()}\n"
             f"{new_discoveries}"
             f"{_absent_text}\n\n"
+            f"{_memory_text}"
             f"## Your Job: Update the Plan\n"
             f"Review the plan and apply relevant changes from:\n"
             f"- TOTAL tasks MUST NOT exceed 15. If the plan already has 12+ tasks, "

@@ -25,9 +25,10 @@ FLAG = "flag{smoke-test-42}"
 class FakeLLM:
     """Minimal LLMSession stand-in for the main loop."""
 
-    def __init__(self, tool_calls=None, fail_on_generate=False):
+    def __init__(self, tool_calls=None, fail_on_generate=False, content="ok"):
         self.tool_calls = tool_calls or []
         self.fail_on_generate = fail_on_generate
+        self.content = content
         self.token_count = 100
         self._compressed_count = 0
         self.calls = []
@@ -49,7 +50,7 @@ class FakeLLM:
         if self.fail_on_generate:
             raise AssertionError("generate() must not be called on the direct path")
         self.calls.append(("generate", prompt))
-        return "ok", [dict(tc) for tc in self.tool_calls]
+        return self.content, [dict(tc) for tc in self.tool_calls]
 
     def compress(self, **kwargs):
         return 0
@@ -209,6 +210,10 @@ async def test_llm_driven_task_executes_via_executor_and_finds_flag(monkeypatch)
     assert executed[0].action["tool"] == "curl_get"
     assert executed[0].action["params"] == {"url": "http://target:8000/"}
     assert recon_gw.calls == [("curl_get", {"url": "http://target:8000/"})]
+    # P10/P11: the loop persisted plan rationale + execution history.
+    assert orch.memory.plan.get("t-curl_get") is not None
+    assert len(orch.memory.execution.for_task("t-curl_get")) == 1
+    assert orch.memory.execution.for_task("t-curl_get")[0].record.tool == "curl_get"
 
 
 @pytest.mark.asyncio
@@ -244,3 +249,46 @@ async def test_direct_task_skips_llm_and_executes_via_executor(monkeypatch):
     assert len(executed) == 1
     assert executed[0].action["tool"] == "shell_exec"
     assert attack_gw.calls == [("shell_exec", {"command": f"echo {FLAG}"})]
+    assert len(orch.memory.execution.for_task("t-shell_exec")) == 1
+
+
+@pytest.mark.asyncio
+async def test_review_plan_injects_preserved_memory(monkeypatch):
+    recon_gw = FakeGateway({})
+    attack_gw = FakeGateway({})
+    llm = FakeLLM(content="[]")
+
+    orch = _make_orchestrator(llm, recon_gw, attack_gw, monkeypatch)
+    orch.exploitation_plan = _plan_with(_task("curl_get", {"url": "http://target:8000/"}))
+    orch.memory.record_task(
+        {
+            "id": "t-curl_get",
+            "instruction": "Fetch the target page",
+            "rationale": "ssh creds found in prior run",
+            "tool": "curl_get",
+            "params": {"url": "http://target:8000/"},
+            "status": "pending",
+            "dependent_task_ids": [],
+        }
+    )
+    orch.memory.record_execution(
+        ToolResult(
+            tool_name="curl_get",
+            success=False,
+            stdout="",
+            stderr="connection refused",
+            exit_code=7,
+            elapsed_ms=800.0,
+        )
+    )
+
+    await orch._review_and_update_plan(
+        {"id": "t-curl_get", "instruction": "Fetch the target page", "tool": "curl_get"},
+        False,
+        "connection refused",
+    )
+
+    prompts = [c[1] for c in llm.calls if c[0] == "generate"]
+    assert prompts
+    assert "Preserved Memory" in prompts[0]
+    assert "ssh creds found in prior run" in prompts[0]
