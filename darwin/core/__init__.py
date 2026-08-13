@@ -53,7 +53,7 @@ from darwin.core.parameters import (
     ToolSchemaProvider,
 )
 from darwin.core.replan import LocalRepair, Replanner
-from darwin.core.runtime import Runtime
+from darwin.core.runtime import Runtime, RuntimeOutcome
 from darwin.core.task import Task
 from darwin.core.task_graph import DependencyType, TaskGraph
 
@@ -90,6 +90,7 @@ __all__ = [
     "ReplanRecommendation",
     "Replanner",
     "Runtime",
+    "RuntimeOutcome",
     "RuntimeEvent",
     "Scheduler",
     "Task",

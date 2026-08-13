@@ -62,12 +62,10 @@ No need to guess the port. DARWIN runs nmap against the target to discover all o
 
 **What happens during a run:**
 
-1. **Network Reconnaissance** — nmap port scan discovers all open ports on the target host. If nmap is unavailable, falls back to probing the URL's port directly.
-2. **HTTP Reconnaissance** — for each discovered HTTP service: whatweb technology fingerprinting, dirb directory enumeration, nikto vulnerability scan, HTML link/endpoint extraction, and form parameter discovery. All findings are written to the Dynamic Knowledge Graph (DKG).
-3. **Analyze** — DKG summary fed to LLM to identify potential vulnerabilities (SQLi, XSS, CMDi, SSTI, LFI, etc.), enriched with CTEG cross-task patterns from prior runs.
-4. **Exploit** — each hypothesized vulnerability is tested (sqlmap, XSS reflection, command injection), results verified through DAVE's 4-layer verification engine.
-5. **Defense Bypass** — if a WAF or other defense is detected, DPM classifies it and the agent attempts bypass strategies (encoding mutation, case alternation, parameter pollution, etc.).
-6. **Verify** — DAVE validates HTTP responses (L1), optionally browser execution (L2), defense integrity (L3), and flag authenticity (L4, rejecting honeypot flags).
+1. **Bootstrap reconnaissance** — nmap discovers open ports on the target host (with a common-HTTP-port fallback when nmap is unavailable); each HTTP service is probed and findings are written to the Dynamic Knowledge Graph (DKG).
+2. **LLM-driven plan & execute loop** — the LLM builds/updates an exploitation plan; every task is consumed as a structured `Task` and executed by the Task-based Executor (strict tool dispatch through `darwin/core/`), with rule-based failure classification, local replanning, capability/tool-parameter validation, and CTEG cross-task hints.
+3. **Defense handling** — if a WAF or other defense is detected, DPM classifies it and the agent attempts bypass strategies (encoding mutation, case alternation, parameter pollution, etc.).
+4. **Verification** — DAVE validates HTTP responses (L1), optionally browser execution (L2), defense integrity (L3), and flag authenticity (L4, rejecting honeypot flags).
 
 Results and checkpoints are written to the `checkpoints/` directory. Cross-task patterns accumulate in `cteg_state.json`.
 
@@ -102,6 +100,9 @@ WAF bypassed:   False
 ```bash
 # Run all unit tests
 pytest tests/ -v
+
+# Milestone acceptance / failure-sample regression tests
+pytest tests/ -m acceptance -v
 
 # Run tests with coverage
 pytest tests/ -v --cov=darwin --cov=experiments --cov-report=term
@@ -150,33 +151,37 @@ The experiment runner (`experiments/runner.py`) orchestrates multiple challenges
 ## Architecture
 
 ```
-Orchestrator.run() → recon → analyze → exploit → bypass → verify
-                         ↓        ↓          ↓         ↓
-                        DKG      LLM     DPM+DAVE   DAVE(L1-L4)
+Orchestrator.run()
+      ↓
+bootstrap recon → DKG world state
+      ↓
+_unified_llm_loop: plan → Task → Executor → evaluate → replan
+      ↓
+DPM defense handling / DAVE flag verification
 ```
 
-### Operating Modes
+Darwin v2 is a single-agent control plane: the LLM decides (plans structured
+Tasks), the system executes (the Executor consumes Tasks through the
+Capability layer), and Memory/Metrics keep the loop observable.
 
-| Mode         | B threshold | Sub-agents | Use case                          |
-|-------------|------------|------------|-----------------------------------|
-| Solo        | B < 0.3    | 0          | Single-host web vulns             |
-| Coordinated | 0.3 ≤ B < 0.6 | 1-2    | Multi-service exploit chains      |
-| Distributed | B ≥ 0.6    | 3+         | Multi-host lateral movement       |
+### Operating Mode
 
-B = 0.4 × N_norm + 0.3 × M_domain + 0.3 × L_move
+| Mode | Description |
+|------|-------------|
+| Solo | Single-agent LLM-driven loop for single-host/multi-service targets. The only mode — multi-agent dispatch (Coordinated/Distributed) was removed in the v2 refactor. |
 
 ### Module Map
 
 | Module              | Role                                                    |
 |---------------------|---------------------------------------------------------|
-| `orchestrator.py`   | Main loop with dynamic Solo/Coordinated/Distributed dispatch |
-| `dkg.py`            | Dynamic Knowledge Graph (NetworkX) — all agent communication |
+| `darwin/orchestrator.py` | Unified LLM main loop — plan → execute → evaluate → replan (Solo) |
+| `darwin/core/`      | v2 control plane: Task model, TaskGraph, Executor, Evaluator, Replanner, Capabilities, Parameter validation, Memory, Metrics |
+| `dkg.py`            | Dynamic Knowledge Graph (NetworkX) — world state with provenance |
 | `dpm.py`            | Defense Perception (3-layer: rule → WAF signature → LLM) |
 | `dave.py`           | 4-layer verification (HTTP → Browser → Integrity → Impact) |
 | `cteg.py`           | Cross-Task Experience Graph — pattern accumulation across tasks |
-| `dynamic_scaling.py`| B dimension + TDI'' hysteresis for mode switching     |
-| `sub_agents/`       | ReconAgent / ExploitAgent / PivotAgent                  |
 | `tools/`            | MCP Gateway + recon/attack tool registrations           |
+| `prompts/`          | Role prompts: orchestrator (unified), planner, evaluator, memory, research |
 | `utils/llm.py`      | LiteLLM wrapper with context compression               |
 | `utils/http_client.py` | Async HTTP client with A-E WAF probe classes          |
 

@@ -15,19 +15,31 @@ import os
 import re
 import shutil
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
 log = logging.getLogger(__name__)
 
 from darwin.cteg import CTEG, TaskRecord
-from darwin.core.evaluator import Evaluator as CoreEvaluator, FailureType
+from darwin.core.contracts import (
+    Budget,
+    Objective,
+    ReplanRecommendation,
+    TaskOutcome,
+)
+from darwin.core.evaluator import (
+    Evaluation,
+    Evaluator as CoreEvaluator,
+    FailureType,
+)
 from darwin.core.executor import ToolExecutor, ExecutionResult as CoreExecutionResult
 from darwin.core.memory import MemoryManager
 from darwin.core.metrics import MetricsCalculator
 from darwin.core.replan import Replanner
+from darwin.core.runtime import Runtime
 from darwin.core.task import Task
+from darwin.core.task_graph import TaskGraph
 from darwin.data_model import (
     normalize_dkg_state, PipelineState, EndpointInfo,
     OrchestratorPhase, TaskResult, VulnerabilityHypothesis, ExploitationPlan,
@@ -57,6 +69,160 @@ from darwin.prompts.evaluator import SYSTEM_PROMPT_EVALUATOR
 
 # Version strings that carry no useful information for RAG lookup.
 # Filtering them avoids polluting LLM context with irrelevant matches.
+
+@dataclass
+class TaskExecution:
+    """Outcome of one plan-task execution incl. post-processing (P15 2b)."""
+
+    success: bool
+    result_text: str
+    flag_result: "TaskResult | None" = None
+    skip: bool = False
+
+
+class _RuntimeFlagFound(Exception):
+    """Terminal signal: the Runtime-driven path captured a verified flag."""
+
+
+class _RuntimePlannerAdapter:
+    """Runtime Planner adapter (P15 2b): legacy plan generation/review
+    behind the Planner Protocol."""
+
+    def __init__(self, orch, target_url: str, cteg_hints: dict | None):
+        self.orch = orch
+        self.target_url = target_url
+        self.cteg_hints = cteg_hints
+
+    async def plan(self, state, objective, memory):
+        orch = self.orch
+        if not orch.exploitation_plan or not orch.exploitation_plan.tasks:
+            orch.exploitation_plan = await orch._generate_exploitation_plan(
+                self.target_url, self.cteg_hints
+            )
+        return TaskGraph(
+            [Task.from_legacy_dict(t) for t in orch.exploitation_plan.tasks]
+        )
+
+    async def replan(self, state, graph, evaluation, memory):
+        orch = self.orch
+        task = graph.get(evaluation.task_id) if evaluation.task_id else None
+        if task is not None:
+            legacy = task.to_legacy_dict()
+            success = evaluation.outcome is TaskOutcome.SUCCESS
+            await orch._review_and_update_plan(
+                legacy, success, legacy.get("result_summary", "") or ""
+            )
+            # Mirror the legacy loop, where the plan-task dict and the
+            # executed task are the same object: persist the reviewed
+            # status/attempts back into the plan. (When the LLM returns
+            # an empty task list, _review_and_update_plan does not rewrite
+            # exploitation_plan.tasks at all.)
+            for t in orch.exploitation_plan.tasks:
+                if isinstance(t, dict) and t.get("id") == legacy.get("id"):
+                    t.update(
+                        {
+                            "status": legacy.get("status", t.get("status")),
+                            "attempts": legacy.get("attempts", t.get("attempts", 0)),
+                            "result_summary": legacy.get(
+                                "result_summary", t.get("result_summary", "")
+                            ),
+                        }
+                    )
+        # The review mutates exploitation_plan — re-sync the graph.
+        return TaskGraph(
+            [Task.from_legacy_dict(t) for t in orch.exploitation_plan.tasks]
+        )
+
+
+class _RuntimeSchedulerAdapter:
+    """Runtime Scheduler adapter (P15 2b): next READY task from the graph.
+
+    Note: the legacy exploit-first priority ordering is not reproduced in
+    stage 2b; ordering equivalence is validated once real scenarios exist.
+    """
+
+    def __init__(self, orch):
+        self.orch = orch
+
+    def next_ready(self, graph, budget):
+        ready = graph.ready_tasks()
+        return ready[0] if ready else None
+
+
+class _RuntimeExecutorAdapter:
+    """Runtime Executor adapter (P15 2b): the orchestrator's full per-task
+    execution incl. post-processing (defense probe, format retry,
+    credential extraction, flag verification)."""
+
+    def __init__(self, orch, tool_defs):
+        self.orch = orch
+        self.tool_defs = tool_defs
+
+    async def execute(self, task: Task) -> CoreExecutionResult:
+        orch = self.orch
+        legacy = task.to_legacy_dict()
+        execution = await orch._execute_task_with_policies(
+            legacy, self.tool_defs
+        )
+        if execution.skip:
+            orch._runtime_skip_task = True
+            return CoreExecutionResult(
+                task_id=task.id,
+                tool="",
+                planned_tool="",
+                adherence=False,
+                success=False,
+                stdout="",
+                stderr="skipped: no tool calls",
+                exit_code=1,
+                elapsed_ms=0.0,
+            )
+        orch._runtime_skip_task = False
+        core_res = CoreExecutionResult(
+            task_id=task.id,
+            tool=str(legacy.get("tool", "") or ""),
+            planned_tool=str(legacy.get("tool", "") or ""),
+            adherence=True,
+            success=execution.success,
+            stdout=execution.result_text[:4000],
+            stderr="",
+            exit_code=0 if execution.success else 1,
+            elapsed_ms=0.0,
+        )
+        if execution.flag_result is not None:
+            # The Runtime loop terminates on a verified flag before its
+            # own memory step, so record the plan rationale here (the tool
+            # execution was already recorded inside the task execution).
+            orch.memory.record_task(task)
+            orch._runtime_flag_result = execution.flag_result
+            # Mirror the legacy loop, which returns immediately on a
+            # verified flag instead of continuing to plan review.
+            raise _RuntimeFlagFound()
+        task.result_summary = execution.result_text
+        return core_res
+
+
+class _RuntimeEvaluatorAdapter:
+    """Runtime Evaluator adapter (P15 2b): rule-based classification, then
+    forces a GLOBAL replan after every task to mirror the legacy per-task
+    LLM plan review."""
+
+    def __init__(self, orch):
+        self.orch = orch
+
+    async def evaluate(self, task, result, state):
+        orch = self.orch
+        if getattr(orch, "_runtime_skip_task", False):
+            return Evaluation(
+                task_id=task.id,
+                outcome=TaskOutcome.FAILED,
+                failure_type=FailureType.INCONCLUSIVE,
+                replan=ReplanRecommendation.NONE,
+            )
+        evaluation = await orch.evaluator.evaluate(task, result, state)
+        return replace(evaluation, replan=ReplanRecommendation.GLOBAL)
+
+
 class Orchestrator:
     """Main Orchestrator Agent — Solo Mode.
 
@@ -569,7 +735,10 @@ class Orchestrator:
                                       "vulns_researched": _researched})
 
                 # Phase 4: Unified LLM loop (plan → exploit → replan)
-                result = await self._unified_llm_loop(target_url, cteg_hints)
+                if os.environ.get("DARWIN_USE_RUNTIME", "") == "1":
+                    result = await self._run_with_runtime(target_url, cteg_hints)
+                else:
+                    result = await self._unified_llm_loop(target_url, cteg_hints)
 
                 # Allow up to 3 solo iterations before marking exhausted
                 self._solo_iterations += 1
@@ -2366,6 +2535,743 @@ class Orchestrator:
 
     # ── Unified LLM-Driven Loop (v2: LLM drives EVERYTHING) ──────────
 
+    async def _execute_task_with_policies(
+        self,
+        task: dict,
+        tool_defs: list[dict],
+        iteration: int = 0,
+        max_iter: int = 25,
+    ) -> "TaskExecution":
+        """Execute one plan task with all orchestrator post-processing (P15 2b).
+
+        Shared by the legacy loop and the Runtime-driven path: direct/LLM
+        tool-call selection, execution via the Executor, adaptive format
+        retry, blacklist/absent-service tracking, defense probe + bypass,
+        fix-and-retry, credential extraction and local-first replan. The
+        LLM plan review is left to the caller.
+        """
+        execution = TaskExecution(success=False, result_text="")
+
+        task_instruction = task.get("instruction", "unknown")
+        task_tool = task.get("tool", "")
+        task_params = task.get("params", {})
+        # LLM can produce params as a JSON string — normalize to dict
+        if isinstance(task_params, str):
+            try:
+                task_params = json.loads(task_params)
+            except (json.JSONDecodeError, TypeError):
+                task_params = {"url": str(task_params)}
+
+        # ── Direct execution for concrete tasks ──────────────────────
+        # When the plan specifies exact tool + params, execute directly
+        # instead of going through the LLM (which may silently change params).
+        # Tasks without concrete params (e.g. exploratory curl_get) still
+        # go through the LLM for creative decision-making.
+        _direct_tools = {
+            "shell_exec", "redis_cmd", "mysql_query", "psql_query",
+            "mssql_query", "oracle_query", "ssh_exec", "ssh_key_exec",
+            "impacket_psexec", "impacket_wmiexec", "impacket_pth",
+            "impacket_secretsdump", "impacket_secretsdump_dcsync",
+            "impacket_ticketer", "impacket_silver_ticket",
+            "impacket_GetUserSPNs", "impacket_GetNPUsers",
+            "nmap_port_range", "nmap_full_scan", "nmap_vulners_scan",
+            "whatweb_scan", "dirb_scan", "gobuster_dir", "nikto_scan",
+            "hydra_http_brute", "ffuf_fuzz", "tomcat_exploit",
+            "php_filter_chain", "jwt_forge", "searchsploit_copy",
+            "impacket_ntlmrelayx",
+        }
+        if task_tool and task_params and task_tool in _direct_tools:
+            # Execute directly — plan params are authoritative
+            task_tool_calls = [{
+                "name": task_tool, "arguments": task_params,
+                "id": f"direct-{task.get('id')}",
+            }]
+            print(f"\n[solo:{iteration}] task={task.get('id','')} → {task_tool} [direct]")
+        else:
+            # LLM-driven execution for flexible/exploratory tasks
+            self._maybe_compress()
+            if "-manual" in task.get("id", ""):
+                # Manual retry: force the LLM to use send_payload with the
+                # tested param. History shows it tends to wander to other
+                # endpoints otherwise.
+                tu_val = task_params.get("url", task_params.get("target_url", ""))
+                tp_val = task_params.get("param", task_params.get("parameter", "q"))
+                freedom_note = (
+                    f"You MUST call send_payload(url=\"{tu_val}\", param=\"{tp_val}\", "
+                    f"payload=..., method=\"GET\"). "
+                    f"Do NOT call curl_get or http_post instead. "
+                    f"Do NOT change the URL or param. "
+                    f"The instruction below contains specific payloads to try."
+                )
+            else:
+                if task_tool and task_tool != "curl_get":
+                    freedom_note = (
+                        f"You MUST call the tool '{task_tool}' now. "
+                        f"Do not substitute another tool. "
+                        f"Use the exact params listed below. "
+                        f"The instruction describes what to do with this tool."
+                    )
+                else:
+                    freedom_note = (
+                        f"You may use a different tool if you have a better approach, "
+                        f"but you MUST target this task's objective."
+                    )
+            # Inject recent DKG artifacts so the LLM knows about
+            # credentials/files/sessions discovered by prior tasks
+            _recent_ctx = self._extract_recent_artifacts()
+            task_prompt = (
+                f"Execute plan task {iteration}/{max_iter}:\n"
+                f"  Instruction: {task_instruction}\n"
+                f"  Required tool: {task_tool if task_tool else '(choose the best tool)'}\n"
+                f"  Params: {json.dumps(task_params)}\n"
+                + (f"\n{_recent_ctx}\n" if _recent_ctx else "") +
+                f"\n{freedom_note}"
+            )
+            content, task_tool_calls = self.llm.generate(
+                prompt=task_prompt,
+                system_prompt=SYSTEM_PROMPT_ORCHESTRATOR_UNIFIED,
+                tools=tool_defs,
+            )
+
+            if not task_tool_calls:
+                # Retry once with more explicit instruction
+                content2, task_tool_calls = self.llm.generate(
+                    prompt=f"You MUST call the tool '{task_tool}' now. "
+                           f"Do not explain. Just execute the function call.",
+                    system_prompt=SYSTEM_PROMPT_ORCHESTRATOR_UNIFIED,
+                    tools=tool_defs,
+                )
+            if not task_tool_calls:
+                log.info("[PLAN] task %s: LLM produced no tool calls — skipping",
+                         task.get("id", ""))
+                task["status"] = "skipped"
+                execution.skip = True
+                execution.result_text = "LLM produced no tool calls"
+                return execution
+            tc_names = [tc.get('name', '?') for tc in task_tool_calls]
+            print(f"\n[solo:{iteration}] task={task.get('id','')} → "
+                  f"{', '.join(tc_names)}")
+
+        # Execute tool calls for this task
+        tc_names = [tc.get('name', '?') for tc in task_tool_calls]
+        task_success = False  # at least one tool must succeed
+        _any_success = False
+        task_summary = ""
+        _all_task_stdouts: list[str] = []  # accumulate all tool outputs (truncated)
+        _raw_task_stdouts: list[str] = []  # full stdout for credential extraction
+        _auto_test_negative = False  # track "no evidence" / "no flag"
+
+        for tc in task_tool_calls:
+            tc_name = tc.get("name", "")
+            tc_args = tc.get("arguments", {})
+            tc_id = tc.get("id", "")
+
+            if self._time_exceeded():
+                self.llm.add_tool_result(tc_id, "Skipped: time exceeded")
+                continue
+
+            self.step_count += 1
+
+            # Auto-inject body_format for POST endpoints.
+            # Only default to JSON when the endpoint's sample response
+            # starts with { or [ (indicating a JSON API). Otherwise
+            # keep the LLM's choice — cloud simulators (AWS STS/IAM)
+            # and OIDC endpoints typically expect form-encoded data.
+            if tc_name == "send_payload" and tc_args.get("method", "GET").upper() == "POST":
+                if not tc_args.get("body_format"):
+                    url = tc_args.get("url", "")
+                    dkg_eps = [e for e in self.dkg.query_nodes("Endpoint")
+                               if e.get("url", "") == url]
+                    if dkg_eps:
+                        _sample = (dkg_eps[0].get("sample_response") or "").strip()
+                        if _sample.startswith("{") or _sample.startswith("["):
+                            tc_args["body_format"] = "json"
+
+            # Block local filesystem access — flag must come from the target
+            if tc_name in ("curl_get", "http_post") and str(tc_args.get("url", "")).startswith("file://"):
+                result = ToolResult(
+                    tool_name=tc_name, success=False,
+                    stdout="BLOCKED: file:// URLs search the local host, not the target. "
+                           "Only interact with the target service.",
+                    stderr="", exit_code=1, elapsed_ms=0,
+                )
+            else:
+                # P5c: strict Task consumption — the Executor is the
+                # only execution path. Post-processing below consumes
+                # the normalized ExecutionResult fields unchanged.
+                try:
+                    result = await self.executor.execute(
+                        Task.from_legacy_dict({
+                            "id": task.get("id", "") or tc_id,
+                            "instruction": task_instruction,
+                            "tool": tc_name,
+                            "params": tc_args,
+                            "endpoint": str(
+                                tc_args.get("url", tc_args.get("target_url", ""))
+                            ),
+                        })
+                    )
+                except Exception as e:
+                    result = CoreExecutionResult(
+                        task_id=task.get("id", "") or tc_id,
+                        tool=tc_name,
+                        planned_tool=tc_name,
+                        adherence=True,
+                        success=False,
+                        stdout="",
+                        stderr=str(e),
+                        exit_code=1,
+                        elapsed_ms=0.0,
+                    )
+
+            # P10/P11: execution history — feeds replan context and
+            # the compression view (preserve/compress/discard).
+            self.memory.record_execution(result)
+
+            # ── Adaptive format retry ──────────────────────────
+            # When send_payload/http_post gets HTTP 400 with one body
+            # format, automatically retry with the opposite format.
+            # Cloud API simulators (AWS STS/IAM/OIDC) often expect
+            # form-encoded data while the LLM may have chosen JSON
+            # (or vice versa). One retry costs ~2-5s but resolves
+            # format mismatches without requiring the LLM to guess.
+            if tc_name in ("send_payload", "http_post") and not result.success:
+                _res_stderr = (getattr(result, 'stderr', '') or '').lower()
+                _res_stdout = (getattr(result, 'stdout', '') or '').lower()
+                if ("400" in _res_stderr or "bad request" in _res_stderr
+                        or "400" in _res_stdout or "bad request" in _res_stdout):
+                    _cur_format = tc_args.get("body_format", "")
+                    if _cur_format == "json":
+                        tc_args["body_format"] = "form"
+                        try:
+                            if tc_name in self.attack_gateway.get_tool_names():
+                                result = await self.attack_gateway.call(tc_name, tc_args)
+                            elif tc_name in self.recon_gateway.get_tool_names():
+                                result = await self.recon_gateway.call(tc_name, tc_args)
+                        except Exception:
+                            pass  # retry failed — keep original error
+                    elif _cur_format in ("form", ""):
+                        tc_args["body_format"] = "json"
+                        try:
+                            if tc_name in self.attack_gateway.get_tool_names():
+                                result = await self.attack_gateway.call(tc_name, tc_args)
+                            elif tc_name in self.recon_gateway.get_tool_names():
+                                result = await self.recon_gateway.call(tc_name, tc_args)
+                        except Exception:
+                            pass  # retry failed — keep original error
+
+            # ── Runtime tool blacklist & absent-service tracking ──
+            _exit_code = getattr(result, 'exit_code', 0)
+            _stderr = (getattr(result, 'stderr', '') or '')
+            _stdout = (getattr(result, 'stdout', '') or '')
+            _combined = (_stdout + " " + _stderr).lower()
+            # Detect missing binary (e.g. netexec not on PATH)
+            if _exit_code == 127 and "not found" in _stderr:
+                _match = re.search(r'/bin/[a-z]+sh:\s+\d+:\s+(\S+):\s+not found', _stderr)
+                _missing_bin = _match.group(1).strip() if _match else ""
+                if _missing_bin:
+                    log.warning("Tool '%s' not found on PATH — blacklisting '%s'", _missing_bin, tc_name)
+                    # Map to fallback if one exists (e.g. mssql_query→mssqlclient_query)
+                    _TOOL_FALLBACK: dict[str, str] = {
+                        "mssql_query": "mssqlclient_query",
+                    }
+                    _fallback = _TOOL_FALLBACK.get(tc_name, "")
+                    self._BLACKLISTED_TOOLS[tc_name] = _fallback
+                    if self.exploitation_plan and self.exploitation_plan.tasks:
+                        self._sanitize_plan_tools(self.exploitation_plan.tasks)
+                    # Auto-retry with fallback tool immediately
+                    if _fallback:
+                        log.info("Auto-retrying '%s' with fallback '%s'", tc_name, _fallback)
+                        try:
+                            if _fallback in self.attack_gateway.get_tool_names():
+                                fallback_result = await self.attack_gateway.call(_fallback, tc_args)
+                            elif _fallback in self.recon_gateway.get_tool_names():
+                                fallback_result = await self.recon_gateway.call(_fallback, tc_args)
+                            else:
+                                fallback_result = None
+                            if fallback_result and getattr(fallback_result, 'success', False):
+                                result = fallback_result
+                                tc_name = _fallback
+                                log.info("Fallback '%s' succeeded", _fallback)
+                            elif fallback_result:
+                                log.info("Fallback '%s' also failed (exit=%s)",
+                                         _fallback, getattr(fallback_result, 'exit_code', '?'))
+                        except Exception as _fb_err:
+                            log.warning("Fallback '%s' error: %s", _fallback, _fb_err)
+            # Detect broken binaries: Go/C binaries that start but
+            # can't parse their own flags (e.g. corrupt gobuster
+            # binary that rejects -w and -u even when present).
+            if (_exit_code not in (0, 127)
+                    and "must be specified" in _combined
+                    and tc_name not in self._BLACKLISTED_TOOLS):
+                log.warning(
+                    "Tool '%s' appears broken (binary rejects its own "
+                    "flags) — blacklisting", tc_name
+                )
+                self._BLACKLISTED_TOOLS[tc_name] = ""
+                if self.exploitation_plan and self.exploitation_plan.tasks:
+                    self._sanitize_plan_tools(self.exploitation_plan.tasks)
+            # Track unreachable targets
+            _target = (tc_args.get("url", "") or tc_args.get("host", "")
+                       or tc_args.get("target", "") or "")
+            if _target:
+                if (_exit_code == 7 and tc_name == "curl_get") or \
+                   any(kw in _combined for kw in ("connection refused", "could not connect",
+                                                   "no route to host", "can't connect")):
+                    self._absent_services.add(_target)
+            # Track absent DB services (Redis/MySQL/PG/Oracle probes)
+            _DB_TOOLS = {"redis_cmd", "mysql_query", "psql_query", "mssql_query", "mssqlclient_query", "mssqlclient_query",
+                         "oracle_query", "smbmap_enum"}
+            if tc_name in _DB_TOOLS and not getattr(result, 'success', False):
+                _host = tc_args.get("host", "")
+                _port = tc_args.get("port", "")
+                if _host:
+                    _label = f"{_host}:{_port}" if _port else _host
+                    self._absent_services.add(_label)
+
+            # Defense probe + bypass attempt
+            defence_probe = ""
+            if tc_name in self.EXPLOIT_TOOLS:
+                url = str(tc_args.get("url", tc_args.get("target_url", "")))
+                param = str(tc_args.get("param", tc_args.get("parameter", "q")))
+                method = str(tc_args.get("method", "GET"))
+                if url and not self.flag_pattern.findall(
+                    getattr(result, 'stdout', '') or ''
+                ):
+                    defence_probe = await self._probe_for_defense(url, param, method, tc_name)
+                # Re-evaluate full DPM defense pipeline when defense first detected
+                if defence_probe and "BLOCKED" in defence_probe and not self.defense_state.waf_type:
+                    await self._detect_defenses()
+                # Attempt bypass if blocked
+                if defence_probe and "BLOCKED" in defence_probe:
+                    bypass_payloads = {
+                        "encoding_mutation": "<scr<script>ipt>alert(1)</scr</script>ipt>",
+                        "case_alternation": "<ScRiPt>alert(1)</sCrIpT>",
+                        "double_url": "%253Cscript%253Ealert(1)%253C%252Fscript%253E",
+                    }
+                    for strategy, payload in bypass_payloads.items():
+                        try:
+                            bp_result = await self.attack_gateway.call("send_payload", {
+                                "url": url, "param": param, "payload": payload,
+                                "method": method, "encode_type":
+                                    "double_url" if "url" in strategy else "none",
+                            })
+                            bp_stdout = getattr(bp_result, 'stdout', '') or ''
+                            bp_flags = self.flag_pattern.findall(bp_stdout)
+                            if bp_flags:
+                                is_valid, reason = await self._verify_flag(
+                                    bp_flags[0], bp_stdout,
+                                    {"url": url, "param": param, "payload": payload},
+                                    getattr(bp_result, "elapsed_ms", 0),
+                                )
+                                if is_valid:
+                                    result = bp_result
+                                    defence_probe = f"\n[DEFENSE BYPASS — {strategy}] SUCCESS: flag={bp_flags[0]}"
+                                    break
+                            elif getattr(bp_result, 'success', False):
+                                defence_probe += f"\n[DEFENSE BYPASS — {strategy}] Payload accepted, no flag"
+                        except Exception:
+                            pass
+
+            # ── Trace: record final tool result (Execution Memory seed) ──
+            self._task_log_event(
+                "info", "tool_result",
+                task_id=task.get("id", ""),
+                tool=tc_name,
+                planned_tool=task.get("tool", "") or "",
+                adherence=(tc_name == task.get("tool", "")),
+                success=bool(getattr(result, "success", False)),
+                exit_code=getattr(result, "exit_code", -1),
+                elapsed_ms=getattr(result, "elapsed_ms", 0),
+            )
+
+            # Logging
+            result_stdout = getattr(result, 'stdout', '') or ''
+            result_exit = getattr(result, 'exit_code', -1)
+            flags_found = self.flag_pattern.findall(result_stdout)
+            if flags_found:
+                log.info("[EXPLOIT] %s: FLAG FOUND %s", tc_name, flags_found[0])
+                _any_success = True
+            elif defence_probe:
+                log.info("[EXPLOIT] %s: DEFENSE — %s", tc_name,
+                         defence_probe[:120].replace('\n', ' '))
+            elif getattr(result, 'success', False):
+                log.debug("[EXPLOIT] %s: OK (exit=%d, %d bytes) — no flag",
+                          tc_name, result_exit, len(result_stdout))
+                _any_success = True
+            else:
+                log.info("[EXPLOIT] %s: FAILED (exit=%d) — %s",
+                         tc_name, result_exit,
+                         (result_stdout[:100] or 'no output').replace('\n', ' '))
+
+            # Format feedback for LLM
+            tool_stdout = self._format_tool_feedback(tc_name, tc_args, result, defence_probe)
+            if (tc_name == "file_upload" and not getattr(result, 'success', False)
+                    and getattr(result, 'exit_code', 0) in (400, 403, 500)):
+                tool_stdout += (
+                    "\n[HINT: HTTP 4xx/5xx on file upload often means the endpoint "
+                    "requires additional form fields (IDs, directories, nonces, tokens). "
+                    "Look at the plugin documentation, readme, or error messages to "
+                    "discover the required parameters. Retry with extra_fields={\"key\":\"value\",...}. "
+                    "Common examples: eeSFL_ID (numeric list ID), eeSFL_FileUploadDir "
+                    "(target directory), action (ajax action), nonce (CSRF token).]"
+                )
+            if (tc_name == "http_post" and not getattr(result, 'success', False)
+                    and tc_args.get("url")):
+                for ep in self.dkg.query_nodes("Endpoint"):
+                    if ep.get("url") == tc_args.get("url") and ep.get("body_format") == "json":
+                        tool_stdout += (
+                            "\n[HINT: this endpoint expects JSON body. "
+                            "Try content_type='application/json']"
+                        )
+                        break
+
+            log.debug("  [%s] %s", tc_name, str(tc_args)[:120])
+            # Direct execution tasks skip LLM history — no preceding
+            # assistant tool_calls message exists, so adding a tool
+            # result here would break DeepSeek's API requirement
+            # ("Messages with role 'tool' must be a response to a
+            #  preceding message with 'tool_calls'").
+            # The fix mechanism (stderr-aware) handles param errors instead.
+            if not tc_id.startswith("direct-"):
+                _is_info = tc_name in ("wpscan_enum", "knowledge_search",
+                    "nmap_port_range", "nmap_full_scan", "nikto_scan",
+                    "dirb_scan", "gobuster_dir", "nvd_search_cves",
+                    "searchsploit_search", "metasploit_search",
+                    "go_exploitdb_search")
+                _limit = 7000 if _is_info else 3000
+                self.llm.add_tool_result(tc_id, tool_stdout[:_limit])
+
+            # Auto-persist technology discoveries to DKG (before compression loses them)
+            if tc_name in ("whatweb_scan",) and getattr(result, 'success', False):
+                parsed = getattr(result, "parsed_output", {})
+                _fingerprint = parsed.get("technologies", [])[:5]
+                if _fingerprint:
+                    # Enrich the existing nmap Service node with
+                    # whatweb fingerprint — do NOT create fake
+                    # port-0 Service nodes.
+                    _ww_host = self.target_host
+                    from urllib.parse import urlparse as _up3
+                    _ww_url = tc_args.get("target_url", "")
+                    _ww_parts = _up3(_ww_url) if _ww_url else None
+                    if _ww_parts and _ww_parts.hostname:
+                        _ww_host = _ww_parts.hostname
+                    _ww_port = (_ww_parts.port if _ww_parts and _ww_parts.port
+                                else 80)
+                    _ww_svc_id = f"svc-{_ww_host}-{_ww_port}"
+                    _ww_svc = self.dkg.get_node(_ww_svc_id)
+                    if _ww_svc:
+                        self.dkg.update_node(
+                            _ww_svc_id,
+                            {"fingerprint": _fingerprint},
+                        )
+            task_summary += f"{tc_name}: {'OK' if getattr(result,'success',False) else 'FAIL'}; "
+            # Accumulate each tool's output for plan review context.
+            # Include the file_upload HINT so the fix-and-retry LLM also
+            # sees it (not just the plan-review LLM via tool_stdout).
+            _out = getattr(result, 'stdout', '') or ''
+            _err = getattr(result, 'stderr', '') or ''
+            # Include stderr so the fix LLM can see parameter errors
+            # (e.g. KeyError('host') when wrong param names are used)
+            _combined = _out
+            if _err:
+                _err_short = _err[:400]
+                _combined = f"{_out}\n[STDERR] {_err_short}"
+            _hint = ""
+            if (tc_name == "file_upload"
+                    and not getattr(result, 'success', False)
+                    and getattr(result, 'exit_code', 0) in (400, 403, 500)):
+                _hint = (
+                    " [HINT: HTTP 4xx/5xx on file upload often means "
+                    "required form fields are missing. Retry with "
+                    "extra_fields={'eeSFL_ID':'1','eeSFL_FileUploadDir':'/wp-content/uploads/'} "
+                    "or similar plugin-specific parameters.]"
+                )
+            _all_task_stdouts.append(f"[{tc_name}] {_combined[:600]}{_hint}")
+            # Track if automated test found nothing
+            rl = (getattr(result, 'stdout', '') or '').lower()
+            if "no evidence" in rl or "no flag" in rl:
+                _auto_test_negative = True
+
+            # CTEG tracking
+            raw_stdout = getattr(result, 'stdout', '') or ''
+            _raw_task_stdouts.append(raw_stdout)  # full, for credential extraction
+            _TOOL_VULN_MAP = {
+                "sqlmap_test": "SQLI", "xss_reflection_test": "XSS",
+                "command_injection_test": "CMDI", "ffuf_fuzz": "FUZZ",
+                "send_payload": "INJECTION", "hydra_http_brute": "AUTH",
+                "hydra_ssh_brute": "AUTH",
+            }
+            self._exploit_chain.append({
+                "tool": tc_name,
+                "url": str(tc_args.get("url", tc_args.get("target_url", ""))),
+                "method": str(tc_args.get("method", "GET")),
+                "param": str(tc_args.get("param", tc_args.get("parameter", ""))),
+                "params": str(tc_args)[:200], "result": raw_stdout[:200],
+                "vuln_type": _TOOL_VULN_MAP.get(tc_name, tc_name),
+                "mechanism": tc_name,
+            })
+
+            # Flag check
+            flags = self.flag_pattern.findall(result_stdout)
+            if flags:
+                is_valid, reason = await self._verify_flag(
+                    flags[0], result_stdout, tc_args, getattr(result, "elapsed_ms", 0),
+                    tool_name=tc_name,
+                )
+                if is_valid:
+                    self.phase = OrchestratorPhase.DONE
+                    execution.flag_result = TaskResult(
+                        success=True, flag=flags[0], steps=self.step_count,
+                        tokens_used=self.llm.token_count,
+                        time_elapsed=time.time() - self.start_time,
+                    )
+                    return execution
+
+        # ── LLM reviews and updates plan after every task (VulnBot-style) ──
+        task_success = _any_success
+        task_result_text = self._summarize_task_result(
+            tc_names, task_success, _all_task_stdouts
+        )
+
+        # ── Fix-and-retry: LLM analyzes failures, fixes param errors ──
+        _fix_attempts = 0
+        _task_tool = task.get("tool", "")
+        while not task_success and _fix_attempts < 2 and _task_tool:
+            fix = await self._analyze_and_fix_task(task, task_result_text)
+            if not fix:
+                break
+
+            # Partial success: auth worked, store credentials (Fix A)
+            if fix.get("partial_success"):
+                creds = fix.get("credentials") or {}
+                if creds.get("username"):
+                    _cred_id = f"cred-partial-{int(time.time())}"
+                    _cred_port = int(task.get("params", {}).get("port", 0))
+                    _cred_user = creds["username"]
+                    _cred_pass = creds.get("password", "")
+                    _cred_type = str(creds.get("cred_type", "mssql"))
+                    self.dkg.add_node("Credential", _cred_id, {
+                        "username": _cred_user,
+                        "password": _cred_pass,
+                        "host": self.target_host,
+                        "port": _cred_port,
+                        "source_host": self.target_host,
+                        "cred_type": _cred_type,
+                        "source": "partial_success",
+                    })
+                    # Also persist to CTEG for cross-task reuse
+                    try:
+                        self.cteg.add_credential(
+                            host=self.target_host, port=_cred_port,
+                            service_type=_cred_type,
+                            username=_cred_user, password=_cred_pass,
+                            source="partial_success",
+                        )
+                    except Exception:
+                        pass
+                    log.info("[PARTIAL SUCCESS] Stored credential '%s' (auth OK → CTEG)",
+                             creds["username"])
+                task_success = True
+                task_result_text = (
+                    f"[PARTIAL SUCCESS — {fix.get('reason', 'auth OK, command failed')}]"
+                )
+                break
+
+            # Merge corrected params into existing ones — the LLM
+            # returns only the fields that need correction, not the
+            # full parameter set. Replacing would drop host/command/etc.
+            task["params"] = {**task["params"], **fix["corrected_params"]}
+            reason = fix.get("reason", "corrected params")
+            print(f"  [FIX] {task.get('id')}: {reason[:120]}")
+            self.step_count += 1
+
+            retry_result = await self.executor.execute(
+                Task.from_legacy_dict(task)
+            )
+            retry_stdout = retry_result.stdout or ""
+            retry_stderr = retry_result.stderr or ""
+
+            if retry_result.success:
+                task_success = True
+                task_result_text = (
+                    f"[FIXED — {reason[:100]}] "
+                    f"{retry_stdout[:1200] or 'OK'}"
+                )
+                # Check for flag
+                flags = self.flag_pattern.findall(retry_stdout)
+                if flags:
+                    is_valid, reason_flag = await self._verify_flag(
+                        flags[0], retry_stdout, task.get("params", {}),
+                        retry_result.elapsed_ms,
+                        tool_name=_task_tool,
+                    )
+                    if is_valid:
+                        self.phase = OrchestratorPhase.DONE
+                        execution.flag_result = TaskResult(
+                            success=True, flag=flags[0],
+                            steps=self.step_count,
+                            tokens_used=self.llm.token_count,
+                            time_elapsed=time.time() - self.start_time,
+                        )
+                        return execution
+            else:
+                task_result_text = (
+                    f"Fix attempt {_fix_attempts + 1} failed "
+                    f"[{reason[:80]}]: {retry_stderr or retry_stdout or 'no output'}"
+                )
+            _fix_attempts += 1
+
+        # ── Auto-extract credentials from task output ────────────
+        # When a task discovers working credentials (e.g. batch SSH
+        # test via shell_exec), extract them into DKG Credential nodes
+        # so subsequent tasks can use $credentials.* placeholders.
+        if task_success and _raw_task_stdouts:
+            await self._extract_credentials_from_task(
+                task, _raw_task_stdouts
+            )
+
+        # ── P7: local-first replan (rule-based, before LLM plan review) ──
+        if not task_success:
+            _task_obj = Task.from_legacy_dict(task)
+            _core_res = CoreExecutionResult(
+                task_id=task.get("id", ""),
+                tool=task.get("tool", "") or "",
+                planned_tool=task.get("tool", "") or "",
+                adherence=True,
+                success=False,
+                stdout=task_result_text[:4000],
+                stderr="",
+                exit_code=-1,
+                elapsed_ms=0.0,
+            )
+            _eval2 = await self.evaluator.evaluate(_task_obj, _core_res)
+            _repair = self.replanner.local_repair(_task_obj, _eval2)
+            self._task_log_event(
+                "info", "replan_requested",
+                task_id=task.get("id", ""),
+                action=_repair.action,
+                failure_type=(
+                    _eval2.failure_type.value if _eval2.failure_type else None
+                ),
+                reason=_repair.reason,
+                rejected_duplicate=_repair.rejected_duplicate,
+            )
+            if _repair.action == "replace" and _repair.replacement is not None:
+                _rep_legacy = _repair.replacement.to_legacy_dict()
+                _rep_legacy["source"] = "replanner"
+                _plan_tasks = (
+                    self.exploitation_plan.tasks
+                    if self.exploitation_plan
+                    else []
+                )
+                if not self._is_duplicate_task(_rep_legacy, _plan_tasks):
+                    _plan_tasks.append(_rep_legacy)
+                    print(
+                        f"[REPLAN] {task.get('id','')} → "
+                        f"{_repair.replacement.id} ({_repair.reason})"
+                    )
+            elif _repair.action == "invalidate":
+                _failed_id = task.get("id", "")
+                for _t in (
+                    self.exploitation_plan.tasks
+                    if self.exploitation_plan
+                    else []
+                ):
+                    if isinstance(_t, dict) and _failed_id in (
+                        _t.get("dependent_task_ids") or []
+                    ):
+                        _t["status"] = "skipped"
+                        _t["result_summary"] = (
+                            f"invalidated: dependent task {_failed_id} failed (P7)"
+                        )
+
+        execution.success = task_success
+        execution.result_text = task_result_text
+        return execution
+
+    async def _run_with_runtime(
+        self, target_url: str, cteg_hints: dict | None = None
+    ) -> TaskResult | None:
+        """P15 2b: Runtime-driven main loop (DARWIN_USE_RUNTIME=1).
+
+        Outer loop control (plan -> schedule -> execute -> evaluate ->
+        replan -> terminate) is delegated to ``core.Runtime``; the per-task
+        execution + post-processing stays here as the injected Executor.
+        Behavior parity is verified by mock scenarios until real benchmark
+        scenarios are available (known 2b limitations: scheduler ordering
+        and plan-exhaustion review are simplified).
+        """
+        self._plan_review_exhausted = False
+        if not self._solo_cycle_context_injected:
+            self.llm.replace_system_prompt(SYSTEM_PROMPT_ORCHESTRATOR_UNIFIED)
+            self._solo_cycle_context_injected = True
+        else:
+            self._maybe_compress()
+        if not hasattr(self, "_exploit_chain"):
+            self._exploit_chain = []
+
+        if not self.exploitation_plan or not self.exploitation_plan.tasks:
+            self.exploitation_plan = await self._generate_exploitation_plan(
+                target_url, cteg_hints
+            )
+
+        tool_defs = [
+            d for d in self.attack_gateway.get_tool_definitions()
+            if d.get("function", {}).get("name") not in self._BLACKLISTED_TOOLS
+        ]
+        tool_defs += [
+            d for d in self.recon_gateway.get_tool_definitions()
+            if d.get("function", {}).get("name") not in self._BLACKLISTED_TOOLS
+        ]
+        try:
+            mcp_defs = self.mcp_pool.get_tool_definitions()
+            if mcp_defs:
+                tool_defs += mcp_defs
+        except Exception:
+            pass
+
+        systematic_result = await self._systematic_exploit_pass(target_url)
+        if systematic_result and systematic_result.success:
+            return systematic_result
+
+        self._runtime_flag_result = None
+        self._runtime_skip_task = False
+        runtime = Runtime(
+            planner=_RuntimePlannerAdapter(self, target_url, cteg_hints),
+            scheduler=_RuntimeSchedulerAdapter(self),
+            executor=_RuntimeExecutorAdapter(self, tool_defs),
+            evaluator=_RuntimeEvaluatorAdapter(self),
+            memory=self.memory,
+        )
+        try:
+            outcome = await runtime.run(
+                self._get_state(),
+                Objective(
+                    task_description=target_url,
+                    budgets=Budget(
+                        time_budget_seconds=self.time_budget,
+                        token_budget=self.token_budget,
+                        max_loops=25,
+                    ),
+                ),
+                Budget(
+                    time_budget_seconds=self.time_budget,
+                    token_budget=self.token_budget,
+                    max_loops=25,
+                ),
+            )
+        except _RuntimeFlagFound:
+            return self._runtime_flag_result
+        log.info(
+            "Runtime loop finished: %d iterations, %d replans (%s)",
+            outcome.iterations, outcome.replan_count, outcome.stopped_reason,
+        )
+        if self._runtime_flag_result is not None:
+            return self._runtime_flag_result
+        self._generate_phase_summary("exploit")
+        return None
+
     async def _unified_llm_loop(
         self, target_url: str, cteg_hints: dict | None = None
     ) -> TaskResult | None:
@@ -2686,635 +3592,15 @@ class Orchestrator:
             # replan fallback can see why this task exists.
             self.memory.record_task(task)
 
-            task_instruction = task.get("instruction", "unknown")
-            task_tool = task.get("tool", "")
-            task_params = task.get("params", {})
-            # LLM can produce params as a JSON string — normalize to dict
-            if isinstance(task_params, str):
-                try:
-                    task_params = json.loads(task_params)
-                except (json.JSONDecodeError, TypeError):
-                    task_params = {"url": str(task_params)}
-
-            # ── Direct execution for concrete tasks ──────────────────────
-            # When the plan specifies exact tool + params, execute directly
-            # instead of going through the LLM (which may silently change params).
-            # Tasks without concrete params (e.g. exploratory curl_get) still
-            # go through the LLM for creative decision-making.
-            _direct_tools = {
-                "shell_exec", "redis_cmd", "mysql_query", "psql_query",
-                "mssql_query", "oracle_query", "ssh_exec", "ssh_key_exec",
-                "impacket_psexec", "impacket_wmiexec", "impacket_pth",
-                "impacket_secretsdump", "impacket_secretsdump_dcsync",
-                "impacket_ticketer", "impacket_silver_ticket",
-                "impacket_GetUserSPNs", "impacket_GetNPUsers",
-                "nmap_port_range", "nmap_full_scan", "nmap_vulners_scan",
-                "whatweb_scan", "dirb_scan", "gobuster_dir", "nikto_scan",
-                "hydra_http_brute", "ffuf_fuzz", "tomcat_exploit",
-                "php_filter_chain", "jwt_forge", "searchsploit_copy",
-                "impacket_ntlmrelayx",
-            }
-            if task_tool and task_params and task_tool in _direct_tools:
-                # Execute directly — plan params are authoritative
-                task_tool_calls = [{
-                    "name": task_tool, "arguments": task_params,
-                    "id": f"direct-{task.get('id')}",
-                }]
-                print(f"\n[solo:{iteration}] task={task.get('id','')} → {task_tool} [direct]")
-            else:
-                # LLM-driven execution for flexible/exploratory tasks
-                self._maybe_compress()
-                if "-manual" in task.get("id", ""):
-                    # Manual retry: force the LLM to use send_payload with the
-                    # tested param. History shows it tends to wander to other
-                    # endpoints otherwise.
-                    tu_val = task_params.get("url", task_params.get("target_url", ""))
-                    tp_val = task_params.get("param", task_params.get("parameter", "q"))
-                    freedom_note = (
-                        f"You MUST call send_payload(url=\"{tu_val}\", param=\"{tp_val}\", "
-                        f"payload=..., method=\"GET\"). "
-                        f"Do NOT call curl_get or http_post instead. "
-                        f"Do NOT change the URL or param. "
-                        f"The instruction below contains specific payloads to try."
-                    )
-                else:
-                    if task_tool and task_tool != "curl_get":
-                        freedom_note = (
-                            f"You MUST call the tool '{task_tool}' now. "
-                            f"Do not substitute another tool. "
-                            f"Use the exact params listed below. "
-                            f"The instruction describes what to do with this tool."
-                        )
-                    else:
-                        freedom_note = (
-                            f"You may use a different tool if you have a better approach, "
-                            f"but you MUST target this task's objective."
-                        )
-                # Inject recent DKG artifacts so the LLM knows about
-                # credentials/files/sessions discovered by prior tasks
-                _recent_ctx = self._extract_recent_artifacts()
-                task_prompt = (
-                    f"Execute plan task {iteration}/{MAX_ITER}:\n"
-                    f"  Instruction: {task_instruction}\n"
-                    f"  Required tool: {task_tool if task_tool else '(choose the best tool)'}\n"
-                    f"  Params: {json.dumps(task_params)}\n"
-                    + (f"\n{_recent_ctx}\n" if _recent_ctx else "") +
-                    f"\n{freedom_note}"
-                )
-                content, task_tool_calls = self.llm.generate(
-                    prompt=task_prompt,
-                    system_prompt=SYSTEM_PROMPT_ORCHESTRATOR_UNIFIED,
-                    tools=tool_defs,
-                )
-
-                if not task_tool_calls:
-                    # Retry once with more explicit instruction
-                    content2, task_tool_calls = self.llm.generate(
-                        prompt=f"You MUST call the tool '{task_tool}' now. "
-                               f"Do not explain. Just execute the function call.",
-                        system_prompt=SYSTEM_PROMPT_ORCHESTRATOR_UNIFIED,
-                        tools=tool_defs,
-                    )
-                if not task_tool_calls:
-                    log.info("[PLAN] task %s: LLM produced no tool calls — skipping",
-                             task.get("id", ""))
-                    task["status"] = "skipped"
-                    continue
-                tc_names = [tc.get('name', '?') for tc in task_tool_calls]
-                print(f"\n[solo:{iteration}] task={task.get('id','')} → "
-                      f"{', '.join(tc_names)}")
-
-            # Execute tool calls for this task
-            tc_names = [tc.get('name', '?') for tc in task_tool_calls]
-            task_success = False  # at least one tool must succeed
-            _any_success = False
-            task_summary = ""
-            _all_task_stdouts: list[str] = []  # accumulate all tool outputs (truncated)
-            _raw_task_stdouts: list[str] = []  # full stdout for credential extraction
-            _auto_test_negative = False  # track "no evidence" / "no flag"
-
-            for tc in task_tool_calls:
-                tc_name = tc.get("name", "")
-                tc_args = tc.get("arguments", {})
-                tc_id = tc.get("id", "")
-
-                if self._time_exceeded():
-                    self.llm.add_tool_result(tc_id, "Skipped: time exceeded")
-                    continue
-
-                self.step_count += 1
-
-                # Auto-inject body_format for POST endpoints.
-                # Only default to JSON when the endpoint's sample response
-                # starts with { or [ (indicating a JSON API). Otherwise
-                # keep the LLM's choice — cloud simulators (AWS STS/IAM)
-                # and OIDC endpoints typically expect form-encoded data.
-                if tc_name == "send_payload" and tc_args.get("method", "GET").upper() == "POST":
-                    if not tc_args.get("body_format"):
-                        url = tc_args.get("url", "")
-                        dkg_eps = [e for e in self.dkg.query_nodes("Endpoint")
-                                   if e.get("url", "") == url]
-                        if dkg_eps:
-                            _sample = (dkg_eps[0].get("sample_response") or "").strip()
-                            if _sample.startswith("{") or _sample.startswith("["):
-                                tc_args["body_format"] = "json"
-
-                # Block local filesystem access — flag must come from the target
-                if tc_name in ("curl_get", "http_post") and str(tc_args.get("url", "")).startswith("file://"):
-                    result = ToolResult(
-                        tool_name=tc_name, success=False,
-                        stdout="BLOCKED: file:// URLs search the local host, not the target. "
-                               "Only interact with the target service.",
-                        stderr="", exit_code=1, elapsed_ms=0,
-                    )
-                else:
-                    # P5c: strict Task consumption — the Executor is the
-                    # only execution path. Post-processing below consumes
-                    # the normalized ExecutionResult fields unchanged.
-                    try:
-                        result = await self.executor.execute(
-                            Task.from_legacy_dict({
-                                "id": task.get("id", "") or tc_id,
-                                "instruction": task_instruction,
-                                "tool": tc_name,
-                                "params": tc_args,
-                                "endpoint": str(
-                                    tc_args.get("url", tc_args.get("target_url", ""))
-                                ),
-                            })
-                        )
-                    except Exception as e:
-                        result = CoreExecutionResult(
-                            task_id=task.get("id", "") or tc_id,
-                            tool=tc_name,
-                            planned_tool=tc_name,
-                            adherence=True,
-                            success=False,
-                            stdout="",
-                            stderr=str(e),
-                            exit_code=1,
-                            elapsed_ms=0.0,
-                        )
-
-                # P10/P11: execution history — feeds replan context and
-                # the compression view (preserve/compress/discard).
-                self.memory.record_execution(result)
-
-                # ── Adaptive format retry ──────────────────────────
-                # When send_payload/http_post gets HTTP 400 with one body
-                # format, automatically retry with the opposite format.
-                # Cloud API simulators (AWS STS/IAM/OIDC) often expect
-                # form-encoded data while the LLM may have chosen JSON
-                # (or vice versa). One retry costs ~2-5s but resolves
-                # format mismatches without requiring the LLM to guess.
-                if tc_name in ("send_payload", "http_post") and not result.success:
-                    _res_stderr = (getattr(result, 'stderr', '') or '').lower()
-                    _res_stdout = (getattr(result, 'stdout', '') or '').lower()
-                    if ("400" in _res_stderr or "bad request" in _res_stderr
-                            or "400" in _res_stdout or "bad request" in _res_stdout):
-                        _cur_format = tc_args.get("body_format", "")
-                        if _cur_format == "json":
-                            tc_args["body_format"] = "form"
-                            try:
-                                if tc_name in self.attack_gateway.get_tool_names():
-                                    result = await self.attack_gateway.call(tc_name, tc_args)
-                                elif tc_name in self.recon_gateway.get_tool_names():
-                                    result = await self.recon_gateway.call(tc_name, tc_args)
-                            except Exception:
-                                pass  # retry failed — keep original error
-                        elif _cur_format in ("form", ""):
-                            tc_args["body_format"] = "json"
-                            try:
-                                if tc_name in self.attack_gateway.get_tool_names():
-                                    result = await self.attack_gateway.call(tc_name, tc_args)
-                                elif tc_name in self.recon_gateway.get_tool_names():
-                                    result = await self.recon_gateway.call(tc_name, tc_args)
-                            except Exception:
-                                pass  # retry failed — keep original error
-
-                # ── Runtime tool blacklist & absent-service tracking ──
-                _exit_code = getattr(result, 'exit_code', 0)
-                _stderr = (getattr(result, 'stderr', '') or '')
-                _stdout = (getattr(result, 'stdout', '') or '')
-                _combined = (_stdout + " " + _stderr).lower()
-                # Detect missing binary (e.g. netexec not on PATH)
-                if _exit_code == 127 and "not found" in _stderr:
-                    _match = re.search(r'/bin/[a-z]+sh:\s+\d+:\s+(\S+):\s+not found', _stderr)
-                    _missing_bin = _match.group(1).strip() if _match else ""
-                    if _missing_bin:
-                        log.warning("Tool '%s' not found on PATH — blacklisting '%s'", _missing_bin, tc_name)
-                        # Map to fallback if one exists (e.g. mssql_query→mssqlclient_query)
-                        _TOOL_FALLBACK: dict[str, str] = {
-                            "mssql_query": "mssqlclient_query",
-                        }
-                        _fallback = _TOOL_FALLBACK.get(tc_name, "")
-                        self._BLACKLISTED_TOOLS[tc_name] = _fallback
-                        if self.exploitation_plan and self.exploitation_plan.tasks:
-                            self._sanitize_plan_tools(self.exploitation_plan.tasks)
-                        # Auto-retry with fallback tool immediately
-                        if _fallback:
-                            log.info("Auto-retrying '%s' with fallback '%s'", tc_name, _fallback)
-                            try:
-                                if _fallback in self.attack_gateway.get_tool_names():
-                                    fallback_result = await self.attack_gateway.call(_fallback, tc_args)
-                                elif _fallback in self.recon_gateway.get_tool_names():
-                                    fallback_result = await self.recon_gateway.call(_fallback, tc_args)
-                                else:
-                                    fallback_result = None
-                                if fallback_result and getattr(fallback_result, 'success', False):
-                                    result = fallback_result
-                                    tc_name = _fallback
-                                    log.info("Fallback '%s' succeeded", _fallback)
-                                elif fallback_result:
-                                    log.info("Fallback '%s' also failed (exit=%s)",
-                                             _fallback, getattr(fallback_result, 'exit_code', '?'))
-                            except Exception as _fb_err:
-                                log.warning("Fallback '%s' error: %s", _fallback, _fb_err)
-                # Detect broken binaries: Go/C binaries that start but
-                # can't parse their own flags (e.g. corrupt gobuster
-                # binary that rejects -w and -u even when present).
-                if (_exit_code not in (0, 127)
-                        and "must be specified" in _combined
-                        and tc_name not in self._BLACKLISTED_TOOLS):
-                    log.warning(
-                        "Tool '%s' appears broken (binary rejects its own "
-                        "flags) — blacklisting", tc_name
-                    )
-                    self._BLACKLISTED_TOOLS[tc_name] = ""
-                    if self.exploitation_plan and self.exploitation_plan.tasks:
-                        self._sanitize_plan_tools(self.exploitation_plan.tasks)
-                # Track unreachable targets
-                _target = (tc_args.get("url", "") or tc_args.get("host", "")
-                           or tc_args.get("target", "") or "")
-                if _target:
-                    if (_exit_code == 7 and tc_name == "curl_get") or \
-                       any(kw in _combined for kw in ("connection refused", "could not connect",
-                                                       "no route to host", "can't connect")):
-                        self._absent_services.add(_target)
-                # Track absent DB services (Redis/MySQL/PG/Oracle probes)
-                _DB_TOOLS = {"redis_cmd", "mysql_query", "psql_query", "mssql_query", "mssqlclient_query", "mssqlclient_query",
-                             "oracle_query", "smbmap_enum"}
-                if tc_name in _DB_TOOLS and not getattr(result, 'success', False):
-                    _host = tc_args.get("host", "")
-                    _port = tc_args.get("port", "")
-                    if _host:
-                        _label = f"{_host}:{_port}" if _port else _host
-                        self._absent_services.add(_label)
-
-                # Defense probe + bypass attempt
-                defence_probe = ""
-                if tc_name in self.EXPLOIT_TOOLS:
-                    url = str(tc_args.get("url", tc_args.get("target_url", "")))
-                    param = str(tc_args.get("param", tc_args.get("parameter", "q")))
-                    method = str(tc_args.get("method", "GET"))
-                    if url and not self.flag_pattern.findall(
-                        getattr(result, 'stdout', '') or ''
-                    ):
-                        defence_probe = await self._probe_for_defense(url, param, method, tc_name)
-                    # Re-evaluate full DPM defense pipeline when defense first detected
-                    if defence_probe and "BLOCKED" in defence_probe and not self.defense_state.waf_type:
-                        await self._detect_defenses()
-                    # Attempt bypass if blocked
-                    if defence_probe and "BLOCKED" in defence_probe:
-                        bypass_payloads = {
-                            "encoding_mutation": "<scr<script>ipt>alert(1)</scr</script>ipt>",
-                            "case_alternation": "<ScRiPt>alert(1)</sCrIpT>",
-                            "double_url": "%253Cscript%253Ealert(1)%253C%252Fscript%253E",
-                        }
-                        for strategy, payload in bypass_payloads.items():
-                            try:
-                                bp_result = await self.attack_gateway.call("send_payload", {
-                                    "url": url, "param": param, "payload": payload,
-                                    "method": method, "encode_type":
-                                        "double_url" if "url" in strategy else "none",
-                                })
-                                bp_stdout = getattr(bp_result, 'stdout', '') or ''
-                                bp_flags = self.flag_pattern.findall(bp_stdout)
-                                if bp_flags:
-                                    is_valid, reason = await self._verify_flag(
-                                        bp_flags[0], bp_stdout,
-                                        {"url": url, "param": param, "payload": payload},
-                                        getattr(bp_result, "elapsed_ms", 0),
-                                    )
-                                    if is_valid:
-                                        result = bp_result
-                                        defence_probe = f"\n[DEFENSE BYPASS — {strategy}] SUCCESS: flag={bp_flags[0]}"
-                                        break
-                                elif getattr(bp_result, 'success', False):
-                                    defence_probe += f"\n[DEFENSE BYPASS — {strategy}] Payload accepted, no flag"
-                            except Exception:
-                                pass
-
-                # ── Trace: record final tool result (Execution Memory seed) ──
-                self._task_log_event(
-                    "info", "tool_result",
-                    task_id=task.get("id", ""),
-                    tool=tc_name,
-                    planned_tool=task.get("tool", "") or "",
-                    adherence=(tc_name == task.get("tool", "")),
-                    success=bool(getattr(result, "success", False)),
-                    exit_code=getattr(result, "exit_code", -1),
-                    elapsed_ms=getattr(result, "elapsed_ms", 0),
-                )
-
-                # Logging
-                result_stdout = getattr(result, 'stdout', '') or ''
-                result_exit = getattr(result, 'exit_code', -1)
-                flags_found = self.flag_pattern.findall(result_stdout)
-                if flags_found:
-                    log.info("[EXPLOIT] %s: FLAG FOUND %s", tc_name, flags_found[0])
-                    _any_success = True
-                elif defence_probe:
-                    log.info("[EXPLOIT] %s: DEFENSE — %s", tc_name,
-                             defence_probe[:120].replace('\n', ' '))
-                elif getattr(result, 'success', False):
-                    log.debug("[EXPLOIT] %s: OK (exit=%d, %d bytes) — no flag",
-                              tc_name, result_exit, len(result_stdout))
-                    _any_success = True
-                else:
-                    log.info("[EXPLOIT] %s: FAILED (exit=%d) — %s",
-                             tc_name, result_exit,
-                             (result_stdout[:100] or 'no output').replace('\n', ' '))
-
-                # Format feedback for LLM
-                tool_stdout = self._format_tool_feedback(tc_name, tc_args, result, defence_probe)
-                if (tc_name == "file_upload" and not getattr(result, 'success', False)
-                        and getattr(result, 'exit_code', 0) in (400, 403, 500)):
-                    tool_stdout += (
-                        "\n[HINT: HTTP 4xx/5xx on file upload often means the endpoint "
-                        "requires additional form fields (IDs, directories, nonces, tokens). "
-                        "Look at the plugin documentation, readme, or error messages to "
-                        "discover the required parameters. Retry with extra_fields={\"key\":\"value\",...}. "
-                        "Common examples: eeSFL_ID (numeric list ID), eeSFL_FileUploadDir "
-                        "(target directory), action (ajax action), nonce (CSRF token).]"
-                    )
-                if (tc_name == "http_post" and not getattr(result, 'success', False)
-                        and tc_args.get("url")):
-                    for ep in self.dkg.query_nodes("Endpoint"):
-                        if ep.get("url") == tc_args.get("url") and ep.get("body_format") == "json":
-                            tool_stdout += (
-                                "\n[HINT: this endpoint expects JSON body. "
-                                "Try content_type='application/json']"
-                            )
-                            break
-
-                log.debug("  [%s] %s", tc_name, str(tc_args)[:120])
-                # Direct execution tasks skip LLM history — no preceding
-                # assistant tool_calls message exists, so adding a tool
-                # result here would break DeepSeek's API requirement
-                # ("Messages with role 'tool' must be a response to a
-                #  preceding message with 'tool_calls'").
-                # The fix mechanism (stderr-aware) handles param errors instead.
-                if not tc_id.startswith("direct-"):
-                    _is_info = tc_name in ("wpscan_enum", "knowledge_search",
-                        "nmap_port_range", "nmap_full_scan", "nikto_scan",
-                        "dirb_scan", "gobuster_dir", "nvd_search_cves",
-                        "searchsploit_search", "metasploit_search",
-                        "go_exploitdb_search")
-                    _limit = 7000 if _is_info else 3000
-                    self.llm.add_tool_result(tc_id, tool_stdout[:_limit])
-
-                # Auto-persist technology discoveries to DKG (before compression loses them)
-                if tc_name in ("whatweb_scan",) and getattr(result, 'success', False):
-                    parsed = getattr(result, "parsed_output", {})
-                    _fingerprint = parsed.get("technologies", [])[:5]
-                    if _fingerprint:
-                        # Enrich the existing nmap Service node with
-                        # whatweb fingerprint — do NOT create fake
-                        # port-0 Service nodes.
-                        _ww_host = self.target_host
-                        from urllib.parse import urlparse as _up3
-                        _ww_url = tc_args.get("target_url", "")
-                        _ww_parts = _up3(_ww_url) if _ww_url else None
-                        if _ww_parts and _ww_parts.hostname:
-                            _ww_host = _ww_parts.hostname
-                        _ww_port = (_ww_parts.port if _ww_parts and _ww_parts.port
-                                    else 80)
-                        _ww_svc_id = f"svc-{_ww_host}-{_ww_port}"
-                        _ww_svc = self.dkg.get_node(_ww_svc_id)
-                        if _ww_svc:
-                            self.dkg.update_node(
-                                _ww_svc_id,
-                                {"fingerprint": _fingerprint},
-                            )
-                task_summary += f"{tc_name}: {'OK' if getattr(result,'success',False) else 'FAIL'}; "
-                # Accumulate each tool's output for plan review context.
-                # Include the file_upload HINT so the fix-and-retry LLM also
-                # sees it (not just the plan-review LLM via tool_stdout).
-                _out = getattr(result, 'stdout', '') or ''
-                _err = getattr(result, 'stderr', '') or ''
-                # Include stderr so the fix LLM can see parameter errors
-                # (e.g. KeyError('host') when wrong param names are used)
-                _combined = _out
-                if _err:
-                    _err_short = _err[:400]
-                    _combined = f"{_out}\n[STDERR] {_err_short}"
-                _hint = ""
-                if (tc_name == "file_upload"
-                        and not getattr(result, 'success', False)
-                        and getattr(result, 'exit_code', 0) in (400, 403, 500)):
-                    _hint = (
-                        " [HINT: HTTP 4xx/5xx on file upload often means "
-                        "required form fields are missing. Retry with "
-                        "extra_fields={'eeSFL_ID':'1','eeSFL_FileUploadDir':'/wp-content/uploads/'} "
-                        "or similar plugin-specific parameters.]"
-                    )
-                _all_task_stdouts.append(f"[{tc_name}] {_combined[:600]}{_hint}")
-                # Track if automated test found nothing
-                rl = (getattr(result, 'stdout', '') or '').lower()
-                if "no evidence" in rl or "no flag" in rl:
-                    _auto_test_negative = True
-
-                # CTEG tracking
-                raw_stdout = getattr(result, 'stdout', '') or ''
-                _raw_task_stdouts.append(raw_stdout)  # full, for credential extraction
-                _TOOL_VULN_MAP = {
-                    "sqlmap_test": "SQLI", "xss_reflection_test": "XSS",
-                    "command_injection_test": "CMDI", "ffuf_fuzz": "FUZZ",
-                    "send_payload": "INJECTION", "hydra_http_brute": "AUTH",
-                    "hydra_ssh_brute": "AUTH",
-                }
-                self._exploit_chain.append({
-                    "tool": tc_name,
-                    "url": str(tc_args.get("url", tc_args.get("target_url", ""))),
-                    "method": str(tc_args.get("method", "GET")),
-                    "param": str(tc_args.get("param", tc_args.get("parameter", ""))),
-                    "params": str(tc_args)[:200], "result": raw_stdout[:200],
-                    "vuln_type": _TOOL_VULN_MAP.get(tc_name, tc_name),
-                    "mechanism": tc_name,
-                })
-
-                # Flag check
-                flags = self.flag_pattern.findall(result_stdout)
-                if flags:
-                    is_valid, reason = await self._verify_flag(
-                        flags[0], result_stdout, tc_args, getattr(result, "elapsed_ms", 0),
-                        tool_name=tc_name,
-                    )
-                    if is_valid:
-                        self.phase = OrchestratorPhase.DONE
-                        return TaskResult(
-                            success=True, flag=flags[0], steps=self.step_count,
-                            tokens_used=self.llm.token_count,
-                            time_elapsed=time.time() - self.start_time,
-                        )
-
-            # ── LLM reviews and updates plan after every task (VulnBot-style) ──
-            task_success = _any_success
-            task_result_text = self._summarize_task_result(
-                tc_names, task_success, _all_task_stdouts
+            execution = await self._execute_task_with_policies(
+                task, tool_defs, iteration, MAX_ITER
             )
-
-            # ── Fix-and-retry: LLM analyzes failures, fixes param errors ──
-            _fix_attempts = 0
-            _task_tool = task.get("tool", "")
-            while not task_success and _fix_attempts < 2 and _task_tool:
-                fix = await self._analyze_and_fix_task(task, task_result_text)
-                if not fix:
-                    break
-
-                # Partial success: auth worked, store credentials (Fix A)
-                if fix.get("partial_success"):
-                    creds = fix.get("credentials") or {}
-                    if creds.get("username"):
-                        _cred_id = f"cred-partial-{int(time.time())}"
-                        _cred_port = int(task.get("params", {}).get("port", 0))
-                        _cred_user = creds["username"]
-                        _cred_pass = creds.get("password", "")
-                        _cred_type = str(creds.get("cred_type", "mssql"))
-                        self.dkg.add_node("Credential", _cred_id, {
-                            "username": _cred_user,
-                            "password": _cred_pass,
-                            "host": self.target_host,
-                            "port": _cred_port,
-                            "source_host": self.target_host,
-                            "cred_type": _cred_type,
-                            "source": "partial_success",
-                        })
-                        # Also persist to CTEG for cross-task reuse
-                        try:
-                            self.cteg.add_credential(
-                                host=self.target_host, port=_cred_port,
-                                service_type=_cred_type,
-                                username=_cred_user, password=_cred_pass,
-                                source="partial_success",
-                            )
-                        except Exception:
-                            pass
-                        log.info("[PARTIAL SUCCESS] Stored credential '%s' (auth OK → CTEG)",
-                                 creds["username"])
-                    task_success = True
-                    task_result_text = (
-                        f"[PARTIAL SUCCESS — {fix.get('reason', 'auth OK, command failed')}]"
-                    )
-                    break
-
-                # Merge corrected params into existing ones — the LLM
-                # returns only the fields that need correction, not the
-                # full parameter set. Replacing would drop host/command/etc.
-                task["params"] = {**task["params"], **fix["corrected_params"]}
-                reason = fix.get("reason", "corrected params")
-                print(f"  [FIX] {task.get('id')}: {reason[:120]}")
-                self.step_count += 1
-
-                retry_result = await self.executor.execute(
-                    Task.from_legacy_dict(task)
-                )
-                retry_stdout = retry_result.stdout or ""
-                retry_stderr = retry_result.stderr or ""
-
-                if retry_result.success:
-                    task_success = True
-                    task_result_text = (
-                        f"[FIXED — {reason[:100]}] "
-                        f"{retry_stdout[:1200] or 'OK'}"
-                    )
-                    # Check for flag
-                    flags = self.flag_pattern.findall(retry_stdout)
-                    if flags:
-                        is_valid, reason_flag = await self._verify_flag(
-                            flags[0], retry_stdout, task.get("params", {}),
-                            retry_result.elapsed_ms,
-                            tool_name=_task_tool,
-                        )
-                        if is_valid:
-                            self.phase = OrchestratorPhase.DONE
-                            return TaskResult(
-                                success=True, flag=flags[0],
-                                steps=self.step_count,
-                                tokens_used=self.llm.token_count,
-                                time_elapsed=time.time() - self.start_time,
-                            )
-                else:
-                    task_result_text = (
-                        f"Fix attempt {_fix_attempts + 1} failed "
-                        f"[{reason[:80]}]: {retry_stderr or retry_stdout or 'no output'}"
-                    )
-                _fix_attempts += 1
-
-            # ── Auto-extract credentials from task output ────────────
-            # When a task discovers working credentials (e.g. batch SSH
-            # test via shell_exec), extract them into DKG Credential nodes
-            # so subsequent tasks can use $credentials.* placeholders.
-            if task_success and _raw_task_stdouts:
-                await self._extract_credentials_from_task(
-                    task, _raw_task_stdouts
-                )
-
-            # ── P7: local-first replan (rule-based, before LLM plan review) ──
-            if not task_success:
-                _task_obj = Task.from_legacy_dict(task)
-                _core_res = CoreExecutionResult(
-                    task_id=task.get("id", ""),
-                    tool=task.get("tool", "") or "",
-                    planned_tool=task.get("tool", "") or "",
-                    adherence=True,
-                    success=False,
-                    stdout=task_result_text[:4000],
-                    stderr="",
-                    exit_code=-1,
-                    elapsed_ms=0.0,
-                )
-                _eval2 = await self.evaluator.evaluate(_task_obj, _core_res)
-                _repair = self.replanner.local_repair(_task_obj, _eval2)
-                self._task_log_event(
-                    "info", "replan_requested",
-                    task_id=task.get("id", ""),
-                    action=_repair.action,
-                    failure_type=(
-                        _eval2.failure_type.value if _eval2.failure_type else None
-                    ),
-                    reason=_repair.reason,
-                    rejected_duplicate=_repair.rejected_duplicate,
-                )
-                if _repair.action == "replace" and _repair.replacement is not None:
-                    _rep_legacy = _repair.replacement.to_legacy_dict()
-                    _rep_legacy["source"] = "replanner"
-                    _plan_tasks = (
-                        self.exploitation_plan.tasks
-                        if self.exploitation_plan
-                        else []
-                    )
-                    if not self._is_duplicate_task(_rep_legacy, _plan_tasks):
-                        _plan_tasks.append(_rep_legacy)
-                        print(
-                            f"[REPLAN] {task.get('id','')} → "
-                            f"{_repair.replacement.id} ({_repair.reason})"
-                        )
-                elif _repair.action == "invalidate":
-                    _failed_id = task.get("id", "")
-                    for _t in (
-                        self.exploitation_plan.tasks
-                        if self.exploitation_plan
-                        else []
-                    ):
-                        if isinstance(_t, dict) and _failed_id in (
-                            _t.get("dependent_task_ids") or []
-                        ):
-                            _t["status"] = "skipped"
-                            _t["result_summary"] = (
-                                f"invalidated: dependent task {_failed_id} failed (P7)"
-                            )
+            if execution.flag_result is not None:
+                return execution.flag_result
+            if execution.skip:
+                continue
+            task_success = execution.success
+            task_result_text = execution.result_text
 
             await self._review_and_update_plan(
                 task, task_success, task_result_text
@@ -9114,4 +9400,3 @@ Respond ONLY with a JSON array of next steps (max 5)."""
             except json.JSONDecodeError:
                 pass
         return {}
-
