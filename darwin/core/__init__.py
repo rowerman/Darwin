@@ -34,6 +34,13 @@ from darwin.core.evaluator import (
     FailureType,
 )
 from darwin.core.executor import ExecutionResult, ToolExecutor
+from darwin.core.parameters import (
+    ParamIssue,
+    ParameterCorrector,
+    ParameterValidator,
+    ToolSchema,
+    ToolSchemaProvider,
+)
 from darwin.core.replan import LocalRepair, Replanner
 from darwin.core.runtime import Runtime
 from darwin.core.task import Task
@@ -54,6 +61,9 @@ __all__ = [
     "FailureType",
     "LocalRepair",
     "Objective",
+    "ParamIssue",
+    "ParameterCorrector",
+    "ParameterValidator",
     "Planner",
     "PreconditionValidator",
     "ReplanRecommendation",
@@ -65,6 +75,8 @@ __all__ = [
     "TaskGraph",
     "TaskOutcome",
     "TaskStatus",
+    "ToolSchema",
+    "ToolSchemaProvider",
     "ToolExecutor",
     "WorldState",
     "default_registry",

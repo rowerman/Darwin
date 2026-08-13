@@ -1,4 +1,4 @@
-"""ToolExecutor — executes a Task against the tool gateways (P5 + P8).
+"""ToolExecutor — executes a Task against the tool gateways (P5 + P8 + P9).
 
 P5a deliverable: a concrete Executor that consumes a Task and returns a
 normalized ExecutionResult, plus the plan-adherence signal (planned tool
@@ -9,6 +9,12 @@ P8 deliverable: optional capability dispatch. When Task.action carries a
 preconditions, and tries the capability's supported tools in order
 (falling back only on TOOL_ERROR / INVALID_ARGUMENT). Tasks without a
 capability keep the legacy direct tool dispatch unchanged.
+
+P9 deliverable: pre-execution schema validation on the capability path.
+Planned tool calls are checked against the gateway's declared parameter
+schema; deterministic corrections (drop unknown keys, fill declared
+defaults) are applied, and uncorrectable calls become pre-execution
+INVALID_ARGUMENT results without invoking the tool.
 
 P5c (after P6) will migrate the orchestrator's LLM-driven execution branch
 onto this strict Task-consumption path. Until then the orchestrator routes
@@ -31,6 +37,11 @@ from darwin.core.capabilities import (
     normalize_result,
 )
 from darwin.core.evaluator import FailureAnalyzer, FailureType
+from darwin.core.parameters import (
+    ParameterCorrector,
+    ParameterValidator,
+    ToolSchemaProvider,
+)
 from darwin.core.task import Task
 
 
@@ -84,6 +95,12 @@ class ToolExecutor:
         self.validator = PreconditionValidator()
         self.resolver = ContextResolver()
         self._analyzer = FailureAnalyzer()
+        # P9: schema-driven parameter validation on the capability path.
+        self.schema_provider = ToolSchemaProvider(
+            attack_gateway, recon_gateway, mcp_pool
+        )
+        self.param_validator = ParameterValidator()
+        self.param_corrector = ParameterCorrector()
 
     @staticmethod
     def _from_any(obj: Any) -> ToolOutcome:
@@ -190,6 +207,58 @@ class ToolExecutor:
             parsed_output=outcome.parsed_output,
         )
 
+    def _validate_and_correct(
+        self,
+        task: Task,
+        capability,
+        capability_name: str,
+        tool: str,
+        params: dict,
+        attempts: list[str],
+    ) -> tuple[ExecutionResult | None, dict]:
+        """Pre-execution schema validation (P9).
+
+        Returns (result, corrected_params). A non-None result means the
+        call is uncorrectable: it is a pre-execution INVALID_ARGUMENT and
+        the tool is NOT invoked. Correctable issues are fixed in place.
+        """
+        schema = self.schema_provider.get(tool)
+        if schema is None:
+            return None, params
+
+        issues = self.param_validator.validate(schema, params)
+        if not issues:
+            return None, params
+
+        corrected, _ = self.param_corrector.correct(schema, params)
+        remaining = self.param_validator.validate(schema, corrected)
+        if not remaining:
+            return None, corrected
+
+        details = []
+        for issue in remaining:
+            if issue.kind == "missing":
+                details.append(f"missing required parameter '{issue.field}'")
+            else:
+                details.append(f"unknown parameter '{issue.field}'")
+        return (
+            ExecutionResult(
+                task_id=task.id,
+                tool=tool,
+                planned_tool=capability.default_tool,
+                adherence=True,
+                success=False,
+                stderr=(
+                    f"invalid argument: {', '.join(details)} "
+                    f"for tool '{tool}'"
+                ),
+                exit_code=1,
+                capability=capability_name,
+                tool_attempts=list(attempts),
+            ),
+            params,
+        )
+
     async def _execute_capability(
         self, task: Task, capability_name: str
     ) -> ExecutionResult:
@@ -202,7 +271,9 @@ class ToolExecutor:
         - supported tools are tried in order; only TOOL_ERROR /
           INVALID_ARGUMENT failures trigger the next tool;
         - a meaningful failure (auth / hypothesis / defense / ...) stops
-          the chain so the real signal reaches the Evaluator.
+          the chain so the real signal reaches the Evaluator;
+        - P9: every planned call is schema-validated first; uncorrectable
+          calls become pre-execution INVALID_ARGUMENT without a tool call.
         """
         capability = self.capability_registry.get(capability_name)
         if capability is None:
@@ -244,17 +315,31 @@ class ToolExecutor:
 
         params_by_tool = self.resolver.resolve(capability, task)
         attempts: list[str] = []
-        last_outcome: ToolOutcome | None = None
+        last_result: ExecutionResult | None = None
         for tool in capability.supported_tools:
             attempts.append(tool)
-            last_outcome = await self._invoke(tool, params_by_tool.get(tool, {}))
-            if last_outcome.success:
+            pre_result, tool_params = self._validate_and_correct(
+                task,
+                capability,
+                capability_name,
+                tool,
+                params_by_tool.get(tool, {}),
+                attempts,
+            )
+            if pre_result is not None:
+                last_result = pre_result
+                continue
+
+            outcome = await self._invoke(tool, tool_params)
+            result = self._result_from_outcome(task.id, capability, tool, outcome)
+            last_result = result
+            if outcome.success:
                 return normalize_result(
-                    self._result_from_outcome(task.id, capability, tool, last_outcome),
+                    result,
                     capability_name,
                     attempts,
                 )
-            cls = self._analyzer.classify(last_outcome, tool=tool)
+            cls = self._analyzer.classify(outcome, tool=tool)
             if cls.failure_type not in (
                 FailureType.TOOL_ERROR,
                 FailureType.INVALID_ARGUMENT,
@@ -262,19 +347,15 @@ class ToolExecutor:
                 # Meaningful failure: switching tools would mask the real
                 # signal. Stop and let the Evaluator classify it.
                 return normalize_result(
-                    self._result_from_outcome(task.id, capability, tool, last_outcome),
+                    result,
                     capability_name,
                     attempts,
                 )
 
-        # Every supported tool failed with a retryable tool error.
+        # Every supported tool failed with a retryable tool error or a
+        # pre-execution INVALID_ARGUMENT.
         return normalize_result(
-            self._result_from_outcome(
-                task.id,
-                capability,
-                capability.supported_tools[-1],
-                last_outcome,
-            ),
+            last_result,
             capability_name,
             attempts,
         )
