@@ -66,7 +66,9 @@ class ToolExecutor:
             success=bool(getattr(obj, "success", False)),
             stdout=str(getattr(obj, "stdout", "") or ""),
             stderr=str(getattr(obj, "stderr", "") or ""),
-            exit_code=int(getattr(obj, "exit_code", -1) or -1),
+            exit_code=-1
+            if getattr(obj, "exit_code", -1) is None
+            else int(getattr(obj, "exit_code", -1)),
             elapsed_ms=float(getattr(obj, "elapsed_ms", 0.0) or 0.0),
             parsed_output=dict(getattr(obj, "parsed_output", {}) or {}),
         )

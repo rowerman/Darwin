@@ -9,8 +9,6 @@ P6 Evaluator, P10 Memory, P15 Runtime).
 
 from darwin.core.contracts import (
     Budget,
-    Evaluation,
-    Evaluator,
     Executor,
     Objective,
     Planner,
@@ -21,6 +19,13 @@ from darwin.core.contracts import (
     WorldState,
 )
 from darwin.core.events import RuntimeEvent
+from darwin.core.evaluator import (
+    Classification,
+    Evaluation,
+    Evaluator,
+    FailureAnalyzer,
+    FailureType,
+)
 from darwin.core.executor import ExecutionResult, ToolExecutor
 from darwin.core.runtime import Runtime
 from darwin.core.task import Task
@@ -28,11 +33,14 @@ from darwin.core.task_graph import DependencyType, TaskGraph
 
 __all__ = [
     "Budget",
+    "Classification",
     "DependencyType",
     "Evaluation",
     "Evaluator",
     "ExecutionResult",
     "Executor",
+    "FailureAnalyzer",
+    "FailureType",
     "Objective",
     "Planner",
     "ReplanRecommendation",

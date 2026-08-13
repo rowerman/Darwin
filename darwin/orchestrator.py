@@ -22,7 +22,8 @@ from typing import Any, Dict, List, Optional
 log = logging.getLogger(__name__)
 
 from darwin.cteg import CTEG, TaskRecord
-from darwin.core.executor import ToolExecutor
+from darwin.core.evaluator import Evaluator as CoreEvaluator, FailureType
+from darwin.core.executor import ToolExecutor, ExecutionResult as CoreExecutionResult
 from darwin.core.task import Task
 from darwin.data_model import (
     normalize_dkg_state, PipelineState, EndpointInfo,
@@ -124,6 +125,8 @@ class Orchestrator:
             recon_gateway=self.recon_gateway,
             mcp_pool=self.mcp_pool,
         )
+        # P6: rule-based Evaluator for structured failure classification
+        self.evaluator = CoreEvaluator()
 
         # Task log — structured event log written to file
         self._task_log: List[Dict[str, Any]] = []
@@ -7221,6 +7224,48 @@ Output ONLY valid JSON array (3-20 tasks depending on complexity. More tasks != 
         params = task.get("params", {})
         params_str = json.dumps(params)
         output_trunc = output[:1500]
+
+        # ── P6: rule-based failure classification first (Evaluator) ──
+        _cls_result = CoreExecutionResult(
+            task_id=task.get("id", ""),
+            tool=tool,
+            planned_tool=tool,
+            adherence=True,
+            success=False,
+            stdout=output[:4000],
+            stderr="",
+            exit_code=-1,
+            elapsed_ms=0.0,
+        )
+        _evaluation = await self.evaluator.evaluate(
+            Task.from_legacy_dict(task), _cls_result
+        )
+        self._task_log_event(
+            "info", "task_evaluated",
+            task_id=task.get("id", ""),
+            outcome=_evaluation.outcome.value,
+            failure_type=(
+                _evaluation.failure_type.value if _evaluation.failure_type else None
+            ),
+            confidence_delta=_evaluation.confidence_delta,
+            replan=_evaluation.replan.value,
+            evidence=_evaluation.evidence[:5],
+        )
+        # Parameter-fixing cannot help these: short-circuit the LLM fix call.
+        _NO_LLM_FIX_TYPES = {
+            FailureType.HYPOTHESIS_REJECTED,
+            FailureType.TARGET_UNREACHABLE,
+            FailureType.DEFENSE_BLOCKED,
+            FailureType.BUDGET_EXCEEDED,
+            FailureType.STRATEGY_FAILED,
+        }
+        if _evaluation.failure_type in _NO_LLM_FIX_TYPES:
+            log.info(
+                "[EVAL] task %s → %s (rule-based, no LLM fix)",
+                task.get("id", ""),
+                _evaluation.failure_type.value,
+            )
+            return None
 
         # Meta-cognition: auto-search RAG when unfamiliar technology detected
         rag_hint = ""
