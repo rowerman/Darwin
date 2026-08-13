@@ -132,9 +132,10 @@ class Orchestrator:
         self.evaluator = CoreEvaluator()
         # P7: local-first replanner with duplicate-failure protection
         self.replanner = Replanner()
-        # P10/P11: Memory layers — plan rationale + execution history
-        # feed the global replan fallback and the compression view.
-        self.memory = MemoryManager()
+        # P10/P11/P13: Memory layers — plan rationale + execution history
+        # feed the replan fallback; preserve-level / key-tool executions
+        # are shared to CTEG as cross-task experience.
+        self.memory = MemoryManager(experience=self.cteg)
 
         # Task log — structured event log written to file
         self._task_log: List[Dict[str, Any]] = []

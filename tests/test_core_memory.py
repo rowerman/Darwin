@@ -267,3 +267,48 @@ def test_compression_view_respects_limits():
     view = manager.compression_view(max_preserved=2, max_compressible=2)
     assert len(view.preserved) == 2
     assert len(view.compressible) == 2
+
+
+# ── P13: experience sharing filter ──────────────────────────────────
+
+
+class FakeExperience:
+    def __init__(self):
+        self.records = []
+
+    def record_execution(self, record):
+        self.records.append(record)
+
+
+def test_memory_manager_shares_preserve_and_key_tools():
+    exp = FakeExperience()
+    manager = MemoryManager(experience=exp)
+    # PRESERVE (credential marker) -> shared
+    manager.record_execution(sample_result(task_id="p", stdout="password=x"))
+    # Successful key exploit tool -> shared even without a preserve marker
+    manager.record_execution(sample_result(task_id="k", tool="sqlmap_test", stdout="ok"))
+    # Routine curl_get -> not shared
+    manager.record_execution(sample_result(task_id="r", tool="curl_get", stdout="page"))
+    # DISCARD (empty) -> never shared
+    manager.record_execution(sample_result(task_id="d", stdout="", stderr=""))
+
+    assert [r.task_id for r in exp.records] == ["p", "k"]
+
+
+def test_memory_manager_failed_key_tool_not_shared():
+    exp = FakeExperience()
+    manager = MemoryManager(experience=exp)
+    manager.record_execution(
+        sample_result(task_id="f", tool="sqlmap_test", success=False, stdout="internal error")
+    )
+    assert exp.records == []
+
+
+def test_memory_manager_experience_failure_is_swallowed():
+    class BrokenExperience:
+        def record_execution(self, record):
+            raise RuntimeError("boom")
+
+    manager = MemoryManager(experience=BrokenExperience())
+    item = manager.record_execution(sample_result(stdout="password=x"))
+    assert item.record.task_id == "t1"  # execution recording still worked

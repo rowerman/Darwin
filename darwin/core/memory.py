@@ -319,6 +319,24 @@ class CompressionView:
     discarded_count: int = 0
 
 
+# P13: successful calls of these exploit/auth tools always count as
+# cross-task experience, even when their output carries no preserve marker.
+_KEY_EXPERIENCE_TOOLS = frozenset(
+    {
+        "sqlmap_test",
+        "xss_reflection_test",
+        "command_injection_test",
+        "ffuf_fuzz",
+        "send_payload",
+        "hydra_http_brute",
+        "hydra_ssh_brute",
+        "test_credential",
+        "ssh_exec",
+        "ssh_key_exec",
+    }
+)
+
+
 class MemoryManager:
     """Coordinates the four layers (P10: Plan + Execution concrete;
     Working/Experience passed in as existing stores, duck-typed)."""
@@ -344,7 +362,37 @@ class MemoryManager:
     ) -> MemoryItem:
         record = ExecutionRecord.from_result(result, failure_type=failure_type)
         importance, reason = self.classifier.classify(record)
-        return self.execution.add(MemoryItem(record, importance, reason))
+        item = self.execution.add(MemoryItem(record, importance, reason))
+        if self._should_share_to_experience(record, importance):
+            self._share_to_experience(record)
+        return item
+
+    def _should_share_to_experience(
+        self, record: ExecutionRecord, importance: ImportanceClass
+    ) -> bool:
+        """P13 filter: preserve-level facts plus successful key exploit
+        calls; DISCARD is never shared."""
+        if importance is ImportanceClass.DISCARD:
+            return False
+        if importance is ImportanceClass.PRESERVE:
+            return True
+        return bool(record.success) and record.tool in _KEY_EXPERIENCE_TOOLS
+
+    def _share_to_experience(self, record: ExecutionRecord) -> None:
+        """Duck-typed write to the Experience layer (CTEG adapter).
+
+        Experience sharing must never break the execution path, so any
+        failure is swallowed (the record already lives in ExecutionMemory).
+        """
+        if self.experience is None:
+            return
+        record_fn = getattr(self.experience, "record_execution", None)
+        if not callable(record_fn):
+            return
+        try:
+            record_fn(record)
+        except Exception:
+            pass
 
     def record_trace(self, trace: dict) -> MemoryItem:
         record = ExecutionRecord.from_trace(trace)

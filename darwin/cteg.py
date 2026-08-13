@@ -131,6 +131,26 @@ class TaskRecord:
 
 # ── CTEG Core ───────────────────────────────────────────────────────
 
+
+# P13: tool -> abstract vulnerability type for single-execution bridge.
+# Mirrors the orchestrator's exploit-chain vuln map so per-execution
+# records land in the same pattern space as task-level commits.
+_TOOL_VULN_TYPES = {
+    "sqlmap_test": "sqli",
+    "xss_reflection_test": "xss",
+    "command_injection_test": "cmdi",
+    "ffuf_fuzz": "fuzz",
+    "send_payload": "injection",
+    "hydra_http_brute": "auth",
+    "hydra_ssh_brute": "auth",
+    "test_credential": "auth",
+    "ssh_exec": "rce",
+    "ssh_key_exec": "rce",
+    "http_post": "http",
+    "curl_get": "http",
+}
+
+
 class CTEG:
     """Cross-Task Experience Graph.
 
@@ -420,6 +440,52 @@ class CTEG:
             self._persist()
 
         return new_count
+
+    def record_execution(self, record: Any, source: str = "execution_memory") -> int:
+        """Bridge one normalized ExecutionRecord into the experience store (P13).
+
+        Narrow adapter: builds a single-step TaskRecord and reuses
+        ``commit_task`` / ``extract_patterns``, so the graph structure,
+        dedup and decay logic stay untouched. The caller (MemoryManager)
+        decides which executions are worth sharing.
+
+        Returns:
+            Number of new patterns added (0 when merged into existing ones).
+        """
+        tool = str(getattr(record, "tool", "") or "")
+        if not tool:
+            return 0
+        success = bool(getattr(record, "success", False))
+        vuln_type = _TOOL_VULN_TYPES.get(tool, tool)
+        result_text = str(getattr(record, "stdout", "") or "")[:200]
+        if not result_text:
+            result_text = str(getattr(record, "stderr", "") or "")[:200]
+        task_id = str(
+            getattr(record, "task_id", "") or f"mem-{int(datetime.now().timestamp())}"
+        )
+        task_record = TaskRecord(
+            task_id=task_id,
+            benchmark="execution_memory",
+            vulnerability_types=[vuln_type],
+            outcome="success" if success else "failure",
+            exploit_chain=[
+                {
+                    "tool": tool,
+                    "vuln_type": vuln_type,
+                    "mechanism": tool,
+                    "url": "",
+                    "method": "GET",
+                    "params": "",
+                    "result": result_text,
+                    "source": source,
+                }
+            ],
+            timestamp=(
+                str(getattr(record, "timestamp", "") or "")
+                or datetime.now().isoformat()
+            ),
+        )
+        return self.commit_task(task_record)
 
     # ── Pattern Retrieval ────────────────────────────────────────
 
