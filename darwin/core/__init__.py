@@ -44,6 +44,7 @@ from darwin.core.memory import (
     PlanEntry,
     PlanMemory,
 )
+from darwin.core.metrics import MetricsCalculator, MetricsReport
 from darwin.core.parameters import (
     ParamIssue,
     ParameterCorrector,
@@ -76,6 +77,8 @@ __all__ = [
     "LocalRepair",
     "MemoryItem",
     "MemoryManager",
+    "MetricsCalculator",
+    "MetricsReport",
     "Objective",
     "ParamIssue",
     "ParameterCorrector",

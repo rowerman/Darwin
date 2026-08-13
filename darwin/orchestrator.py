@@ -25,6 +25,7 @@ from darwin.cteg import CTEG, TaskRecord
 from darwin.core.evaluator import Evaluator as CoreEvaluator, FailureType
 from darwin.core.executor import ToolExecutor, ExecutionResult as CoreExecutionResult
 from darwin.core.memory import MemoryManager
+from darwin.core.metrics import MetricsCalculator
 from darwin.core.replan import Replanner
 from darwin.core.task import Task
 from darwin.data_model import (
@@ -8776,6 +8777,10 @@ Respond ONLY with a JSON array of next steps (max 5)."""
             "event": event,
             **data,
         })
+
+    def metrics_report(self):
+        """P19: aggregate the v2 success metrics from this run's traces."""
+        return MetricsCalculator().calculate(self._task_log, self.replanner)
 
     def _task_log_write(self) -> None:
         """Persist the task log to JSON file."""

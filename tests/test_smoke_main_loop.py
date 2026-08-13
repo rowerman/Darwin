@@ -214,6 +214,10 @@ async def test_llm_driven_task_executes_via_executor_and_finds_flag(monkeypatch)
     assert orch.memory.plan.get("t-curl_get") is not None
     assert len(orch.memory.execution.for_task("t-curl_get")) == 1
     assert orch.memory.execution.for_task("t-curl_get")[0].record.tool == "curl_get"
+    # P19: metrics aggregate from the run's traces.
+    report = orch.metrics_report()
+    assert report.total_executions == 1
+    assert report.adherence_rate == 1.0
 
 
 @pytest.mark.asyncio
