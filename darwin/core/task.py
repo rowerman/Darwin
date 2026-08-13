@@ -147,6 +147,19 @@ class Task:
         )
         instruction = d.get("instruction", "") or ""
 
+        action = {
+            "tool": d.get("tool", "") or "",
+            "target": target,
+            "params": params,
+        }
+        # P8: capability passthrough so task dicts carrying a capability
+        # survive the legacy compatibility layer.
+        capability = d.get("capability") or ""
+        if not capability and isinstance(d.get("action"), dict):
+            capability = (d.get("action") or {}).get("capability") or ""
+        if capability:
+            action["capability"] = capability
+
         return cls(
             id=str(d.get("id", "")),
             type=d.get("type", "task"),
@@ -156,11 +169,7 @@ class Task:
             rationale=d.get("rationale", "") or "",
             evidence=list(d.get("evidence") or []),
             confidence=float(d.get("confidence", 0.5)),
-            action={
-                "tool": d.get("tool", "") or "",
-                "target": target,
-                "params": params,
-            },
+            action=action,
             required_context=dict(d.get("required_context") or {}),
             success_condition=d.get("success_condition"),
             failure_policy=dict(
@@ -191,6 +200,7 @@ class Task:
             "evidence": list(self.evidence),
             "confidence": self.confidence,
             "tool": action.get("tool", "") or "",
+            "capability": str(action.get("capability", "") or ""),
             "endpoint": action.get("target", "") or "",
             "params": params,
             "required_context": dict(self.required_context),

@@ -106,6 +106,36 @@ def test_endpoint_used_as_target():
     assert t.action["target"] == "http://x/login"
 
 
+def test_legacy_roundtrip_preserves_capability():
+    """P8: capability survives the legacy dict <-> Task bridge."""
+    legacy = {
+        "id": "sql_001",
+        "instruction": "Verify SQLi",
+        "capability": "verify_sql_injection",
+        "tool": "sqlmap_test",
+        "params": {"url": "http://x/login", "param": "user"},
+    }
+    t = Task.from_legacy_dict(legacy)
+    assert t.action["capability"] == "verify_sql_injection"
+    assert t.action["tool"] == "sqlmap_test"
+
+    out = t.to_legacy_dict()
+    assert out["capability"] == "verify_sql_injection"
+    assert out["tool"] == "sqlmap_test"
+
+
+def test_capability_from_nested_action_dict():
+    t = Task.from_legacy_dict(
+        {
+            "id": "x",
+            "type": "t",
+            "goal": "g",
+            "action": {"capability": "fetch_url", "tool": "curl_get"},
+        }
+    )
+    assert t.action["capability"] == "fetch_url"
+
+
 def test_summary_compact():
     t = Task(id="x", type="exploit", goal="Capture the flag on the login form")
     s = t.summary()

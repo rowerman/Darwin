@@ -113,6 +113,10 @@ class FailureAnalyzer:
         "got an unexpected",
         "required field",
         "unknown tool",
+        # P8: capability authoring errors surface as INVALID_ARGUMENT so
+        # the existing fix/retry path (rather than a silent fallback) sees
+        # them.
+        "unknown capability",
     )
     _ENVIRONMENT_MARKERS = (
         "command not found",

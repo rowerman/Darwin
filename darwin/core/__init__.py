@@ -18,6 +18,13 @@ from darwin.core.contracts import (
     TaskStatus,
     WorldState,
 )
+from darwin.core.capabilities import (
+    Capability,
+    CapabilityRegistry,
+    ContextResolver,
+    PreconditionValidator,
+    default_registry,
+)
 from darwin.core.events import RuntimeEvent
 from darwin.core.evaluator import (
     Classification,
@@ -34,7 +41,10 @@ from darwin.core.task_graph import DependencyType, TaskGraph
 
 __all__ = [
     "Budget",
+    "Capability",
+    "CapabilityRegistry",
     "Classification",
+    "ContextResolver",
     "DependencyType",
     "Evaluation",
     "Evaluator",
@@ -45,6 +55,7 @@ __all__ = [
     "LocalRepair",
     "Objective",
     "Planner",
+    "PreconditionValidator",
     "ReplanRecommendation",
     "Replanner",
     "Runtime",
@@ -56,4 +67,5 @@ __all__ = [
     "TaskStatus",
     "ToolExecutor",
     "WorldState",
+    "default_registry",
 ]
