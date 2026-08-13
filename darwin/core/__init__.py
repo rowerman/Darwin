@@ -17,7 +17,6 @@ from darwin.core.contracts import (
     Planner,
     ReplanRecommendation,
     Scheduler,
-    TaskGraph,
     TaskOutcome,
     TaskStatus,
     WorldState,
@@ -25,9 +24,11 @@ from darwin.core.contracts import (
 from darwin.core.events import RuntimeEvent
 from darwin.core.runtime import Runtime
 from darwin.core.task import Task
+from darwin.core.task_graph import DependencyType, TaskGraph
 
 __all__ = [
     "Budget",
+    "DependencyType",
     "Evaluation",
     "Evaluator",
     "ExecutionResult",

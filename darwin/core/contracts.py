@@ -22,18 +22,25 @@ from darwin.data_model import PipelineState
 
 
 class TaskStatus(str, Enum):
-    """Task lifecycle status.
+    """Task lifecycle status (P4 full state machine).
 
-    P2 keeps the statuses the current runtime already uses; P4 replaces
-    this with the full v2 state machine (CREATED / READY / RUNNING /
-    SUCCESS / FAILED / BLOCKED / INVALIDATED / NEEDS_REPLAN / ABANDONED).
+    CREATED -> READY -> RUNNING -> SUCCESS | FAILED
+
+    - BLOCKED:      a precondition is unmet; may become READY again.
+    - NEEDS_REPLAN: the current path is invalid; planner should revise.
+    - INVALIDATED:  new evidence disproves the task.
+    - ABANDONED:    planner judged further attempts not worth the cost.
     """
 
-    PENDING = "pending"
-    DONE = "done"
+    CREATED = "created"
+    READY = "ready"
+    RUNNING = "running"
+    SUCCESS = "success"
     FAILED = "failed"
-    SKIPPED = "skipped"
-    EXHAUSTED = "exhausted"
+    BLOCKED = "blocked"
+    INVALIDATED = "invalidated"
+    NEEDS_REPLAN = "needs_replan"
+    ABANDONED = "abandoned"
 
 
 class TaskOutcome(str, Enum):

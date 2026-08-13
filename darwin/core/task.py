@@ -17,7 +17,7 @@ from __future__ import annotations
 import json
 import time
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Iterable
 
 from darwin.core.contracts import TaskStatus
 
@@ -26,11 +26,65 @@ DEFAULT_FAILURE_POLICY: dict = {"retry": 1, "replan_on_failure": True}
 
 
 def _coerce_status(value: Any) -> TaskStatus:
-    """Map a legacy/unknown status string onto the TaskStatus enum."""
+    """Map a legacy/unknown status string onto the v2 TaskStatus enum.
+
+    Legacy orchestrator statuses map as agreed in P4:
+    pending->READY, done->SUCCESS, failed->FAILED, skipped/exhausted->ABANDONED.
+    Unknown values default to CREATED (safe, never executable).
+    """
+    legacy = {
+        "pending": TaskStatus.READY,
+        "done": TaskStatus.SUCCESS,
+        "failed": TaskStatus.FAILED,
+        "skipped": TaskStatus.ABANDONED,
+        "exhausted": TaskStatus.ABANDONED,
+    }
+    if str(value) in legacy:
+        return legacy[str(value)]
     try:
         return TaskStatus(str(value))
     except ValueError:
-        return TaskStatus.PENDING
+        return TaskStatus.CREATED
+
+
+def _deps_to_structured(deps: Iterable[Any]) -> list[dict]:
+    """Convert legacy string/Task-ID deps into structured dependency entries."""
+    out: list[dict] = []
+    for d in deps:
+        if isinstance(d, dict):
+            out.append(dict(d))
+        else:
+            out.append({"type": "requires_task_success", "task_id": str(d)})
+    return out
+
+
+def _deps_to_legacy_ids(deps: Iterable[dict]) -> list[str]:
+    """Extract Task-ID edges from structured dependencies for the legacy path."""
+    ids: list[str] = []
+    for d in deps:
+        if not isinstance(d, dict):
+            ids.append(str(d))
+            continue
+        tid = d.get("task_id")
+        if d.get("type") == "requires_task_success" and tid:
+            ids.append(str(tid))
+    return ids
+
+
+def _status_to_legacy(status: TaskStatus) -> str:
+    """Map v2 statuses back to strings the current orchestrator understands."""
+    legacy = {
+        TaskStatus.CREATED: "pending",
+        TaskStatus.READY: "pending",
+        TaskStatus.RUNNING: "pending",
+        TaskStatus.SUCCESS: "done",
+        TaskStatus.FAILED: "failed",
+        TaskStatus.BLOCKED: "skipped",
+        TaskStatus.INVALIDATED: "skipped",
+        TaskStatus.NEEDS_REPLAN: "failed",
+        TaskStatus.ABANDONED: "skipped",
+    }
+    return legacy.get(status, status.value)
 
 
 @dataclass
@@ -61,9 +115,12 @@ class Task:
     )
 
     # ── Graph / lifecycle ───────────────────────────────────────────
-    dependencies: list[str] = field(default_factory=list)
+    # Structured dependencies (P4): each entry is a dict with a "type"
+    # from DependencyType, e.g. {"type": "requires_evidence", "evidence": ...}
+    # or {"type": "requires_task_success", "task_id": "recon_001"}.
+    dependencies: list[dict] = field(default_factory=list)
     priority: float = 0.5
-    status: TaskStatus = TaskStatus.PENDING
+    status: TaskStatus = TaskStatus.CREATED
     created_at: str = field(
         default_factory=lambda: time.strftime("%Y-%m-%dT%H:%M:%S")
     )
@@ -109,7 +166,7 @@ class Task:
             failure_policy=dict(
                 d.get("failure_policy") or DEFAULT_FAILURE_POLICY
             ),
-            dependencies=list(
+            dependencies=_deps_to_structured(
                 d.get("dependent_task_ids") or d.get("dependencies") or []
             ),
             priority=float(d.get("priority", 0.5)),
@@ -139,10 +196,10 @@ class Task:
             "required_context": dict(self.required_context),
             "success_condition": self.success_condition,
             "failure_policy": dict(self.failure_policy),
-            "dependent_task_ids": list(self.dependencies),
-            "dependencies": list(self.dependencies),
+            "dependent_task_ids": _deps_to_legacy_ids(self.dependencies),
+            "dependencies": _deps_to_legacy_ids(self.dependencies),
             "priority": self.priority,
-            "status": self.status.value,
+            "status": _status_to_legacy(self.status),
             "attempts": self.attempt_count,
             "result_summary": self.result_summary,
         }
