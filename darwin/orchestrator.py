@@ -120,7 +120,8 @@ class Orchestrator:
         self.mcp_pool = MCPClientPool()
         self.client = HTTPClient()
         self.probe_client = ProbeClient()
-        # P5: Task-based executor (fix-retry seam wired now; full migration in P5c)
+        # P5/P5c: Task-based executor is the sole execution path (fix-retry
+        # seam since P5; main-loop dispatch migrated in P5c).
         self.executor = ToolExecutor(
             attack_gateway=self.attack_gateway,
             recon_gateway=self.recon_gateway,
@@ -2816,39 +2817,32 @@ class Orchestrator:
                         stderr="", exit_code=1, elapsed_ms=0,
                     )
                 else:
+                    # P5c: strict Task consumption — the Executor is the
+                    # only execution path. Post-processing below consumes
+                    # the normalized ExecutionResult fields unchanged.
                     try:
-                        if tc_name in self.attack_gateway.get_tool_names():
-                            result = await self.attack_gateway.call(tc_name, tc_args)
-                        elif tc_name in self.recon_gateway.get_tool_names():
-                            result = await self.recon_gateway.call(tc_name, tc_args)
-                        elif tc_name in self.mcp_pool.get_tool_names():
-                            mcp_raw = await self.mcp_pool.call_tool(tc_name, tc_args)
-                            mcp_text = json.dumps(mcp_raw, ensure_ascii=False)
-                            is_error = mcp_raw.get("isError", False)
-                            error_text = ""
-                            if is_error:
-                                content_list = mcp_raw.get("content", [])
-                                if content_list and isinstance(content_list[0], dict):
-                                    error_text = content_list[0].get("text", "")
-                            result = ToolResult(
-                                tool_name=tc_name,
-                                success=not is_error,
-                                stdout=error_text if is_error else mcp_text,
-                                stderr=error_text,
-                                exit_code=1 if is_error else 0,
-                                elapsed_ms=0,
-                            )
-                        else:
-                            result = ToolResult(
-                                tool_name=tc_name, success=False,
-                                stdout=f"Unknown tool: {tc_name}", stderr="",
-                                exit_code=1, elapsed_ms=0,
-                            )
+                        result = await self.executor.execute(
+                            Task.from_legacy_dict({
+                                "id": task.get("id", "") or tc_id,
+                                "instruction": task_instruction,
+                                "tool": tc_name,
+                                "params": tc_args,
+                                "endpoint": str(
+                                    tc_args.get("url", tc_args.get("target_url", ""))
+                                ),
+                            })
+                        )
                     except Exception as e:
-                        result = ToolResult(
-                            tool_name=tc_name, success=False,
-                            stdout="", stderr=str(e),
-                            exit_code=1, elapsed_ms=0,
+                        result = CoreExecutionResult(
+                            task_id=task.get("id", "") or tc_id,
+                            tool=tc_name,
+                            planned_tool=tc_name,
+                            adherence=True,
+                            success=False,
+                            stdout="",
+                            stderr=str(e),
+                            exit_code=1,
+                            elapsed_ms=0.0,
                         )
 
                 # ── Adaptive format retry ──────────────────────────
