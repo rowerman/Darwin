@@ -1,8 +1,8 @@
-# DARWIN v2 重构进度交接（2026-08-13，session 总结版）
+# DARWIN v2 重构进度交接（2026-08-14，session 清理版）
 
 > 本文件用于跨 session 续接。新 session 先读本文件 + `Darwin_v2_architecture_plan.md`（v2 目标方案）。
-> 当前进度：**M0、P1–P7（上个 session）+ P8–P15 阶段 2b（本 session）已完成；345 passed**。
-> 剩余：P15 2d/3（等真实场景行为等价）、P17 配置与环境，以及若干"已建未消费"的收尾项（见 §4）。
+> 当前进度：**M0–P7（已提交）+ P8–P15 阶段 2b（用户已提交）+ 缺口补齐 G1–G5（本 session，未提交）全部完成；364 passed**。
+> 剩余：P15 2d/3（等真实场景行为等价）、P17 配置与环境、目录化（见 §4）。
 
 ---
 
@@ -11,7 +11,7 @@
 - 仓库：`C:\Users\hanwenZ\Desktop\小论文\Darwin`（单 agent 的 LLM 驱动渗透测试框架）
 - 入口：`run.py`；`config/` 目录在仓库外（gitignore，含 API key），本地验证不依赖它
 - 推荐 Python：`C:\Users\hanwenZ\anaconda3\envs\deeplearn\python.exe`（已装 litellm 1.96.2、pydantic、pytest 等）
-- 跑测试：`& 'C:\Users\hanwenZ\anaconda3\envs\deeplearn\python.exe' -m pytest tests/ -q` → 当前 **345 passed**
+- 跑测试：`& 'C:\Users\hanwenZ\anaconda3\envs\deeplearn\python.exe' -m pytest tests/ -q` → 当前 **364 passed**
 - 验收样本单独跑：`pytest tests/ -m acceptance -q`（4 个失败样本回归）
 - Runtime 路径开关：环境变量 `DARWIN_USE_RUNTIME=1` 时主循环走 `_run_with_runtime()`，默认走旧路径
 - 注意：litellm/tiktoken 首次导入需联网（沙箱禁网时用提权运行）；deeplearn 是用户指定环境
@@ -27,7 +27,9 @@
 - **P6** FailureAnalyzer 11 类 + Evaluator；`_analyze_and_fix_task` 规则分类短路
 - **P7** Replanner 本地修复（retry/replace/invalidate/abandon/defer/global_stop）+ 失败签名去重 + novelty_ratio
 
-## 3. 本 session 完成项（P8 – P15 阶段 2b）
+## 3. 完成项（P8 – P15 阶段 2b + 缺口补齐 G1–G5）
+
+> P8–P15 2b 已由用户提交（commit：P10/P11/P13/P12/P19/P18/P16/end tail 等）；G1–G5 未提交。
 
 ### P8 Capability 层
 - `darwin/core/capabilities.py`：`Capability` + `CapabilityRegistry` + `default_registry()`（4 个能力：
@@ -88,18 +90,37 @@
   开关（默认关）；修了 2 个迁移暴露的差异（flag 命中即终止；review 状态回写 exploitation_plan）
 - 已知 2b 限制（等真实场景验证）：调度顺序简化（graph READY 序 vs 旧 exploit 优先级）、plan-exhausted 审查流程简化
 
+### 缺口补齐（G1–G5，本 session）
+
+**G5 Tool Adapter 独立层**：`darwin/tools/adapters/`（ToolAdapter 基类 + 4 个能力适配器：
+fetch_url / verify_sql_injection / test_credentials / acquire_shell）；ContextResolver 改为按 capability
+分发到适配器，自定义能力回落旧 per-tool 映射；其余 ~130 工具保持旧直调
+
+**G3 CTEG 双向闭环**：`MemoryManager.experience_hints()` 统一反向入口；run() 传主漏洞类型——
+修复真实缺口（get_suggestions 传空 vuln_type 时 exploit_strategies 恒为空，P13 经验回不来）；
+闭环测试（ExecutionRecord → CTEG pattern → 下一轮 hints）；已知限制：漏洞类型精确匹配，
+"SQL Injection" 等变体暂不命中
+
+**G2 DKG provenance 消费**：`provenance_summary()`（嵌套 provenance 优先、回退扁平 source，
+有来源排序在前、上限 10 条）；`_review_and_update_plan` prompt 注入 `## World State Provenance`
+
+**G1 压缩分级接入**：`MemoryManager.compression_payload()` 三桶渲染；`LLMSession.compress()` 加
+`preserved_context`（摘要路径 + 硬截断路径都原样注入 `## PRESERVED MEMORY`）；`_maybe_compress`
+把 preserved 传进 compress、discard 只记日志；`ExecutionRecord.from_result` 兼容 dict 输入
+
+**G4 research prompt 接线**：`SYSTEM_PROMPT_RESEARCH` 升级为完整研究角色（身份/工具/流程/JSON
+输出，并入 `_research_phase` 与 `_active_service_research` 内嵌指令）；两个研究方法的 4 个 LLM
+调用从 ANALYZE prompt 切到 RESEARCH prompt
+
 ## 4. 剩余/待办
 
 - **P15 2d + 3**：后处理抽 lifecycle hook → orchestrator 变薄装配层。**前提：真实 benchmark 场景做行为等价
   （P19 指标对比），当前用户暂无场景条件，暂停**
 - **P17 配置与环境**：config 骨架、外部工具依赖、Windows/Linux 差异
-- **压缩分级接入**：ImportanceClassifier/CompressionView 已建，未接入 `_maybe_compress` LLM 摘要流程（有行为风险，建议放最后）
-- **DKG provenance 消费**：provenance 只存未用，planner/replan 可信度判断未接
-- **CTEG 双向**：Execution→CTEG 已通；反向 get_suggestions→cteg_hints 是既有路径，未做闭环验证
-- **Tool Adapter 独立层**：架构计划 §11 的 `tools/adapters/` 未建（ContextResolver+ToolExecutor 承担了职责）
 - **目录化**：架构计划 §15 的 planner/scheduler/executor/memory/capabilities 目录未拆（core/ 单文件模式）
-- **research prompt 接线**：备用资产
-- **真实运行验证**：所有验证均为 mock 层（345 测试），无真实场景
+- **真实运行验证**：所有验证均为 mock 层（364 测试），P19 指标无真实基线；G1/G2/G4 改了 LLM 可见内容，
+  真实质量只能等场景验证
+- 已知限制汇总：CTEG 漏洞类型精确匹配；2b 调度顺序/plan-exhausted 简化；research 质量仅 mock 验证
 
 ## 5. 技术要点与坑
 
@@ -112,30 +133,34 @@
   ③ flag 命中旧路径直接 return，Runtime 路径要抛哨兵异常终止；④ 脚本批量改文件会改行尾（本次 orchestrator.py
   已由 CRLF 变 LF，git 会提示，无内容损坏）
 - **外部事件**：`knowledge/web/web_exploitation_supplement.json` 在 session 中被杀毒软件隔离删除（git 有记录可恢复）
+- **补丁坑**：apply_patch 用过于宽泛的上下文（`except Exception: pass`）会把块插到错误的同名位置
+  （G2 provenance 块曾误插进 `_research_phase`），补丁后要 `rg` 定位确认
 - **死代码检查习惯**：改动后 `rg` 残留符号；`py_compile` 全部模块；pytest 全绿
 - **沙箱**：deeplearn 环境安装依赖/联网需要提权（用户已批准该环境）
 
-## 6. 未提交的 git 改动（本 session 全部未提交）
+## 6. 未提交的 git 改动（仅 G1–G5；P8–P15 2b 已提交）
 
 ```
-M CLAUDE.md
-M README.md
-D _transform_runner.py
-M darwin/core/__init__.py
-M darwin/core/runtime.py
+M darwin/core/capabilities.py
+M darwin/core/memory.py
 M darwin/orchestrator.py
-D knowledge/web/web_exploitation_supplement.json   ← 杀毒软件隔离，非本 session 改动
-?? tests/test_core_runtime.py
-?? tests/test_runtime_path.py
+M darwin/prompts/research.py
+M darwin/utils/llm.py
+M tests/conftest.py
+M tests/test_core_memory.py
+M tests/test_cteg_experience.py
+M tests/test_prompts.py
+M tests/test_runtime_path.py
+?? darwin/tools/adapters/
+?? tests/test_provenance.py
+?? tests/test_tool_adapters.py
 ```
 
-注：P8–P20 期间的 core 组件（capabilities/parameters/memory/metrics、executor/task/evaluator 等）也已修改或新建，
-均已体现在工作区；本 session 所有改动均未 commit。
 备份/存档位置：`%TEMP%\orchestrator_m0_backup_*.py`、`%TEMP%\darwin_v2_legacy_validate_replan.py`、
 `%TEMP%\darwin_module_compare.md`
 
 ## 7. 新 session 的第一步
 
 1. 读本文件 + `Darwin_v2_architecture_plan.md`
-2. 对照 §4 剩余清单决定优先级（建议：先 P17 或等真实场景做 P15 2d/3；压缩分级接入放最后）
-3. 若需要提交：本 session 改动建议按功能拆 2–3 个 commit（P8–P13 core 层 / P16–P20 / P15 runtime）
+2. 对照 §4 剩余清单决定优先级（建议：先提交 G1–G5，再 P17 或等真实场景做 P15 2d/3）
+3. 提交建议：G1–G5 按功能拆 2 个 commit（G5/G3/G2 一组、G1/G4 一组），或一个 commit 收尾

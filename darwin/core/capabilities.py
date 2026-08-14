@@ -23,7 +23,9 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field, replace
+from typing import Iterable
 
+from darwin.tools.adapters import ToolAdapter, default_adapters
 from darwin.core.task import Task
 
 
@@ -196,21 +198,56 @@ class ContextResolver:
     P8 keeps this a pure field mapping (no DKG lookups, no LLM). Tool
     signatures are taken from darwin/tools/recon_server.py and
     darwin/tools/attack_server.py; tool-specific caveats are noted inline.
+
+    P15 G5: capabilities with a registered ToolAdapter dispatch to it;
+    everything else falls back to the legacy per-tool mapping.
     """
+
+    def __init__(
+        self, adapters: Iterable[ToolAdapter] | None = None
+    ) -> None:
+        self._adapters = {
+            adapter.capability_name: adapter
+            for adapter in (adapters if adapters is not None else default_adapters())
+        }
 
     def resolve(self, capability: Capability, task: Task) -> dict[str, dict]:
         """Return {tool_name: params} for every supported tool."""
+        adapter = self._adapters.get(capability.name)
+        if adapter is not None:
+            return adapter.resolve(self._build_env(task), _task_params(task))
+        return self._resolve_legacy(capability, task)
+
+    @staticmethod
+    def _build_env(task: Task) -> dict:
+        """Normalized context consumed by the ToolAdapters."""
         ctx = _context_from_task(task)
         params = _task_params(task)
-        endpoint = str(ctx.get("endpoint", "") or "") or str(params.get("url", "") or "")
-        parameter = str(ctx.get("parameter", "") or "")
         cred = ctx.get("credential") if isinstance(ctx.get("credential"), dict) else {}
-        port = int(cred.get("port") or params.get("port") or 22)
-        command = str(cred.get("command") or params.get("command") or "id")
-        username = str(
-            cred.get("username") or cred.get("user")
-            or params.get("username") or "root"
-        )
+        return {
+            "endpoint": str(ctx.get("endpoint", "") or "") or str(params.get("url", "") or ""),
+            "parameter": str(ctx.get("parameter", "") or ""),
+            "credential": ctx.get("credential"),
+            "port": int(cred.get("port") or params.get("port") or 22),
+            "command": str(cred.get("command") or params.get("command") or "id"),
+            "username": str(
+                cred.get("username") or cred.get("user")
+                or params.get("username") or "root"
+            ),
+        }
+
+    def _resolve_legacy(
+        self, capability: Capability, task: Task
+    ) -> dict[str, dict]:
+        """Legacy per-tool mapping for capabilities without an adapter."""
+        env = self._build_env(task)
+        params = _task_params(task)
+        endpoint = env["endpoint"]
+        parameter = env["parameter"]
+        cred = env["credential"] if isinstance(env["credential"], dict) else {}
+        port = env["port"]
+        command = env["command"]
+        username = env["username"]
 
         out: dict[str, dict] = {}
         for tool in capability.supported_tools:

@@ -269,6 +269,23 @@ def test_compression_view_respects_limits():
     assert len(view.compressible) == 2
 
 
+def test_compression_payload_renders_three_buckets():
+    manager = MemoryManager()
+    manager.record_execution(
+        sample_result(task_id="p1", tool="sqlmap_test", stdout="injectable: yes")
+    )
+    manager.record_execution(sample_result(task_id="c1", stdout="routine page"))
+    manager.record_execution(sample_result(task_id="d1", stdout="", stderr=""))
+
+    preserved, compressible, discarded = manager.compression_payload()
+
+    assert "sqlmap_test" in preserved
+    assert "task=p1" in preserved
+    assert "routine page" in compressible
+    assert "d1" not in preserved and "d1" not in compressible
+    assert discarded == 1
+
+
 # ── P13: experience sharing filter ──────────────────────────────────
 
 
@@ -278,6 +295,16 @@ class FakeExperience:
 
     def record_execution(self, record):
         self.records.append(record)
+
+
+class SuggestionExperience:
+    def __init__(self, hints):
+        self.hints = hints
+        self.calls = []
+
+    def get_suggestions(self, **kwargs):
+        self.calls.append(kwargs)
+        return self.hints
 
 
 def test_memory_manager_shares_preserve_and_key_tools():
@@ -312,3 +339,20 @@ def test_memory_manager_experience_failure_is_swallowed():
     manager = MemoryManager(experience=BrokenExperience())
     item = manager.record_execution(sample_result(stdout="password=x"))
     assert item.record.task_id == "t1"  # execution recording still worked
+
+
+def test_experience_hints_empty_without_experience():
+    assert MemoryManager().experience_hints() == {}
+
+
+def test_experience_hints_wraps_get_suggestions():
+    exp = SuggestionExperience({"exploit_strategies": [{"mechanism": "sqlmap_test"}]})
+    manager = MemoryManager(experience=exp)
+    hints = manager.experience_hints(defense_type="waf", vuln_type="sqli")
+    assert hints["exploit_strategies"][0]["mechanism"] == "sqlmap_test"
+    assert exp.calls == [{"defense_type": "waf", "vuln_type": "sqli"}]
+
+
+def test_experience_hints_ignores_missing_method():
+    manager = MemoryManager(experience=FakeExperience())  # no get_suggestions
+    assert manager.experience_hints() == {}

@@ -271,6 +271,7 @@ class LLMSession:
         max_context_tokens: int = 180000,
         compression_threshold: float = 0.4,
         truncation_context: str = "",
+        preserved_context: str = "",
     ) -> int:
         """Compress conversation history by summarizing older messages.
 
@@ -286,6 +287,9 @@ class LLMSession:
                 max compressions reached and oldest messages are truncated.
                 Should contain DKG-derived facts (flags, creds, sessions,
                 services) so the LLM has critical state even after truncation.
+            preserved_context: Decision-critical memory (P15 G1) injected
+                VERBATIM into the compressed context — it must never be
+                summarized away.
         """
         if self.context_load < compression_threshold:
             return 0
@@ -310,6 +314,11 @@ class LLMSession:
                     notice += f"\n\n{truncation_context}"
                 else:
                     notice += " Current DKG state has the structured facts."
+                if preserved_context:
+                    notice += (
+                        f"\n\n## PRESERVED MEMORY (verbatim — do not drop)\n"
+                        f"{preserved_context}"
+                    )
                 self.conversation_history.insert(0, {"role": "user", "content": notice})
             return 0
 
@@ -377,6 +386,11 @@ class LLMSession:
         # compress calls), merge it by prepending.
         prev = getattr(self, '_pending_compressed_context', "")
         context_text = f"[COMPRESSED CONTEXT — {len(old_messages)} messages summarized]\n\n{summary}"
+        if preserved_context:
+            context_text += (
+                f"\n\n## PRESERVED MEMORY (verbatim — do not drop)\n"
+                f"{preserved_context}"
+            )
         self._pending_compressed_context = (
             f"{prev}\n\n{context_text}" if prev else context_text
         )

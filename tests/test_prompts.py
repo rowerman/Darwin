@@ -7,7 +7,7 @@ from darwin.prompts.evaluator import SYSTEM_PROMPT_EVALUATOR
 from darwin.prompts.memory import SYSTEM_PROMPT_MEMORY
 from darwin.prompts.planner import SYSTEM_PROMPT_PLANNER
 from darwin.prompts.research import SYSTEM_PROMPT_RESEARCH
-from darwin.data_model import ExploitationPlan
+from darwin.data_model import ExploitationPlan, VulnerabilityHypothesis
 
 
 # ── Structural assertions ────────────────────────────────────────────
@@ -22,8 +22,9 @@ def test_planner_prompt_has_planning_responsibilities():
 
 def test_research_prompt_has_research_guidance():
     assert "knowledge_search" in SYSTEM_PROMPT_RESEARCH
-    assert "Research(!!)" in SYSTEM_PROMPT_RESEARCH
+    assert "research specialist" in SYSTEM_PROMPT_RESEARCH
     assert "MANDATORY" in SYSTEM_PROMPT_RESEARCH
+    assert "Output ONLY valid JSON" in SYSTEM_PROMPT_RESEARCH
 
 
 def test_evaluator_prompt_has_classification_schema():
@@ -102,3 +103,108 @@ async def test_fix_analysis_uses_evaluator_prompt(
     generates = [c for c in llm.calls if c[0] == "generate"]
     assert generates
     assert generates[0][2] == SYSTEM_PROMPT_EVALUATOR
+
+
+@pytest.mark.asyncio
+async def test_review_plan_injects_provenance(
+    fake_llm, fake_gateway, make_orchestrator
+):
+    """P15 G2: the replan prompt carries DKG provenance."""
+    llm = fake_llm(content="[]")
+    orch = make_orchestrator(llm, fake_gateway({}), fake_gateway({}))
+    orch.exploitation_plan = _plan_with(
+        {
+            "id": "t1",
+            "instruction": "x",
+            "tool": "curl_get",
+            "params": {"url": "http://x"},
+            "status": "pending",
+            "dependent_task_ids": [],
+        }
+    )
+    orch.dkg.add_node(
+        "Vulnerability",
+        "v1",
+        {"vuln_type": "sqli", "endpoint": "http://x/login"},
+        source="sqlmap_test",
+        evidence="error-based injection",
+    )
+
+    await orch._review_and_update_plan(
+        {"id": "t1", "instruction": "x", "tool": "curl_get"},
+        False,
+        "failed",
+    )
+
+    prompts = [c[1] for c in llm.calls if c[0] == "generate"]
+    assert prompts
+    assert "World State Provenance" in prompts[0]
+    assert "source: sqlmap_test" in prompts[0]
+
+
+def _research_gateway(fake_gateway):
+    """Attack gateway exposing the research tool set."""
+    return fake_gateway(
+        {
+            "knowledge_search": None,
+            "cve_lookup": None,
+            "metasploit_search": None,
+            "searchsploit_search": None,
+            "go_exploitdb_search": None,
+            "ddg_web_search": None,
+            "curl_get": None,
+        },
+        schemas={
+            "knowledge_search": {"query": {"type": "string"}},
+            "cve_lookup": {"cve_id": {"type": "string"}},
+            "metasploit_search": {"query": {"type": "string"}},
+            "searchsploit_search": {"query": {"type": "string"}},
+            "go_exploitdb_search": {"query": {"type": "string"}},
+            "ddg_web_search": {"query": {"type": "string"}},
+            "curl_get": {"url": {"type": "string"}},
+        },
+    )
+
+
+@pytest.mark.asyncio
+async def test_research_phase_uses_research_prompt(
+    fake_llm, fake_gateway, make_orchestrator
+):
+    """P15 G4: the vulnerability research phase runs with the research role."""
+    llm = fake_llm(content="[]")
+    orch = make_orchestrator(llm, _research_gateway(fake_gateway), fake_gateway({}))
+    orch.vulnerabilities = [
+        VulnerabilityHypothesis(
+            vuln_type="sqli",
+            endpoint="http://x/login",
+            param="user",
+            confidence=0.7,
+            evidence="quote error observed",
+            suggested_tool="sqlmap_test",
+            tool_args={"url": "http://x/login", "param": "user"},
+        )
+    ]
+
+    await orch._research_phase()
+
+    generates = [c for c in llm.calls if c[0] == "generate"]
+    assert generates
+    assert any(c[2] == SYSTEM_PROMPT_RESEARCH for c in generates)
+
+
+@pytest.mark.asyncio
+async def test_active_service_research_uses_research_prompt(
+    fake_llm, fake_gateway, make_orchestrator
+):
+    """P15 G4: service research also runs with the research role."""
+    llm = fake_llm(content="[]")
+    orch = make_orchestrator(llm, _research_gateway(fake_gateway), fake_gateway({}))
+    orch.dkg.add_node(
+        "Service", "svc-1", {"port": 80, "protocol": "tcp", "version": "Apache/2.4.41"}
+    )
+
+    await orch._active_service_research()
+
+    generates = [c for c in llm.calls if c[0] == "generate"]
+    assert generates
+    assert any(c[2] == SYSTEM_PROMPT_RESEARCH for c in generates)

@@ -2,6 +2,7 @@
 
 from darwin.cteg import CTEG
 from darwin.core.executor import ExecutionResult
+from darwin.core.memory import MemoryManager
 
 
 def result(**overrides):
@@ -65,3 +66,14 @@ def test_cteg_persists_after_record_execution(tmp_path):
 
     reloaded = CTEG(storage_path=path)
     assert "ep-sqli-t1" in reloaded.graph
+
+
+def test_execution_to_hints_roundtrip(tmp_path):
+    """P15 G3 closure: ExecutionRecord -> CTEG pattern -> next-round hints."""
+    cteg = CTEG(storage_path=str(tmp_path / "cteg.json"))
+    manager = MemoryManager(experience=cteg)
+    manager.record_execution(result())  # sqlmap_test success -> shared
+
+    hints = manager.experience_hints(vuln_type="sqli")
+    strategies = hints.get("exploit_strategies") or []
+    assert any(s.get("mechanism") == "sqlmap_test" for s in strategies)

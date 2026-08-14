@@ -32,6 +32,61 @@ def make_plan(task):
 
 
 @pytest.mark.asyncio
+async def test_memory_experience_wired_to_cteg(
+    fake_llm, fake_gateway, make_orchestrator
+):
+    """P15 G3 wiring sanity: the orchestrator's MemoryManager reads CTEG
+    through the same instance used for execution-memory sharing."""
+    orch = make_orchestrator(fake_llm(), fake_gateway({}), fake_gateway({}))
+    assert orch.memory.experience is orch.cteg
+
+
+@pytest.mark.asyncio
+async def test_maybe_compress_passes_preserved_context(
+    fake_llm, fake_gateway, make_orchestrator
+):
+    """P15 G1: _maybe_compress feeds preserved memory verbatim into
+    llm.compress and never includes discarded records."""
+    llm = fake_llm()
+    orch = make_orchestrator(llm, fake_gateway({}), fake_gateway({}))
+    llm.context_load = 0.9  # force the compression branch
+    orch.memory.record_execution(
+        {
+            "task_id": "p1",
+            "tool": "sqlmap_test",
+            "planned_tool": "sqlmap_test",
+            "adherence": True,
+            "success": True,
+            "stdout": "injectable: yes",
+            "stderr": "",
+            "exit_code": 0,
+            "elapsed_ms": 5.0,
+        }
+    )
+    orch.memory.record_execution(
+        {
+            "task_id": "d1",
+            "tool": "curl_get",
+            "planned_tool": "curl_get",
+            "adherence": True,
+            "success": True,
+            "stdout": "",
+            "stderr": "",
+            "exit_code": 0,
+            "elapsed_ms": 5.0,
+        }
+    )
+
+    orch._maybe_compress()
+
+    compresses = [c[1] for c in llm.calls if c[0] == "compress"]
+    assert compresses
+    assert "sqlmap_test" in compresses[-1]["preserved_context"]
+    assert "task=p1" in compresses[-1]["preserved_context"]
+    assert "d1" not in compresses[-1]["preserved_context"]
+
+
+@pytest.mark.asyncio
 async def test_runtime_path_llm_driven_flag_matches_legacy(
     fake_llm, fake_gateway, make_orchestrator
 ):

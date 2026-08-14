@@ -54,25 +54,32 @@ class ExecutionRecord:
         default_factory=lambda: time.strftime("%Y-%m-%dT%H:%M:%S")
     )
 
+    @staticmethod
+    def _get(result: Any, name: str, default: Any = "") -> Any:
+        """Read a field from an ExecutionResult-like object OR a dict."""
+        if isinstance(result, dict):
+            return result.get(name, default)
+        return getattr(result, name, default)
+
     @classmethod
     def from_result(cls, result: Any, failure_type: str | None = None) -> "ExecutionRecord":
         """Build a record from an ExecutionResult-like object."""
         return cls(
-            task_id=str(getattr(result, "task_id", "") or ""),
-            tool=str(getattr(result, "tool", "") or ""),
-            planned_tool=str(getattr(result, "planned_tool", "") or ""),
-            adherence=bool(getattr(result, "adherence", True)),
-            success=bool(getattr(result, "success", False)),
-            stdout=str(getattr(result, "stdout", "") or ""),
-            stderr=str(getattr(result, "stderr", "") or ""),
+            task_id=str(cls._get(result, "task_id", "") or ""),
+            tool=str(cls._get(result, "tool", "") or ""),
+            planned_tool=str(cls._get(result, "planned_tool", "") or ""),
+            adherence=bool(cls._get(result, "adherence", True)),
+            success=bool(cls._get(result, "success", False)),
+            stdout=str(cls._get(result, "stdout", "") or ""),
+            stderr=str(cls._get(result, "stderr", "") or ""),
             exit_code=0
-            if getattr(result, "exit_code", 0) is None
-            else int(getattr(result, "exit_code", 0)),
-            elapsed_ms=float(getattr(result, "elapsed_ms", 0.0) or 0.0),
-            capability=str(getattr(result, "capability", "") or ""),
-            tool_attempts=list(getattr(result, "tool_attempts", []) or []),
-            normalized=dict(getattr(result, "normalized", {}) or {}),
-            parsed_output=dict(getattr(result, "parsed_output", {}) or {}),
+            if cls._get(result, "exit_code", 0) is None
+            else int(cls._get(result, "exit_code", 0)),
+            elapsed_ms=float(cls._get(result, "elapsed_ms", 0.0) or 0.0),
+            capability=str(cls._get(result, "capability", "") or ""),
+            tool_attempts=list(cls._get(result, "tool_attempts", []) or []),
+            normalized=dict(cls._get(result, "normalized", {}) or {}),
+            parsed_output=dict(cls._get(result, "parsed_output", {}) or {}),
             failure_type=failure_type,
         )
 
@@ -394,6 +401,24 @@ class MemoryManager:
         except Exception:
             pass
 
+    def experience_hints(self, **kwargs) -> dict:
+        """Reverse path (P15 G3): pull cross-task suggestions from the
+        Experience layer (CTEG) for the next planning round.
+
+        Duck-typed wrapper around ``get_suggestions``; returns {} when no
+        experience layer is attached, the method is missing, or it fails.
+        """
+        if self.experience is None:
+            return {}
+        fn = getattr(self.experience, "get_suggestions", None)
+        if not callable(fn):
+            return {}
+        try:
+            hints = fn(**kwargs)
+            return dict(hints) if isinstance(hints, dict) else {}
+        except Exception:
+            return {}
+
     def record_trace(self, trace: dict) -> MemoryItem:
         record = ExecutionRecord.from_trace(trace)
         importance, reason = self.classifier.classify(record)
@@ -448,4 +473,34 @@ class MemoryManager:
             preserved=preserved,
             compressible=compressible,
             discarded_count=discarded_count,
+        )
+
+    def compression_payload(
+        self, max_preserved: int = 30, max_compressible: int = 30
+    ) -> tuple[str, str, int]:
+        """Render the compression view for the LLM compression flow (G1).
+
+        Returns (preserved_text, compressible_text, discarded_count):
+        - preserved_text is injected VERBATIM into the compressed context
+          (never LLM-summarized away);
+        - compressible_text may be summarized by the existing flow;
+        - discarded_count is low-value noise that is simply dropped.
+        """
+        view = self.compression_view(max_preserved, max_compressible)
+
+        def _render(records: list[ExecutionRecord]) -> str:
+            lines = []
+            for record in records:
+                status = "OK" if record.success else "FAIL"
+                output = str(record.stdout or "").strip().replace("\n", " ")[:120]
+                line = f"- [{record.tool}] task={record.task_id} {status}"
+                if output:
+                    line += f": {output}"
+                lines.append(line)
+            return "\n".join(lines)
+
+        return (
+            _render(view.preserved),
+            _render(view.compressible),
+            view.discarded_count,
         )

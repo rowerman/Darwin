@@ -21,11 +21,8 @@ class FakeLLM:
         self.content = content
         self.token_count = 100
         self._compressed_count = 0
+        self.context_load = 0.0
         self.calls = []
-
-    @property
-    def context_load(self):
-        return 0.0
 
     def replace_system_prompt(self, prompt):
         self.calls.append(("replace_system_prompt", prompt))
@@ -43,6 +40,7 @@ class FakeLLM:
         return self.content, [dict(tc) for tc in self.tool_calls]
 
     def compress(self, **kwargs):
+        self.calls.append(("compress", dict(kwargs)))
         return 0
 
 

@@ -66,6 +66,7 @@ from darwin.prompts.orchestrator import (
 )
 from darwin.prompts.planner import SYSTEM_PROMPT_PLANNER
 from darwin.prompts.evaluator import SYSTEM_PROMPT_EVALUATOR
+from darwin.prompts.research import SYSTEM_PROMPT_RESEARCH
 
 # Version strings that carry no useful information for RAG lookup.
 # Filtering them avoids polluting LLM context with irrelevant matches.
@@ -502,8 +503,18 @@ class Orchestrator:
                 for s in state.services[:5]
                 if s.version or s.banner
             )
-            cteg_hints = self.cteg.get_suggestions(
-                defense_type=self.defense_state.waf_type or "", vuln_type="",
+            # P15 G3: reverse-path closure via the MemoryManager; pass the
+            # primary vulnerability type so learned exploit patterns can
+            # actually come back (get_suggestions with vuln_type="" returns
+            # exploit_strategies=[]).
+            _primary_vuln = (
+                str(self.vulnerabilities[0].vuln_type or "").lower()
+                if self.vulnerabilities
+                else ""
+            )
+            cteg_hints = self.memory.experience_hints(
+                defense_type=self.defense_state.waf_type or "",
+                vuln_type=_primary_vuln,
             )
             if cteg_hints.get("bypass_strategies") or cteg_hints.get("exploit_strategies"):
                 self._task_log_event("info", "cteg_hints", hints=cteg_hints)
@@ -5426,7 +5437,7 @@ class Orchestrator:
         self._maybe_compress()
         content, tool_calls = self.llm.generate(
             prompt=_first_prompt,
-            system_prompt=getattr(self, '_analyze_prompt_formatted', SYSTEM_PROMPT_ANALYZE),
+            system_prompt=SYSTEM_PROMPT_RESEARCH,
             tools=research_tools,
         )
 
@@ -5479,7 +5490,7 @@ class Orchestrator:
             self._maybe_compress()
             content, tool_calls = self.llm.generate(
                 prompt="Continue researching. Output JSON summary when done.",
-                system_prompt=getattr(self, '_analyze_prompt_formatted', SYSTEM_PROMPT_ANALYZE),
+                system_prompt=SYSTEM_PROMPT_RESEARCH,
                 tools=research_tools,
             )
 
@@ -5575,7 +5586,7 @@ class Orchestrator:
         self._maybe_compress()
         content, tool_calls = self.llm.generate(
             prompt=prompt,
-            system_prompt=getattr(self, '_analyze_prompt_formatted', SYSTEM_PROMPT_ANALYZE),
+            system_prompt=SYSTEM_PROMPT_RESEARCH,
             tools=research_tools,
         )
 
@@ -5597,7 +5608,7 @@ class Orchestrator:
             self._maybe_compress()
             content, tool_calls = self.llm.generate(
                 prompt="Continue researching. Output JSON summary when done.",
-                system_prompt=getattr(self, '_analyze_prompt_formatted', SYSTEM_PROMPT_ANALYZE),
+                system_prompt=SYSTEM_PROMPT_RESEARCH,
                 tools=research_tools,
             )
 
@@ -8202,6 +8213,19 @@ Output ONLY valid JSON:
         except Exception:
             pass
 
+        # P15 G2: inject DKG node provenance so the replan LLM can judge
+        # how trustworthy each world-state fact is.
+        _provenance_text = ""
+        try:
+            _prov_ctx = self.provenance_summary()
+            if _prov_ctx:
+                _provenance_text = (
+                    f"## World State Provenance (source & evidence)\n"
+                    f"{_prov_ctx}\n"
+                )
+        except Exception:
+            pass
+
         prompt = (
             f"Just completed: {task.get('instruction','')}\n"
             f"Tool: {task.get('tool','')}\n"
@@ -8216,6 +8240,7 @@ Output ONLY valid JSON:
             f"{self._format_plan_status()}\n"
             f"{new_discoveries}"
             f"{_absent_text}\n\n"
+            f"{_provenance_text}"
             f"{_memory_text}"
             f"## Your Job: Update the Plan\n"
             f"Review the plan and apply relevant changes from:\n"
@@ -9072,6 +9097,42 @@ Respond ONLY with a JSON array of next steps (max 5)."""
         """P19: aggregate the v2 success metrics from this run's traces."""
         return MetricsCalculator().calculate(self._task_log, self.replanner)
 
+    def provenance_summary(self, max_items: int = 10) -> str:
+        """P15 G2: render DKG node provenance for the replan LLM.
+
+        Uses the nested P12 ``provenance`` dict when present; falls back to
+        the legacy flat ``source`` property so existing nodes (e.g. CTEG
+        credentials) still show where they came from. Facts with real
+        provenance sort first; everything caps at ``max_items`` rows.
+        """
+        rows = []
+        for node_type in ("Endpoint", "Credential", "Vulnerability", "Session"):
+            for node in self.dkg.query_nodes(node_type):
+                prov = node.get("provenance")
+                if isinstance(prov, dict) and prov:
+                    source = str(prov.get("source") or "unknown")
+                    evidence = str(prov.get("evidence") or "")
+                else:
+                    source = str(node.get("source") or "unknown")
+                    evidence = ""
+                label = (
+                    node.get("url")
+                    or node.get("username")
+                    or node.get("vuln_type")
+                    or node.get("host")
+                    or node.get("id", "")
+                )
+                rows.append((source != "unknown", node_type, label, source, evidence))
+
+        rows.sort(key=lambda r: r[0], reverse=True)
+        lines = []
+        for _, node_type, label, source, evidence in rows[:max_items]:
+            line = f"- [{node_type}] {str(label)[:60]} (source: {source})"
+            if evidence:
+                line += f"\n  evidence: {evidence[:80]}"
+            lines.append(line)
+        return "\n".join(lines)
+
     def _task_log_write(self) -> None:
         """Persist the task log to JSON file."""
         if self._task_log_path and self._task_log:
@@ -9273,10 +9334,23 @@ Respond ONLY with a JSON array of next steps (max 5)."""
         # has structured facts even when conversation history is truncated
         trunc_ctx = self._build_truncation_context()
 
+        # P15 G1: decision-critical execution records are injected
+        # verbatim; only compressible material may be summarized away;
+        # discarded records are low-value noise.
+        preserved_text, compressible_text, discarded_count = (
+            self.memory.compression_payload()
+        )
+        if preserved_text or compressible_text or discarded_count:
+            log.debug(
+                "compression: preserved=%d chars, compressible=%d chars, "
+                "discarded=%d records",
+                len(preserved_text), len(compressible_text), discarded_count,
+            )
         saved = self.llm.compress(
             max_context_tokens=self.max_context_tokens,
             compression_threshold=self.compression_threshold,
             truncation_context=trunc_ctx,
+            preserved_context=preserved_text,
         )
         if saved > 0:
             self._task_log_event("info", "context_compressed",
