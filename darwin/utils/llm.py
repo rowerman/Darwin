@@ -37,12 +37,16 @@ class LLMSession:
         base_url: str | None = None,
         temperature: float = 0.7,
         max_tokens: int = 4096,
+        thought_logger: Any = None,
     ):
         self.model = f"{provider}/{model}" if provider != "openai" else model
         self.provider = provider
         self.temperature = temperature
         self.max_tokens = max_tokens
         self.conversation_history: List[Dict[str, Any]] = []
+        # P0/P1: optional chain-of-thought observer (duck-typed — needs only
+        # record_call() / record_tool_result()). Owns its own persistence.
+        self.thought_logger = thought_logger
         self._compressed_count = 0  # number of times compression has been applied
         self._pending_compressed_context = ""  # consumed once in next _build_messages
         self._max_compressions = 3  # prevent cascading telephone-game degradation
@@ -105,6 +109,7 @@ class LLMSession:
         tools: List[Dict[str, Any]] | None = None,
         temperature: float | None = None,
         timeout: float = 180.0,
+        stage: str | None = None,
     ) -> tuple[str, List[Dict[str, Any]] | None]:
         """Generate LLM response with optional tool calling.
 
@@ -114,6 +119,8 @@ class LLMSession:
             tools: Optional list of OpenAI tool definitions.
             temperature: Override the default temperature for this call.
             timeout: LiteLLM request timeout in seconds (default 180s).
+            stage: Optional stage label for chain-of-thought logging.
+                Falls back to the thought logger's current stage when unset.
 
         Returns:
             (content, tool_calls) — tool_calls is None if no tools were called.
@@ -145,11 +152,14 @@ class LLMSession:
         content = choice.message.content or ""
         tool_calls_raw = getattr(choice.message, "tool_calls", None)
         reasoning = getattr(choice.message, "reasoning_content", None)
+        if reasoning is None:
+            reasoning = getattr(choice.message, "reasoning", None)
 
         # Add response to conversation history
         assistant_msg: Dict[str, Any] = {"role": "assistant", "content": content}
         if reasoning:
             assistant_msg["reasoning_content"] = reasoning
+        parsed_calls: List[Dict[str, Any]] | None = None
         if tool_calls_raw:
             assistant_msg["tool_calls"] = [
                 {"id": tc.id, "type": "function",
@@ -162,10 +172,23 @@ class LLMSession:
                  "arguments": json.loads(tc.function.arguments)}
                 for tc in tool_calls_raw
             ]
-            return content, parsed_calls
         else:
             self.conversation_history.append(assistant_msg)
-            return content, None
+
+        # P0/P1: chain-of-thought capture — the observer owns persistence and
+        # swallows its own errors, so this never affects the main flow.
+        if self.thought_logger is not None:
+            self.thought_logger.record_call(
+                stage=stage,
+                model=self.model,
+                prompt=prompt,
+                system_prompt=system_prompt,
+                reasoning=reasoning,
+                content=content,
+                tool_calls=parsed_calls,
+            )
+
+        return content, parsed_calls
 
     def _build_messages(
         self, prompt: str, system_prompt: str | None
@@ -224,6 +247,9 @@ class LLMSession:
             "tool_call_id": tool_call_id,
             "content": result,
         })
+        # P0/P1: record the tool feedback the LLM faces next.
+        if self.thought_logger is not None:
+            self.thought_logger.record_tool_result(tool_call_id, result)
 
     def add_context_message(self, content: str, role: str = "user") -> None:
         """Inject a message into conversation history without requiring a tool call.
@@ -375,6 +401,7 @@ class LLMSession:
             summary, _ = self.generate(
                 prompt=compression_prompt,
                 system_prompt=SYSTEM_PROMPT_COMPRESS,
+                stage="compress",
             )
         except Exception:
             summary = self._fallback_truncate(old_messages)

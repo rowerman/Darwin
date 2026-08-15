@@ -121,6 +121,7 @@ Time/token budgets, solo mode limits, defense probe settings, browser config, an
 | `max_context_tokens` | 180000 | Token count considered 100% context load |
 | `context_compression_threshold` | 0.4 | Trigger compression at 40% context load |
 | `pass_at_k` | 3 | Attempts per challenge (benchmark mode) |
+| `log_thoughts` | true | Record each LLM call's chain of thought per stage to `log/thought/` (JSONL + readable log). DeepSeek returns full thinking text; GPT-series returns reasoning summaries via LiteLLM |
 
 ### `config/llm.yaml`
 
