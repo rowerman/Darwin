@@ -39,6 +39,11 @@ from darwin.core.replan import Replanner
 from darwin.core.runtime import Runtime
 from darwin.core.task import Task
 from darwin.core.task_graph import TaskGraph
+from darwin.core.belief import (
+    node_ids_by_type,
+    render_belief_snapshot,
+    render_new_discoveries,
+)
 from darwin.data_model import (
     normalize_dkg_state, PipelineState, EndpointInfo,
     OrchestratorPhase, TaskResult, VulnerabilityHypothesis, ExploitationPlan,
@@ -304,6 +309,10 @@ class Orchestrator:
         # feed the replan fallback; preserve-level / key-tool executions
         # are shared to CTEG as cross-task experience.
         self.memory = MemoryManager(experience=self.cteg)
+        # O3.1/O3.3: belief provider renders the CURRENT cognition snapshot
+        # at compression time, so decision-critical facts (beliefs, plan,
+        # defense, rationale) ride the preserved payload verbatim.
+        self.memory.belief_provider = lambda: self._belief_context(compact=True)
 
         # Task log — structured event log written to file
         self._task_log: List[Dict[str, Any]] = []
@@ -2238,6 +2247,138 @@ class Orchestrator:
         """
         return normalize_dkg_state(self.dkg)
 
+    def _belief_context(self, *, compact: bool = False) -> str:
+        """O1: render the unified cognition snapshot for one LLM prompt.
+
+        Single rendering path shared by task execution, plan review, plan
+        generation, and compression/truncation. Never raises — prompt
+        construction must not break the run.
+        """
+        try:
+            rationale: list = []
+            try:
+                rationale = self.memory.plan.active_entries()
+            except Exception:
+                pass
+            return render_belief_snapshot(
+                state=self._get_state(),
+                vulnerabilities=self.vulnerabilities,
+                plan=self.exploitation_plan,
+                defense=self.defense_state,
+                rationale_entries=rationale,
+                compact=compact,
+            )
+        except Exception:
+            return ""
+
+    def _find_vuln_dkg_id(self, v) -> str | None:
+        """Locate the DKG Vulnerability node backing a hypothesis (O2.1).
+
+        _analyze_phase writes ids as ``vuln-{1-based index}``, but the
+        augment path uses other formulas and duplicates are possible, so the
+        node is matched by fields first and falls back to the positional id
+        only when that node actually exists.
+        """
+        try:
+            ep_norm = (v.endpoint or "").rstrip("/")
+            for n in self.dkg.query_nodes("Vulnerability"):
+                if (n.get("vuln_type") or "") != (v.vuln_type or ""):
+                    continue
+                if (n.get("endpoint") or "").rstrip("/") != ep_norm:
+                    continue
+                if (n.get("parameter") or "") not in ("", v.param or ""):
+                    continue
+                return n.get("id")
+            try:
+                idx = self.vulnerabilities.index(v)
+            except ValueError:
+                return None
+            cand = f"vuln-{idx + 1}"
+            if self.dkg.get_node(cand):
+                return cand
+        except Exception:
+            return None
+        return None
+
+    def _apply_vulnerability_feedback(
+        self,
+        task: dict,
+        *,
+        success: bool,
+        failure_type: str | None = None,
+        delta: float = 0.0,
+        flag_found: bool = False,
+    ) -> None:
+        """O2.1: apply one task outcome to the matching vulnerability beliefs.
+
+        Matches hypotheses by endpoint (exact ``rstrip('/')`` or mutual
+        substring). Updates the in-memory hypothesis confidence/status and
+        mirrors it onto the DKG Vulnerability node. Never raises — belief
+        feedback must never break the execution path.
+        """
+        if not self.vulnerabilities:
+            return
+        params = task.get("params", {}) or {}
+        if isinstance(params, str):
+            try:
+                params = json.loads(params)
+            except (json.JSONDecodeError, TypeError):
+                params = {}
+        if not isinstance(params, dict):
+            params = {}
+        endpoint = str(
+            task.get("endpoint", "")
+            or params.get("url", "")
+            or params.get("target_url", "")
+            or ""
+        ).strip()
+        if not endpoint:
+            return
+
+        if success:
+            delta = 0.2 if flag_found else 0.05
+            status = "confirmed" if flag_found else "tested"
+        else:
+            status_map = {
+                "hypothesis_rejected": "rejected",
+                "defense_blocked": "blocked",
+                "inconclusive": "inconclusive",
+            }
+            status = status_map.get(failure_type or "", "")
+
+        endpoint_norm = endpoint.rstrip("/")
+        matched = False
+        for v in self.vulnerabilities:
+            v_ep = (v.endpoint or "").rstrip("/")
+            if not v_ep:
+                continue
+            if not (
+                endpoint_norm == v_ep
+                or (endpoint_norm and endpoint_norm in v_ep)
+                or (v_ep and v_ep in endpoint_norm)
+            ):
+                continue
+            matched = True
+            new_conf = max(0.05, min(0.98, v.confidence + delta))
+            v.confidence = new_conf
+            if status:
+                v.status = status
+            try:
+                node_id = self._find_vuln_dkg_id(v)
+                if node_id:
+                    self.dkg.add_node("Vulnerability", node_id, {
+                        "confidence": round(new_conf, 3),
+                        "status": status,
+                        "last_tested_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+                    })
+            except Exception:
+                pass
+        if matched:
+            log.debug(
+                "O2.1 belief feedback: endpoint=%s delta=%+.2f status=%s",
+                endpoint, delta, status or "-",
+            )
+
     # ── Tool Result Feedback ─────────────────────────────────────
 
     EXPLOIT_TOOLS = {"sqlmap_test", "send_payload", "command_injection_test",
@@ -2477,6 +2618,14 @@ class Orchestrator:
         """
         execution = TaskExecution(success=False, result_text="")
 
+        # O1.2: capture the world-state before this task runs so the plan
+        # review LLM can see exactly what this task discovered (added
+        # Endpoint/Vulnerability/Credential/Session/Flag/Service nodes).
+        try:
+            self._cognition_before = node_ids_by_type(self.dkg)
+        except Exception:
+            self._cognition_before = None
+
         task_instruction = task.get("instruction", "unknown")
         task_tool = task.get("tool", "")
         task_params = task.get("params", {})
@@ -2544,12 +2693,18 @@ class Orchestrator:
             # Inject recent DKG artifacts so the LLM knows about
             # credentials/files/sessions discovered by prior tasks
             _recent_ctx = self._extract_recent_artifacts()
+            # O1.3: unified cognition snapshot — facts, beliefs, plan and
+            # rationale rendered from the current world model. This is what
+            # keeps the execution-phase LLM aligned with the latest state
+            # even after conversation history was compressed.
+            _belief_ctx = self._belief_context()
             task_prompt = (
                 f"Execute plan task {iteration}/{max_iter}:\n"
                 f"  Instruction: {task_instruction}\n"
                 f"  Required tool: {task_tool if task_tool else '(choose the best tool)'}\n"
                 f"  Params: {json.dumps(task_params)}\n"
                 + (f"\n{_recent_ctx}\n" if _recent_ctx else "") +
+                (f"\n{_belief_ctx}\n" if _belief_ctx else "") +
                 f"\n{freedom_note}"
             )
             content, task_tool_calls = self.llm.generate(
@@ -2955,6 +3110,17 @@ class Orchestrator:
 
         # ── LLM reviews and updates plan after every task (VulnBot-style) ──
         task_success = _any_success
+
+        # O2.1: positive belief feedback — a successful task raises the
+        # confidence of the matching vulnerability hypothesis.
+        try:
+            if task_success:
+                self._apply_vulnerability_feedback(
+                    task, success=True,
+                    flag_found=bool(execution.flag_result),
+                )
+        except Exception:
+            pass
         task_result_text = self._summarize_task_result(
             tc_names, task_success, _all_task_stdouts
         )
@@ -3072,6 +3238,21 @@ class Orchestrator:
             )
             _eval2 = await self.evaluator.evaluate(_task_obj, _core_res)
             _repair = self.replanner.local_repair(_task_obj, _eval2)
+            # O2.1: belief feedback — a failed task applies the Evaluator's
+            # confidence delta (HYPOTHESIS_REJECTED lowers it, TOOL_ERROR /
+            # INVALID_ARGUMENT leave it unchanged) to the matching hypothesis.
+            try:
+                self._apply_vulnerability_feedback(
+                    task, success=False,
+                    failure_type=(
+                        _eval2.failure_type.value
+                        if _eval2.failure_type is not None
+                        else None
+                    ),
+                    delta=float(_eval2.confidence_delta or 0.0),
+                )
+            except Exception:
+                pass
             self._task_log_event(
                 "info", "replan_requested",
                 task_id=task.get("id", ""),
@@ -3372,6 +3553,12 @@ class Orchestrator:
                 for v in sys_tested[:5]
             )
 
+        # O1.3: unified cognition snapshot injected into the loop's initial
+        # context so plan generation and execution start from one world view.
+        belief_block = self._belief_context(compact=True)
+        if belief_block:
+            belief_block = f"\n{belief_block}\n"
+
         initial_prompt = f"""Target: {target_url}
 
 ## Discovered Services
@@ -3393,6 +3580,7 @@ class Orchestrator:
 
 {plan_status}
 {vuln_text}
+{belief_block}
 """
 
         # Inject initial context into LLM conversation (no tool calling yet).
@@ -7848,21 +8036,39 @@ Output ONLY valid JSON:
         else:
             task["status"] = "failed"
         task["result_summary"] = task_result[:2000]
+        # O2.2: keep PlanMemory status in sync — the entry recorded before
+        # execution still said "pending"; replan_context() relies on the
+        # status to decide which rationale is still active.
+        try:
+            self.memory.record_task(task)
+        except Exception:
+            pass
 
         # Build prompt: what just happened + current plan + new DKG state
         state = self._get_state()
-        new_discoveries = ""
-        if state.endpoints:
-            new_discoveries += "\n".join(
-                f"  - {ep.method} {ep.url}" + (f" params={ep.params}" if ep.params else "")
-                for ep in state.endpoints[-5:]
-            )
-            new_discoveries = f"\n## Latest Discoveries\n{new_discoveries}"
-        if state.credentials:
-            cred_text = "\n".join(
-                f"  - {c.username}@{c.source_host}" for c in state.credentials
-            )
-            new_discoveries += f"\n## Credentials\n{cred_text}"
+        # O1.2: diff-based discoveries — the review LLM sees exactly which
+        # nodes this task added to the world model. Falls back to the legacy
+        # "latest endpoints/credentials" view when there is no per-task
+        # baseline (e.g. the plan-exhausted review).
+        _before_nodes = getattr(self, "_cognition_before", None)
+        try:
+            new_discoveries = render_new_discoveries(_before_nodes, self.dkg)
+        except Exception:
+            new_discoveries = ""
+        self._cognition_before = None
+        if not new_discoveries:
+            if state.endpoints:
+                new_discoveries = "\n## Latest Discoveries\n" + "\n".join(
+                    f"  - {ep.method} {ep.url}"
+                    + (f" params={ep.params}" if ep.params else "")
+                    for ep in state.endpoints[-5:]
+                )
+            if state.credentials:
+                new_discoveries += "\n## Credentials\n" + "\n".join(
+                    f"  - {c.username}@{c.source_host}" for c in state.credentials
+                )
+        else:
+            new_discoveries = f"\n{new_discoveries}"
 
         # If the task was reading a config/credential file, flag it explicitly
         cred_reminder = ""
@@ -8059,6 +8265,17 @@ Output ONLY valid JSON:
         except Exception:
             pass
 
+        # O1.3: unified cognition snapshot — beliefs (hypotheses with
+        # confidence/status), plan summary, defense and preserved rationale,
+        # so the review LLM plans from the same world model as execution.
+        _belief_text = ""
+        try:
+            _belief_text = self._belief_context(compact=True)
+            if _belief_text:
+                _belief_text = f"\n{_belief_text}\n"
+        except Exception:
+            pass
+
         prompt = (
             f"Just completed: {task.get('instruction','')}\n"
             f"Tool: {task.get('tool','')}\n"
@@ -8075,6 +8292,7 @@ Output ONLY valid JSON:
             f"{_absent_text}\n\n"
             f"{_provenance_text}"
             f"{_memory_text}"
+            f"{_belief_text}"
             f"## Your Job: Update the Plan\n"
             f"Review the plan and apply relevant changes from:\n"
             f"- TOTAL tasks MUST NOT exceed 15. If the plan already has 12+ tasks, "
@@ -8506,10 +8724,17 @@ Output ONLY valid JSON:
     def _build_truncation_context(self) -> str:
         """Build structured DKG state summary for injection when conversation is truncated.
 
-        Called by _maybe_compress() when the conversation history is truncated
-        (max_compressions reached).  Gives the LLM critical state facts directly
-        instead of a generic "DKG has the facts" message.
+        O3.4: reuses the unified cognition snapshot (facts + beliefs + plan +
+        defense), falling back to the legacy manual DKG summary when the
+        snapshot is unavailable. Called by _maybe_compress() when the
+        conversation history is truncated (max_compressions reached).
         """
+        try:
+            ctx = self._belief_context(compact=True)
+            if ctx:
+                return ctx
+        except Exception:
+            pass
         lines = ["[DKG STATE AT TRUNCATION — structured facts preserved]"]
         try:
             # Flags captured so far

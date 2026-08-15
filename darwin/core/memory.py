@@ -245,6 +245,18 @@ class PlanMemory:
         if isinstance(task, dict):
             task = Task.from_legacy_dict(task)
         entry = PlanEntry.from_task(task)
+        existing = self._entries.get(entry.task_id)
+        if existing is not None:
+            # O2.2: status-sync calls (task completed/failed) often carry a
+            # slim task dict without the original rationale. Never erase the
+            # decision provenance — keep the earlier rationale/hypothesis/
+            # evidence when the incoming entry does not supply them.
+            if not entry.rationale:
+                entry.rationale = existing.rationale
+            if not entry.hypothesis:
+                entry.hypothesis = existing.hypothesis
+            if not entry.evidence:
+                entry.evidence = list(existing.evidence)
         self._entries[entry.task_id] = entry
         return entry
 
@@ -360,6 +372,12 @@ class MemoryManager:
         self.working = working  # DKG adapter (interface mapping in P10)
         self.experience = experience  # CTEG adapter (interface mapping in P10)
         self.classifier = ImportanceClassifier()
+        # O3.1/O3.3: callable() -> str rendering the CURRENT cognition
+        # snapshot (beliefs + plan + defense + preserved rationale). The
+        # orchestrator wires it; compression_payload() prepends it to the
+        # preserved payload, so the block rides compression verbatim and is
+        # rendered at compression time (no stale flush needed).
+        self.belief_provider = None
 
     def record_task(self, task: Task | dict) -> PlanEntry:
         return self.plan.record_task(task)
@@ -499,8 +517,15 @@ class MemoryManager:
                 lines.append(line)
             return "\n".join(lines)
 
-        return (
-            _render(view.preserved),
-            _render(view.compressible),
-            view.discarded_count,
-        )
+        preserved_text = _render(view.preserved)
+        # O3.1: the belief snapshot (beliefs/plan/defense/rationale) is
+        # decision-critical and must survive compression verbatim. It is
+        # rendered live by the orchestrator-provided callable.
+        if self.belief_provider is not None:
+            try:
+                belief = self.belief_provider()
+            except Exception:
+                belief = ""
+            if belief:
+                preserved_text = f"{belief}\n" + preserved_text if preserved_text else belief
+        return preserved_text, _render(view.compressible), view.discarded_count
