@@ -464,7 +464,9 @@ class DefensePerceptionModule:
             return dsv
 
         prompt = self._build_classifier_prompt(dsv, probe_results, http_responses)
-        content, _ = self._llm.generate(prompt, temperature=0.1)
+        content, _ = self._llm.generate(
+            prompt, temperature=0.1, stage="defense_classification"
+        )
 
         # Parse LLM output for defense type and confidence
         try:

@@ -33,7 +33,7 @@ class FakeLLM:
     def add_tool_result(self, tool_call_id, result):
         self.calls.append(("add_tool_result", tool_call_id, result))
 
-    def generate(self, prompt, system_prompt=None, tools=None, temperature=None, timeout=180.0):
+    def generate(self, prompt, system_prompt=None, tools=None, temperature=None, timeout=180.0, stage=None):
         if self.fail_on_generate:
             raise AssertionError("generate() must not be called on the direct path")
         self.calls.append(("generate", prompt, system_prompt))

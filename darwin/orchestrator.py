@@ -53,6 +53,7 @@ from darwin.tools.attack_server import create_attack_gateway
 from darwin.utils.http_client import HTTPClient, ProbeClient, HTTPResponse
 from darwin.utils.llm import LLMSession
 from darwin.utils.phase_logger import PhaseLogger
+from darwin.utils.thought_logger import ThoughtLogger
 
 
 # -- System Prompts (imported from darwin.prompts) --------------------------
@@ -373,6 +374,7 @@ class Orchestrator:
         # Initialize phase logger with config-driven settings
         _log_dir = "log"
         _log_level = "INFO"
+        _log_thoughts = True
         try:
             import yaml
             _config_path = getattr(self, "_config_path", "config/darwin.yaml")
@@ -382,6 +384,7 @@ class Orchestrator:
                 _darwin = _cfg.get("darwin", {})
                 _log_dir = _darwin.get("log_dir", "log")
                 _log_level = _darwin.get("log_level", "INFO")
+                _log_thoughts = _darwin.get("log_thoughts", True)
         except Exception:
             pass
         self.phase_logger = PhaseLogger(
@@ -389,6 +392,14 @@ class Orchestrator:
             log_dir=_log_dir,
             log_level=_log_level,
         )
+        # P3: chain-of-thought logging — declarative wiring only. All logic
+        # lives in ThoughtLogger; LLMSession just notifies it.
+        self.thought_logger = ThoughtLogger(
+            run_id=ts,
+            log_dir=_log_dir,
+            enabled=bool(_log_thoughts),
+        )
+        self.llm.thought_logger = self.thought_logger
         self.phase_logger.set_shared_metadata(
             target=target_url,
             model=getattr(self.llm, 'model', ''),
@@ -2556,6 +2567,7 @@ class Orchestrator:
                 prompt=task_prompt,
                 system_prompt=SYSTEM_PROMPT_ORCHESTRATOR_UNIFIED,
                 tools=tool_defs,
+                stage="task_execution",
             )
 
             if not task_tool_calls:
@@ -2565,6 +2577,7 @@ class Orchestrator:
                            f"Do not explain. Just execute the function call.",
                     system_prompt=SYSTEM_PROMPT_ORCHESTRATOR_UNIFIED,
                     tools=tool_defs,
+                    stage="task_execution",
                 )
             if not task_tool_calls:
                 log.info("[PLAN] task %s: LLM produced no tool calls — skipping",
@@ -4478,6 +4491,7 @@ class Orchestrator:
 
         content, _ = self.llm.generate(
             prompt=prompt,
+            stage="analyze",
         )
         tokens_used = self.llm.token_count - tokens_before
         self._task_log_event("info", "llm_analyze_call",
@@ -4669,6 +4683,7 @@ class Orchestrator:
                            f"Output JSON array: [{{\"index\": 1, \"vuln_type\": \"...\", "
                            f"\"suggested_tool\": \"...\", \"confidence\": 0.X}}]",
                     system_prompt="You are a vulnerability classifier. Output only valid JSON.",
+                    stage="dkg_augment",
                 )
                 classifications = self._extract_json(llm_content)
                 if isinstance(classifications, list):
@@ -5353,6 +5368,7 @@ class Orchestrator:
             prompt=_first_prompt,
             system_prompt=SYSTEM_PROMPT_RESEARCH,
             tools=research_tools,
+            stage="research",
         )
 
         # LLM-driven rounds (max 2 more)
@@ -5406,6 +5422,7 @@ class Orchestrator:
                 prompt="Continue researching. Output JSON summary when done.",
                 system_prompt=SYSTEM_PROMPT_RESEARCH,
                 tools=research_tools,
+                stage="research",
             )
 
         # ── Parse findings from final content ──
@@ -5502,6 +5519,7 @@ class Orchestrator:
             prompt=prompt,
             system_prompt=SYSTEM_PROMPT_RESEARCH,
             tools=research_tools,
+            stage="research",
         )
 
         # Execute research tool calls (max 2 rounds)
@@ -5524,6 +5542,7 @@ class Orchestrator:
                 prompt="Continue researching. Output JSON summary when done.",
                 system_prompt=SYSTEM_PROMPT_RESEARCH,
                 tools=research_tools,
+                stage="research",
             )
 
         # Store findings in DKG Service nodes
@@ -6877,7 +6896,7 @@ Output ONLY valid JSON array (3-20 tasks depending on complexity. More tasks != 
 
         self._maybe_compress()
         try:
-            content, _ = self.llm.generate(prompt=prompt, system_prompt=SYSTEM_PROMPT_ORCHESTRATOR_UNIFIED, timeout=180.0)
+            content, _ = self.llm.generate(prompt=prompt, system_prompt=SYSTEM_PROMPT_ORCHESTRATOR_UNIFIED, timeout=180.0, stage="plan")
         except Exception as e:
             log.warning("Plan generation LLM call failed: %s — retrying with shorter prompt", e)
             self._maybe_compress()
@@ -6888,7 +6907,7 @@ Output ONLY valid JSON array (3-20 tasks depending on complexity. More tasks != 
                     short_vulns = self._format_vulnerability_summary_short(max_items=5)
                     short_prompt += f"## Analyzed Vulnerabilities\n{short_vulns}\n"
                 short_prompt += prompt.split("## Available Tools")[1] if "## Available Tools" in prompt else ""
-                content, _ = self.llm.generate(prompt=short_prompt, system_prompt=SYSTEM_PROMPT_ORCHESTRATOR_UNIFIED, timeout=180.0)
+                content, _ = self.llm.generate(prompt=short_prompt, system_prompt=SYSTEM_PROMPT_ORCHESTRATOR_UNIFIED, timeout=180.0, stage="plan")
             except Exception as e2:
                 log.warning("Plan generation retry also failed: %s — using hardcoded fallback", e2)
                 content = ""
@@ -7543,7 +7562,8 @@ Output ONLY valid JSON:
 
         try:
             content, _ = self.llm.generate(
-                prompt=prompt, system_prompt=SYSTEM_PROMPT_EVALUATOR
+                prompt=prompt, system_prompt=SYSTEM_PROMPT_EVALUATOR,
+                stage="fix_analysis",
             )
             # Extract JSON from response
             match = re.search(r"\{[\s\S]*\}", content)
@@ -7693,7 +7713,8 @@ Output ONLY valid JSON:
         try:
             from darwin.utils.llm import LLMSession
             _classifier = LLMSession.from_config("classifier")
-            content, _ = _classifier.generate(prompt=prompt)
+            _classifier.thought_logger = getattr(self, "thought_logger", None)
+            content, _ = _classifier.generate(prompt=prompt, stage="credential_extraction")
             if not content:
                 return
             # Extract JSON from response
@@ -8104,6 +8125,7 @@ Output ONLY valid JSON:
             content, _ = self.llm.generate(
                 prompt=prompt,
                 system_prompt=SYSTEM_PROMPT_PLANNER,
+                stage="plan_review",
             )
             new_tasks = self._extract_json_array(content) or []
             if new_tasks and isinstance(new_tasks, list) and len(new_tasks) > 0:
@@ -8335,6 +8357,7 @@ Output ONLY valid JSON:
                        f"Consider: backup files, config leaks, admin panels, API docs, "
                        f"debug endpoints. Output JSON array of path strings only.",
                 system_prompt="You are a penetration tester. Output only a JSON array of URL paths.",
+                stage="flag_search",
             )
             llm_paths = self._extract_json(llm_paths_content)
             if isinstance(llm_paths, list):
