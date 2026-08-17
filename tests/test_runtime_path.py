@@ -139,7 +139,11 @@ async def test_runtime_path_direct_task_matches_legacy(
                 exit_code=0,
                 elapsed_ms=1.0,
             )
-        }
+        },
+        # Phase 1: the direct path is schema-validated, so the fake gateway
+        # must declare shell_exec's real parameter (command), not the generic
+        # synthesized {url} schema.
+        schemas={"shell_exec": {"command": {"type": "string"}}},
     )
     recon_gw = fake_gateway({})
     # The direct path must not consult the LLM for tool selection; plan

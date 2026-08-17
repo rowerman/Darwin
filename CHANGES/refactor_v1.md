@@ -2,6 +2,8 @@
 
 > 本文件用于跨 session 续接。新 session 先读本文件 + `Darwin_v2_architecture_plan.md`（v2 目标方案）。
 > 当前进度：**M0–P7（已提交）+ P8–P15 阶段 2b（用户已提交）+ 缺口补齐 G1–G5（本 session，未提交）全部完成；364 passed**。
+> 2026-08-15 session：orchestrator 死代码清理（已提交，main/6c2e328，见 §8）+ LLM 思维链日志
+> （已提交，think-chain/998fdf0，独立文档 `CHANGES/thought_logger.md`）；当前分支 task-status 不含思维链功能。
 > 剩余：P15 2d/3（等真实场景行为等价）、P17 配置与环境、目录化（见 §4）。
 
 ---
@@ -164,3 +166,52 @@ M tests/test_runtime_path.py
 1. 读本文件 + `Darwin_v2_architecture_plan.md`
 2. 对照 §4 剩余清单决定优先级（建议：先提交 G1–G5，再 P17 或等真实场景做 P15 2d/3）
 3. 提交建议：G1–G5 按功能拆 2 个 commit（G5/G3/G2 一组、G1/G4 一组），或一个 commit 收尾
+
+---
+
+## 8. 2026-08-15 session：orchestrator 死代码清理
+
+> 本 session 两件事：① 清理 orchestrator.py 死代码（-860 行，**已提交** main/6c2e328）；
+> ② 新增 LLM 思维链阶段日志（**已提交** think-chain/998fdf0，独立功能文档：
+> [`CHANGES/thought_logger.md`](thought_logger.md)）。思维链功能未合入当前分支。
+
+### 8.1 Orchestrator 死代码清理
+
+- `darwin/orchestrator.py`：9476 → 8614 行，方法 81 → 62
+- 删除 19 个零引用/仅被死代码调用的方法（约 860 行）：
+  `_record_auth_protected_service`、`_try_auto_login`、`_extract_links_from_html`、
+  `_extract_ids_from_url`、`_extract_ids_from_body`、`_update_plan_after_task`、
+  `_fuzz_idor_patterns`、`_post_auth_explore`、`_exploit_phase`（注释即标 legacy，
+  Coordinated/Distributed 遗留）、`_llm_driven_exploit`、`_systematic_post_check`、
+  `_print_phase`、`_print_discovery`、`_print_task_execution`、`_print_task_result`、
+  `_print_progress`、`_save_orchestrator_checkpoint`、`_find_latest_checkpoint`、
+  `_load_orchestrator_checkpoint`
+- 顺带删除：4 个孤儿节标题、`from enum import Enum`、import 中的 `MCPGateway`
+- 教训：`_active_service_research` 最初被误判为死代码（`tests/test_prompts.py` 直接调用
+  `orch._active_service_research()`），已从 git 恢复——判死代码要连 tests 一起 `rg`
+- 验证：`pytest tests/ -q` → 364 passed
+
+### 8.2 分支与未提交状态（2026-08-15）
+
+分支归属（2026-08-15 实测）：
+
+- `main` → `6c2e328 remove: unused rubbish code`：含 orchestrator 死代码清理
+- `think-chain` → `998fdf0 feat: add thought chain log`：含思维链功能全部代码 + 测试
+- `task-status` → `82302ae feat: add task status to help llm`：含认知快照/信念功能
+  （`darwin/core/belief.py` 等），**不含思维链功能**；当前工作区在此分支
+
+当前未提交的只有 CHANGES/ 文档重组：
+
+```
+D CHANGES.md                      （已移入 CHANGES/OLD_CHANGES.md）
+D Darwin_v2_architecture_plan.md  （已从根目录删除，未归档）
+D REFACTOR_PROGRESS.md            （已移入 CHANGES/refactor_v1.md）
+?? CHANGES/                       （cognition_snapshot.md / OLD_CHANGES.md / refactor_v1.md / thought_logger.md）
+```
+
+### 8.3 下一步建议
+
+1. 思维链功能的实现细节与待办见 [`CHANGES/thought_logger.md`](thought_logger.md)
+2. 决定思维链功能（think-chain）与认知快照功能（task-status）是否/如何合并
+3. 提交 CHANGES/ 文档重组；`Darwin_v2_architecture_plan.md` 被删，需确认是否归档
+4. 按 §4 剩余清单继续（P15 2d/3 等真实场景行为等价；P17 配置与环境；目录化）

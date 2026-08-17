@@ -40,6 +40,9 @@ _COLLECTION_MAP = {
     "windows_ad": "windows_ad",
     "cloud": "cloud",
     "network": "network",
+    # Phase 2: benchmark scenario domains map onto existing collections.
+    "k8s": "cloud",
+    "db": "network",
 }
 
 
@@ -91,8 +94,13 @@ class DarwinRAG:
         }
         self._vectorizers: Dict[str, Any] = {}
         self._matrices: Dict[str, Any] = {}
+        self._entry_index: Dict[str, Dict[str, int]] = {}
         self._loaded = False
         self._entry_count = 0
+        # Phase 2: explicit taxonomy (domain -> class -> scenario leaf).
+        self._taxonomy: Optional[Dict[str, Any]] = None
+        self._taxonomy_leaves: List[Dict[str, Any]] = []
+        self._leaf_embeddings: Dict[str, np.ndarray] = {}
 
         self._model_dir = model_dir or self._DEFAULT_MODEL_DIR
         self._embedder = None
@@ -182,6 +190,9 @@ class DarwinRAG:
             if not entries:
                 continue
             self._collections[coll] = entries
+            self._entry_index[coll] = {
+                str(e.get("id", "")): i for i, e in enumerate(entries)
+            }
             total += len(entries)
 
             texts = [e["_search_text"] for e in entries]
@@ -219,6 +230,7 @@ class DarwinRAG:
 
         self._entry_count = total
         self._loaded = True
+        self.load_taxonomy()
         rag_log.info("DarwinRAG loaded %d entries across %d collections in %.2fs",
                      total, sum(1 for c in COLLECTIONS if raw_entries[c]), time.time() - t0)
         return total
@@ -424,6 +436,207 @@ class DarwinRAG:
 
         return results
 
+    # ── Phase 2: hierarchical retrieval ─────────────────────────────
+
+    def load_taxonomy(self, path: str = "") -> int:
+        """Load the explicit taxonomy (domain -> class -> scenario leaf).
+
+        Returns the number of leaves loaded. Missing/invalid taxonomy files
+        are tolerated — hierarchical search then falls back to flat search.
+        """
+        self._taxonomy = None
+        self._taxonomy_leaves = []
+        self._leaf_embeddings = {}
+        candidate = path or str(
+            Path(__file__).resolve().parent.parent / "knowledge" / "taxonomy.json"
+        )
+        taxonomy_path = Path(candidate)
+        if not taxonomy_path.exists():
+            rag_log.info("No taxonomy file at %s — hierarchical search disabled", taxonomy_path)
+            return 0
+        try:
+            data = json.loads(taxonomy_path.read_text(encoding="utf-8"))
+        except Exception as e:
+            rag_log.warning("Failed to load taxonomy %s: %s", taxonomy_path, e)
+            return 0
+        leaves = data.get("leaves", []) if isinstance(data, dict) else []
+        leaves = [leaf for leaf in leaves if isinstance(leaf, dict) and leaf.get("id")]
+        self._taxonomy = data
+        self._taxonomy_leaves = leaves
+        rag_log.info("Taxonomy loaded: %d leaves from %s", len(leaves), taxonomy_path)
+        return len(leaves)
+
+    @property
+    def taxonomy_loaded(self) -> bool:
+        return bool(self._taxonomy_leaves)
+
+    def _leaf_text(self, leaf: Dict[str, Any]) -> str:
+        parts = [str(p) for p in (leaf.get("path") or [])]
+        parts.extend([str(leaf.get("title") or ""), str(leaf.get("guid") or "")])
+        return " ".join(parts)
+
+    def _route_leaves(
+        self, query: str, route_k: int, min_route_score: float = 0.0,
+    ) -> List[Dict[str, Any]]:
+        """Score every taxonomy leaf and return the top ``route_k``."""
+        if not self._taxonomy_leaves:
+            return []
+        query_words = _tokenize(query)
+        embedder = self._get_embedder()
+        q_vec = None
+        if embedder is not None:
+            q_vec = embedder.encode(
+                [query], normalize_embeddings=True,
+                show_progress_bar=False,
+            )[0]
+
+        scored: List[tuple[float, Dict[str, Any]]] = []
+        for leaf in self._taxonomy_leaves:
+            text = self._leaf_text(leaf)
+            keyword = (
+                _keyword_overlap(query_words, text)
+                if query_words else 0.0
+            )
+            emb = 0.0
+            if q_vec is not None:
+                vec = self._leaf_embeddings.get(leaf["id"])
+                if vec is None:
+                    vec = embedder.encode(
+                        [text], normalize_embeddings=True,
+                        show_progress_bar=False,
+                    )[0]
+                    self._leaf_embeddings[leaf["id"]] = vec
+                emb = float(np.dot(q_vec, vec))
+            score = 0.5 * keyword + (0.5 * max(emb, 0.0) if q_vec is not None else 0.0)
+            scored.append((score, leaf))
+
+        scored.sort(key=lambda x: x[0], reverse=True)
+        return [
+            leaf for score, leaf in scored[:route_k]
+            if score > min_route_score
+        ]
+
+    def _score_subset(
+        self,
+        collection: str,
+        entries: List[Dict[str, Any]],
+        selected_ids: set[str],
+        query: str,
+        query_words: list[str],
+    ) -> List[tuple[float, Dict[str, Any]]]:
+        """Score only the entries whose id is in ``selected_ids``."""
+        subset = [
+            (i, e) for i, e in enumerate(entries)
+            if str(e.get("id", "")) in selected_ids
+        ]
+        if not subset:
+            return []
+        embedder = self._get_embedder()
+        sims: list[float] = []
+        if embedder is not None and collection in self._faiss_indices:
+            idx = self._faiss_indices[collection]
+            q_vec = embedder.encode(
+                [query], normalize_embeddings=True,
+                show_progress_bar=False,
+            )[0]
+            vectors = np.vstack(
+                [idx.reconstruct(i).astype(np.float32) for i, _ in subset]
+            )
+            sims = list((vectors @ q_vec).tolist())
+        elif collection in self._vectorizers:
+            vec = self._vectorizers[collection]
+            q_vec = vec.transform([query])
+            matrix = vec.transform([e["_search_text"] for _, e in subset])
+            from sklearn.metrics.pairwise import cosine_similarity
+            sims = list(cosine_similarity(q_vec, matrix)[0])
+        else:
+            return []
+
+        scored: List[tuple[float, Dict[str, Any]]] = []
+        for (_, entry), sim in zip(subset, sims):
+            if sim <= 0.0:
+                continue
+            overlap = _keyword_overlap(query_words, entry.get("_search_text", ""))
+            confidence = float(entry.get("confidence") or 0.5)
+            score = 0.6 * sim + 0.2 * overlap + 0.2 * confidence
+            scored.append((score, entry))
+        return scored
+
+    def search_hierarchical(
+        self,
+        query: str,
+        top_k: int = 5,
+        route_k: int = 2,
+        min_route_score: float = 0.0,
+        min_keyword_overlap: float = 0.0,
+    ) -> List[Dict[str, Any]]:
+        """Two-stage retrieval: route to taxonomy leaves, then score inside
+        the selected subtree. Falls back to the flat :meth:`search` when the
+        taxonomy is unavailable or no leaf routes above ``min_route_score``.
+
+        Rerank: 0.6 * vector/cosine + 0.2 * keyword overlap + 0.2 * confidence.
+        Results carry ``path`` and ``guid`` for explainability.
+        """
+        if not self.taxonomy_loaded:
+            return self.search(
+                query, top_k=top_k, min_keyword_overlap=min_keyword_overlap
+            )
+
+        leaves = self._route_leaves(
+            query, route_k=route_k, min_route_score=min_route_score
+        )
+        if not leaves:
+            return self.search(
+                query, top_k=top_k, min_keyword_overlap=min_keyword_overlap
+            )
+
+        selected_ids = {str(leaf["id"]) for leaf in leaves}
+        leaf_by_id = {str(leaf["id"]): leaf for leaf in leaves}
+        query_words = _tokenize(query)
+        all_scored: List[tuple[float, Dict[str, Any]]] = []
+
+        for coll in COLLECTIONS:
+            entries = self._collections.get(coll, [])
+            if not entries:
+                continue
+            all_scored.extend(
+                self._score_subset(
+                    coll, entries, selected_ids, query, query_words
+                )
+            )
+
+        if not all_scored:
+            return self.search(
+                query, top_k=top_k, min_keyword_overlap=min_keyword_overlap
+            )
+
+        all_scored.sort(key=lambda x: x[0], reverse=True)
+        results: List[Dict[str, Any]] = []
+        seen: set[str] = set()
+        for score, entry in all_scored:
+            entry_id = str(entry.get("id", ""))
+            if entry_id in seen:
+                continue
+            seen.add(entry_id)
+            leaf = leaf_by_id.get(entry_id, {})
+            r = {k: v for k, v in entry.items() if not k.startswith("_")}
+            r["score"] = round(score, 3)
+            r["path"] = leaf.get("path", [])
+            r["guid"] = leaf.get("guid", "")
+            results.append(r)
+            if len(results) >= top_k:
+                break
+
+        if not results:
+            return self.search(
+                query, top_k=top_k, min_keyword_overlap=min_keyword_overlap
+            )
+        rag_log.info(
+            "RAG_HIER_SEARCH query=%r route_leaves=%d results=%d elapsed=%.3fs",
+            query[:120], len(leaves), len(results), 0.0,
+        )
+        return results
+
     def summarize(
         self, query: str, top_k: int = 3,
         collection: str = "", category: str = "",
@@ -509,6 +722,9 @@ class DarwinRAG:
 
         if new_count > 0:
             # Rebuild index for this collection
+            self._entry_index[collection] = {
+                str(e.get("id", "")): i for i, e in enumerate(entries)
+            }
             texts = [e["_search_text"] for e in entries]
             embedder = self._get_embedder()
             if embedder:
@@ -691,6 +907,9 @@ class DarwinRAG:
             entries = self._collections.get(coll, [])
             if not entries:
                 continue
+            self._entry_index[coll] = {
+                str(e.get("id", "")): i for i, e in enumerate(entries)
+            }
             texts = [e["_search_text"] for e in entries]
             total += len(entries)
 

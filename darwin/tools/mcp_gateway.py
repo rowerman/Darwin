@@ -3,15 +3,32 @@
 Reference:
   - Cochise common.py — LLMFunctionMapping auto-conversion
   - CPA spoke/grpc/ — gRPC tool registry pattern
+
+Phase 1 (tool contract): every registration carries (or auto-derives) a
+ToolSpec. The gateway exposes ``get_tool_specs()`` for the manifest and
+coverage tooling, and provides a shell-argv executor that runs external
+commands without a shell (``register_shell_argv_tool``).
 """
 
 from __future__ import annotations
 
 import asyncio
+import logging
+import re
 import subprocess
 import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional
+
+from darwin.tools.spec import (
+    EXECUTOR_MCP,
+    EXECUTOR_PYTHON,
+    EXECUTOR_SHELL,
+    EXECUTOR_SHELL_ARGV,
+    ToolSpec,
+    auto_spec,
+    shlex_split_value,
+)
 
 
 # ── Semantic parameter alias table ────────────────────────────────────
@@ -78,6 +95,7 @@ class MCPGateway:
         self._registry: Dict[str, _ToolEntry] = {}
         self._execution_log: List[ToolResult] = []
         self._enabled_domains: set[str] | None = None  # None = all domains enabled
+        self._log = logging.getLogger(__name__)
 
     def set_enabled_domains(self, domains: set[str] | None) -> None:
         """Set which tool domains are enabled. None = all domains enabled.
@@ -95,24 +113,35 @@ class MCPGateway:
         description: str,
         parameters: Dict[str, Any],
         domain: str | None = None,
+        spec: ToolSpec | None = None,
     ) -> None:
         """Register a tool with its schema.
 
         Args:
             domain: Optional domain tag for filtering (e.g. 'web', 'k8s', 'cloud', 'ad').
                     Tools without a domain are always registered.
+            spec: Optional explicit ToolSpec. When omitted, an auto spec is
+                    derived from the registration fields (Phase 1 contract).
         """
         # Domain filter: skip if domain is set and not in enabled_domains
         if domain is not None and self._enabled_domains is not None:
             if domain not in self._enabled_domains:
                 return  # silently skip
 
+        tool_spec = spec or auto_spec(
+            name=name,
+            description=description,
+            parameters=parameters,
+            domain=domain,
+            executor=EXECUTOR_PYTHON,
+        )
         self._registry[name] = _ToolEntry(
             name=name,
             func=func,
             description=description,
             parameters=parameters,
             domain=domain,
+            spec=tool_spec,
         )
 
     def register_shell_tool(
@@ -120,6 +149,7 @@ class MCPGateway:
         parameters: Dict[str, Any], parser: Callable | None = None,
         timeout: int = 60, retries: int = 1,
         domain: str | None = None,
+        spec: ToolSpec | None = None,
     ) -> None:
         """Register a shell command as a tool.
 
@@ -133,13 +163,18 @@ class MCPGateway:
             retries: Number of retries after timeout (default 1, timeout multiplier 1.5x)
             domain: Optional domain tag for filtering (e.g. 'web', 'k8s', 'cloud', 'ad').
                     Tools without a domain are always registered.
+            spec: Optional explicit ToolSpec.
         """
         # Domain filter: skip if domain is set and not in enabled_domains
         if domain is not None and self._enabled_domains is not None:
             if domain not in self._enabled_domains:
                 return  # silently skip
-        import logging
-        _log = logging.getLogger(__name__)
+        # Some registrations pass parenthesized adjacent string literals as a
+        # tuple (e.g. ``command_template=("python3 -c \\"", "import ...")``).
+        # Coerce to a single string so both format() and spec validation work.
+        if isinstance(command_template, (list, tuple)):
+            command_template = "".join(command_template)
+        _log = self._log
 
         # Collect defaults from parameter schema
         _defaults = {k: v["default"] for k, v in parameters.items() if isinstance(v, dict) and "default" in v}
@@ -234,9 +269,153 @@ class MCPGateway:
             )
             return result
 
+        tool_spec = spec or auto_spec(
+            name=name,
+            description=description,
+            parameters=parameters,
+            domain=domain,
+            executor=EXECUTOR_SHELL,
+            command_template=command_template,
+        )
         self._registry[name] = _ToolEntry(
             name=name, func=_execute, description=description, parameters=parameters,
+            domain=domain, spec=tool_spec,
+        )
+
+    def register_shell_argv_tool(
+        self,
+        name: str,
+        shell_args: List[str],
+        description: str,
+        parameters: Dict[str, Any],
+        split_params: List[str] | None = None,
+        parser: Callable | None = None,
+        timeout: int = 60,
+        retries: int = 1,
+        domain: str | None = None,
+        spec: ToolSpec | None = None,
+    ) -> None:
+        """Register a shell tool that runs WITHOUT a shell (argv list).
+
+        Args:
+            name: Tool name.
+            shell_args: argv template; each element may contain ``{param}``
+                placeholders. Elements that are exactly ``{param}`` and whose
+                param is listed in ``split_params`` are shlex-split and spliced
+                (preserving the old shell word-splitting behaviour for
+                free-form ``command`` parameters).
+            description: Tool description for the LLM.
+            parameters: Parameter schema (OpenAI property format).
+            split_params: params to word-split when injected as a standalone
+                argv element.
+            parser: Optional output parser.
+            timeout: Per-attempt timeout in seconds.
+            retries: Retries after timeout (1.5x multiplier per attempt).
+            domain: Optional domain tag.
+            spec: Optional explicit ToolSpec.
+        """
+        if domain is not None and self._enabled_domains is not None:
+            if domain not in self._enabled_domains:
+                return
+        _log = self._log
+        split_params = list(split_params or [])
+        _defaults = {
+            k: v["default"]
+            for k, v in parameters.items()
+            if isinstance(v, dict) and "default" in v
+        }
+
+        async def _execute(**kwargs: Any) -> ToolResult:
+            try:
+                for k, v in _defaults.items():
+                    kwargs.setdefault(k, v)
+                argv: List[str] = []
+                for element in shell_args:
+                    match = re.fullmatch(r"\{(\w+)\}", element)
+                    if match and match.group(1) in split_params:
+                        argv.extend(shlex_split_value(kwargs.get(match.group(1))))
+                    else:
+                        argv.append(element.format(**kwargs))
+            except (ValueError, KeyError) as e:
+                _err_msg = (
+                    f"argv format error: {e} | argv={shell_args[:4]} | kwargs={kwargs}"
+                )
+                return ToolResult(
+                    tool_name=name, success=False,
+                    stdout=_err_msg, stderr=_err_msg,
+                    exit_code=1, elapsed_ms=0,
+                )
+
+            start = time.perf_counter()
+            last_stderr = ""
+            max_attempts = 1 + retries
+            for attempt in range(max_attempts):
+                current_timeout = timeout * (1.5 ** attempt)
+                proc = None
+                try:
+                    import os
+                    no_prompt_env = {**os.environ, "PGPASSWORD": ""}
+                    proc = await asyncio.create_subprocess_exec(
+                        *argv,
+                        stdout=asyncio.subprocess.PIPE,
+                        stderr=asyncio.subprocess.PIPE,
+                        env=no_prompt_env,
+                    )
+                    stdout, stderr = await asyncio.wait_for(
+                        proc.communicate(), timeout=current_timeout
+                    )
+                    stdout_s = stdout.decode("utf-8", errors="replace")
+                    stderr_s = stderr.decode("utf-8", errors="replace")
+                    elapsed = (time.perf_counter() - start) * 1000
+                    parsed = {}
+                    if parser:
+                        try:
+                            parsed = parser(stdout_s)
+                        except Exception as e:
+                            _log.warning(
+                                "MCPGateway: parser failed for '%s': %s", name, e
+                            )
+                    return ToolResult(
+                        tool_name=name,
+                        success=proc.returncode == 0,
+                        stdout=stdout_s,
+                        stderr=stderr_s,
+                        exit_code=proc.returncode or 0,
+                        elapsed_ms=elapsed,
+                        parsed_output=parsed,
+                    )
+                except asyncio.TimeoutError:
+                    last_stderr = f"Command timed out after {current_timeout}s"
+                    if attempt < max_attempts - 1:
+                        _log.warning(
+                            "Tool '%s' timed out after %ds (attempt %d/%d), retrying",
+                            name, current_timeout, attempt + 1, max_attempts,
+                        )
+                    try:
+                        if proc is not None:
+                            proc.kill()
+                    except Exception:
+                        pass
+
+            elapsed = (time.perf_counter() - start) * 1000
+            return ToolResult(
+                tool_name=name, success=False,
+                stdout="", stderr=last_stderr,
+                exit_code=-1, elapsed_ms=elapsed,
+            )
+
+        tool_spec = spec or auto_spec(
+            name=name,
+            description=description,
+            parameters=parameters,
             domain=domain,
+            executor=EXECUTOR_SHELL_ARGV,
+            shell_args=shell_args,
+            split_params=split_params,
+        )
+        self._registry[name] = _ToolEntry(
+            name=name, func=_execute, description=description,
+            parameters=parameters, domain=domain, spec=tool_spec,
         )
 
     def _normalize_params(
@@ -245,7 +424,7 @@ class MCPGateway:
         """Normalize LLM-provided parameters to match tool-declared names.
 
         Applies four phases:
-          1. Explicit alias table (_PARAM_ALIASES)
+          1. Explicit aliases: spec.aliases first, then _PARAM_ALIASES
           2. 'anonymous' flag → empty credentials
           3. Substring fuzzy matching for close-but-not-exact names
           4. Drop params not in the tool's declared schema
@@ -258,7 +437,13 @@ class MCPGateway:
         tool_params = entry.parameters  # declared parameter schema dict
 
         # Phase 1: apply explicit aliases
-        for alias, canonical_list in _PARAM_ALIASES.items():
+        spec_aliases: Dict[str, list[str]] = {}
+        if entry.spec is not None:
+            spec_aliases = dict(entry.spec.aliases)
+        alias_table: Dict[str, list[str]] = {}
+        alias_table.update(_PARAM_ALIASES)
+        alias_table.update(spec_aliases)  # spec aliases take precedence
+        for alias, canonical_list in alias_table.items():
             if alias not in normalized:
                 continue
             # Try each canonical name in priority order — first one
@@ -384,6 +569,29 @@ class MCPGateway:
         """List all registered tool names."""
         return list(self._registry.keys())
 
+    def get_tool_specs(self) -> Dict[str, ToolSpec]:
+        """Return {tool_name: ToolSpec} for every registered tool.
+
+        Auto-derives a spec for any entry registered before the Phase 1
+        contract landed, so the manifest covers the full registry.
+        """
+        specs: Dict[str, ToolSpec] = {}
+        for name, entry in self._registry.items():
+            if entry.spec is None:
+                entry.spec = auto_spec(
+                    name=name,
+                    description=entry.description,
+                    parameters=entry.parameters,
+                    domain=entry.domain,
+                    executor=EXECUTOR_PYTHON,
+                )
+            specs[name] = entry.spec
+        return specs
+
+    def ensure_specs(self) -> Dict[str, ToolSpec]:
+        """Idempotent wrapper over :meth:`get_tool_specs` (naming clarity)."""
+        return self.get_tool_specs()
+
     def get_execution_log(self) -> List[ToolResult]:
         """Get all tool execution results."""
         return self._execution_log
@@ -392,9 +600,10 @@ class MCPGateway:
 class _ToolEntry:
     """Internal registry entry for a tool."""
     def __init__(self, name: str, func: Callable, description: str, parameters: Dict[str, Any],
-                 domain: str | None = None):
+                 domain: str | None = None, spec: ToolSpec | None = None):
         self.name = name
         self.func = func
         self.description = description
         self.parameters = parameters
         self.domain = domain
+        self.spec = spec

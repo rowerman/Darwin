@@ -1,0 +1,2015 @@
+{
+  "version": 1,
+  "roots": [
+    {
+      "name": "cloud",
+      "children": [
+        {
+          "name": "n-a-actor-tenant-validation-bug-case-246",
+          "children": []
+        },
+        {
+          "name": "n-a-control-plane-ownership-check-missin",
+          "children": []
+        },
+        {
+          "name": "n-a-non-production-endpoint-skips-audit-",
+          "children": []
+        },
+        {
+          "name": "n-a-unauth-internal-registry-case-260-li",
+          "children": []
+        },
+        {
+          "name": "n-a-cap-net-raw-arp-spoofing",
+          "children": []
+        },
+        {
+          "name": "n-a-cf-fn-sub-injection",
+          "children": []
+        },
+        {
+          "name": "n-a-ci-cd-script-injection",
+          "children": []
+        },
+        {
+          "name": "n-a-atexecchangeowner-patch-analyze-case",
+          "children": []
+        },
+        {
+          "name": "n-a-global-namespace-dependency-confusio",
+          "children": []
+        },
+        {
+          "name": "n-a-forwardingid-authz-bypass-case-073",
+          "children": []
+        },
+        {
+          "name": "n-a-overly-permissive-trust-policy",
+          "children": []
+        },
+        {
+          "name": "n-a-cross-tenant-path-traversal-case-267",
+          "children": []
+        },
+        {
+          "name": "n-a-internal-subnet-mis-anchored-cert-re",
+          "children": []
+        },
+        {
+          "name": "n-a-global-namespace-resource-squatting",
+          "children": []
+        },
+        {
+          "name": "n-a-saml-signing-key-exposure",
+          "children": []
+        },
+        {
+          "name": "n-a-uncovered-service-error-oracle-case-",
+          "children": []
+        },
+        {
+          "name": "n-a-command-injection-iam-privesc",
+          "children": []
+        },
+        {
+          "name": "n-a-connector-store-tenant-scope-missing",
+          "children": []
+        },
+        {
+          "name": "n-a-privileged-container-hostpid-escape",
+          "children": []
+        },
+        {
+          "name": "n-a-notebook-escape-sa-token",
+          "children": []
+        },
+        {
+          "name": "n-a-oidc-federation-misconfiguration",
+          "children": []
+        },
+        {
+          "name": "n-a-auth-bypass-in-provider-agent-cve-20",
+          "children": []
+        },
+        {
+          "name": "n-a-automation-runbook-persistence-case-",
+          "children": []
+        },
+        {
+          "name": "n-a-pickle-deserialization-case-091",
+          "children": []
+        },
+        {
+          "name": "n-a-log-fdw-path-traversal-case-015",
+          "children": []
+        },
+        {
+          "name": "n-a-unlogged-search-api-case-148",
+          "children": []
+        },
+        {
+          "name": "n-a-overly-permissive-rbac",
+          "children": []
+        },
+        {
+          "name": "n-a-scp-enforcement-gap",
+          "children": []
+        },
+        {
+          "name": "n-a-over-scoped-default-sa-case-266-272",
+          "children": []
+        },
+        {
+          "name": "n-a-service-tag-source-ip-trust-case-259",
+          "children": []
+        },
+        {
+          "name": "n-a-ssrf-imds",
+          "children": []
+        },
+        {
+          "name": "n-a-odbc-driver-injection-cve-2022-29972",
+          "children": []
+        },
+        {
+          "name": "n-a-unvalidated-transport-cert-case-255-",
+          "children": []
+        }
+      ]
+    },
+    {
+      "name": "db",
+      "children": [
+        {
+          "name": "n-a-erlang-native-view-rce",
+          "children": []
+        },
+        {
+          "name": "n-a-script-injection",
+          "children": []
+        },
+        {
+          "name": "n-a-nosql-injection",
+          "children": []
+        },
+        {
+          "name": "n-a-misconfiguration",
+          "children": []
+        },
+        {
+          "name": "mssql-linked-server",
+          "children": []
+        },
+        {
+          "name": "mysql-udf-abuse",
+          "children": []
+        },
+        {
+          "name": "tns-poisoning",
+          "children": []
+        }
+      ]
+    },
+    {
+      "name": "k8s",
+      "children": [
+        {
+          "name": "cap-sys-admin-abuse",
+          "children": []
+        },
+        {
+          "name": "cap-sys-ptrace-abuse",
+          "children": []
+        },
+        {
+          "name": "n-a-ip-spoofing",
+          "children": []
+        },
+        {
+          "name": "cri-socket-abuse",
+          "children": []
+        },
+        {
+          "name": "docker-socket-abuse",
+          "children": []
+        },
+        {
+          "name": "n-a-misconfiguration",
+          "children": []
+        },
+        {
+          "name": "cve-2020-8554",
+          "children": []
+        },
+        {
+          "name": "cve-2024-10220",
+          "children": []
+        },
+        {
+          "name": "n-a-hostpath-mount",
+          "children": []
+        },
+        {
+          "name": "cve-2025-1974",
+          "children": []
+        },
+        {
+          "name": "cve-2021-25742",
+          "children": []
+        },
+        {
+          "name": "cve-2020-8558",
+          "children": []
+        },
+        {
+          "name": "n-a-image-tag-mutation",
+          "children": []
+        },
+        {
+          "name": "n-a-network-policy-bypass",
+          "children": []
+        },
+        {
+          "name": "cve-2020-8559",
+          "children": []
+        },
+        {
+          "name": "n-a-scheduling-bypass",
+          "children": []
+        },
+        {
+          "name": "n-a-privileged-pod",
+          "children": []
+        },
+        {
+          "name": "cve-2024-21626",
+          "children": []
+        },
+        {
+          "name": "cve-2025-31133",
+          "children": []
+        },
+        {
+          "name": "cve-2025-52881",
+          "children": []
+        },
+        {
+          "name": "rbac-misconfiguration",
+          "children": []
+        },
+        {
+          "name": "n-a-rbac-lateral",
+          "children": []
+        },
+        {
+          "name": "n-a-taint-bypass",
+          "children": []
+        },
+        {
+          "name": "n-a-admission-control-abuse",
+          "children": []
+        }
+      ]
+    },
+    {
+      "name": "web",
+      "children": [
+        {
+          "name": "graphql-introspection-idor",
+          "children": []
+        },
+        {
+          "name": "jwt-alg-none",
+          "children": []
+        },
+        {
+          "name": "mssql-xp-cmdshell",
+          "children": []
+        },
+        {
+          "name": "mysql-udf-abuse",
+          "children": []
+        },
+        {
+          "name": "insecure-php-deserialization",
+          "children": []
+        },
+        {
+          "name": "cve-2025-1094",
+          "children": []
+        },
+        {
+          "name": "n-a-ssrf-misconfiguration",
+          "children": []
+        },
+        {
+          "name": "n-a-ssti-vulnerability",
+          "children": []
+        },
+        {
+          "name": "cve-2025-24813",
+          "children": []
+        },
+        {
+          "name": "cve-2024-50379",
+          "children": []
+        },
+        {
+          "name": "cve-2025-0366",
+          "children": []
+        },
+        {
+          "name": "cve-2025-8625",
+          "children": []
+        },
+        {
+          "name": "cve-2025-34085",
+          "children": []
+        },
+        {
+          "name": "cve-2025-6058",
+          "children": []
+        },
+        {
+          "name": "stored-xss",
+          "children": []
+        },
+        {
+          "name": "xxe-xml-external-entity",
+          "children": []
+        }
+      ]
+    }
+  ],
+  "leaves": [
+    {
+      "id": "scenario-actor-token",
+      "guid": "",
+      "title": "CLOUD-32 Entra Actor Token：身份 actor 校验缺陷",
+      "path": [
+        "cloud",
+        "n-a-actor-tenant-validation-bug-case-246"
+      ],
+      "tools": [
+        "docker_registry",
+        "container_escape_docker_sock",
+        "shell_exec"
+      ],
+      "capability": "cloud_iam_assume",
+      "source": "../benchmark/cve_challenges/scenarios/cloud/actor-token/GUIDE.md"
+    },
+    {
+      "id": "scenario-attachme-volume",
+      "guid": "",
+      "title": "CLOUD-31 AttachMe：可预测资源 ID + 属主校验缺失",
+      "path": [
+        "cloud",
+        "n-a-control-plane-ownership-check-missin"
+      ],
+      "tools": [
+        "docker_registry",
+        "container_escape_docker_sock",
+        "shell_exec"
+      ],
+      "capability": "web_exploit_send",
+      "source": "../benchmark/cve_challenges/scenarios/cloud/attachme-volume/GUIDE.md"
+    },
+    {
+      "id": "scenario-beta-endpoint",
+      "guid": "",
+      "title": "CLOUD-35 Service Catalog：非生产端点不可见写",
+      "path": [
+        "cloud",
+        "n-a-non-production-endpoint-skips-audit-"
+      ],
+      "tools": [
+        "docker_registry",
+        "container_escape_docker_sock",
+        "shell_exec",
+        "aws_cli",
+        "aws_sts_query",
+        "aws_iam_federation"
+      ],
+      "capability": "web_exploit_send",
+      "source": "../benchmark/cve_challenges/scenarios/cloud/beta-endpoint/GUIDE.md"
+    },
+    {
+      "id": "scenario-buildfleet-registry",
+      "guid": "",
+      "title": "CLOUD-29 构建舰队 + 内部镜像仓库供应链",
+      "path": [
+        "cloud",
+        "n-a-unauth-internal-registry-case-260-li"
+      ],
+      "tools": [
+        "docker_registry",
+        "container_escape_docker_sock",
+        "shell_exec",
+        "send_payload",
+        "php_serialize_generate"
+      ],
+      "capability": "web_exploit_send",
+      "source": "../benchmark/cve_challenges/scenarios/cloud/buildfleet-registry/GUIDE.md"
+    },
+    {
+      "id": "scenario-cap-netraw-metadata",
+      "guid": "",
+      "title": "CLOUD-02 CAP_NET_RAW → 元数据服务 MITM",
+      "path": [
+        "cloud",
+        "n-a-cap-net-raw-arp-spoofing"
+      ],
+      "tools": [
+        "kubectl_exec",
+        "kubectl_run",
+        "kubectl_get_pods",
+        "k8s_secret_dump",
+        "shell_exec"
+      ],
+      "capability": "web_exploit_send",
+      "source": "../benchmark/cve_challenges/scenarios/cloud/cap-netraw-metadata/GUIDE.md"
+    },
+    {
+      "id": "scenario-cap-sys-admin-cgroup",
+      "guid": "K8S-14",
+      "title": "K8S-14: CAP_SYS_ADMIN cgroup Escape",
+      "path": [
+        "k8s",
+        "cap-sys-admin-abuse"
+      ],
+      "tools": [
+        "kubectl_exec",
+        "kubectl_run",
+        "kubectl_get_pods",
+        "k8s_secret_dump",
+        "docker_registry",
+        "container_escape_docker_sock",
+        "shell_exec"
+      ],
+      "capability": "container_escape",
+      "source": "../benchmark/cve_challenges/scenarios/k8s/cap-sys-admin-cgroup/GUIDE.md"
+    },
+    {
+      "id": "scenario-cap-sys-ptrace-inject",
+      "guid": "K8S-19",
+      "title": "K8S-19: CAP_SYS_PTRACE Host Process Injection",
+      "path": [
+        "k8s",
+        "cap-sys-ptrace-abuse"
+      ],
+      "tools": [
+        "kubectl_exec",
+        "kubectl_run",
+        "kubectl_get_pods",
+        "k8s_secret_dump",
+        "shell_exec"
+      ],
+      "capability": "container_escape",
+      "source": "../benchmark/cve_challenges/scenarios/k8s/cap-sys-ptrace-inject/GUIDE.md"
+    },
+    {
+      "id": "scenario-cf-injection",
+      "guid": "",
+      "title": "CLOUD-05 CloudFormation 模板注入 → SSM 参数泄露",
+      "path": [
+        "cloud",
+        "n-a-cf-fn-sub-injection"
+      ],
+      "tools": [
+        "docker_registry",
+        "container_escape_docker_sock",
+        "shell_exec"
+      ],
+      "capability": "web_exploit_send",
+      "source": "../benchmark/cve_challenges/scenarios/cloud/cf-injection/GUIDE.md"
+    },
+    {
+      "id": "scenario-ci-poisoning",
+      "guid": "",
+      "title": "CLOUD-08 CI/CD 管道投毒 → 凭据外泄",
+      "path": [
+        "cloud",
+        "n-a-ci-cd-script-injection"
+      ],
+      "tools": [
+        "docker_registry",
+        "container_escape_docker_sock",
+        "shell_exec"
+      ],
+      "capability": "web_exploit_send",
+      "source": "../benchmark/cve_challenges/scenarios/cloud/ci-poisoning/GUIDE.md"
+    },
+    {
+      "id": "scenario-cloudsql-index-rce",
+      "guid": "",
+      "title": "CLOUD-25 Cloud SQL 引擎补丁：索引函数以供应商角色执行",
+      "path": [
+        "cloud",
+        "n-a-atexecchangeowner-patch-analyze-case"
+      ],
+      "tools": [
+        "docker_registry",
+        "container_escape_docker_sock",
+        "shell_exec"
+      ],
+      "capability": "web_exploit_send",
+      "source": "../benchmark/cve_challenges/scenarios/cloud/cloudsql-index-rce/GUIDE.md"
+    },
+    {
+      "id": "scenario-cni-ip-spoof",
+      "guid": "K8S-30",
+      "title": "K8S-30: CNI IP Spoofing (NetworkPolicy Bypass)",
+      "path": [
+        "k8s",
+        "n-a-ip-spoofing"
+      ],
+      "tools": [
+        "kubectl_exec",
+        "kubectl_run",
+        "kubectl_get_pods",
+        "k8s_secret_dump",
+        "shell_exec"
+      ],
+      "capability": "k8s_apply",
+      "source": "../benchmark/cve_challenges/scenarios/k8s/cni-ip-spoof/GUIDE.md"
+    },
+    {
+      "id": "scenario-composer-depconf",
+      "guid": "",
+      "title": "CLOUD-37 CloudImposer：托管数据平台依赖混淆",
+      "path": [
+        "cloud",
+        "n-a-global-namespace-dependency-confusio"
+      ],
+      "tools": [
+        "docker_registry",
+        "container_escape_docker_sock",
+        "shell_exec"
+      ],
+      "capability": "web_exploit_send",
+      "source": "../benchmark/cve_challenges/scenarios/cloud/composer-depconf/GUIDE.md"
+    },
+    {
+      "id": "scenario-cosmiss-notebook",
+      "guid": "",
+      "title": "CLOUD-23 CosMiss：托管笔记本前端跨租户访问",
+      "path": [
+        "cloud",
+        "n-a-forwardingid-authz-bypass-case-073"
+      ],
+      "tools": [
+        "docker_registry",
+        "container_escape_docker_sock",
+        "shell_exec"
+      ],
+      "capability": "web_exploit_send",
+      "source": "../benchmark/cve_challenges/scenarios/cloud/cosmiss-notebook/GUIDE.md"
+    },
+    {
+      "id": "scenario-couchdb-rce",
+      "guid": "DB-08",
+      "title": "DB-08: CouchDB Arbitrary Command Execution",
+      "path": [
+        "db",
+        "n-a-erlang-native-view-rce"
+      ],
+      "tools": [
+        "curl_get",
+        "http_post",
+        "send_payload",
+        "docker_registry",
+        "container_escape_docker_sock",
+        "shell_exec"
+      ],
+      "capability": "sql_query",
+      "source": "../benchmark/cve_challenges/scenarios/db/couchdb-rce/GUIDE.md"
+    },
+    {
+      "id": "scenario-cri-socket-escape",
+      "guid": "K8S-16",
+      "title": "K8S-16: CRI Socket Mount Escape",
+      "path": [
+        "k8s",
+        "cri-socket-abuse"
+      ],
+      "tools": [
+        "kubectl_exec",
+        "kubectl_run",
+        "kubectl_get_pods",
+        "k8s_secret_dump",
+        "docker_registry",
+        "container_escape_docker_sock",
+        "shell_exec",
+        "crictl_cmd"
+      ],
+      "capability": "container_escape",
+      "source": "../benchmark/cve_challenges/scenarios/k8s/cri-socket-escape/GUIDE.md"
+    },
+    {
+      "id": "scenario-cross-account-trust",
+      "guid": "CLOUD-12 IAM 信任策略 Principal",
+      "title": "CLOUD-12 IAM 信任策略 Principal:* → 跨账号接管",
+      "path": [
+        "cloud",
+        "n-a-overly-permissive-trust-policy"
+      ],
+      "tools": [
+        "docker_registry",
+        "container_escape_docker_sock",
+        "shell_exec",
+        "aws_cli",
+        "aws_sts_query",
+        "aws_iam_federation"
+      ],
+      "capability": "cloud_iam_assume",
+      "source": "../benchmark/cve_challenges/scenarios/cloud/cross-account-trust/GUIDE.md"
+    },
+    {
+      "id": "scenario-dataform-pt",
+      "guid": "",
+      "title": "CLOUD-40 Dataform：托管数据服务跨租户路径穿越",
+      "path": [
+        "cloud",
+        "n-a-cross-tenant-path-traversal-case-267"
+      ],
+      "tools": [
+        "docker_registry",
+        "container_escape_docker_sock",
+        "shell_exec"
+      ],
+      "capability": "web_exploit_send",
+      "source": "../benchmark/cve_challenges/scenarios/cloud/dataform-pt/GUIDE.md"
+    },
+    {
+      "id": "scenario-docker-socket-escape",
+      "guid": "K8S-17",
+      "title": "K8S-17: Docker Socket Mount Escape",
+      "path": [
+        "k8s",
+        "docker-socket-abuse"
+      ],
+      "tools": [
+        "kubectl_exec",
+        "kubectl_run",
+        "kubectl_get_pods",
+        "k8s_secret_dump",
+        "docker_registry",
+        "container_escape_docker_sock",
+        "shell_exec"
+      ],
+      "capability": "container_escape",
+      "source": "../benchmark/cve_challenges/scenarios/k8s/docker-socket-escape/GUIDE.md"
+    },
+    {
+      "id": "scenario-elasticsearch-script",
+      "guid": "DB-07",
+      "title": "DB-07: Elasticsearch Script Injection",
+      "path": [
+        "db",
+        "n-a-script-injection"
+      ],
+      "tools": [
+        "curl_get",
+        "http_post",
+        "send_payload",
+        "docker_registry",
+        "container_escape_docker_sock",
+        "shell_exec"
+      ],
+      "capability": "sql_query",
+      "source": "../benchmark/cve_challenges/scenarios/db/elasticsearch-script/GUIDE.md"
+    },
+    {
+      "id": "scenario-etcd-unauth",
+      "guid": "K8S-08",
+      "title": "K8S-08: etcd Unauthorized Access",
+      "path": [
+        "k8s",
+        "n-a-misconfiguration"
+      ],
+      "tools": [
+        "curl_get",
+        "http_post",
+        "send_payload",
+        "kubectl_exec",
+        "kubectl_run",
+        "kubectl_get_pods",
+        "k8s_secret_dump",
+        "etcdctl_get",
+        "k8s_etcd_keys",
+        "shell_exec"
+      ],
+      "capability": "secret_dump",
+      "source": "../benchmark/cve_challenges/scenarios/k8s/etcd-unauth/GUIDE.md"
+    },
+    {
+      "id": "scenario-externalip-hijack",
+      "guid": "K8S-22",
+      "title": "K8S-22: Service ExternalIP Traffic Interception",
+      "path": [
+        "k8s",
+        "cve-2020-8554"
+      ],
+      "tools": [
+        "kubectl_exec",
+        "kubectl_run",
+        "kubectl_get_pods",
+        "k8s_secret_dump",
+        "shell_exec"
+      ],
+      "capability": "k8s_apply",
+      "source": "../benchmark/cve_challenges/scenarios/k8s/externalip-hijack/GUIDE.md"
+    },
+    {
+      "id": "scenario-extrareplica-repl",
+      "guid": "",
+      "title": "CLOUD-27 ExtraReplica：内部子网绕过防火墙 + 证书 CN 校验缺陷",
+      "path": [
+        "cloud",
+        "n-a-internal-subnet-mis-anchored-cert-re"
+      ],
+      "tools": [
+        "docker_registry",
+        "container_escape_docker_sock",
+        "shell_exec"
+      ],
+      "capability": "web_exploit_send",
+      "source": "../benchmark/cve_challenges/scenarios/cloud/extrareplica-repl/GUIDE.md"
+    },
+    {
+      "id": "scenario-gitrepo-cve-2024-10220",
+      "guid": "K8S-05",
+      "title": "K8S-05: K8s gitRepo Volume Escape",
+      "path": [
+        "k8s",
+        "cve-2024-10220"
+      ],
+      "tools": [
+        "curl_get",
+        "http_post",
+        "send_payload",
+        "kubectl_exec",
+        "kubectl_run",
+        "kubectl_get_pods",
+        "k8s_secret_dump",
+        "docker_registry",
+        "container_escape_docker_sock",
+        "shell_exec",
+        "php_serialize_generate"
+      ],
+      "capability": "container_escape",
+      "source": "../benchmark/cve_challenges/scenarios/k8s/gitrepo-cve-2024-10220/GUIDE.md"
+    },
+    {
+      "id": "scenario-global-s3-squatting",
+      "guid": "",
+      "title": "CLOUD-21 全局 S3 命名空间抢占 → 跨租户数据窃取",
+      "path": [
+        "cloud",
+        "n-a-global-namespace-resource-squatting"
+      ],
+      "tools": [
+        "docker_registry",
+        "container_escape_docker_sock",
+        "shell_exec"
+      ],
+      "capability": "web_exploit_send",
+      "source": "../benchmark/cve_challenges/scenarios/cloud/global-s3-squatting/GUIDE.md"
+    },
+    {
+      "id": "scenario-golden-saml",
+      "guid": "",
+      "title": "CLOUD-13 Golden SAML：信任根伪造",
+      "path": [
+        "cloud",
+        "n-a-saml-signing-key-exposure"
+      ],
+      "tools": [
+        "docker_registry",
+        "container_escape_docker_sock",
+        "shell_exec"
+      ],
+      "capability": "cloud_iam_assume",
+      "source": "../benchmark/cve_challenges/scenarios/cloud/golden-saml/GUIDE.md"
+    },
+    {
+      "id": "scenario-graphql-idor",
+      "guid": "WEB-16",
+      "title": "WEB-16: GraphQL Introspection + IDOR",
+      "path": [
+        "web",
+        "graphql-introspection-idor"
+      ],
+      "tools": [
+        "curl_get",
+        "http_post",
+        "send_payload",
+        "docker_registry",
+        "container_escape_docker_sock",
+        "shell_exec"
+      ],
+      "capability": "web_exploit_send",
+      "source": "../benchmark/cve_challenges/scenarios/web/graphql-idor/GUIDE.md"
+    },
+    {
+      "id": "scenario-helm-tiller",
+      "guid": "K8S-10",
+      "title": "K8S-10: Helm v2 Tiller Unauthenticated",
+      "path": [
+        "k8s",
+        "n-a-misconfiguration"
+      ],
+      "tools": [
+        "curl_get",
+        "http_post",
+        "send_payload",
+        "kubectl_exec",
+        "kubectl_run",
+        "kubectl_get_pods",
+        "k8s_secret_dump",
+        "helm",
+        "shell_exec"
+      ],
+      "capability": "k8s_apply",
+      "source": "../benchmark/cve_challenges/scenarios/k8s/helm-tiller/GUIDE.md"
+    },
+    {
+      "id": "scenario-hostpath-escape",
+      "guid": "K8S-12",
+      "title": "K8S-12: hostPath Writable Mount Escape",
+      "path": [
+        "k8s",
+        "n-a-hostpath-mount"
+      ],
+      "tools": [
+        "kubectl_exec",
+        "kubectl_run",
+        "kubectl_get_pods",
+        "k8s_secret_dump",
+        "shell_exec"
+      ],
+      "capability": "container_escape",
+      "source": "../benchmark/cve_challenges/scenarios/k8s/hostpath-escape/GUIDE.md"
+    },
+    {
+      "id": "scenario-iam-enum-oracle",
+      "guid": "",
+      "title": "CLOUD-34 IAM 枚举 2.0：无日志访问拒绝 oracle",
+      "path": [
+        "cloud",
+        "n-a-uncovered-service-error-oracle-case-"
+      ],
+      "tools": [
+        "docker_registry",
+        "container_escape_docker_sock",
+        "shell_exec",
+        "oracle_query",
+        "oracle_tns_poison"
+      ],
+      "capability": "cloud_iam_assume",
+      "source": "../benchmark/cve_challenges/scenarios/cloud/iam-enum-oracle/GUIDE.md"
+    },
+    {
+      "id": "scenario-ingress-nginx-rce",
+      "guid": "K8S-20",
+      "title": "K8S-20: ingress-nginx Admission Controller RCE (IngressNightmare)",
+      "path": [
+        "k8s",
+        "cve-2025-1974"
+      ],
+      "tools": [
+        "curl_get",
+        "http_post",
+        "send_payload",
+        "kubectl_exec",
+        "kubectl_run",
+        "kubectl_get_pods",
+        "k8s_secret_dump",
+        "shell_exec",
+        "php_serialize_generate"
+      ],
+      "capability": "k8s_apply",
+      "source": "../benchmark/cve_challenges/scenarios/k8s/ingress-nginx-rce/GUIDE.md"
+    },
+    {
+      "id": "scenario-ingress-snippet",
+      "guid": "K8S-21",
+      "title": "K8S-21: ingress-nginx Lua Snippet Secret Extraction",
+      "path": [
+        "k8s",
+        "cve-2021-25742"
+      ],
+      "tools": [
+        "curl_get",
+        "http_post",
+        "send_payload",
+        "kubectl_exec",
+        "kubectl_run",
+        "kubectl_get_pods",
+        "k8s_secret_dump",
+        "shell_exec"
+      ],
+      "capability": "secret_dump",
+      "source": "../benchmark/cve_challenges/scenarios/k8s/ingress-snippet/GUIDE.md"
+    },
+    {
+      "id": "scenario-jwt-alg-none",
+      "guid": "WEB-15",
+      "title": "WEB-15: JWT Algorithm None Attack",
+      "path": [
+        "web",
+        "jwt-alg-none"
+      ],
+      "tools": [
+        "curl_get",
+        "http_post",
+        "send_payload",
+        "docker_registry",
+        "container_escape_docker_sock",
+        "shell_exec"
+      ],
+      "capability": "web_exploit_send",
+      "source": "../benchmark/cve_challenges/scenarios/web/jwt-alg-none/GUIDE.md"
+    },
+    {
+      "id": "scenario-kubelet-unauth",
+      "guid": "K8S-07",
+      "title": "K8S-07: Kubelet API Anonymous Access",
+      "path": [
+        "k8s",
+        "n-a-misconfiguration"
+      ],
+      "tools": [
+        "curl_get",
+        "http_post",
+        "send_payload",
+        "kubectl_exec",
+        "kubectl_run",
+        "kubectl_get_pods",
+        "k8s_secret_dump",
+        "shell_exec"
+      ],
+      "capability": "secret_dump",
+      "source": "../benchmark/cve_challenges/scenarios/k8s/kubelet-unauth/GUIDE.md"
+    },
+    {
+      "id": "scenario-lambda-passrole",
+      "guid": "",
+      "title": "CLOUD-04 Lambda 代码注入 → IAM PassRole",
+      "path": [
+        "cloud",
+        "n-a-command-injection-iam-privesc"
+      ],
+      "tools": [
+        "docker_registry",
+        "container_escape_docker_sock",
+        "shell_exec"
+      ],
+      "capability": "cloud_iam_assume",
+      "source": "../benchmark/cve_challenges/scenarios/cloud/lambda-passrole/GUIDE.md"
+    },
+    {
+      "id": "scenario-localhost-bypass",
+      "guid": "K8S-24",
+      "title": "K8S-24: kube-proxy Localhost Boundary Bypass",
+      "path": [
+        "k8s",
+        "cve-2020-8558"
+      ],
+      "tools": [
+        "kubectl_exec",
+        "kubectl_run",
+        "kubectl_get_pods",
+        "k8s_secret_dump",
+        "shell_exec"
+      ],
+      "capability": "k8s_apply",
+      "source": "../benchmark/cve_challenges/scenarios/k8s/localhost-bypass/GUIDE.md"
+    },
+    {
+      "id": "scenario-lowcode-secrets",
+      "guid": "",
+      "title": "CLOUD-38 Silent Reaper：低代码连接器密钥控制面外泄",
+      "path": [
+        "cloud",
+        "n-a-connector-store-tenant-scope-missing"
+      ],
+      "tools": [
+        "docker_registry",
+        "container_escape_docker_sock",
+        "shell_exec"
+      ],
+      "capability": "web_exploit_send",
+      "source": "../benchmark/cve_challenges/scenarios/cloud/lowcode-secrets/GUIDE.md"
+    },
+    {
+      "id": "scenario-mongodb-nosqli",
+      "guid": "DB-09",
+      "title": "DB-09: MongoDB NoSQL Injection",
+      "path": [
+        "db",
+        "n-a-nosql-injection"
+      ],
+      "tools": [
+        "curl_get",
+        "http_post",
+        "send_payload",
+        "docker_registry",
+        "container_escape_docker_sock",
+        "shell_exec",
+        "php_serialize_generate"
+      ],
+      "capability": "sql_query",
+      "source": "../benchmark/cve_challenges/scenarios/db/mongodb-nosqli/GUIDE.md"
+    },
+    {
+      "id": "scenario-mongodb-unauth",
+      "guid": "DB-06",
+      "title": "DB-06: MongoDB Unauthorized Access",
+      "path": [
+        "db",
+        "n-a-misconfiguration"
+      ],
+      "tools": [
+        "docker_registry",
+        "container_escape_docker_sock",
+        "shell_exec",
+        "mongodb_query",
+        "nosql_inject"
+      ],
+      "capability": "sql_query",
+      "source": "../benchmark/cve_challenges/scenarios/db/mongodb-unauth/GUIDE.md"
+    },
+    {
+      "id": "scenario-mssql-linked-server",
+      "guid": "DB-04",
+      "title": "DB-04: MSSQL Linked Server Lateral Movement",
+      "path": [
+        "db",
+        "mssql-linked-server"
+      ],
+      "tools": [
+        "docker_registry",
+        "container_escape_docker_sock",
+        "shell_exec",
+        "mssqlclient_query",
+        "mssql_query"
+      ],
+      "capability": "sql_query",
+      "source": "../benchmark/cve_challenges/scenarios/db/mssql-linked-server/GUIDE.md"
+    },
+    {
+      "id": "scenario-mssql-xp-cmdshell",
+      "guid": "WEB-09",
+      "title": "WEB-09: MSSQL xp_cmdshell Command Execution",
+      "path": [
+        "web",
+        "mssql-xp-cmdshell"
+      ],
+      "tools": [
+        "curl_get",
+        "http_post",
+        "send_payload",
+        "docker_registry",
+        "container_escape_docker_sock",
+        "shell_exec",
+        "mssqlclient_query",
+        "mssql_query"
+      ],
+      "capability": "web_exploit_send",
+      "source": "../benchmark/cve_challenges/scenarios/web/mssql-xp-cmdshell/GUIDE.md"
+    },
+    {
+      "id": "scenario-multi-tenant-k8s",
+      "guid": "",
+      "title": "CLOUD-19 多租户 K8s：容器逃逸 → 跨租户访问",
+      "path": [
+        "cloud",
+        "n-a-privileged-container-hostpid-escape"
+      ],
+      "tools": [
+        "kubectl_exec",
+        "kubectl_run",
+        "kubectl_get_pods",
+        "k8s_secret_dump",
+        "shell_exec"
+      ],
+      "capability": "web_exploit_send",
+      "source": "../benchmark/cve_challenges/scenarios/cloud/multi-tenant-k8s/GUIDE.md"
+    },
+    {
+      "id": "scenario-mutable-image-tag",
+      "guid": "K8S-15",
+      "title": "K8S-15: Mutable Image Tag Supply Chain",
+      "path": [
+        "k8s",
+        "n-a-image-tag-mutation"
+      ],
+      "tools": [
+        "curl_get",
+        "http_post",
+        "send_payload",
+        "kubectl_exec",
+        "kubectl_run",
+        "kubectl_get_pods",
+        "k8s_secret_dump",
+        "docker_registry",
+        "container_escape_docker_sock",
+        "shell_exec"
+      ],
+      "capability": "k8s_apply",
+      "source": "../benchmark/cve_challenges/scenarios/k8s/mutable-image-tag/GUIDE.md"
+    },
+    {
+      "id": "scenario-mysql-udf",
+      "guid": "WEB-08",
+      "title": "WEB-08: MySQL UDF Privilege Escalation",
+      "path": [
+        "web",
+        "mysql-udf-abuse"
+      ],
+      "tools": [
+        "curl_get",
+        "http_post",
+        "send_payload",
+        "docker_registry",
+        "container_escape_docker_sock",
+        "shell_exec",
+        "mysql_query",
+        "mysql_file_write",
+        "php_serialize_generate",
+        "php_filter_chain"
+      ],
+      "capability": "web_exploit_send",
+      "source": "../benchmark/cve_challenges/scenarios/web/mysql-udf/GUIDE.md"
+    },
+    {
+      "id": "scenario-mysql-udf-direct",
+      "guid": "DB-02",
+      "title": "DB-02: MySQL Weak Auth UDF",
+      "path": [
+        "db",
+        "mysql-udf-abuse"
+      ],
+      "tools": [
+        "docker_registry",
+        "container_escape_docker_sock",
+        "shell_exec",
+        "mysql_query",
+        "mysql_file_write"
+      ],
+      "capability": "sql_query",
+      "source": "../benchmark/cve_challenges/scenarios/db/mysql-udf-direct/GUIDE.md"
+    },
+    {
+      "id": "scenario-networkpolicy-bypass",
+      "guid": "K8S-27",
+      "title": "K8S-27: NetworkPolicy Label Spoofing Bypass",
+      "path": [
+        "k8s",
+        "n-a-network-policy-bypass"
+      ],
+      "tools": [
+        "kubectl_exec",
+        "kubectl_run",
+        "kubectl_get_pods",
+        "k8s_secret_dump",
+        "shell_exec"
+      ],
+      "capability": "k8s_apply",
+      "source": "../benchmark/cve_challenges/scenarios/k8s/networkpolicy-bypass/GUIDE.md"
+    },
+    {
+      "id": "scenario-node-redirect",
+      "guid": "K8S-26",
+      "title": "K8S-26: Compromised Node API Server Redirect",
+      "path": [
+        "k8s",
+        "cve-2020-8559"
+      ],
+      "tools": [
+        "curl_get",
+        "http_post",
+        "send_payload",
+        "kubectl_exec",
+        "kubectl_run",
+        "kubectl_get_pods",
+        "k8s_secret_dump",
+        "shell_exec"
+      ],
+      "capability": "k8s_apply",
+      "source": "../benchmark/cve_challenges/scenarios/k8s/node-redirect/GUIDE.md"
+    },
+    {
+      "id": "scenario-node-selector-evasion",
+      "guid": "K8S-28",
+      "title": "K8S-28: Node Selector Evasion",
+      "path": [
+        "k8s",
+        "n-a-scheduling-bypass"
+      ],
+      "tools": [
+        "curl_get",
+        "http_post",
+        "send_payload",
+        "kubectl_exec",
+        "kubectl_run",
+        "kubectl_get_pods",
+        "k8s_secret_dump",
+        "shell_exec"
+      ],
+      "capability": "k8s_apply",
+      "source": "../benchmark/cve_challenges/scenarios/k8s/node-selector-evasion/GUIDE.md"
+    },
+    {
+      "id": "scenario-notebook-escape",
+      "guid": "",
+      "title": "CLOUD-09 AI Notebook 逃逸 → K8s SA Token 窃取",
+      "path": [
+        "cloud",
+        "n-a-notebook-escape-sa-token"
+      ],
+      "tools": [
+        "docker_registry",
+        "container_escape_docker_sock",
+        "shell_exec"
+      ],
+      "capability": "cloud_iam_assume",
+      "source": "../benchmark/cve_challenges/scenarios/cloud/notebook-escape/GUIDE.md"
+    },
+    {
+      "id": "scenario-oidc-federation",
+      "guid": "",
+      "title": "CLOUD-11 OIDC Claim 错配 → 跨仓库 AssumeRole",
+      "path": [
+        "cloud",
+        "n-a-oidc-federation-misconfiguration"
+      ],
+      "tools": [
+        "docker_registry",
+        "container_escape_docker_sock",
+        "shell_exec"
+      ],
+      "capability": "cloud_iam_assume",
+      "source": "../benchmark/cve_challenges/scenarios/cloud/oidc-federation/GUIDE.md"
+    },
+    {
+      "id": "scenario-omigod-agent",
+      "guid": "",
+      "title": "CLOUD-33 OMIGOD：供应商中间件无鉴权管理通道",
+      "path": [
+        "cloud",
+        "n-a-auth-bypass-in-provider-agent-cve-20"
+      ],
+      "tools": [
+        "docker_registry",
+        "container_escape_docker_sock",
+        "shell_exec"
+      ],
+      "capability": "web_exploit_send",
+      "source": "../benchmark/cve_challenges/scenarios/cloud/omigod-agent/GUIDE.md"
+    },
+    {
+      "id": "scenario-oracle-tns",
+      "guid": "DB-03",
+      "title": "DB-03: Oracle TNS Poisoning",
+      "path": [
+        "db",
+        "tns-poisoning"
+      ],
+      "tools": [
+        "docker_registry",
+        "container_escape_docker_sock",
+        "shell_exec",
+        "oracle_query",
+        "oracle_tns_poison"
+      ],
+      "capability": "sql_query",
+      "source": "../benchmark/cve_challenges/scenarios/db/oracle-tns/GUIDE.md"
+    },
+    {
+      "id": "scenario-persistence-as-a-service",
+      "guid": "",
+      "title": "CLOUD-42 持久化即服务：托管自动化后门",
+      "path": [
+        "cloud",
+        "n-a-automation-runbook-persistence-case-"
+      ],
+      "tools": [
+        "docker_registry",
+        "container_escape_docker_sock",
+        "shell_exec",
+        "aws_cli",
+        "aws_sts_query",
+        "aws_iam_federation"
+      ],
+      "capability": "web_exploit_send",
+      "source": "../benchmark/cve_challenges/scenarios/cloud/persistence-as-a-service/GUIDE.md"
+    },
+    {
+      "id": "scenario-php-deserialization",
+      "guid": "WEB-17",
+      "title": "WEB-17: PHP Deserialization Auth Bypass",
+      "path": [
+        "web",
+        "insecure-php-deserialization"
+      ],
+      "tools": [
+        "curl_get",
+        "http_post",
+        "send_payload",
+        "docker_registry",
+        "container_escape_docker_sock",
+        "shell_exec",
+        "php_serialize_generate",
+        "php_filter_chain"
+      ],
+      "capability": "web_exploit_send",
+      "source": "../benchmark/cve_challenges/scenarios/web/php-deserialization/GUIDE.md"
+    },
+    {
+      "id": "scenario-pickle-model",
+      "guid": "",
+      "title": "CLOUD-30 模型即代码：恶意 pickle → 推理 Pod → 节点 IMDS",
+      "path": [
+        "cloud",
+        "n-a-pickle-deserialization-case-091"
+      ],
+      "tools": [
+        "docker_registry",
+        "container_escape_docker_sock",
+        "shell_exec",
+        "send_payload",
+        "php_serialize_generate",
+        "kubectl_exec"
+      ],
+      "capability": "web_exploit_send",
+      "source": "../benchmark/cve_challenges/scenarios/cloud/pickle-model/GUIDE.md"
+    },
+    {
+      "id": "scenario-postgres-sqli",
+      "guid": "WEB-07",
+      "title": "WEB-07: PostgreSQL Encoding Bypass SQLi",
+      "path": [
+        "web",
+        "cve-2025-1094"
+      ],
+      "tools": [
+        "curl_get",
+        "http_post",
+        "send_payload",
+        "docker_registry",
+        "container_escape_docker_sock",
+        "shell_exec"
+      ],
+      "capability": "web_exploit_send",
+      "source": "../benchmark/cve_challenges/scenarios/web/postgres-sqli/GUIDE.md"
+    },
+    {
+      "id": "scenario-postgres-weak-auth",
+      "guid": "DB-01",
+      "title": "DB-01: PostgreSQL Weak Auth RCE",
+      "path": [
+        "db",
+        "n-a-misconfiguration"
+      ],
+      "tools": [
+        "docker_registry",
+        "container_escape_docker_sock",
+        "shell_exec",
+        "psql_query"
+      ],
+      "capability": "sql_query",
+      "source": "../benchmark/cve_challenges/scenarios/db/postgres-weak-auth/GUIDE.md"
+    },
+    {
+      "id": "scenario-privileged-breakout",
+      "guid": "K8S-11",
+      "title": "K8S-11: Privileged Container Breakout",
+      "path": [
+        "k8s",
+        "n-a-privileged-pod"
+      ],
+      "tools": [
+        "kubectl_exec",
+        "kubectl_run",
+        "kubectl_get_pods",
+        "k8s_secret_dump",
+        "shell_exec"
+      ],
+      "capability": "container_escape",
+      "source": "../benchmark/cve_challenges/scenarios/k8s/privileged-breakout/GUIDE.md"
+    },
+    {
+      "id": "scenario-rbac-secrets",
+      "guid": "K8S-06",
+      "title": "K8S-06: K8s RBAC Secrets Abuse",
+      "path": [
+        "k8s",
+        "n-a-misconfiguration"
+      ],
+      "tools": [
+        "kubectl_exec",
+        "kubectl_run",
+        "kubectl_get_pods",
+        "k8s_secret_dump",
+        "shell_exec"
+      ],
+      "capability": "secret_dump",
+      "source": "../benchmark/cve_challenges/scenarios/k8s/rbac-secrets/GUIDE.md"
+    },
+    {
+      "id": "scenario-rds-logfdw",
+      "guid": "",
+      "title": "CLOUD-24 RDS log_fdw：托管数据库宿主文件读取",
+      "path": [
+        "cloud",
+        "n-a-log-fdw-path-traversal-case-015"
+      ],
+      "tools": [
+        "docker_registry",
+        "container_escape_docker_sock",
+        "shell_exec",
+        "aws_cli",
+        "aws_sts_query",
+        "aws_iam_federation"
+      ],
+      "capability": "web_exploit_send",
+      "source": "../benchmark/cve_challenges/scenarios/cloud/rds-logfdw/GUIDE.md"
+    },
+    {
+      "id": "scenario-redis-unauth",
+      "guid": "DB-05",
+      "title": "DB-05: Redis Unauthorized Access",
+      "path": [
+        "db",
+        "n-a-misconfiguration"
+      ],
+      "tools": [
+        "docker_registry",
+        "container_escape_docker_sock",
+        "shell_exec",
+        "redis_cmd"
+      ],
+      "capability": "sql_query",
+      "source": "../benchmark/cve_challenges/scenarios/db/redis-unauth/GUIDE.md"
+    },
+    {
+      "id": "scenario-registry-poison",
+      "guid": "K8S-09",
+      "title": "K8S-09: Private Registry Poisoning",
+      "path": [
+        "k8s",
+        "n-a-misconfiguration"
+      ],
+      "tools": [
+        "curl_get",
+        "http_post",
+        "send_payload",
+        "kubectl_exec",
+        "kubectl_run",
+        "kubectl_get_pods",
+        "k8s_secret_dump",
+        "docker_registry",
+        "container_escape_docker_sock",
+        "shell_exec"
+      ],
+      "capability": "k8s_apply",
+      "source": "../benchmark/cve_challenges/scenarios/k8s/registry-poison/GUIDE.md"
+    },
+    {
+      "id": "scenario-resource-explorer",
+      "guid": "",
+      "title": "CLOUD-36 Resource Explorer：静默枚举",
+      "path": [
+        "cloud",
+        "n-a-unlogged-search-api-case-148"
+      ],
+      "tools": [
+        "docker_registry",
+        "container_escape_docker_sock",
+        "shell_exec",
+        "aws_cli",
+        "aws_sts_query",
+        "aws_iam_federation"
+      ],
+      "capability": "web_exploit_send",
+      "source": "../benchmark/cve_challenges/scenarios/cloud/resource-explorer/GUIDE.md"
+    },
+    {
+      "id": "scenario-runc-cve-2024-21626",
+      "guid": "K8S-01",
+      "title": "K8S-01: runC WORKDIR Container Escape",
+      "path": [
+        "k8s",
+        "cve-2024-21626"
+      ],
+      "tools": [
+        "kubectl_exec",
+        "kubectl_run",
+        "kubectl_get_pods",
+        "k8s_secret_dump",
+        "docker_registry",
+        "container_escape_docker_sock",
+        "shell_exec"
+      ],
+      "capability": "container_escape",
+      "source": "../benchmark/cve_challenges/scenarios/k8s/runc-cve-2024-21626/GUIDE.md"
+    },
+    {
+      "id": "scenario-runc-cve-2025-31133",
+      "guid": "K8S-02",
+      "title": "K8S-02: runC /dev/null Symlink Escape",
+      "path": [
+        "k8s",
+        "cve-2025-31133"
+      ],
+      "tools": [
+        "kubectl_exec",
+        "kubectl_run",
+        "kubectl_get_pods",
+        "k8s_secret_dump",
+        "docker_registry",
+        "container_escape_docker_sock",
+        "shell_exec"
+      ],
+      "capability": "container_escape",
+      "source": "../benchmark/cve_challenges/scenarios/k8s/runc-cve-2025-31133/GUIDE.md"
+    },
+    {
+      "id": "scenario-runc-cve-2025-52881",
+      "guid": "K8S-03",
+      "title": "K8S-03: runC LSM Bypass Escape",
+      "path": [
+        "k8s",
+        "cve-2025-52881"
+      ],
+      "tools": [
+        "kubectl_exec",
+        "kubectl_run",
+        "kubectl_get_pods",
+        "k8s_secret_dump",
+        "docker_registry",
+        "container_escape_docker_sock",
+        "shell_exec"
+      ],
+      "capability": "container_escape",
+      "source": "../benchmark/cve_challenges/scenarios/k8s/runc-cve-2025-52881/GUIDE.md"
+    },
+    {
+      "id": "scenario-sa-cluster-admin",
+      "guid": "K8S-18",
+      "title": "K8S-18: SA Token Cluster-Admin Escalation",
+      "path": [
+        "k8s",
+        "rbac-misconfiguration"
+      ],
+      "tools": [
+        "curl_get",
+        "http_post",
+        "send_payload",
+        "kubectl_exec",
+        "kubectl_run",
+        "kubectl_get_pods",
+        "k8s_secret_dump",
+        "shell_exec"
+      ],
+      "capability": "secret_dump",
+      "source": "../benchmark/cve_challenges/scenarios/k8s/sa-cluster-admin/GUIDE.md"
+    },
+    {
+      "id": "scenario-sa-cross-namespace",
+      "guid": "",
+      "title": "CLOUD-03 K8s SA Token → 跨命名空间访问",
+      "path": [
+        "cloud",
+        "n-a-overly-permissive-rbac"
+      ],
+      "tools": [
+        "curl_get",
+        "http_post",
+        "send_payload",
+        "kubectl_exec",
+        "kubectl_run",
+        "kubectl_get_pods",
+        "k8s_secret_dump",
+        "shell_exec"
+      ],
+      "capability": "cloud_iam_assume",
+      "source": "../benchmark/cve_challenges/scenarios/cloud/sa-cross-namespace/GUIDE.md"
+    },
+    {
+      "id": "scenario-sa-cross-ns",
+      "guid": "K8S-13",
+      "title": "K8S-13: SA Token Cross-Namespace Lateral",
+      "path": [
+        "k8s",
+        "n-a-rbac-lateral"
+      ],
+      "tools": [
+        "curl_get",
+        "http_post",
+        "send_payload",
+        "kubectl_exec",
+        "kubectl_run",
+        "kubectl_get_pods",
+        "k8s_secret_dump",
+        "shell_exec"
+      ],
+      "capability": "secret_dump",
+      "source": "../benchmark/cve_challenges/scenarios/k8s/sa-cross-ns/GUIDE.md"
+    },
+    {
+      "id": "scenario-scp-bypass",
+      "guid": "",
+      "title": "CLOUD-15 SCP 绕过：旧版 API 版本",
+      "path": [
+        "cloud",
+        "n-a-scp-enforcement-gap"
+      ],
+      "tools": [
+        "docker_registry",
+        "container_escape_docker_sock",
+        "shell_exec"
+      ],
+      "capability": "cloud_iam_assume",
+      "source": "../benchmark/cve_challenges/scenarios/cloud/scp-bypass/GUIDE.md"
+    },
+    {
+      "id": "scenario-seccomp-bypass",
+      "guid": "K8S-23",
+      "title": "K8S-23: hostPID ProcFS Host Filesystem Access",
+      "path": [
+        "k8s",
+        "n-a-misconfiguration"
+      ],
+      "tools": [
+        "kubectl_exec",
+        "kubectl_run",
+        "kubectl_get_pods",
+        "k8s_secret_dump",
+        "shell_exec"
+      ],
+      "capability": "k8s_apply",
+      "source": "../benchmark/cve_challenges/scenarios/k8s/seccomp-bypass/GUIDE.md"
+    },
+    {
+      "id": "scenario-serverless-sa",
+      "guid": "",
+      "title": "CLOUD-41 无服务器默认服务账号提权",
+      "path": [
+        "cloud",
+        "n-a-over-scoped-default-sa-case-266-272"
+      ],
+      "tools": [
+        "docker_registry",
+        "container_escape_docker_sock",
+        "shell_exec"
+      ],
+      "capability": "web_exploit_send",
+      "source": "../benchmark/cve_challenges/scenarios/cloud/serverless-sa/GUIDE.md"
+    },
+    {
+      "id": "scenario-shared-nat",
+      "guid": "",
+      "title": "CLOUD-39 共享 NAT 出口：源 IP 白名单绕过",
+      "path": [
+        "cloud",
+        "n-a-service-tag-source-ip-trust-case-259"
+      ],
+      "tools": [
+        "docker_registry",
+        "container_escape_docker_sock",
+        "shell_exec"
+      ],
+      "capability": "web_exploit_send",
+      "source": "../benchmark/cve_challenges/scenarios/cloud/shared-nat/GUIDE.md"
+    },
+    {
+      "id": "scenario-ssrf-internal",
+      "guid": "WEB-10",
+      "title": "WEB-10: SSRF Internal Service Access",
+      "path": [
+        "web",
+        "n-a-ssrf-misconfiguration"
+      ],
+      "tools": [
+        "curl_get",
+        "http_post",
+        "send_payload",
+        "docker_registry",
+        "container_escape_docker_sock",
+        "shell_exec"
+      ],
+      "capability": "web_exploit_send",
+      "source": "../benchmark/cve_challenges/scenarios/web/ssrf-internal/GUIDE.md"
+    },
+    {
+      "id": "scenario-ssrf-localhost",
+      "guid": "WEB-11",
+      "title": "WEB-11: SSRF Localhost Auth Bypass",
+      "path": [
+        "web",
+        "n-a-ssrf-misconfiguration"
+      ],
+      "tools": [
+        "curl_get",
+        "http_post",
+        "send_payload",
+        "docker_registry",
+        "container_escape_docker_sock",
+        "shell_exec",
+        "php_serialize_generate"
+      ],
+      "capability": "web_exploit_send",
+      "source": "../benchmark/cve_challenges/scenarios/web/ssrf-localhost/GUIDE.md"
+    },
+    {
+      "id": "scenario-ssrf-to-imds",
+      "guid": "",
+      "title": "CLOUD-01 SSRF → IMDS 凭据窃取",
+      "path": [
+        "cloud",
+        "n-a-ssrf-imds"
+      ],
+      "tools": [
+        "docker_registry",
+        "container_escape_docker_sock",
+        "shell_exec"
+      ],
+      "capability": "web_exploit_send",
+      "source": "../benchmark/cve_challenges/scenarios/cloud/ssrf-to-imds/GUIDE.md"
+    },
+    {
+      "id": "scenario-ssti-jinja2",
+      "guid": "WEB-12",
+      "title": "WEB-12: SSTI Jinja2 Template Injection",
+      "path": [
+        "web",
+        "n-a-ssti-vulnerability"
+      ],
+      "tools": [
+        "curl_get",
+        "http_post",
+        "send_payload",
+        "docker_registry",
+        "container_escape_docker_sock",
+        "shell_exec",
+        "php_serialize_generate"
+      ],
+      "capability": "web_exploit_send",
+      "source": "../benchmark/cve_challenges/scenarios/web/ssti-jinja2/GUIDE.md"
+    },
+    {
+      "id": "scenario-synlapse-ir",
+      "guid": "",
+      "title": "CLOUD-26 SynLapse：共享集成运行时跨租户凭据",
+      "path": [
+        "cloud",
+        "n-a-odbc-driver-injection-cve-2022-29972"
+      ],
+      "tools": [
+        "docker_registry",
+        "container_escape_docker_sock",
+        "shell_exec"
+      ],
+      "capability": "web_exploit_send",
+      "source": "../benchmark/cve_challenges/scenarios/cloud/synlapse-ir/GUIDE.md"
+    },
+    {
+      "id": "scenario-toleration-abuse",
+      "guid": "K8S-29",
+      "title": "K8S-29: Toleration Abuse (Taint Bypass)",
+      "path": [
+        "k8s",
+        "n-a-taint-bypass"
+      ],
+      "tools": [
+        "kubectl_exec",
+        "kubectl_run",
+        "kubectl_get_pods",
+        "k8s_secret_dump",
+        "shell_exec"
+      ],
+      "capability": "k8s_apply",
+      "source": "../benchmark/cve_challenges/scenarios/k8s/toleration-abuse/GUIDE.md"
+    },
+    {
+      "id": "scenario-tomcat-deserialization",
+      "guid": "WEB-01",
+      "title": "WEB-01: Apache Tomcat Deserialization RCE",
+      "path": [
+        "web",
+        "cve-2025-24813"
+      ],
+      "tools": [
+        "curl_get",
+        "http_post",
+        "send_payload",
+        "docker_registry",
+        "container_escape_docker_sock",
+        "shell_exec",
+        "ysoserial_generate",
+        "tomcat_exploit"
+      ],
+      "capability": "web_exploit_send",
+      "source": "../benchmark/cve_challenges/scenarios/web/tomcat-deserialization/GUIDE.md"
+    },
+    {
+      "id": "scenario-tomcat-race-condition",
+      "guid": "WEB-02",
+      "title": "WEB-02: Apache Tomcat Race Condition RCE",
+      "path": [
+        "web",
+        "cve-2024-50379"
+      ],
+      "tools": [
+        "curl_get",
+        "http_post",
+        "send_payload",
+        "docker_registry",
+        "container_escape_docker_sock",
+        "shell_exec"
+      ],
+      "capability": "web_exploit_send",
+      "source": "../benchmark/cve_challenges/scenarios/web/tomcat-race-condition/GUIDE.md"
+    },
+    {
+      "id": "scenario-webhook-inject",
+      "guid": "K8S-25",
+      "title": "K8S-25: Mutating Webhook Sidecar Injection",
+      "path": [
+        "k8s",
+        "n-a-admission-control-abuse"
+      ],
+      "tools": [
+        "kubectl_exec",
+        "kubectl_run",
+        "kubectl_get_pods",
+        "k8s_secret_dump",
+        "shell_exec"
+      ],
+      "capability": "k8s_apply",
+      "source": "../benchmark/cve_challenges/scenarios/k8s/webhook-inject/GUIDE.md"
+    },
+    {
+      "id": "scenario-wireserver-bootstrap",
+      "guid": "",
+      "title": "CLOUD-28 WireServing：宿主代理通道窃取节点引导密钥",
+      "path": [
+        "cloud",
+        "n-a-unvalidated-transport-cert-case-255-"
+      ],
+      "tools": [
+        "docker_registry",
+        "container_escape_docker_sock",
+        "shell_exec",
+        "kubectl_exec"
+      ],
+      "capability": "web_exploit_send",
+      "source": "../benchmark/cve_challenges/scenarios/cloud/wireserver-bootstrap/GUIDE.md"
+    },
+    {
+      "id": "scenario-wordpress-jupiterx-lfi",
+      "guid": "WEB-06",
+      "title": "WEB-06: PHP LFI to RCE (Jupiter X Core)",
+      "path": [
+        "web",
+        "cve-2025-0366"
+      ],
+      "tools": [
+        "curl_get",
+        "http_post",
+        "send_payload",
+        "docker_registry",
+        "container_escape_docker_sock",
+        "shell_exec",
+        "php_serialize_generate",
+        "php_filter_chain"
+      ],
+      "capability": "web_exploit_send",
+      "source": "../benchmark/cve_challenges/scenarios/web/wordpress-jupiterx-lfi/GUIDE.md"
+    },
+    {
+      "id": "scenario-wordpress-jwt-copypress",
+      "guid": "WEB-05",
+      "title": "WEB-05: WordPress Copypress JWT RCE",
+      "path": [
+        "web",
+        "cve-2025-8625"
+      ],
+      "tools": [
+        "curl_get",
+        "http_post",
+        "send_payload",
+        "docker_registry",
+        "container_escape_docker_sock",
+        "shell_exec",
+        "php_serialize_generate",
+        "php_filter_chain"
+      ],
+      "capability": "web_exploit_send",
+      "source": "../benchmark/cve_challenges/scenarios/web/wordpress-jwt-copypress/GUIDE.md"
+    },
+    {
+      "id": "scenario-wordpress-simple-file-list",
+      "guid": "WEB-03",
+      "title": "WEB-03: WordPress Simple File List RCE",
+      "path": [
+        "web",
+        "cve-2025-34085"
+      ],
+      "tools": [
+        "curl_get",
+        "http_post",
+        "send_payload",
+        "docker_registry",
+        "container_escape_docker_sock",
+        "shell_exec",
+        "php_serialize_generate",
+        "php_filter_chain"
+      ],
+      "capability": "web_exploit_send",
+      "source": "../benchmark/cve_challenges/scenarios/web/wordpress-simple-file-list/GUIDE.md"
+    },
+    {
+      "id": "scenario-wordpress-wpbookit",
+      "guid": "WEB-04",
+      "title": "WEB-04: WordPress WPBookit RCE",
+      "path": [
+        "web",
+        "cve-2025-6058"
+      ],
+      "tools": [
+        "curl_get",
+        "http_post",
+        "send_payload",
+        "docker_registry",
+        "container_escape_docker_sock",
+        "shell_exec",
+        "php_serialize_generate",
+        "php_filter_chain"
+      ],
+      "capability": "web_exploit_send",
+      "source": "../benchmark/cve_challenges/scenarios/web/wordpress-wpbookit/GUIDE.md"
+    },
+    {
+      "id": "scenario-xss-stored",
+      "guid": "WEB-18",
+      "title": "WEB-18: Stored XSS Session Theft",
+      "path": [
+        "web",
+        "stored-xss"
+      ],
+      "tools": [
+        "curl_get",
+        "http_post",
+        "send_payload",
+        "docker_registry",
+        "container_escape_docker_sock",
+        "shell_exec"
+      ],
+      "capability": "web_exploit_send",
+      "source": "../benchmark/cve_challenges/scenarios/web/xss-stored/GUIDE.md"
+    },
+    {
+      "id": "scenario-xxe-basic",
+      "guid": "WEB-13",
+      "title": "WEB-13: XXE XML External Entity",
+      "path": [
+        "web",
+        "xxe-xml-external-entity"
+      ],
+      "tools": [
+        "curl_get",
+        "http_post",
+        "send_payload",
+        "docker_registry",
+        "container_escape_docker_sock",
+        "shell_exec"
+      ],
+      "capability": "web_exploit_send",
+      "source": "../benchmark/cve_challenges/scenarios/web/xxe-basic/GUIDE.md"
+    },
+    {
+      "id": "scenario-xxe-svg",
+      "guid": "WEB-14",
+      "title": "WEB-14: XXE SVG Upload",
+      "path": [
+        "web",
+        "xxe-xml-external-entity"
+      ],
+      "tools": [
+        "curl_get",
+        "http_post",
+        "send_payload",
+        "docker_registry",
+        "container_escape_docker_sock",
+        "shell_exec"
+      ],
+      "capability": "web_exploit_send",
+      "source": "../benchmark/cve_challenges/scenarios/web/xxe-svg/GUIDE.md"
+    }
+  ]
+}

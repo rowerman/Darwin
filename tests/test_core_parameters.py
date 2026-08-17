@@ -244,16 +244,42 @@ async def test_all_tools_pre_fail_with_invalid_argument():
 
 
 @pytest.mark.asyncio
-async def test_legacy_dispatch_ignores_schema():
-    gw = SchemaGateway({"curl_get": {"url": {"type": "string"}, "cookie": {"type": "string"}}})
+async def test_legacy_dispatch_validates_schema():
+    # Phase 1: the legacy direct path is schema-validated too. Missing
+    # optional params are filled from defaults; valid calls reach the tool.
+    gw = SchemaGateway(
+        {
+            "curl_get": {
+                "url": {"type": "string"},
+                "cookie": {"type": "string", "default": ""},
+            }
+        }
+    )
     ex = ToolExecutor(recon_gateway=gw)
-    # Legacy path: no capability, tool direct — schema is NOT consulted.
     res = await ex.execute(
         task_with("", target="http://x", tool="curl_get", params={"url": "http://x"})
     )
+    # Optional params without defaults are only filled when validation finds
+    # issues (matching the capability path's P9 semantics); a valid call is
+    # passed through untouched.
     assert gw.calls == [("curl_get", {"url": "http://x"})]
     assert res.success is True
     assert res.capability == ""
+
+
+@pytest.mark.asyncio
+async def test_legacy_dispatch_uncorrectable_missing_required():
+    # A call missing a required parameter becomes a pre-execution
+    # INVALID_ARGUMENT and the tool is NOT invoked.
+    gw = SchemaGateway({"curl_get": {"url": {"type": "string"}}})
+    ex = ToolExecutor(recon_gateway=gw)
+    res = await ex.execute(
+        task_with("", target="http://x", tool="curl_get", params={"cookie": "x"})
+    )
+    assert gw.calls == []
+    assert res.success is False
+    assert "missing required parameter 'url'" in res.stderr
+    assert res.exit_code == 1
 
 
 @pytest.mark.asyncio

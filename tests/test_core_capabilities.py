@@ -64,7 +64,7 @@ def task_with(capability, target="", params=None, required_context=None, tool=""
 # ── Registry ────────────────────────────────────────────────────────
 
 
-def test_default_registry_has_four_capabilities():
+def test_default_registry_has_scenario_capabilities():
     reg = default_registry()
     names = {c.name for c in reg.list()}
     assert names == {
@@ -72,6 +72,14 @@ def test_default_registry_has_four_capabilities():
         "verify_sql_injection",
         "test_credentials",
         "acquire_shell",
+        "sql_query",
+        "web_exploit_send",
+        "container_escape",
+        "k8s_apply",
+        "secret_dump",
+        "cloud_iam_assume",
+        "registry_push",
+        "credential_test",
     }
     for cap in reg.list():
         assert cap.supported_tools

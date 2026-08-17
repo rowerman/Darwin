@@ -76,7 +76,7 @@ the Replanner before the LLM review fallback. All execution goes through
 | `darwin/dpm.py` | Defense Perception Module. 3-layer detection: rule-based → WAF signature → LLM classifier. CDF (Cloud Defense Fingerprinting) for cloud-native defenses. |
 | `darwin/dave.py` | 4-layer verification: L1 HTTP response, L2 Playwright browser, L3 defense integrity, L4 impact confirmation (flag extraction + honeypot detection). |
 | `darwin/cteg.py` | Cross-Task Experience Graph — dynamic patterns only. Persisted to `cteg_state.json` with half-life decay. |
-| `darwin/rag.py` | DarwinRAG — static knowledge. Multi-collection Faiss + SentenceTransformer. Singleton via `get_rag()`. |
+| `darwin/rag.py` | DarwinRAG — static knowledge. Multi-collection Faiss + SentenceTransformer; `search_hierarchical()` routes through `knowledge/taxonomy.json` (domain → class → scenario leaf) before ranking inside the subtree. Singleton via `get_rag()`. |
 | `darwin/cloud_topology.py` | CTAGE: auto-discovers K8s cluster topology and IAM trust relationships into DKG nodes+edges. |
 | `darwin/cloud_attack_path.py` | AttackPathReasoner: BFS path discoverers for IAM escalation, container escape, lateral movement, cross-account. |
 | `darwin/data_model.py` | Typed dataclasses: `EndpointInfo`, `ServiceInfo`, `VulnerabilityInfo`, `HostInfo`, `CredentialInfo`. |
@@ -84,6 +84,8 @@ the Replanner before the LLM review fallback. All execution goes through
 | `darwin/tools/recon_server.py` | 15 recon tools: nmap, whatweb, dirb, gobuster, curl, form extraction, login testing. |
 | `darwin/tools/mcp_gateway.py` | Tool registry with OpenAI function-calling format. Parameter aliasing (`host`→`target`, etc.). |
 | `darwin/tools/mcp_client.py` | MCP client pool with per-server connection management. |
+| `darwin/tools/spec.py` | Tool contract (ToolSpec): name/version/domains/capability/parameters/executor/dependencies. Every registered tool carries one (auto-derived for legacy registrations). |
+| `darwin/tools/manifest.py` | `python -m darwin.tools.manifest --out tools_manifest.json [--check]` — machine-readable tool manifest + lock verification. |
 | `darwin/utils/llm.py` | LiteLLM wrapper with conversation history, token counting, context compression. |
 | `darwin/utils/http_client.py` | Async HTTP client with WAF probe classes and baseline comparison. |
 | `darwin/utils/phase_logger.py` | Structured per-phase file logging to `log/<phase>/`. |

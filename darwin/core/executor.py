@@ -10,11 +10,12 @@ preconditions, and tries the capability's supported tools in order
 (falling back only on TOOL_ERROR / INVALID_ARGUMENT). Tasks without a
 capability keep the legacy direct tool dispatch unchanged.
 
-P9 deliverable: pre-execution schema validation on the capability path.
-Planned tool calls are checked against the gateway's declared parameter
-schema; deterministic corrections (drop unknown keys, fill declared
-defaults) are applied, and uncorrectable calls become pre-execution
-INVALID_ARGUMENT results without invoking the tool.
+P9 deliverable: pre-execution schema validation on BOTH the capability
+path and the legacy direct-dispatch path (Phase 1). Planned tool calls
+are checked against the gateway's declared parameter schema; deterministic
+corrections (drop unknown keys, fill declared defaults) are applied, and
+uncorrectable calls become pre-execution INVALID_ARGUMENT results without
+invoking the tool.
 
 P5c (after P6) will migrate the orchestrator's LLM-driven execution branch
 onto this strict Task-consumption path. Until then the orchestrator routes
@@ -165,6 +166,37 @@ class ToolExecutor:
                 params = {"url": params}
         if not isinstance(params, dict):
             params = {"value": params}
+
+        # Phase 1: schema-driven validation on the direct path as well.
+        schema = self.schema_provider.get(tool)
+        if schema is not None:
+            issues = self.param_validator.validate(schema, params)
+            if issues:
+                corrected, _ = self.param_corrector.correct(schema, params)
+                remaining = self.param_validator.validate(schema, corrected)
+                if not remaining:
+                    params = corrected
+                else:
+                    details = []
+                    for issue in remaining:
+                        if issue.kind == "missing":
+                            details.append(
+                                f"missing required parameter '{issue.field}'"
+                            )
+                        else:
+                            details.append(f"unknown parameter '{issue.field}'")
+                    return ExecutionResult(
+                        task_id=task.id,
+                        tool=tool,
+                        planned_tool=tool,
+                        adherence=True,
+                        success=False,
+                        stderr=(
+                            f"invalid argument: {', '.join(details)} "
+                            f"for tool '{tool}'"
+                        ),
+                        exit_code=1,
+                    )
 
         start = time.monotonic()
         outcome = await self._invoke(tool, params)

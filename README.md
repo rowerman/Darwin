@@ -149,6 +149,30 @@ python experiments/runner.py
 
 The experiment runner (`experiments/runner.py`) orchestrates multiple challenges with Pass@k evaluation, metrics computation (TSR, token efficiency, WAF bypass rate), and statistical analysis.
 
+## Tool Contract & Hierarchical Knowledge
+
+Darwin v0.2+ standardizes every tool behind a machine-checkable contract
+(`darwin/tools/spec.py`) and organizes static knowledge as an explicit
+taxonomy with two-stage retrieval (`darwin/rag.py`).
+
+```bash
+# Tool contract: regenerate / verify the committed manifest (130 tools)
+python -m darwin.tools.manifest --out tools_manifest.json
+python -m darwin.tools.manifest --out tools_manifest.json --check
+
+# Knowledge taxonomy: ingest the benchmark GUIDE leaves, rebuild taxonomy
+python tools/ingest_benchmark_guides.py
+python tools/build_taxonomy.py
+
+# A/B evaluate flat RAG vs hierarchical retrieval (89 benchmark queries)
+python -m tools.eval_knowledge_retrieval
+
+# Coverage audit: taxonomy leaves -> tools / capabilities / knowledge
+python -m tools.audit_coverage
+```
+
+See `PLAN_TOOL_CONTRACT_AND_KNOWLEDGE.md` for the design and status.
+
 ## Architecture
 
 ```

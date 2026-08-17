@@ -747,4 +747,6 @@ def register_recon_tools(gateway: MCPGateway) -> MCPGateway:
 def create_recon_gateway() -> MCPGateway:
     """Factory: create a gateway with all recon tools registered."""
     gateway = MCPGateway()
-    return register_recon_tools(gateway)
+    gateway = register_recon_tools(gateway)
+    gateway.ensure_specs()
+    return gateway

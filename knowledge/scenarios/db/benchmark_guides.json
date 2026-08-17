@@ -1,0 +1,256 @@
+[
+  {
+    "id": "scenario-couchdb-rce",
+    "guid": "DB-08",
+    "title": "DB-08: CouchDB Arbitrary Command Execution",
+    "category": "db",
+    "subcategory": "N/A (Erlang native view RCE)",
+    "description": "Create or invoke an Erlang native view payload",
+    "techniques": [],
+    "indicators": [],
+    "tags": [
+      "db",
+      "couchdb-rce",
+      "N/A (Erlang native view RCE)"
+    ],
+    "tools": [
+      "curl_get",
+      "http_post",
+      "send_payload",
+      "docker_registry",
+      "container_escape_docker_sock",
+      "shell_exec"
+    ],
+    "prerequisites": [],
+    "confidence": 0.6,
+    "mitre_attack": "",
+    "references": [],
+    "flag": "flag{[^",
+    "source": "../benchmark/cve_challenges/scenarios/db/couchdb-rce/GUIDE.md"
+  },
+  {
+    "id": "scenario-elasticsearch-script",
+    "guid": "DB-07",
+    "title": "DB-07: Elasticsearch Script Injection",
+    "category": "db",
+    "subcategory": "N/A (script injection)",
+    "description": "Submit a malicious Elasticsearch script query",
+    "techniques": [],
+    "indicators": [],
+    "tags": [
+      "db",
+      "elasticsearch-script",
+      "N/A (script injection)"
+    ],
+    "tools": [
+      "curl_get",
+      "http_post",
+      "send_payload",
+      "docker_registry",
+      "container_escape_docker_sock",
+      "shell_exec"
+    ],
+    "prerequisites": [],
+    "confidence": 0.6,
+    "mitre_attack": "",
+    "references": [],
+    "flag": "flag{[^",
+    "source": "../benchmark/cve_challenges/scenarios/db/elasticsearch-script/GUIDE.md"
+  },
+  {
+    "id": "scenario-mongodb-nosqli",
+    "guid": "DB-09",
+    "title": "DB-09: MongoDB NoSQL Injection",
+    "category": "db",
+    "subcategory": "N/A (NoSQL injection)",
+    "description": "Use a NoSQL operator such as $ne to bypass authentication",
+    "techniques": [],
+    "indicators": [],
+    "tags": [
+      "db",
+      "mongodb-nosqli",
+      "N/A (NoSQL injection)"
+    ],
+    "tools": [
+      "curl_get",
+      "http_post",
+      "send_payload",
+      "docker_registry",
+      "container_escape_docker_sock",
+      "shell_exec",
+      "php_serialize_generate"
+    ],
+    "prerequisites": [],
+    "confidence": 0.6,
+    "mitre_attack": "",
+    "references": [],
+    "flag": "flag{db-09-xxxxxxxxxxxxxxxx",
+    "source": "../benchmark/cve_challenges/scenarios/db/mongodb-nosqli/GUIDE.md"
+  },
+  {
+    "id": "scenario-mongodb-unauth",
+    "guid": "DB-06",
+    "title": "DB-06: MongoDB Unauthorized Access",
+    "category": "db",
+    "subcategory": "N/A (misconfiguration)",
+    "description": "Connect without authentication and query sensitive collections",
+    "techniques": [],
+    "indicators": [],
+    "tags": [
+      "db",
+      "mongodb-unauth",
+      "N/A (misconfiguration)"
+    ],
+    "tools": [
+      "docker_registry",
+      "container_escape_docker_sock",
+      "shell_exec",
+      "mongodb_query",
+      "nosql_inject"
+    ],
+    "prerequisites": [],
+    "confidence": 0.6,
+    "mitre_attack": "",
+    "references": [],
+    "flag": "flag{[^",
+    "source": "../benchmark/cve_challenges/scenarios/db/mongodb-unauth/GUIDE.md"
+  },
+  {
+    "id": "scenario-mssql-linked-server",
+    "guid": "DB-04",
+    "title": "DB-04: MSSQL Linked Server Lateral Movement",
+    "category": "db",
+    "subcategory": "MSSQL Linked Server",
+    "description": "Use OPENQUERY against the linked target and invoke xp_cmdshell",
+    "techniques": [],
+    "indicators": [],
+    "tags": [
+      "db",
+      "mssql-linked-server",
+      "MSSQL Linked Server"
+    ],
+    "tools": [
+      "docker_registry",
+      "container_escape_docker_sock",
+      "shell_exec",
+      "mssqlclient_query",
+      "mssql_query"
+    ],
+    "prerequisites": [],
+    "confidence": 0.6,
+    "mitre_attack": "",
+    "references": [],
+    "flag": "flag{db-04-xxxxxxxxxxxxxxxx",
+    "source": "../benchmark/cve_challenges/scenarios/db/mssql-linked-server/GUIDE.md"
+  },
+  {
+    "id": "scenario-mysql-udf-direct",
+    "guid": "DB-02",
+    "title": "DB-02: MySQL Weak Auth UDF",
+    "category": "db",
+    "subcategory": "MySQL UDF Abuse",
+    "description": "Create or load a malicious MySQL UDF",
+    "techniques": [],
+    "indicators": [],
+    "tags": [
+      "db",
+      "mysql-udf-direct",
+      "MySQL UDF Abuse"
+    ],
+    "tools": [
+      "docker_registry",
+      "container_escape_docker_sock",
+      "shell_exec",
+      "mysql_query",
+      "mysql_file_write"
+    ],
+    "prerequisites": [],
+    "confidence": 0.6,
+    "mitre_attack": "",
+    "references": [],
+    "flag": "flag{db-02-xxxxxxxxxxxxxxxx",
+    "source": "../benchmark/cve_challenges/scenarios/db/mysql-udf-direct/GUIDE.md"
+  },
+  {
+    "id": "scenario-oracle-tns",
+    "guid": "DB-03",
+    "title": "DB-03: Oracle TNS Poisoning",
+    "category": "db",
+    "subcategory": "TNS Poisoning",
+    "description": "Perform TNS listener poisoning/MITM and authenticate to Oracle",
+    "techniques": [],
+    "indicators": [],
+    "tags": [
+      "db",
+      "oracle-tns",
+      "TNS Poisoning"
+    ],
+    "tools": [
+      "docker_registry",
+      "container_escape_docker_sock",
+      "shell_exec",
+      "oracle_query",
+      "oracle_tns_poison"
+    ],
+    "prerequisites": [],
+    "confidence": 0.6,
+    "mitre_attack": "",
+    "references": [],
+    "flag": "flag{db-03-xxxxxxxxxxxxxxxx",
+    "source": "../benchmark/cve_challenges/scenarios/db/oracle-tns/GUIDE.md"
+  },
+  {
+    "id": "scenario-postgres-weak-auth",
+    "guid": "DB-01",
+    "title": "DB-01: PostgreSQL Weak Auth RCE",
+    "category": "db",
+    "subcategory": "N/A (misconfiguration)",
+    "description": "Authenticate with weak credentials and invoke COPY ... PROGRAM",
+    "techniques": [],
+    "indicators": [],
+    "tags": [
+      "db",
+      "postgres-weak-auth",
+      "N/A (misconfiguration)"
+    ],
+    "tools": [
+      "docker_registry",
+      "container_escape_docker_sock",
+      "shell_exec",
+      "psql_query"
+    ],
+    "prerequisites": [],
+    "confidence": 0.6,
+    "mitre_attack": "",
+    "references": [],
+    "flag": "flag{db-01-xxxxxxxxxxxxxxxx",
+    "source": "../benchmark/cve_challenges/scenarios/db/postgres-weak-auth/GUIDE.md"
+  },
+  {
+    "id": "scenario-redis-unauth",
+    "guid": "DB-05",
+    "title": "DB-05: Redis Unauthorized Access",
+    "category": "db",
+    "subcategory": "N/A (misconfiguration)",
+    "description": "Connect without credentials and abuse exposed Redis commands",
+    "techniques": [],
+    "indicators": [],
+    "tags": [
+      "db",
+      "redis-unauth",
+      "N/A (misconfiguration)"
+    ],
+    "tools": [
+      "docker_registry",
+      "container_escape_docker_sock",
+      "shell_exec",
+      "redis_cmd"
+    ],
+    "prerequisites": [],
+    "confidence": 0.6,
+    "mitre_attack": "",
+    "references": [],
+    "flag": "flag{db-05-xxxxxxxxxxxxxxxx",
+    "source": "../benchmark/cve_challenges/scenarios/db/redis-unauth/GUIDE.md"
+  }
+]

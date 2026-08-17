@@ -1,0 +1,997 @@
+[
+  {
+    "id": "scenario-cap-sys-admin-cgroup",
+    "guid": "K8S-14",
+    "title": "K8S-14: CAP_SYS_ADMIN cgroup Escape",
+    "category": "k8s",
+    "subcategory": "CAP_SYS_ADMIN abuse",
+    "description": "Abuse CAP_SYS_ADMIN to configure a cgroup escape\nPod `capsys-pod` runs with `CAP_SYS_ADMIN` capability\nThe pod has cgroup v1 hierarchy mounted at `/sys/fs/cgroup` (hostPath)\nCAP_SYS_ADMIN allows writing to `release_agent` in a cgroup\n`release_agent` is executed on the host when the last process in the cgroup exits\nWrite a script that reads the flag and trigger cgroup release\nCreating a sub-cgroup\nWriting a notify_on_release script\nSetting release_agent to point to the script",
+    "techniques": [
+      "Pod `capsys-pod` runs with `CAP_SYS_ADMIN` capability",
+      "The pod has cgroup v1 hierarchy mounted at `/sys/fs/cgroup` (hostPath)",
+      "CAP_SYS_ADMIN allows writing to `release_agent` in a cgroup",
+      "`release_agent` is executed on the host when the last process in the cgroup exits",
+      "Write a script that reads the flag and trigger cgroup release",
+      "Creating a sub-cgroup",
+      "Writing a notify_on_release script",
+      "Setting release_agent to point to the script"
+    ],
+    "indicators": [],
+    "tags": [
+      "k8s",
+      "cap-sys-admin-cgroup",
+      "CAP_SYS_ADMIN abuse"
+    ],
+    "tools": [
+      "kubectl_exec",
+      "kubectl_run",
+      "kubectl_get_pods",
+      "k8s_secret_dump",
+      "docker_registry",
+      "container_escape_docker_sock",
+      "shell_exec"
+    ],
+    "prerequisites": [],
+    "confidence": 0.6,
+    "mitre_attack": "",
+    "references": [],
+    "flag": "flag{k8s-14-*",
+    "source": "../benchmark/cve_challenges/scenarios/k8s/cap-sys-admin-cgroup/GUIDE.md"
+  },
+  {
+    "id": "scenario-cap-sys-ptrace-inject",
+    "guid": "K8S-19",
+    "title": "K8S-19: CAP_SYS_PTRACE Host Process Injection",
+    "category": "k8s",
+    "subcategory": "CAP_SYS_PTRACE abuse",
+    "description": "Inject or inspect a host process with ptrace\nPod runs with `CAP_SYS_PTRACE` and `CAP_SYS_ADMIN` capabilities, `hostPID: true`\nUbuntu 22.04 image with `gdb` installed\nIdentify `kubelet` process PID on the host (visible via hostPID)\nAttach `gdb` to the kubelet process\nUse `gdb` to call `system()` inside the kubelet process, writing the flag to a readable file\nRead the flag from the temporary file",
+    "techniques": [
+      "Pod runs with `CAP_SYS_PTRACE` and `CAP_SYS_ADMIN` capabilities, `hostPID: true`",
+      "Ubuntu 22.04 image with `gdb` installed",
+      "Identify `kubelet` process PID on the host (visible via hostPID)",
+      "Attach `gdb` to the kubelet process",
+      "Use `gdb` to call `system()` inside the kubelet process, writing the flag to a readable file",
+      "Read the flag from the temporary file"
+    ],
+    "indicators": [],
+    "tags": [
+      "k8s",
+      "cap-sys-ptrace-inject",
+      "CAP_SYS_PTRACE abuse"
+    ],
+    "tools": [
+      "kubectl_exec",
+      "kubectl_run",
+      "kubectl_get_pods",
+      "k8s_secret_dump",
+      "shell_exec"
+    ],
+    "prerequisites": [],
+    "confidence": 0.6,
+    "mitre_attack": "",
+    "references": [],
+    "flag": "flag{k8s-19-*",
+    "source": "../benchmark/cve_challenges/scenarios/k8s/cap-sys-ptrace-inject/GUIDE.md"
+  },
+  {
+    "id": "scenario-cni-ip-spoof",
+    "guid": "K8S-30",
+    "title": "K8S-30: CNI IP Spoofing (NetworkPolicy Bypass)",
+    "category": "k8s",
+    "subcategory": "N/A (IP spoofing)",
+    "description": "Spoof a pod IP to bypass NetworkPolicy",
+    "techniques": [],
+    "indicators": [],
+    "tags": [
+      "k8s",
+      "cni-ip-spoof",
+      "N/A (IP spoofing)"
+    ],
+    "tools": [
+      "kubectl_exec",
+      "kubectl_run",
+      "kubectl_get_pods",
+      "k8s_secret_dump",
+      "shell_exec"
+    ],
+    "prerequisites": [],
+    "confidence": 0.6,
+    "mitre_attack": "",
+    "references": [],
+    "flag": "",
+    "source": "../benchmark/cve_challenges/scenarios/k8s/cni-ip-spoof/GUIDE.md"
+  },
+  {
+    "id": "scenario-cri-socket-escape",
+    "guid": "K8S-16",
+    "title": "K8S-16: CRI Socket Mount Escape",
+    "category": "k8s",
+    "subcategory": "CRI socket abuse",
+    "description": "Use the CRI socket to create a privileged host-mounted container\nPod has `/run/containerd/containerd.sock` mounted via hostPath with `type: Socket`\nPod runs as root with `ctr` binary (containerd CLI) installed\nUse `ctr` to list images available through the host containerd\nLaunch a **privileged** container via the host containerd socket that mounts the host filesystem\nRead the flag from the escaped container",
+    "techniques": [
+      "Pod has `/run/containerd/containerd.sock` mounted via hostPath with `type: Socket`",
+      "Pod runs as root with `ctr` binary (containerd CLI) installed",
+      "Use `ctr` to list images available through the host containerd",
+      "Launch a **privileged** container via the host containerd socket that mounts the host filesystem",
+      "Read the flag from the escaped container"
+    ],
+    "indicators": [],
+    "tags": [
+      "k8s",
+      "cri-socket-escape",
+      "CRI socket abuse"
+    ],
+    "tools": [
+      "kubectl_exec",
+      "kubectl_run",
+      "kubectl_get_pods",
+      "k8s_secret_dump",
+      "docker_registry",
+      "container_escape_docker_sock",
+      "shell_exec",
+      "crictl_cmd"
+    ],
+    "prerequisites": [],
+    "confidence": 0.6,
+    "mitre_attack": "",
+    "references": [],
+    "flag": "flag{k8s-16-*",
+    "source": "../benchmark/cve_challenges/scenarios/k8s/cri-socket-escape/GUIDE.md"
+  },
+  {
+    "id": "scenario-docker-socket-escape",
+    "guid": "K8S-17",
+    "title": "K8S-17: Docker Socket Mount Escape",
+    "category": "k8s",
+    "subcategory": "Docker socket abuse",
+    "description": "Use the Docker socket to run a host-mounted privileged container\nPod has `/var/run/docker.sock` mounted via hostPath (extraMounts map host Docker socket into KIND node, then hostPath into pod)\nPod uses `docker:cli` image (contains the Docker CLI binary)\nUse `docker` CLI to communicate with the host's Docker daemon\nLaunch a container that mounts the host filesystem via `-v /host-flag:/mnt`\nRead the flag from the sibling container",
+    "techniques": [
+      "Pod has `/var/run/docker.sock` mounted via hostPath (extraMounts map host Docker socket into KIND node, then hostPath into pod)",
+      "Pod uses `docker:cli` image (contains the Docker CLI binary)",
+      "Use `docker` CLI to communicate with the host's Docker daemon",
+      "Launch a container that mounts the host filesystem via `-v /host-flag:/mnt`",
+      "Read the flag from the sibling container"
+    ],
+    "indicators": [],
+    "tags": [
+      "k8s",
+      "docker-socket-escape",
+      "Docker socket abuse"
+    ],
+    "tools": [
+      "kubectl_exec",
+      "kubectl_run",
+      "kubectl_get_pods",
+      "k8s_secret_dump",
+      "docker_registry",
+      "container_escape_docker_sock",
+      "shell_exec"
+    ],
+    "prerequisites": [],
+    "confidence": 0.6,
+    "mitre_attack": "",
+    "references": [],
+    "flag": "flag{k8s-17-*",
+    "source": "../benchmark/cve_challenges/scenarios/k8s/docker-socket-escape/GUIDE.md"
+  },
+  {
+    "id": "scenario-etcd-unauth",
+    "guid": "K8S-08",
+    "title": "K8S-08: etcd Unauthorized Access",
+    "category": "k8s",
+    "subcategory": "N/A (misconfiguration)",
+    "description": "Query etcd without client authentication\netcd is exposed on port 2379 (mapped to host port 11379) without authentication\netcdctl can connect directly to the etcd store and enumerate all keys\nKubernetes stores all cluster state (including secrets) in etcd\nThe flag is stored as a Kubernetes Secret and persisted in etcd\nRead the secret value directly from etcd using etcdctl",
+    "techniques": [
+      "etcd is exposed on port 2379 (mapped to host port 11379) without authentication",
+      "etcdctl can connect directly to the etcd store and enumerate all keys",
+      "Kubernetes stores all cluster state (including secrets) in etcd",
+      "The flag is stored as a Kubernetes Secret and persisted in etcd",
+      "Read the secret value directly from etcd using etcdctl"
+    ],
+    "indicators": [],
+    "tags": [
+      "k8s",
+      "etcd-unauth",
+      "N/A (misconfiguration)"
+    ],
+    "tools": [
+      "curl_get",
+      "http_post",
+      "send_payload",
+      "kubectl_exec",
+      "kubectl_run",
+      "kubectl_get_pods",
+      "k8s_secret_dump",
+      "etcdctl_get",
+      "k8s_etcd_keys",
+      "shell_exec"
+    ],
+    "prerequisites": [],
+    "confidence": 0.6,
+    "mitre_attack": "",
+    "references": [],
+    "flag": "flag{k8s-08-*",
+    "source": "../benchmark/cve_challenges/scenarios/k8s/etcd-unauth/GUIDE.md"
+  },
+  {
+    "id": "scenario-externalip-hijack",
+    "guid": "K8S-22",
+    "title": "K8S-22: Service ExternalIP Traffic Interception",
+    "category": "k8s",
+    "subcategory": "CVE-2020-8554",
+    "description": "Claim an ExternalIP to intercept service traffic",
+    "techniques": [],
+    "indicators": [],
+    "tags": [
+      "k8s",
+      "externalip-hijack",
+      "CVE-2020-8554"
+    ],
+    "tools": [
+      "kubectl_exec",
+      "kubectl_run",
+      "kubectl_get_pods",
+      "k8s_secret_dump",
+      "shell_exec"
+    ],
+    "prerequisites": [],
+    "confidence": 0.6,
+    "mitre_attack": "",
+    "references": [],
+    "flag": "flag{k8s-22-<16-hex>",
+    "source": "../benchmark/cve_challenges/scenarios/k8s/externalip-hijack/GUIDE.md"
+  },
+  {
+    "id": "scenario-gitrepo-cve-2024-10220",
+    "guid": "K8S-05",
+    "title": "K8S-05: K8s gitRepo Volume Escape",
+    "category": "k8s",
+    "subcategory": "CVE-2024-10220",
+    "description": "Abuse gitRepo volume checkout to place executable or hostile content\nKubernetes `gitRepo` volume type clones a git repository into a pod on creation\nCVE-2024-10220: the `post-checkout` git hook executes during clone, before container isolation\nThe hook runs on the host (or with host-level privileges), enabling escape\nCreate a malicious git repo with a `post-checkout` hook that reads the flag\nKubelet runs `git clone` to fetch the repo\nThe `post-checkout` hook executes during the clone\nDue to CVE-2024-10220, the hook may execute with unexpected privileges\nThe flag at `/host-flags/flag.txt` on the host is readable from the hook context",
+    "techniques": [
+      "Kubernetes `gitRepo` volume type clones a git repository into a pod on creation",
+      "CVE-2024-10220: the `post-checkout` git hook executes during clone, before container isolation",
+      "The hook runs on the host (or with host-level privileges), enabling escape",
+      "Create a malicious git repo with a `post-checkout` hook that reads the flag",
+      "Kubelet runs `git clone` to fetch the repo",
+      "The `post-checkout` hook executes during the clone",
+      "Due to CVE-2024-10220, the hook may execute with unexpected privileges",
+      "The flag at `/host-flags/flag.txt` on the host is readable from the hook context"
+    ],
+    "indicators": [],
+    "tags": [
+      "k8s",
+      "gitrepo-cve-2024-10220",
+      "CVE-2024-10220"
+    ],
+    "tools": [
+      "curl_get",
+      "http_post",
+      "send_payload",
+      "kubectl_exec",
+      "kubectl_run",
+      "kubectl_get_pods",
+      "k8s_secret_dump",
+      "docker_registry",
+      "container_escape_docker_sock",
+      "shell_exec",
+      "php_serialize_generate"
+    ],
+    "prerequisites": [],
+    "confidence": 0.6,
+    "mitre_attack": "",
+    "references": [],
+    "flag": "flag{k8s-05-*",
+    "source": "../benchmark/cve_challenges/scenarios/k8s/gitrepo-cve-2024-10220/GUIDE.md"
+  },
+  {
+    "id": "scenario-helm-tiller",
+    "guid": "K8S-10",
+    "title": "K8S-10: Helm v2 Tiller Unauthenticated",
+    "category": "k8s",
+    "subcategory": "N/A (misconfiguration)",
+    "description": "Submit privileged Helm release resources through Tiller\nHelm v2 Tiller is deployed in `kube-system` with `cluster-admin` privileges\nTiller's gRPC API is exposed on port 44134 without authentication\nAn attacker can use the `helm` CLI to interact with Tiller and deploy charts\nDeploy a malicious Helm chart with cluster-admin privileges to read `helm-flag` secret",
+    "techniques": [
+      "Helm v2 Tiller is deployed in `kube-system` with `cluster-admin` privileges",
+      "Tiller's gRPC API is exposed on port 44134 without authentication",
+      "An attacker can use the `helm` CLI to interact with Tiller and deploy charts",
+      "Deploy a malicious Helm chart with cluster-admin privileges to read `helm-flag` secret"
+    ],
+    "indicators": [],
+    "tags": [
+      "k8s",
+      "helm-tiller",
+      "N/A (misconfiguration)"
+    ],
+    "tools": [
+      "curl_get",
+      "http_post",
+      "send_payload",
+      "kubectl_exec",
+      "kubectl_run",
+      "kubectl_get_pods",
+      "k8s_secret_dump",
+      "helm",
+      "shell_exec"
+    ],
+    "prerequisites": [],
+    "confidence": 0.6,
+    "mitre_attack": "",
+    "references": [],
+    "flag": "flag{k8s-10-*",
+    "source": "../benchmark/cve_challenges/scenarios/k8s/helm-tiller/GUIDE.md"
+  },
+  {
+    "id": "scenario-hostpath-escape",
+    "guid": "K8S-12",
+    "title": "K8S-12: hostPath Writable Mount Escape",
+    "category": "k8s",
+    "subcategory": "N/A (hostPath mount)",
+    "description": "Escape through a writable hostPath mount\nPod `hostpath-pod` mounts `/var/log` from the host as a writable hostPath volume\nThe pod also mounts `/host-flag` as a hostPath volume (containing the flag)\nCreate a symlink in `/var/log` pointing to the host's `/host-flag` directory\nRead the flag through the symlink -- or use the writable mount to write SSH keys, cron jobs, etc.\nAlternatively, the symlink trick can redirect writes to escape to the host filesystem",
+    "techniques": [
+      "Pod `hostpath-pod` mounts `/var/log` from the host as a writable hostPath volume",
+      "The pod also mounts `/host-flag` as a hostPath volume (containing the flag)",
+      "Create a symlink in `/var/log` pointing to the host's `/host-flag` directory",
+      "Read the flag through the symlink -- or use the writable mount to write SSH keys, cron jobs, etc.",
+      "Alternatively, the symlink trick can redirect writes to escape to the host filesystem"
+    ],
+    "indicators": [],
+    "tags": [
+      "k8s",
+      "hostpath-escape",
+      "N/A (hostPath mount)"
+    ],
+    "tools": [
+      "kubectl_exec",
+      "kubectl_run",
+      "kubectl_get_pods",
+      "k8s_secret_dump",
+      "shell_exec"
+    ],
+    "prerequisites": [],
+    "confidence": 0.6,
+    "mitre_attack": "",
+    "references": [],
+    "flag": "flag{k8s-12-*",
+    "source": "../benchmark/cve_challenges/scenarios/k8s/hostpath-escape/GUIDE.md"
+  },
+  {
+    "id": "scenario-ingress-nginx-rce",
+    "guid": "K8S-20",
+    "title": "K8S-20: ingress-nginx Admission Controller RCE (IngressNightmare)",
+    "category": "k8s",
+    "subcategory": "CVE-2025-1974",
+    "description": "Exploit IngressNightmare/CVE-2025-1974 payload handling",
+    "techniques": [],
+    "indicators": [],
+    "tags": [
+      "k8s",
+      "ingress-nginx-rce",
+      "CVE-2025-1974"
+    ],
+    "tools": [
+      "curl_get",
+      "http_post",
+      "send_payload",
+      "kubectl_exec",
+      "kubectl_run",
+      "kubectl_get_pods",
+      "k8s_secret_dump",
+      "shell_exec",
+      "php_serialize_generate"
+    ],
+    "prerequisites": [],
+    "confidence": 0.6,
+    "mitre_attack": "",
+    "references": [],
+    "flag": "flag{k8s-20-xxxxxxxxxxxxxxxx",
+    "source": "../benchmark/cve_challenges/scenarios/k8s/ingress-nginx-rce/GUIDE.md"
+  },
+  {
+    "id": "scenario-ingress-snippet",
+    "guid": "K8S-21",
+    "title": "K8S-21: ingress-nginx Lua Snippet Secret Extraction",
+    "category": "k8s",
+    "subcategory": "CVE-2021-25742",
+    "description": "Inject a Lua snippet into an Ingress",
+    "techniques": [],
+    "indicators": [],
+    "tags": [
+      "k8s",
+      "ingress-snippet",
+      "CVE-2021-25742"
+    ],
+    "tools": [
+      "curl_get",
+      "http_post",
+      "send_payload",
+      "kubectl_exec",
+      "kubectl_run",
+      "kubectl_get_pods",
+      "k8s_secret_dump",
+      "shell_exec"
+    ],
+    "prerequisites": [],
+    "confidence": 0.6,
+    "mitre_attack": "",
+    "references": [],
+    "flag": "flag{k8s-21-<16-hex>",
+    "source": "../benchmark/cve_challenges/scenarios/k8s/ingress-snippet/GUIDE.md"
+  },
+  {
+    "id": "scenario-kubelet-unauth",
+    "guid": "K8S-07",
+    "title": "K8S-07: Kubelet API Anonymous Access",
+    "category": "k8s",
+    "subcategory": "N/A (misconfiguration)",
+    "description": "Call the unauthenticated kubelet API\nKubelet is configured with `anonymous-auth: true` and `authorization-mode: AlwaysAllow`\nThe kubelet API is accessible on port 10250 without authentication\nUse the kubelet `/runningpods/` endpoint to list pods and read their information\nExtract the flag from pod metadata, environment variables, or ConfigMaps visible through the kubelet",
+    "techniques": [
+      "Kubelet is configured with `anonymous-auth: true` and `authorization-mode: AlwaysAllow`",
+      "The kubelet API is accessible on port 10250 without authentication",
+      "Use the kubelet `/runningpods/` endpoint to list pods and read their information",
+      "Extract the flag from pod metadata, environment variables, or ConfigMaps visible through the kubelet"
+    ],
+    "indicators": [],
+    "tags": [
+      "k8s",
+      "kubelet-unauth",
+      "N/A (misconfiguration)"
+    ],
+    "tools": [
+      "curl_get",
+      "http_post",
+      "send_payload",
+      "kubectl_exec",
+      "kubectl_run",
+      "kubectl_get_pods",
+      "k8s_secret_dump",
+      "shell_exec"
+    ],
+    "prerequisites": [],
+    "confidence": 0.6,
+    "mitre_attack": "",
+    "references": [],
+    "flag": "flag{k8s-07-*",
+    "source": "../benchmark/cve_challenges/scenarios/k8s/kubelet-unauth/GUIDE.md"
+  },
+  {
+    "id": "scenario-localhost-bypass",
+    "guid": "K8S-24",
+    "title": "K8S-24: kube-proxy Localhost Boundary Bypass",
+    "category": "k8s",
+    "subcategory": "CVE-2020-8558",
+    "description": "Reach a localhost-only kube-proxy/API endpoint from a pod",
+    "techniques": [],
+    "indicators": [],
+    "tags": [
+      "k8s",
+      "localhost-bypass",
+      "CVE-2020-8558"
+    ],
+    "tools": [
+      "kubectl_exec",
+      "kubectl_run",
+      "kubectl_get_pods",
+      "k8s_secret_dump",
+      "shell_exec"
+    ],
+    "prerequisites": [],
+    "confidence": 0.6,
+    "mitre_attack": "",
+    "references": [],
+    "flag": "flag{k8s-24-<16-hex>",
+    "source": "../benchmark/cve_challenges/scenarios/k8s/localhost-bypass/GUIDE.md"
+  },
+  {
+    "id": "scenario-mutable-image-tag",
+    "guid": "K8S-15",
+    "title": "K8S-15: Mutable Image Tag Supply Chain",
+    "category": "k8s",
+    "subcategory": "N/A (image tag mutation)",
+    "description": "Replace an image behind a trusted mutable tag\nA Deployment uses `image: nginx:1.24-alpine` with `imagePullPolicy: Always`\nAn insecure local Docker registry runs on `localhost:5000`\nThe target deployment pulls from Docker Hub with mutable tag `nginx:1.24-alpine`\nThe attacker pushes a malicious image to the insecure registry with the same tag name\nThe cluster's containerd is configured to mirror `nginx:1.24-alpine` pulls to the local registry\nWhen the pod restarts, it pulls the attacker's backdoored image\nThe backdoored container reads the flag from the ConfigMap",
+    "techniques": [
+      "A Deployment uses `image: nginx:1.24-alpine` with `imagePullPolicy: Always`",
+      "An insecure local Docker registry runs on `localhost:5000`",
+      "The target deployment pulls from Docker Hub with mutable tag `nginx:1.24-alpine`",
+      "The attacker pushes a malicious image to the insecure registry with the same tag name",
+      "The cluster's containerd is configured to mirror `nginx:1.24-alpine` pulls to the local registry",
+      "When the pod restarts, it pulls the attacker's backdoored image",
+      "The backdoored container reads the flag from the ConfigMap"
+    ],
+    "indicators": [],
+    "tags": [
+      "k8s",
+      "mutable-image-tag",
+      "N/A (image tag mutation)"
+    ],
+    "tools": [
+      "curl_get",
+      "http_post",
+      "send_payload",
+      "kubectl_exec",
+      "kubectl_run",
+      "kubectl_get_pods",
+      "k8s_secret_dump",
+      "docker_registry",
+      "container_escape_docker_sock",
+      "shell_exec"
+    ],
+    "prerequisites": [],
+    "confidence": 0.6,
+    "mitre_attack": "",
+    "references": [],
+    "flag": "flag{k8s-15-*",
+    "source": "../benchmark/cve_challenges/scenarios/k8s/mutable-image-tag/GUIDE.md"
+  },
+  {
+    "id": "scenario-networkpolicy-bypass",
+    "guid": "K8S-27",
+    "title": "K8S-27: NetworkPolicy Label Spoofing Bypass",
+    "category": "k8s",
+    "subcategory": "N/A (network policy bypass)",
+    "description": "Spoof a label to satisfy NetworkPolicy selection",
+    "techniques": [],
+    "indicators": [],
+    "tags": [
+      "k8s",
+      "networkpolicy-bypass",
+      "N/A (network policy bypass)"
+    ],
+    "tools": [
+      "kubectl_exec",
+      "kubectl_run",
+      "kubectl_get_pods",
+      "k8s_secret_dump",
+      "shell_exec"
+    ],
+    "prerequisites": [],
+    "confidence": 0.6,
+    "mitre_attack": "",
+    "references": [],
+    "flag": "flag{k8s-27-<16-hex>",
+    "source": "../benchmark/cve_challenges/scenarios/k8s/networkpolicy-bypass/GUIDE.md"
+  },
+  {
+    "id": "scenario-node-redirect",
+    "guid": "K8S-26",
+    "title": "K8S-26: Compromised Node API Server Redirect",
+    "category": "k8s",
+    "subcategory": "CVE-2020-8559",
+    "description": "Abuse CVE-2020-8559 to redirect API traffic",
+    "techniques": [],
+    "indicators": [],
+    "tags": [
+      "k8s",
+      "node-redirect",
+      "CVE-2020-8559"
+    ],
+    "tools": [
+      "curl_get",
+      "http_post",
+      "send_payload",
+      "kubectl_exec",
+      "kubectl_run",
+      "kubectl_get_pods",
+      "k8s_secret_dump",
+      "shell_exec"
+    ],
+    "prerequisites": [],
+    "confidence": 0.6,
+    "mitre_attack": "",
+    "references": [],
+    "flag": "flag{k8s-26-<16-hex>",
+    "source": "../benchmark/cve_challenges/scenarios/k8s/node-redirect/GUIDE.md"
+  },
+  {
+    "id": "scenario-node-selector-evasion",
+    "guid": "K8S-28",
+    "title": "K8S-28: Node Selector Evasion",
+    "category": "k8s",
+    "subcategory": "N/A (scheduling bypass)",
+    "description": "Evade a restrictive node selector",
+    "techniques": [],
+    "indicators": [],
+    "tags": [
+      "k8s",
+      "node-selector-evasion",
+      "N/A (scheduling bypass)"
+    ],
+    "tools": [
+      "curl_get",
+      "http_post",
+      "send_payload",
+      "kubectl_exec",
+      "kubectl_run",
+      "kubectl_get_pods",
+      "k8s_secret_dump",
+      "shell_exec"
+    ],
+    "prerequisites": [],
+    "confidence": 0.6,
+    "mitre_attack": "",
+    "references": [],
+    "flag": "",
+    "source": "../benchmark/cve_challenges/scenarios/k8s/node-selector-evasion/GUIDE.md"
+  },
+  {
+    "id": "scenario-privileged-breakout",
+    "guid": "K8S-11",
+    "title": "K8S-11: Privileged Container Breakout",
+    "category": "k8s",
+    "subcategory": "N/A (privileged pod)",
+    "description": "Create or use a privileged container\nPod `privileged-pod` runs with `privileged: true` (all capabilities, no isolation)\nThe pod has a hostPath volume mounting `/host-flag` from the KIND node\nUse `nsenter` to enter the host namespace and read the flag\nAlternative: mount the host filesystem and read the flag directly",
+    "techniques": [
+      "Pod `privileged-pod` runs with `privileged: true` (all capabilities, no isolation)",
+      "The pod has a hostPath volume mounting `/host-flag` from the KIND node",
+      "Use `nsenter` to enter the host namespace and read the flag",
+      "Alternative: mount the host filesystem and read the flag directly"
+    ],
+    "indicators": [],
+    "tags": [
+      "k8s",
+      "privileged-breakout",
+      "N/A (privileged pod)"
+    ],
+    "tools": [
+      "kubectl_exec",
+      "kubectl_run",
+      "kubectl_get_pods",
+      "k8s_secret_dump",
+      "shell_exec"
+    ],
+    "prerequisites": [],
+    "confidence": 0.6,
+    "mitre_attack": "",
+    "references": [],
+    "flag": "flag{k8s-11-*",
+    "source": "../benchmark/cve_challenges/scenarios/k8s/privileged-breakout/GUIDE.md"
+  },
+  {
+    "id": "scenario-rbac-secrets",
+    "guid": "K8S-06",
+    "title": "K8S-06: K8s RBAC Secrets Abuse",
+    "category": "k8s",
+    "subcategory": "N/A (misconfiguration)",
+    "description": "Use over-broad secrets-reader RBAC permissions\nA ServiceAccount `attacker-sa` is bound to ClusterRole `secrets-reader`\nThe ClusterRole grants `get` and `list` on `secrets` across all namespaces\nAn attacker pod uses this SA to read secrets cluster-wide\nThe flag is stored in `flag-secret` in `kube-system` namespace\nDecode the base64-encoded flag value",
+    "techniques": [
+      "A ServiceAccount `attacker-sa` is bound to ClusterRole `secrets-reader`",
+      "The ClusterRole grants `get` and `list` on `secrets` across all namespaces",
+      "An attacker pod uses this SA to read secrets cluster-wide",
+      "The flag is stored in `flag-secret` in `kube-system` namespace",
+      "Decode the base64-encoded flag value"
+    ],
+    "indicators": [],
+    "tags": [
+      "k8s",
+      "rbac-secrets",
+      "N/A (misconfiguration)"
+    ],
+    "tools": [
+      "kubectl_exec",
+      "kubectl_run",
+      "kubectl_get_pods",
+      "k8s_secret_dump",
+      "shell_exec"
+    ],
+    "prerequisites": [],
+    "confidence": 0.6,
+    "mitre_attack": "",
+    "references": [],
+    "flag": "flag{k8s-06-*",
+    "source": "../benchmark/cve_challenges/scenarios/k8s/rbac-secrets/GUIDE.md"
+  },
+  {
+    "id": "scenario-registry-poison",
+    "guid": "K8S-09",
+    "title": "K8S-09: Private Registry Poisoning",
+    "category": "k8s",
+    "subcategory": "N/A (misconfiguration)",
+    "description": "Push or replace a trusted image in the private registry\nAn insecure private Docker registry runs on `localhost:10500` (no TLS)\nA pod (`registry-target`) pulls `localhost:10500/backdoored-nginx:latest` from this registry\nThe attacker can push a malicious image with the same tag to the registry\nWhen the pod restarts or scales, it pulls the backdoored image\nThe backdoored container reads the flag (or enables lateral movement to access it)",
+    "techniques": [
+      "An insecure private Docker registry runs on `localhost:10500` (no TLS)",
+      "A pod (`registry-target`) pulls `localhost:10500/backdoored-nginx:latest` from this registry",
+      "The attacker can push a malicious image with the same tag to the registry",
+      "When the pod restarts or scales, it pulls the backdoored image",
+      "The backdoored container reads the flag (or enables lateral movement to access it)"
+    ],
+    "indicators": [],
+    "tags": [
+      "k8s",
+      "registry-poison",
+      "N/A (misconfiguration)"
+    ],
+    "tools": [
+      "curl_get",
+      "http_post",
+      "send_payload",
+      "kubectl_exec",
+      "kubectl_run",
+      "kubectl_get_pods",
+      "k8s_secret_dump",
+      "docker_registry",
+      "container_escape_docker_sock",
+      "shell_exec"
+    ],
+    "prerequisites": [],
+    "confidence": 0.6,
+    "mitre_attack": "",
+    "references": [],
+    "flag": "flag{k8s-09-*",
+    "source": "../benchmark/cve_challenges/scenarios/k8s/registry-poison/GUIDE.md"
+  },
+  {
+    "id": "scenario-runc-cve-2024-21626",
+    "guid": "K8S-01",
+    "title": "K8S-01: runC WORKDIR Container Escape",
+    "category": "k8s",
+    "subcategory": "CVE-2024-21626",
+    "description": "Exploit CVE-2024-21626 with a malicious WORKDIR\nPod runs an image with `WORKDIR /proc/self/fd/7` in its Dockerfile\nDue to CVE-2024-21626, runC follows `/proc/self/fd/7` to the host filesystem descriptor leaked by runC\nWhen the container starts, its working directory is set to the host's `/host-flags` directory\nThe container command reads `flag.txt` from the host filesystem\nrunC opens the container's root filesystem and stores the file descriptor\nDue to the race condition in CVE-2024-21626, the FD for the host's filesystem is leaked at `/proc/self/fd/7`\nSetting `WORKDIR /proc/self/fd/7` makes the container start in the host filesystem context\nThe container command `cat /host-flags/flag.txt` then resolves relative to the host, not the container",
+    "techniques": [
+      "Pod runs an image with `WORKDIR /proc/self/fd/7` in its Dockerfile",
+      "Due to CVE-2024-21626, runC follows `/proc/self/fd/7` to the host filesystem descriptor leaked by runC",
+      "When the container starts, its working directory is set to the host's `/host-flags` directory",
+      "The container command reads `flag.txt` from the host filesystem",
+      "runC opens the container's root filesystem and stores the file descriptor",
+      "Due to the race condition in CVE-2024-21626, the FD for the host's filesystem is leaked at `/proc/self/fd/7`",
+      "Setting `WORKDIR /proc/self/fd/7` makes the container start in the host filesystem context",
+      "The container command `cat /host-flags/flag.txt` then resolves relative to the host, not the container"
+    ],
+    "indicators": [],
+    "tags": [
+      "k8s",
+      "runc-cve-2024-21626",
+      "CVE-2024-21626"
+    ],
+    "tools": [
+      "kubectl_exec",
+      "kubectl_run",
+      "kubectl_get_pods",
+      "k8s_secret_dump",
+      "docker_registry",
+      "container_escape_docker_sock",
+      "shell_exec"
+    ],
+    "prerequisites": [],
+    "confidence": 0.6,
+    "mitre_attack": "",
+    "references": [],
+    "flag": "flag{k8s-01-*",
+    "source": "../benchmark/cve_challenges/scenarios/k8s/runc-cve-2024-21626/GUIDE.md"
+  },
+  {
+    "id": "scenario-runc-cve-2025-31133",
+    "guid": "K8S-02",
+    "title": "K8S-02: runC /dev/null Symlink Escape",
+    "category": "k8s",
+    "subcategory": "CVE-2025-31133",
+    "description": "Exploit the /dev/null symlink escape condition\nPod runs a malicious container image that replaces `/dev/null` with a symlink\nSymlink points to `/proc/sys/kernel/core_pattern` on the host\nrunC internally writes to `/dev/null` during container setup, which follows the symlink\nWriting to `core_pattern` allows arbitrary command execution when a process crashes\nTrigger a controlled crash to execute a payload that reads the flag\nReplace `/dev/null` with a symlink to `/proc/sys/kernel/core_pattern`\nrunC writes to `/dev/null` (actually writing to core_pattern)\ncore_pattern value `|/tmp/handler %p %s %e` causes the kernel to execute `/tmp/handler` on every crash",
+    "techniques": [
+      "Pod runs a malicious container image that replaces `/dev/null` with a symlink",
+      "Symlink points to `/proc/sys/kernel/core_pattern` on the host",
+      "runC internally writes to `/dev/null` during container setup, which follows the symlink",
+      "Writing to `core_pattern` allows arbitrary command execution when a process crashes",
+      "Trigger a controlled crash to execute a payload that reads the flag",
+      "Replace `/dev/null` with a symlink to `/proc/sys/kernel/core_pattern`",
+      "runC writes to `/dev/null` (actually writing to core_pattern)",
+      "core_pattern value `|/tmp/handler %p %s %e` causes the kernel to execute `/tmp/handler` on every crash"
+    ],
+    "indicators": [],
+    "tags": [
+      "k8s",
+      "runc-cve-2025-31133",
+      "CVE-2025-31133"
+    ],
+    "tools": [
+      "kubectl_exec",
+      "kubectl_run",
+      "kubectl_get_pods",
+      "k8s_secret_dump",
+      "docker_registry",
+      "container_escape_docker_sock",
+      "shell_exec"
+    ],
+    "prerequisites": [],
+    "confidence": 0.6,
+    "mitre_attack": "",
+    "references": [],
+    "flag": "flag{k8s-02-*",
+    "source": "../benchmark/cve_challenges/scenarios/k8s/runc-cve-2025-31133/GUIDE.md"
+  },
+  {
+    "id": "scenario-runc-cve-2025-52881",
+    "guid": "K8S-03",
+    "title": "K8S-03: runC LSM Bypass Escape",
+    "category": "k8s",
+    "subcategory": "CVE-2025-52881",
+    "description": "Use the runC LSM bypass payload\nPod runs a malicious image designed to exploit the shared-mount TOCTOU race\nThe vulnerability bypasses AppArmor/SELinux enforcement during container startup\nA race condition in shared mount handling allows redirecting runC writes to forged procfs files\nSuccessfully writing to `/proc/sys/kernel/core_pattern` (or similar) enables host command execution\nTrigger a crash to execute a payload that reads the flag\nrunC sets up bind mounts for the container rootfs\nA race exists between the mount setup and LSM (AppArmor/SELinux) label application\nAn attacker process inside the container can manipulate shared mounts before the LSM label is applied",
+    "techniques": [
+      "Pod runs a malicious image designed to exploit the shared-mount TOCTOU race",
+      "The vulnerability bypasses AppArmor/SELinux enforcement during container startup",
+      "A race condition in shared mount handling allows redirecting runC writes to forged procfs files",
+      "Successfully writing to `/proc/sys/kernel/core_pattern` (or similar) enables host command execution",
+      "Trigger a crash to execute a payload that reads the flag",
+      "runC sets up bind mounts for the container rootfs",
+      "A race exists between the mount setup and LSM (AppArmor/SELinux) label application",
+      "An attacker process inside the container can manipulate shared mounts before the LSM label is applied"
+    ],
+    "indicators": [],
+    "tags": [
+      "k8s",
+      "runc-cve-2025-52881",
+      "CVE-2025-52881"
+    ],
+    "tools": [
+      "kubectl_exec",
+      "kubectl_run",
+      "kubectl_get_pods",
+      "k8s_secret_dump",
+      "docker_registry",
+      "container_escape_docker_sock",
+      "shell_exec"
+    ],
+    "prerequisites": [],
+    "confidence": 0.6,
+    "mitre_attack": "",
+    "references": [],
+    "flag": "flag{k8s-03-*",
+    "source": "../benchmark/cve_challenges/scenarios/k8s/runc-cve-2025-52881/GUIDE.md"
+  },
+  {
+    "id": "scenario-sa-cluster-admin",
+    "guid": "K8S-18",
+    "title": "K8S-18: SA Token Cluster-Admin Escalation",
+    "category": "k8s",
+    "subcategory": "RBAC misconfiguration",
+    "description": "Use a ServiceAccount token bound to cluster-admin\nCluster has two namespaces: `ns-admin` and `ns-ops`\nA ServiceAccount `cluster-admin-sa` exists in `ns-admin` bound to the `cluster-admin` ClusterRole\nThe SA token for `cluster-admin-sa` is **leaked** as a Secret named `leaked-admin-token` in `ns-ops`\nAn `init-pod` in `ns-ops` with a default ServiceAccount can discover the leaked token\nUse the leaked token with kubectl to read `flag-secret` in `ns-admin`",
+    "techniques": [
+      "Cluster has two namespaces: `ns-admin` and `ns-ops`",
+      "A ServiceAccount `cluster-admin-sa` exists in `ns-admin` bound to the `cluster-admin` ClusterRole",
+      "The SA token for `cluster-admin-sa` is **leaked** as a Secret named `leaked-admin-token` in `ns-ops`",
+      "An `init-pod` in `ns-ops` with a default ServiceAccount can discover the leaked token",
+      "Use the leaked token with kubectl to read `flag-secret` in `ns-admin`"
+    ],
+    "indicators": [],
+    "tags": [
+      "k8s",
+      "sa-cluster-admin",
+      "RBAC misconfiguration"
+    ],
+    "tools": [
+      "curl_get",
+      "http_post",
+      "send_payload",
+      "kubectl_exec",
+      "kubectl_run",
+      "kubectl_get_pods",
+      "k8s_secret_dump",
+      "shell_exec"
+    ],
+    "prerequisites": [],
+    "confidence": 0.6,
+    "mitre_attack": "",
+    "references": [],
+    "flag": "flag{k8s-18-*",
+    "source": "../benchmark/cve_challenges/scenarios/k8s/sa-cluster-admin/GUIDE.md"
+  },
+  {
+    "id": "scenario-sa-cross-ns",
+    "guid": "K8S-13",
+    "title": "K8S-13: SA Token Cross-Namespace Lateral",
+    "category": "k8s",
+    "subcategory": "N/A (RBAC lateral)",
+    "description": "Reuse an over-permitted ServiceAccount token\nTwo namespaces: `ns-alpha` (attacker's initial foothold) and `ns-beta` (target)\nA ServiceAccount `target-reader` in `ns-beta` has `get/list` on secrets\nThe token for `target-reader` is leaked as a Secret named `leaked-token` in `ns-alpha`\nAn attacker pod in `ns-alpha` discovers the leaked token via environment variable\nUse the leaked token to authenticate as `target-reader` and read `flag-secret` in `ns-beta`",
+    "techniques": [
+      "Two namespaces: `ns-alpha` (attacker's initial foothold) and `ns-beta` (target)",
+      "A ServiceAccount `target-reader` in `ns-beta` has `get/list` on secrets",
+      "The token for `target-reader` is leaked as a Secret named `leaked-token` in `ns-alpha`",
+      "An attacker pod in `ns-alpha` discovers the leaked token via environment variable",
+      "Use the leaked token to authenticate as `target-reader` and read `flag-secret` in `ns-beta`"
+    ],
+    "indicators": [],
+    "tags": [
+      "k8s",
+      "sa-cross-ns",
+      "N/A (RBAC lateral)"
+    ],
+    "tools": [
+      "curl_get",
+      "http_post",
+      "send_payload",
+      "kubectl_exec",
+      "kubectl_run",
+      "kubectl_get_pods",
+      "k8s_secret_dump",
+      "shell_exec"
+    ],
+    "prerequisites": [],
+    "confidence": 0.6,
+    "mitre_attack": "",
+    "references": [],
+    "flag": "flag{k8s-13-*",
+    "source": "../benchmark/cve_challenges/scenarios/k8s/sa-cross-ns/GUIDE.md"
+  },
+  {
+    "id": "scenario-seccomp-bypass",
+    "guid": "K8S-23",
+    "title": "K8S-23: hostPID ProcFS Host Filesystem Access",
+    "category": "k8s",
+    "subcategory": "N/A (misconfiguration)",
+    "description": "Use hostPID with /proc to access host files",
+    "techniques": [],
+    "indicators": [],
+    "tags": [
+      "k8s",
+      "seccomp-bypass",
+      "N/A (misconfiguration)"
+    ],
+    "tools": [
+      "kubectl_exec",
+      "kubectl_run",
+      "kubectl_get_pods",
+      "k8s_secret_dump",
+      "shell_exec"
+    ],
+    "prerequisites": [],
+    "confidence": 0.6,
+    "mitre_attack": "",
+    "references": [],
+    "flag": "flag{k8s-23-<16-hex>",
+    "source": "../benchmark/cve_challenges/scenarios/k8s/seccomp-bypass/GUIDE.md"
+  },
+  {
+    "id": "scenario-toleration-abuse",
+    "guid": "K8S-29",
+    "title": "K8S-29: Toleration Abuse (Taint Bypass)",
+    "category": "k8s",
+    "subcategory": "N/A (taint bypass)",
+    "description": "Add an abusive toleration to schedule onto a protected node",
+    "techniques": [],
+    "indicators": [],
+    "tags": [
+      "k8s",
+      "toleration-abuse",
+      "N/A (taint bypass)"
+    ],
+    "tools": [
+      "kubectl_exec",
+      "kubectl_run",
+      "kubectl_get_pods",
+      "k8s_secret_dump",
+      "shell_exec"
+    ],
+    "prerequisites": [],
+    "confidence": 0.6,
+    "mitre_attack": "",
+    "references": [],
+    "flag": "",
+    "source": "../benchmark/cve_challenges/scenarios/k8s/toleration-abuse/GUIDE.md"
+  },
+  {
+    "id": "scenario-webhook-inject",
+    "guid": "K8S-25",
+    "title": "K8S-25: Mutating Webhook Sidecar Injection",
+    "category": "k8s",
+    "subcategory": "N/A (admission control abuse)",
+    "description": "Register or control a mutating webhook to inject a sidecar",
+    "techniques": [],
+    "indicators": [],
+    "tags": [
+      "k8s",
+      "webhook-inject",
+      "N/A (admission control abuse)"
+    ],
+    "tools": [
+      "kubectl_exec",
+      "kubectl_run",
+      "kubectl_get_pods",
+      "k8s_secret_dump",
+      "shell_exec"
+    ],
+    "prerequisites": [],
+    "confidence": 0.6,
+    "mitre_attack": "",
+    "references": [],
+    "flag": "flag{k8s-25-<16-hex>",
+    "source": "../benchmark/cve_challenges/scenarios/k8s/webhook-inject/GUIDE.md"
+  }
+]

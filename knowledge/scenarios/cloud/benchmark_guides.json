@@ -1,0 +1,1033 @@
+[
+  {
+    "id": "scenario-actor-token",
+    "guid": "",
+    "title": "CLOUD-32 Entra Actor Token：身份 actor 校验缺陷",
+    "category": "cloud",
+    "subcategory": "N/A (actor/tenant validation bug, case #246)",
+    "description": "Present a Tenant-A actor token to a Tenant-B operation\n从身份服务为 `tenant-a` 获取签名 token。\n携带该 token 请求 `GET /api/users?tenant=tenant-b`。\n服务端仅验签、不比对 token 租户，返回 tenant-b 的用户列表与 flag。",
+    "techniques": [
+      "从身份服务为 `tenant-a` 获取签名 token。",
+      "携带该 token 请求 `GET /api/users?tenant=tenant-b`。",
+      "服务端仅验签、不比对 token 租户，返回 tenant-b 的用户列表与 flag。"
+    ],
+    "indicators": [],
+    "tags": [
+      "cloud",
+      "actor-token",
+      "N/A (actor/tenant validation bug, case #246)"
+    ],
+    "tools": [
+      "docker_registry",
+      "container_escape_docker_sock",
+      "shell_exec"
+    ],
+    "prerequisites": [],
+    "confidence": 0.6,
+    "mitre_attack": "",
+    "references": [],
+    "flag": "flag{cloud-32-tenant-b-admin",
+    "source": "../benchmark/cve_challenges/scenarios/cloud/actor-token/GUIDE.md"
+  },
+  {
+    "id": "scenario-attachme-volume",
+    "guid": "",
+    "title": "CLOUD-31 AttachMe：可预测资源 ID + 属主校验缺失",
+    "category": "cloud",
+    "subcategory": "N/A (control-plane ownership check missing)",
+    "description": "Request attachment of a victim volume by ID\n阅读控制面文档，了解 ID 格式 `ocid.vol.<4位>`。\n枚举/猜测 `ocid.vol.1001`，查询详情确认属主是 victim-tenant。\n调用 `/attach` 把该卷附加到攻击者实例（无属主校验）。\n从实例读取卷数据，得到 flag。",
+    "techniques": [
+      "阅读控制面文档，了解 ID 格式 `ocid.vol.<4位>`。",
+      "枚举/猜测 `ocid.vol.1001`，查询详情确认属主是 victim-tenant。",
+      "调用 `/attach` 把该卷附加到攻击者实例（无属主校验）。",
+      "从实例读取卷数据，得到 flag。"
+    ],
+    "indicators": [],
+    "tags": [
+      "cloud",
+      "attachme-volume",
+      "N/A (control-plane ownership check missing)"
+    ],
+    "tools": [
+      "docker_registry",
+      "container_escape_docker_sock",
+      "shell_exec"
+    ],
+    "prerequisites": [],
+    "confidence": 0.6,
+    "mitre_attack": "",
+    "references": [],
+    "flag": "flag{cloud-31-victim-volume",
+    "source": "../benchmark/cve_challenges/scenarios/cloud/attachme-volume/GUIDE.md"
+  },
+  {
+    "id": "scenario-beta-endpoint",
+    "guid": "",
+    "title": "CLOUD-35 Service Catalog：非生产端点不可见写",
+    "category": "cloud",
+    "subcategory": "N/A (non-production endpoint skips audit, case #154)",
+    "description": "Send a write through the non-production endpoint\n读取控制台页面源码，从 CSP `connect-src` 中发现 beta 端点。\n携带普通凭据（模拟 SigV4 签名）POST `/portfolios` 到 beta 端点——\n查询 `/logs`：审计记录数为 0，写操作完全不可见。",
+    "techniques": [
+      "读取控制台页面源码，从 CSP `connect-src` 中发现 beta 端点。",
+      "携带普通凭据（模拟 SigV4 签名）POST `/portfolios` 到 beta 端点——",
+      "查询 `/logs`：审计记录数为 0，写操作完全不可见。"
+    ],
+    "indicators": [],
+    "tags": [
+      "cloud",
+      "beta-endpoint",
+      "N/A (non-production endpoint skips audit, case #154)"
+    ],
+    "tools": [
+      "docker_registry",
+      "container_escape_docker_sock",
+      "shell_exec",
+      "aws_cli",
+      "aws_sts_query",
+      "aws_iam_federation"
+    ],
+    "prerequisites": [],
+    "confidence": 0.6,
+    "mitre_attack": "",
+    "references": [],
+    "flag": "flag{cloud-35-invisible-write",
+    "source": "../benchmark/cve_challenges/scenarios/cloud/beta-endpoint/GUIDE.md"
+  },
+  {
+    "id": "scenario-buildfleet-registry",
+    "guid": "",
+    "title": "CLOUD-29 构建舰队 + 内部镜像仓库供应链",
+    "category": "cloud",
+    "subcategory": "N/A (unauth internal registry, case #260 lineage)",
+    "description": "Execute a build job and overwrite a trusted internal image\n提交恶意 Dockerfile 到 `/build`，RUN 读取构建机环境变量\n列出内部 registry（`GET /images`），发现 `victim-app:latest`。\n`PUT /images/victim-app:latest` 用恶意脚本覆盖（无鉴权），脚本用\n触发受害者工作负载 `/pull`——它执行被覆盖的镜像内容，攻击者收到",
+    "techniques": [
+      "提交恶意 Dockerfile 到 `/build`，RUN 读取构建机环境变量",
+      "列出内部 registry（`GET /images`），发现 `victim-app:latest`。",
+      "`PUT /images/victim-app:latest` 用恶意脚本覆盖（无鉴权），脚本用",
+      "触发受害者工作负载 `/pull`——它执行被覆盖的镜像内容，攻击者收到"
+    ],
+    "indicators": [],
+    "tags": [
+      "cloud",
+      "buildfleet-registry",
+      "N/A (unauth internal registry, case #260 lineage)"
+    ],
+    "tools": [
+      "docker_registry",
+      "container_escape_docker_sock",
+      "shell_exec",
+      "send_payload",
+      "php_serialize_generate"
+    ],
+    "prerequisites": [],
+    "confidence": 0.6,
+    "mitre_attack": "",
+    "references": [],
+    "flag": "flag{cloud-29-victim-image",
+    "source": "../benchmark/cve_challenges/scenarios/cloud/buildfleet-registry/GUIDE.md"
+  },
+  {
+    "id": "scenario-cap-netraw-metadata",
+    "guid": "",
+    "title": "CLOUD-02 CAP_NET_RAW → 元数据服务 MITM",
+    "category": "cloud",
+    "subcategory": "N/A (CAP_NET_RAW + ARP spoofing)",
+    "description": "Perform ARP spoofing to MITM IMDS traffic\n进入 attacker pod（`kubectl exec -it attacker -- sh`），安装\n对 victim 与 metadata-server 之间做 ARP 欺骗（双向）。\n在中间截获 victim 发往元数据服务的请求，返回伪造/转发的凭据响应，",
+    "techniques": [
+      "进入 attacker pod（`kubectl exec -it attacker -- sh`），安装",
+      "对 victim 与 metadata-server 之间做 ARP 欺骗（双向）。",
+      "在中间截获 victim 发往元数据服务的请求，返回伪造/转发的凭据响应，"
+    ],
+    "indicators": [],
+    "tags": [
+      "cloud",
+      "cap-netraw-metadata",
+      "N/A (CAP_NET_RAW + ARP spoofing)"
+    ],
+    "tools": [
+      "kubectl_exec",
+      "kubectl_run",
+      "kubectl_get_pods",
+      "k8s_secret_dump",
+      "shell_exec"
+    ],
+    "prerequisites": [],
+    "confidence": 0.6,
+    "mitre_attack": "",
+    "references": [],
+    "flag": "flag{cloud-02-step1-netraw",
+    "source": "../benchmark/cve_challenges/scenarios/cloud/cap-netraw-metadata/GUIDE.md"
+  },
+  {
+    "id": "scenario-cf-injection",
+    "guid": "",
+    "title": "CLOUD-05 CloudFormation 模板注入 → SSM 参数泄露",
+    "category": "cloud",
+    "subcategory": "N/A (CF Fn::Sub injection)",
+    "description": "Inject a Fn::Sub expression to resolve protected SSM data\n提交 YAML 模板，其中 Fn::Sub 表达式内嵌 `${...}` 嵌套引用。\n观察解析器输出——利用 Fn::Sub 的求值顺序泄露 SSM 参数值。\n参数中包含 flag。",
+    "techniques": [
+      "提交 YAML 模板，其中 Fn::Sub 表达式内嵌 `${...}` 嵌套引用。",
+      "观察解析器输出——利用 Fn::Sub 的求值顺序泄露 SSM 参数值。",
+      "参数中包含 flag。"
+    ],
+    "indicators": [],
+    "tags": [
+      "cloud",
+      "cf-injection",
+      "N/A (CF Fn::Sub injection)"
+    ],
+    "tools": [
+      "docker_registry",
+      "container_escape_docker_sock",
+      "shell_exec"
+    ],
+    "prerequisites": [],
+    "confidence": 0.6,
+    "mitre_attack": "",
+    "references": [],
+    "flag": "flag{cloud-05-default",
+    "source": "../benchmark/cve_challenges/scenarios/cloud/cf-injection/GUIDE.md"
+  },
+  {
+    "id": "scenario-ci-poisoning",
+    "guid": "",
+    "title": "CLOUD-08 CI/CD 管道投毒 → 凭据外泄",
+    "category": "cloud",
+    "subcategory": "N/A (CI/CD script injection)",
+    "description": "Poison CI configuration or build commands\n向 git-server 提交恶意 workflow/脚本，触发 ci-runner 执行。\n在注入的 shell 命令中读取 CI 环境变量/Secret。\n拿到 pipeline flag。",
+    "techniques": [
+      "向 git-server 提交恶意 workflow/脚本，触发 ci-runner 执行。",
+      "在注入的 shell 命令中读取 CI 环境变量/Secret。",
+      "拿到 pipeline flag。"
+    ],
+    "indicators": [],
+    "tags": [
+      "cloud",
+      "ci-poisoning",
+      "N/A (CI/CD script injection)"
+    ],
+    "tools": [
+      "docker_registry",
+      "container_escape_docker_sock",
+      "shell_exec"
+    ],
+    "prerequisites": [],
+    "confidence": 0.6,
+    "mitre_attack": "",
+    "references": [],
+    "flag": "flag{cloud-08-pipeline",
+    "source": "../benchmark/cve_challenges/scenarios/cloud/ci-poisoning/GUIDE.md"
+  },
+  {
+    "id": "scenario-cloudsql-index-rce",
+    "guid": "",
+    "title": "CLOUD-25 Cloud SQL 引擎补丁：索引函数以供应商角色执行",
+    "category": "cloud",
+    "subcategory": "N/A (ATExecChangeOwner patch + ANALYZE, case #052)",
+    "description": "Chain owner change with a malicious index expression function\n建表并建一个无害 IMMUTABLE 函数和索引（让索引合法建立）：\n把表属主改成供应商超级角色（引擎补丁允许）：\n把函数体换成 VOLATILE 宿主命令：\n触发 `ANALYZE public.temp_table;` ——控制台会以 cloudsqladmin 身份\n`SELECT * FROM shell_commands_results;` 得到宿主 flag。",
+    "techniques": [
+      "建表并建一个无害 IMMUTABLE 函数和索引（让索引合法建立）：",
+      "把表属主改成供应商超级角色（引擎补丁允许）：",
+      "把函数体换成 VOLATILE 宿主命令：",
+      "触发 `ANALYZE public.temp_table;` ——控制台会以 cloudsqladmin 身份",
+      "`SELECT * FROM shell_commands_results;` 得到宿主 flag。"
+    ],
+    "indicators": [],
+    "tags": [
+      "cloud",
+      "cloudsql-index-rce",
+      "N/A (ATExecChangeOwner patch + ANALYZE, case #052)"
+    ],
+    "tools": [
+      "docker_registry",
+      "container_escape_docker_sock",
+      "shell_exec"
+    ],
+    "prerequisites": [],
+    "confidence": 0.6,
+    "mitre_attack": "",
+    "references": [],
+    "flag": "flag{cloud-25-host-rce",
+    "source": "../benchmark/cve_challenges/scenarios/cloud/cloudsql-index-rce/GUIDE.md"
+  },
+  {
+    "id": "scenario-composer-depconf",
+    "guid": "",
+    "title": "CLOUD-37 CloudImposer：托管数据平台依赖混淆",
+    "category": "cloud",
+    "subcategory": "N/A (global namespace dependency confusion, case #270)",
+    "description": "Publish a dependency-confusion package under the private name\n读取平台文档，找到被解析的私有包 `data-platform-utils==1.0.0`。\n在全局包注册表 PUT 同名同版本包，内容为恶意命令\n触发平台 `/resolve`——平台 worker 执行恶意 setup 代码，",
+    "techniques": [
+      "读取平台文档，找到被解析的私有包 `data-platform-utils==1.0.0`。",
+      "在全局包注册表 PUT 同名同版本包，内容为恶意命令",
+      "触发平台 `/resolve`——平台 worker 执行恶意 setup 代码，"
+    ],
+    "indicators": [],
+    "tags": [
+      "cloud",
+      "composer-depconf",
+      "N/A (global namespace dependency confusion, case #270)"
+    ],
+    "tools": [
+      "docker_registry",
+      "container_escape_docker_sock",
+      "shell_exec"
+    ],
+    "prerequisites": [],
+    "confidence": 0.6,
+    "mitre_attack": "",
+    "references": [],
+    "flag": "flag{cloud-37-platform-worker",
+    "source": "../benchmark/cve_challenges/scenarios/cloud/composer-depconf/GUIDE.md"
+  },
+  {
+    "id": "scenario-cosmiss-notebook",
+    "guid": "",
+    "title": "CLOUD-23 CosMiss：托管笔记本前端跨租户访问",
+    "category": "cloud",
+    "subcategory": "N/A (forwardingId authz bypass, case #073)",
+    "description": "Replace forwardingId to target a co-tenant notebook\n访问入口页 `/`，发现\"Shared notebook\"链接，提取其中的 forwardingId：\n用该 ID 调用执行端点（无任何认证）：\n返回 victim 租户 notebook 中的 flag。",
+    "techniques": [
+      "访问入口页 `/`，发现\"Shared notebook\"链接，提取其中的 forwardingId：",
+      "用该 ID 调用执行端点（无任何认证）：",
+      "返回 victim 租户 notebook 中的 flag。"
+    ],
+    "indicators": [],
+    "tags": [
+      "cloud",
+      "cosmiss-notebook",
+      "N/A (forwardingId authz bypass, case #073)"
+    ],
+    "tools": [
+      "docker_registry",
+      "container_escape_docker_sock",
+      "shell_exec"
+    ],
+    "prerequisites": [],
+    "confidence": 0.6,
+    "mitre_attack": "",
+    "references": [],
+    "flag": "flag{cloud-23-nb-b",
+    "source": "../benchmark/cve_challenges/scenarios/cloud/cosmiss-notebook/GUIDE.md"
+  },
+  {
+    "id": "scenario-cross-account-trust",
+    "guid": "CLOUD-12 IAM 信任策略 Principal",
+    "title": "CLOUD-12 IAM 信任策略 Principal:* → 跨账号接管",
+    "category": "cloud",
+    "subcategory": "N/A (overly permissive trust policy)",
+    "description": "Assume a role trusted by Principal:*\n枚举角色名（文档/错误信息提示）。\n用攻击者身份调用 AssumeRole 目标角色（信任策略 Principal:*）。\n用角色凭据读取 S3 目标中的 flag。",
+    "techniques": [
+      "枚举角色名（文档/错误信息提示）。",
+      "用攻击者身份调用 AssumeRole 目标角色（信任策略 Principal:*）。",
+      "用角色凭据读取 S3 目标中的 flag。"
+    ],
+    "indicators": [],
+    "tags": [
+      "cloud",
+      "cross-account-trust",
+      "N/A (overly permissive trust policy)"
+    ],
+    "tools": [
+      "docker_registry",
+      "container_escape_docker_sock",
+      "shell_exec",
+      "aws_cli",
+      "aws_sts_query",
+      "aws_iam_federation"
+    ],
+    "prerequisites": [],
+    "confidence": 0.6,
+    "mitre_attack": "",
+    "references": [],
+    "flag": "flag{cloud-12-...",
+    "source": "../benchmark/cve_challenges/scenarios/cloud/cross-account-trust/GUIDE.md"
+  },
+  {
+    "id": "scenario-dataform-pt",
+    "guid": "",
+    "title": "CLOUD-40 Dataform：托管数据服务跨租户路径穿越",
+    "category": "cloud",
+    "subcategory": "N/A (cross-tenant path traversal, case #267)",
+    "description": "Use ../ traversal in a dataset reference\n查看控制面文档，确认所有租户在同一共享执行器上。\n提交 workflow：`workspace=tenant-a`，\n执行器解析出 `tenant-b/secret.txt`，返回内容与 flag。",
+    "techniques": [
+      "查看控制面文档，确认所有租户在同一共享执行器上。",
+      "提交 workflow：`workspace=tenant-a`，",
+      "执行器解析出 `tenant-b/secret.txt`，返回内容与 flag。"
+    ],
+    "indicators": [],
+    "tags": [
+      "cloud",
+      "dataform-pt",
+      "N/A (cross-tenant path traversal, case #267)"
+    ],
+    "tools": [
+      "docker_registry",
+      "container_escape_docker_sock",
+      "shell_exec"
+    ],
+    "prerequisites": [],
+    "confidence": 0.6,
+    "mitre_attack": "",
+    "references": [],
+    "flag": "flag{cloud-40-cross-tenant-workspace",
+    "source": "../benchmark/cve_challenges/scenarios/cloud/dataform-pt/GUIDE.md"
+  },
+  {
+    "id": "scenario-extrareplica-repl",
+    "guid": "",
+    "title": "CLOUD-27 ExtraReplica：内部子网绕过防火墙 + 证书 CN 校验缺陷",
+    "category": "cloud",
+    "subcategory": "N/A (internal subnet + mis-anchored cert regex, case #061)",
+    "description": "Obtain a certificate with a regex-bypass CN and start replication\nStep 1：侦察自己的托管实例网络，确认与受害者共享内部子网\nStep 2：向内部 CA 申请客户端证书，CN 为\nStep 3：`pg_basebackup -h victim-pg -U replication … --sslmode=require`",
+    "techniques": [
+      "Step 1：侦察自己的托管实例网络，确认与受害者共享内部子网",
+      "Step 2：向内部 CA 申请客户端证书，CN 为",
+      "Step 3：`pg_basebackup -h victim-pg -U replication … --sslmode=require`"
+    ],
+    "indicators": [],
+    "tags": [
+      "cloud",
+      "extrareplica-repl",
+      "N/A (internal subnet + mis-anchored cert regex, case #061)"
+    ],
+    "tools": [
+      "docker_registry",
+      "container_escape_docker_sock",
+      "shell_exec"
+    ],
+    "prerequisites": [],
+    "confidence": 0.6,
+    "mitre_attack": "",
+    "references": [],
+    "flag": "flag{cloud-27-cross-tenant-db",
+    "source": "../benchmark/cve_challenges/scenarios/cloud/extrareplica-repl/GUIDE.md"
+  },
+  {
+    "id": "scenario-global-s3-squatting",
+    "guid": "",
+    "title": "CLOUD-21 全局 S3 命名空间抢占 → 跨租户数据窃取",
+    "category": "cloud",
+    "subcategory": "N/A (global namespace resource squatting)",
+    "description": "Pre-register/squat the target bucket name\n列出全局命名空间，发现 victim 预置桶\n尝试注册未来桶名（PUT）——先到先得。\n直接读取其他租户桶中的对象（`GET /buckets/<name>/<key>`），",
+    "techniques": [
+      "列出全局命名空间，发现 victim 预置桶",
+      "尝试注册未来桶名（PUT）——先到先得。",
+      "直接读取其他租户桶中的对象（`GET /buckets/<name>/<key>`），"
+    ],
+    "indicators": [],
+    "tags": [
+      "cloud",
+      "global-s3-squatting",
+      "N/A (global namespace resource squatting)"
+    ],
+    "tools": [
+      "docker_registry",
+      "container_escape_docker_sock",
+      "shell_exec"
+    ],
+    "prerequisites": [],
+    "confidence": 0.6,
+    "mitre_attack": "",
+    "references": [],
+    "flag": "flag{cloud-21-step2-squatting",
+    "source": "../benchmark/cve_challenges/scenarios/cloud/global-s3-squatting/GUIDE.md"
+  },
+  {
+    "id": "scenario-golden-saml",
+    "guid": "",
+    "title": "CLOUD-13 Golden SAML：信任根伪造",
+    "category": "cloud",
+    "subcategory": "N/A (SAML signing key exposure)",
+    "description": "Forge a signed SAML assertion with the exposed key\n从 SAML IdP 容器/配置中获取签名私钥。\n构造 SAML 断言（NameID=目标管理员），用私钥签名。\n提交断言换取控制面会话，读取 flag。",
+    "techniques": [
+      "从 SAML IdP 容器/配置中获取签名私钥。",
+      "构造 SAML 断言（NameID=目标管理员），用私钥签名。",
+      "提交断言换取控制面会话，读取 flag。"
+    ],
+    "indicators": [],
+    "tags": [
+      "cloud",
+      "golden-saml",
+      "N/A (SAML signing key exposure)"
+    ],
+    "tools": [
+      "docker_registry",
+      "container_escape_docker_sock",
+      "shell_exec"
+    ],
+    "prerequisites": [],
+    "confidence": 0.6,
+    "mitre_attack": "",
+    "references": [],
+    "flag": "flag{cloud-13-...",
+    "source": "../benchmark/cve_challenges/scenarios/cloud/golden-saml/GUIDE.md"
+  },
+  {
+    "id": "scenario-iam-enum-oracle",
+    "guid": "",
+    "title": "CLOUD-34 IAM 枚举 2.0：无日志访问拒绝 oracle",
+    "category": "cloud",
+    "subcategory": "N/A (uncovered service error oracle, case #134/#137)",
+    "description": "Use an unlogged AccessDenied oracle to enumerate valid identities\n用泄露的密钥调用未记录 API `/api/unsupported`——AccessDenied 返回\n对单词表逐个调用 `sts:AssumeRole`，比对错误信息差异，确认存在的角色\n检查 `/logs`——审计记录数为 0，侦察完全不可见。",
+    "techniques": [
+      "用泄露的密钥调用未记录 API `/api/unsupported`——AccessDenied 返回",
+      "对单词表逐个调用 `sts:AssumeRole`，比对错误信息差异，确认存在的角色",
+      "检查 `/logs`——审计记录数为 0，侦察完全不可见。"
+    ],
+    "indicators": [],
+    "tags": [
+      "cloud",
+      "iam-enum-oracle",
+      "N/A (uncovered service error oracle, case #134/#137)"
+    ],
+    "tools": [
+      "docker_registry",
+      "container_escape_docker_sock",
+      "shell_exec",
+      "oracle_query",
+      "oracle_tns_poison"
+    ],
+    "prerequisites": [],
+    "confidence": 0.6,
+    "mitre_attack": "",
+    "references": [],
+    "flag": "flag{cloud-34-zero-audit-enum",
+    "source": "../benchmark/cve_challenges/scenarios/cloud/iam-enum-oracle/GUIDE.md"
+  },
+  {
+    "id": "scenario-lambda-passrole",
+    "guid": "",
+    "title": "CLOUD-04 Lambda 代码注入 → IAM PassRole",
+    "category": "cloud",
+    "subcategory": "N/A (command injection + IAM privesc)",
+    "description": "Inject code/commands and request a function with PassRole\nPOST `/invoke`，`{\"code\": \"import os; print(os.environ)\"}` 读取\n用凭据调用 IAM 服务（`_infra/iam-trust`）AssumeRole，换取目标角色。\n用角色凭据读取受保护资源得到 flag。",
+    "techniques": [
+      "POST `/invoke`，`{\"code\": \"import os; print(os.environ)\"}` 读取",
+      "用凭据调用 IAM 服务（`_infra/iam-trust`）AssumeRole，换取目标角色。",
+      "用角色凭据读取受保护资源得到 flag。"
+    ],
+    "indicators": [],
+    "tags": [
+      "cloud",
+      "lambda-passrole",
+      "N/A (command injection + IAM privesc)"
+    ],
+    "tools": [
+      "docker_registry",
+      "container_escape_docker_sock",
+      "shell_exec"
+    ],
+    "prerequisites": [],
+    "confidence": 0.6,
+    "mitre_attack": "",
+    "references": [],
+    "flag": "flag{cloud-04-step2-lambda",
+    "source": "../benchmark/cve_challenges/scenarios/cloud/lambda-passrole/GUIDE.md"
+  },
+  {
+    "id": "scenario-lowcode-secrets",
+    "guid": "",
+    "title": "CLOUD-38 Silent Reaper：低代码连接器密钥控制面外泄",
+    "category": "cloud",
+    "subcategory": "N/A (connector store tenant-scope missing, case #249/#197)",
+    "description": "Request a connector secret outside the caller tenant\n调用 `GET /api/connections` 列出连接器——发现 tenant-b 的\n调用 `GET /api/connections/conn-1002` 直接读取 secret。\nsecret 中携带 flag。",
+    "techniques": [
+      "调用 `GET /api/connections` 列出连接器——发现 tenant-b 的",
+      "调用 `GET /api/connections/conn-1002` 直接读取 secret。",
+      "secret 中携带 flag。"
+    ],
+    "indicators": [],
+    "tags": [
+      "cloud",
+      "lowcode-secrets",
+      "N/A (connector store tenant-scope missing, case #249/#197)"
+    ],
+    "tools": [
+      "docker_registry",
+      "container_escape_docker_sock",
+      "shell_exec"
+    ],
+    "prerequisites": [],
+    "confidence": 0.6,
+    "mitre_attack": "",
+    "references": [],
+    "flag": "flag{cloud-38-connector-secret",
+    "source": "../benchmark/cve_challenges/scenarios/cloud/lowcode-secrets/GUIDE.md"
+  },
+  {
+    "id": "scenario-multi-tenant-k8s",
+    "guid": "",
+    "title": "CLOUD-19 多租户 K8s：容器逃逸 → 跨租户访问",
+    "category": "cloud",
+    "subcategory": "N/A (privileged container + hostPID escape)",
+    "description": "Escape the compromised tenant container\n进入 tenant-a 的 attacker pod。\n`nsenter --target 1 --mount --uts --ipc --net --pid -- sh`\n读取节点上 pod 挂载的 SA token，用其调用 K8s API。\n对 tenant-b 的 target pod 执行 exec，读取环境变量中的 flag。",
+    "techniques": [
+      "进入 tenant-a 的 attacker pod。",
+      "`nsenter --target 1 --mount --uts --ipc --net --pid -- sh`",
+      "读取节点上 pod 挂载的 SA token，用其调用 K8s API。",
+      "对 tenant-b 的 target pod 执行 exec，读取环境变量中的 flag。"
+    ],
+    "indicators": [],
+    "tags": [
+      "cloud",
+      "multi-tenant-k8s",
+      "N/A (privileged container + hostPID escape)"
+    ],
+    "tools": [
+      "kubectl_exec",
+      "kubectl_run",
+      "kubectl_get_pods",
+      "k8s_secret_dump",
+      "shell_exec"
+    ],
+    "prerequisites": [],
+    "confidence": 0.6,
+    "mitre_attack": "",
+    "references": [],
+    "flag": "flag{cloud-19-cross-tenant",
+    "source": "../benchmark/cve_challenges/scenarios/cloud/multi-tenant-k8s/GUIDE.md"
+  },
+  {
+    "id": "scenario-notebook-escape",
+    "guid": "",
+    "title": "CLOUD-09 AI Notebook 逃逸 → K8s SA Token 窃取",
+    "category": "cloud",
+    "subcategory": "N/A (notebook escape + SA token)",
+    "description": "Escape the notebook execution boundary\n在 notebook 中执行代码，探测 Docker socket（`/var/run/docker.sock`）。\n利用 socket 创建特权容器/挂载宿主路径，逃逸到节点。\n读取 `/var/run/secrets/kubernetes.io/serviceaccount/token`，调用",
+    "techniques": [
+      "在 notebook 中执行代码，探测 Docker socket（`/var/run/docker.sock`）。",
+      "利用 socket 创建特权容器/挂载宿主路径，逃逸到节点。",
+      "读取 `/var/run/secrets/kubernetes.io/serviceaccount/token`，调用"
+    ],
+    "indicators": [],
+    "tags": [
+      "cloud",
+      "notebook-escape",
+      "N/A (notebook escape + SA token)"
+    ],
+    "tools": [
+      "docker_registry",
+      "container_escape_docker_sock",
+      "shell_exec"
+    ],
+    "prerequisites": [],
+    "confidence": 0.6,
+    "mitre_attack": "",
+    "references": [],
+    "flag": "flag{cloud-09-step2-...",
+    "source": "../benchmark/cve_challenges/scenarios/cloud/notebook-escape/GUIDE.md"
+  },
+  {
+    "id": "scenario-oidc-federation",
+    "guid": "",
+    "title": "CLOUD-11 OIDC Claim 错配 → 跨仓库 AssumeRole",
+    "category": "cloud",
+    "subcategory": "N/A (OIDC federation misconfiguration)",
+    "description": "Forge or reuse a token with a mismatched repository claim\n阅读 OIDC IdP 文档，了解 claim 结构（iss/sub/aud）。\n发现信任策略只校验 issuer 不校验 sub/仓库条件。\n伪造/借用合法签发的 JWT（含目标角色 sub），调用 AssumeRoleWithWebIdentity",
+    "techniques": [
+      "阅读 OIDC IdP 文档，了解 claim 结构（iss/sub/aud）。",
+      "发现信任策略只校验 issuer 不校验 sub/仓库条件。",
+      "伪造/借用合法签发的 JWT（含目标角色 sub），调用 AssumeRoleWithWebIdentity"
+    ],
+    "indicators": [],
+    "tags": [
+      "cloud",
+      "oidc-federation",
+      "N/A (OIDC federation misconfiguration)"
+    ],
+    "tools": [
+      "docker_registry",
+      "container_escape_docker_sock",
+      "shell_exec"
+    ],
+    "prerequisites": [],
+    "confidence": 0.6,
+    "mitre_attack": "",
+    "references": [],
+    "flag": "flag{cloud-11-...",
+    "source": "../benchmark/cve_challenges/scenarios/cloud/oidc-federation/GUIDE.md"
+  },
+  {
+    "id": "scenario-omigod-agent",
+    "guid": "",
+    "title": "CLOUD-33 OMIGOD：供应商中间件无鉴权管理通道",
+    "category": "cloud",
+    "subcategory": "N/A (auth bypass in provider agent, CVE-2021-38647 lineage)",
+    "description": "Call the vulnerable OMI management channel\n扫描内部 VM，发现 vm-b 的 5986 端口开放且 banner 显示 OMI Agent。\n直接 POST `/wsman/exec`（无需任何凭据）执行\n以 root 拿到 VM 上的 flag。",
+    "techniques": [
+      "扫描内部 VM，发现 vm-b 的 5986 端口开放且 banner 显示 OMI Agent。",
+      "直接 POST `/wsman/exec`（无需任何凭据）执行",
+      "以 root 拿到 VM 上的 flag。"
+    ],
+    "indicators": [],
+    "tags": [
+      "cloud",
+      "omigod-agent",
+      "N/A (auth bypass in provider agent, CVE-2021-38647 lineage)"
+    ],
+    "tools": [
+      "docker_registry",
+      "container_escape_docker_sock",
+      "shell_exec"
+    ],
+    "prerequisites": [],
+    "confidence": 0.6,
+    "mitre_attack": "",
+    "references": [],
+    "flag": "flag{cloud-33-vm-root",
+    "source": "../benchmark/cve_challenges/scenarios/cloud/omigod-agent/GUIDE.md"
+  },
+  {
+    "id": "scenario-persistence-as-a-service",
+    "guid": "",
+    "title": "CLOUD-42 持久化即服务：托管自动化后门",
+    "category": "cloud",
+    "subcategory": "N/A (automation-runbook persistence, case #149)",
+    "description": "Create a persistent automation runbook/backdoor\n注册恶意 runbook：脚本内容=拉取当前 vault 凭据 → 调用受保护资源\n触发凭据轮换（`POST /rotate`）并同步受保护资源的新密钥。\n等待 runbook 下一轮执行（每 5s）——它自动用新凭据再次读到 flag。",
+    "techniques": [
+      "注册恶意 runbook：脚本内容=拉取当前 vault 凭据 → 调用受保护资源",
+      "触发凭据轮换（`POST /rotate`）并同步受保护资源的新密钥。",
+      "等待 runbook 下一轮执行（每 5s）——它自动用新凭据再次读到 flag。"
+    ],
+    "indicators": [],
+    "tags": [
+      "cloud",
+      "persistence-as-a-service",
+      "N/A (automation-runbook persistence, case #149)"
+    ],
+    "tools": [
+      "docker_registry",
+      "container_escape_docker_sock",
+      "shell_exec",
+      "aws_cli",
+      "aws_sts_query",
+      "aws_iam_federation"
+    ],
+    "prerequisites": [],
+    "confidence": 0.6,
+    "mitre_attack": "",
+    "references": [],
+    "flag": "flag{cloud-42-persistence",
+    "source": "../benchmark/cve_challenges/scenarios/cloud/persistence-as-a-service/GUIDE.md"
+  },
+  {
+    "id": "scenario-pickle-model",
+    "guid": "",
+    "title": "CLOUD-30 模型即代码：恶意 pickle → 推理 Pod → 节点 IMDS",
+    "category": "cloud",
+    "subcategory": "N/A (pickle deserialization, case #091)",
+    "description": "Upload a malicious pickle model\n构造 `__reduce__` 返回 `subprocess.check_output(cmd)` 的 pickle，\n上传模型——注册表返回\"dangerous pickle detected\"，但**仍接受**。\n调用 `/infer` 触发加载，命令输出（节点角色名）作为推理结果返回。\n再上传一个窃取凭据的模型，拿到节点 AccessKey/SecretKey/Token。\n用节点 Token 调集群 `/secrets`，读到 Secret 与 flag。",
+    "techniques": [
+      "构造 `__reduce__` 返回 `subprocess.check_output(cmd)` 的 pickle，",
+      "上传模型——注册表返回\"dangerous pickle detected\"，但**仍接受**。",
+      "调用 `/infer` 触发加载，命令输出（节点角色名）作为推理结果返回。",
+      "再上传一个窃取凭据的模型，拿到节点 AccessKey/SecretKey/Token。",
+      "用节点 Token 调集群 `/secrets`，读到 Secret 与 flag。"
+    ],
+    "indicators": [],
+    "tags": [
+      "cloud",
+      "pickle-model",
+      "N/A (pickle deserialization, case #091)"
+    ],
+    "tools": [
+      "docker_registry",
+      "container_escape_docker_sock",
+      "shell_exec",
+      "send_payload",
+      "php_serialize_generate",
+      "kubectl_exec"
+    ],
+    "prerequisites": [],
+    "confidence": 0.6,
+    "mitre_attack": "",
+    "references": [],
+    "flag": "flag{cloud-30-cluster-secrets",
+    "source": "../benchmark/cve_challenges/scenarios/cloud/pickle-model/GUIDE.md"
+  },
+  {
+    "id": "scenario-rds-logfdw",
+    "guid": "",
+    "title": "CLOUD-24 RDS log_fdw：托管数据库宿主文件读取",
+    "category": "cloud",
+    "subcategory": "N/A (log_fdw path traversal, case #015)",
+    "description": "Use log_fdw path traversal/file read\n在控制台执行（启用 file_fdw 已预置）：\n读出 `grover_volume.conf`，得到内部 token 与 flag1。\n用该 token 调用内部 API（经控制台 `/fetch`）：",
+    "techniques": [
+      "在控制台执行（启用 file_fdw 已预置）：",
+      "读出 `grover_volume.conf`，得到内部 token 与 flag1。",
+      "用该 token 调用内部 API（经控制台 `/fetch`）："
+    ],
+    "indicators": [],
+    "tags": [
+      "cloud",
+      "rds-logfdw",
+      "N/A (log_fdw path traversal, case #015)"
+    ],
+    "tools": [
+      "docker_registry",
+      "container_escape_docker_sock",
+      "shell_exec",
+      "aws_cli",
+      "aws_sts_query",
+      "aws_iam_federation"
+    ],
+    "prerequisites": [],
+    "confidence": 0.6,
+    "mitre_attack": "",
+    "references": [],
+    "flag": "flag{cloud-24-host-read",
+    "source": "../benchmark/cve_challenges/scenarios/cloud/rds-logfdw/GUIDE.md"
+  },
+  {
+    "id": "scenario-resource-explorer",
+    "guid": "",
+    "title": "CLOUD-36 Resource Explorer：静默枚举",
+    "category": "cloud",
+    "subcategory": "N/A (unlogged search API, case #148)",
+    "description": "Enumerate resources through the feature-inherent quiet API\n用空查询/关键词（prod、role、flag）调用 `/search`，枚举全部资源。\n发现 `flag-store` 资源，读取其详情获得 flag。\n检查 `/logs`：审计为 0，枚举不可见。",
+    "techniques": [
+      "用空查询/关键词（prod、role、flag）调用 `/search`，枚举全部资源。",
+      "发现 `flag-store` 资源，读取其详情获得 flag。",
+      "检查 `/logs`：审计为 0，枚举不可见。"
+    ],
+    "indicators": [],
+    "tags": [
+      "cloud",
+      "resource-explorer",
+      "N/A (unlogged search API, case #148)"
+    ],
+    "tools": [
+      "docker_registry",
+      "container_escape_docker_sock",
+      "shell_exec",
+      "aws_cli",
+      "aws_sts_query",
+      "aws_iam_federation"
+    ],
+    "prerequisites": [],
+    "confidence": 0.6,
+    "mitre_attack": "",
+    "references": [],
+    "flag": "flag{cloud-36-flag-store",
+    "source": "../benchmark/cve_challenges/scenarios/cloud/resource-explorer/GUIDE.md"
+  },
+  {
+    "id": "scenario-sa-cross-namespace",
+    "guid": "",
+    "title": "CLOUD-03 K8s SA Token → 跨命名空间访问",
+    "category": "cloud",
+    "subcategory": "N/A (overly permissive RBAC)",
+    "description": "Use an over-permitted ServiceAccount token\n进入 tenant-a 的 attacker pod，读取挂载的 SA token。\n用 token 调用 K8s API 列出/读取 tenant-b 的 Secret。\n`kubectl get secret -n tenant-b target-flag` 解码得到 flag。",
+    "techniques": [
+      "进入 tenant-a 的 attacker pod，读取挂载的 SA token。",
+      "用 token 调用 K8s API 列出/读取 tenant-b 的 Secret。",
+      "`kubectl get secret -n tenant-b target-flag` 解码得到 flag。"
+    ],
+    "indicators": [],
+    "tags": [
+      "cloud",
+      "sa-cross-namespace",
+      "N/A (overly permissive RBAC)"
+    ],
+    "tools": [
+      "curl_get",
+      "http_post",
+      "send_payload",
+      "kubectl_exec",
+      "kubectl_run",
+      "kubectl_get_pods",
+      "k8s_secret_dump",
+      "shell_exec"
+    ],
+    "prerequisites": [],
+    "confidence": 0.6,
+    "mitre_attack": "",
+    "references": [],
+    "flag": "flag{cloud-03-step2-cross-ns",
+    "source": "../benchmark/cve_challenges/scenarios/cloud/sa-cross-namespace/GUIDE.md"
+  },
+  {
+    "id": "scenario-scp-bypass",
+    "guid": "",
+    "title": "CLOUD-15 SCP 绕过：旧版 API 版本",
+    "category": "cloud",
+    "subcategory": "N/A (SCP enforcement gap)",
+    "description": "Call the API version outside SCP enforcement\n用默认版本 AssumeRole AdminRole——被 SCP 拒绝。\n在请求中加入旧版参数 `Version=2010-05-08` 重试。\n旧版路径未执行 SCP 校验，成功获得 AdminRole 凭据与 flag。",
+    "techniques": [
+      "用默认版本 AssumeRole AdminRole——被 SCP 拒绝。",
+      "在请求中加入旧版参数 `Version=2010-05-08` 重试。",
+      "旧版路径未执行 SCP 校验，成功获得 AdminRole 凭据与 flag。"
+    ],
+    "indicators": [],
+    "tags": [
+      "cloud",
+      "scp-bypass",
+      "N/A (SCP enforcement gap)"
+    ],
+    "tools": [
+      "docker_registry",
+      "container_escape_docker_sock",
+      "shell_exec"
+    ],
+    "prerequisites": [],
+    "confidence": 0.6,
+    "mitre_attack": "",
+    "references": [],
+    "flag": "flag{cloud-15-...",
+    "source": "../benchmark/cve_challenges/scenarios/cloud/scp-bypass/GUIDE.md"
+  },
+  {
+    "id": "scenario-serverless-sa",
+    "guid": "",
+    "title": "CLOUD-41 无服务器默认服务账号提权",
+    "category": "cloud",
+    "subcategory": "N/A (over-scoped default SA, case #266/#272)",
+    "description": "Invoke or deploy through an over-scoped default identity\n部署恶意函数，代码读取运行环境中的 `DEFAULT_SA_TOKEN`。\n函数输出默认服务账号令牌。\n用该令牌调用受害者项目 `/api/projects/victim/secrets`，",
+    "techniques": [
+      "部署恶意函数，代码读取运行环境中的 `DEFAULT_SA_TOKEN`。",
+      "函数输出默认服务账号令牌。",
+      "用该令牌调用受害者项目 `/api/projects/victim/secrets`，"
+    ],
+    "indicators": [],
+    "tags": [
+      "cloud",
+      "serverless-sa",
+      "N/A (over-scoped default SA, case #266/#272)"
+    ],
+    "tools": [
+      "docker_registry",
+      "container_escape_docker_sock",
+      "shell_exec"
+    ],
+    "prerequisites": [],
+    "confidence": 0.6,
+    "mitre_attack": "",
+    "references": [],
+    "flag": "flag{cloud-41-victim-project",
+    "source": "../benchmark/cve_challenges/scenarios/cloud/serverless-sa/GUIDE.md"
+  },
+  {
+    "id": "scenario-shared-nat",
+    "guid": "",
+    "title": "CLOUD-39 共享 NAT 出口：源 IP 白名单绕过",
+    "category": "cloud",
+    "subcategory": "N/A (service-tag source-IP trust, case #259)",
+    "description": "Route a request through the shared NAT\n直接访问受害者 `/flag`——源 IP 不在受信段，403。\n调用共享 NAT `/egress` 代理访问受害者 `/flag`——出口源 IP",
+    "techniques": [
+      "直接访问受害者 `/flag`——源 IP 不在受信段，403。",
+      "调用共享 NAT `/egress` 代理访问受害者 `/flag`——出口源 IP"
+    ],
+    "indicators": [],
+    "tags": [
+      "cloud",
+      "shared-nat",
+      "N/A (service-tag source-IP trust, case #259)"
+    ],
+    "tools": [
+      "docker_registry",
+      "container_escape_docker_sock",
+      "shell_exec"
+    ],
+    "prerequisites": [],
+    "confidence": 0.6,
+    "mitre_attack": "",
+    "references": [],
+    "flag": "flag{cloud-39-allowlist-bypass",
+    "source": "../benchmark/cve_challenges/scenarios/cloud/shared-nat/GUIDE.md"
+  },
+  {
+    "id": "scenario-ssrf-to-imds",
+    "guid": "",
+    "title": "CLOUD-01 SSRF → IMDS 凭据窃取",
+    "category": "cloud",
+    "subcategory": "N/A (SSRF → IMDS)",
+    "description": "Use SSRF to query 169.254.169.254 and obtain temporary credentials\n在 `/fetch?url=` 输入 `http://169.254.169.254/latest/meta-data/iam/security-credentials/`\n继续读取角色路径，获得 AccessKeyId / SecretAccessKey / Token。\n用凭据访问 S3 模拟服务（`/latest/meta-data/...` 之外的 `s3` 容器），",
+    "techniques": [
+      "在 `/fetch?url=` 输入 `http://169.254.169.254/latest/meta-data/iam/security-credentials/`",
+      "继续读取角色路径，获得 AccessKeyId / SecretAccessKey / Token。",
+      "用凭据访问 S3 模拟服务（`/latest/meta-data/...` 之外的 `s3` 容器），"
+    ],
+    "indicators": [],
+    "tags": [
+      "cloud",
+      "ssrf-to-imds",
+      "N/A (SSRF → IMDS)"
+    ],
+    "tools": [
+      "docker_registry",
+      "container_escape_docker_sock",
+      "shell_exec"
+    ],
+    "prerequisites": [],
+    "confidence": 0.6,
+    "mitre_attack": "",
+    "references": [],
+    "flag": "flag{cloud-01-imds-s3",
+    "source": "../benchmark/cve_challenges/scenarios/cloud/ssrf-to-imds/GUIDE.md"
+  },
+  {
+    "id": "scenario-synlapse-ir",
+    "guid": "",
+    "title": "CLOUD-26 SynLapse：共享集成运行时跨租户凭据",
+    "category": "cloud",
+    "subcategory": "N/A (ODBC driver injection, CVE-2022-29972 lineage, case #062)",
+    "description": "Send an ODBC driver/LOGIN_URL injection to the shared runtime\n查看控制面文档，确认存在共享运行时\n构造恶意连接字符串，`LOGIN_URL` 内放 shell 命令\n以 `runtime_name=AutoResolveIntegrationRuntime` 提交管道。\n共享 worker 执行注入命令，返回同机 co-tenant 凭据与 flag。",
+    "techniques": [
+      "查看控制面文档，确认存在共享运行时",
+      "构造恶意连接字符串，`LOGIN_URL` 内放 shell 命令",
+      "以 `runtime_name=AutoResolveIntegrationRuntime` 提交管道。",
+      "共享 worker 执行注入命令，返回同机 co-tenant 凭据与 flag。"
+    ],
+    "indicators": [],
+    "tags": [
+      "cloud",
+      "synlapse-ir",
+      "N/A (ODBC driver injection, CVE-2022-29972 lineage, case #062)"
+    ],
+    "tools": [
+      "docker_registry",
+      "container_escape_docker_sock",
+      "shell_exec"
+    ],
+    "prerequisites": [],
+    "confidence": 0.6,
+    "mitre_attack": "",
+    "references": [],
+    "flag": "flag{cloud-26-co-tenant",
+    "source": "../benchmark/cve_challenges/scenarios/cloud/synlapse-ir/GUIDE.md"
+  },
+  {
+    "id": "scenario-wireserver-bootstrap",
+    "guid": "",
+    "title": "CLOUD-28 WireServing：宿主代理通道窃取节点引导密钥",
+    "category": "cloud",
+    "subcategory": "N/A (unvalidated transport cert, case #255/#184)",
+    "description": "Supply an attacker certificate, unwrap the secret bundle, and decrypt settings\n从 pod 内 GET `http://168.63.129.16/machine/?comp=goalstate`（无鉴权）。\n生成自签传输证书，放入 `x-ms-guest-agent-public-x509-cert` 头请求\n请求 `/vmSettings`，用 TenantEncryptionCert 解密 protectedSettings，\n用 bootstrap token 向控制面提交 CSR（CN=system:node:*）——自动签发。\n以伪造的 node 身份读取 `/node-secrets`，拿到最终 flag。",
+    "techniques": [
+      "从 pod 内 GET `http://168.63.129.16/machine/?comp=goalstate`（无鉴权）。",
+      "生成自签传输证书，放入 `x-ms-guest-agent-public-x509-cert` 头请求",
+      "请求 `/vmSettings`，用 TenantEncryptionCert 解密 protectedSettings，",
+      "用 bootstrap token 向控制面提交 CSR（CN=system:node:*）——自动签发。",
+      "以伪造的 node 身份读取 `/node-secrets`，拿到最终 flag。"
+    ],
+    "indicators": [],
+    "tags": [
+      "cloud",
+      "wireserver-bootstrap",
+      "N/A (unvalidated transport cert, case #255/#184)"
+    ],
+    "tools": [
+      "docker_registry",
+      "container_escape_docker_sock",
+      "shell_exec",
+      "kubectl_exec"
+    ],
+    "prerequisites": [],
+    "confidence": 0.6,
+    "mitre_attack": "",
+    "references": [],
+    "flag": "flag{cloud-28-bootstrap",
+    "source": "../benchmark/cve_challenges/scenarios/cloud/wireserver-bootstrap/GUIDE.md"
+  }
+]
