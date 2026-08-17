@@ -21,6 +21,9 @@ logging.getLogger("litellm").setLevel(logging.WARNING)
 # P16: memory role prompt lives with the other role prompts; imported by
 # identity so compression behavior is unchanged.
 from darwin.prompts.memory import SYSTEM_PROMPT_MEMORY as SYSTEM_PROMPT_COMPRESS
+# O3.2: the cognition-snapshot marker used to keep decision-critical
+# messages out of the summarizer and verbatim in the preserved payload.
+from darwin.core.belief import SNAPSHOT_MARKER
 
 
 class LLMSession:
@@ -328,8 +331,17 @@ class LLMSession:
             # Inject a structured summary so the LLM knows context was dropped.
             overflow = len(self.conversation_history) - keep_recent - 2
             if overflow > 0:
-                truncated_count = overflow
-                self.conversation_history = self.conversation_history[overflow:]
+                drop_candidates = self.conversation_history[:overflow]
+                # O3.2: never drop cognition-snapshot messages on truncation —
+                # keep them verbatim and only truncate compressible history.
+                marked_keep = [
+                    m for m in drop_candidates
+                    if SNAPSHOT_MARKER in str(m.get("content", "") or "")
+                ]
+                truncated_count = overflow - len(marked_keep)
+                self.conversation_history = (
+                    marked_keep + self.conversation_history[overflow:]
+                )
                 # Inject a brief truncation notice, with optional DKG state snapshot
                 notice = (
                     f"[CONTEXT TRUNCATED] {truncated_count} oldest messages were dropped "
@@ -340,10 +352,16 @@ class LLMSession:
                     notice += f"\n\n{truncation_context}"
                 else:
                     notice += " Current DKG state has the structured facts."
-                if preserved_context:
+                _kept_text = "\n".join(
+                    str(m.get("content", "") or "") for m in marked_keep
+                )
+                _preserved_parts = [
+                    p for p in (preserved_context, _kept_text) if p
+                ]
+                if _preserved_parts:
                     notice += (
-                        f"\n\n## PRESERVED MEMORY (verbatim — do not drop)\n"
-                        f"{preserved_context}"
+                        "\n\n## PRESERVED MEMORY (verbatim — do not drop)\n"
+                        + "\n\n".join(_preserved_parts)
                     )
                 self.conversation_history.insert(0, {"role": "user", "content": notice})
             return 0
@@ -388,25 +406,58 @@ class LLMSession:
         old_messages = self.conversation_history[:_split]
         recent = self.conversation_history[_split:]
 
-        serialized = self._serialize_messages(old_messages)
+        # O3.2: partition old history. Cognition-snapshot messages carry the
+        # SNAPSHOT_MARKER and are preserved VERBATIM; only unmarked messages
+        # (tool outputs, ordinary dialogue) are eligible for summarization.
+        marked_messages = [
+            m for m in old_messages
+            if SNAPSHOT_MARKER in str(m.get("content", "") or "")
+        ]
+        summarizable = [
+            m for m in old_messages
+            if SNAPSHOT_MARKER not in str(m.get("content", "") or "")
+        ]
+        if marked_messages:
+            marked_text = "\n\n".join(
+                str(m.get("content", "") or "") for m in marked_messages
+            )
+            preserved_context = (
+                f"{preserved_context}\n\n{marked_text}"
+                if preserved_context
+                else marked_text
+            )
+
         tokens_before = self.token_count
 
         compression_prompt = (
             f"The following is an older portion of a penetration testing conversation "
             f"that needs to be compressed. Extract and preserve all critical information.\n\n"
-            f"{serialized}"
         )
 
-        try:
-            summary, _ = self.generate(
-                prompt=compression_prompt,
-                system_prompt=SYSTEM_PROMPT_COMPRESS,
-                stage="compress",
-            )
-        except Exception:
-            summary = self._fallback_truncate(old_messages)
-            if not summary:
-                return -1
+        if summarizable:
+            serialized = self._serialize_messages(summarizable)
+            # O3.2: the summarizer must not see decision-critical (marked)
+            # messages at all — neither via the serialized prompt nor via the
+            # conversation history it would otherwise receive.
+            _history_backup = list(self.conversation_history)
+            self.conversation_history = [
+                m for m in _history_backup
+                if SNAPSHOT_MARKER not in str(m.get("content", "") or "")
+            ]
+            try:
+                summary, _ = self.generate(
+                    prompt=compression_prompt + serialized,
+                    system_prompt=SYSTEM_PROMPT_COMPRESS,
+                    stage="compress",
+                )
+            except Exception:
+                self.conversation_history = _history_backup
+                summary = self._fallback_truncate(summarizable)
+                if not summary:
+                    return -1
+        else:
+            # Everything old was decision-critical — nothing to summarize.
+            summary = "(all old history was decision-critical context; preserved verbatim below)"
 
         # Store compressed context for one-time consumption, keep recent messages.
         # If previous compressed context was not consumed (no generate() between

@@ -61,6 +61,10 @@ class VulnerabilityHypothesis:
     suggested_payloads: list[str] = field(default_factory=list)
     research_techniques: list = field(default_factory=list)
     research_cves: list = field(default_factory=list)
+    # O2.1: belief status — "" (untested) | tested | confirmed | rejected |
+    # blocked | inconclusive. Written by the orchestrator's confidence
+    # feedback loop and mirrored onto the DKG Vulnerability node.
+    status: str = ""
 
 
 @dataclass
