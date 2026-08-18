@@ -146,18 +146,19 @@ def test_plan_memory_records_task_provenance():
     assert "username is injectable" in block
 
 
-def test_plan_memory_accepts_legacy_dict():
+def test_plan_memory_accepts_typed_task():
     memory = PlanMemory()
     memory.record_task(
-        {
-            "id": "legacy-1",
-            "instruction": "Probe endpoint",
-            "tool": "curl_get",
-            "params": {"url": "http://x"},
-            "status": "pending",
-        }
+        Task(
+            id="typed-1",
+            type="task",
+            goal="Probe endpoint",
+            instruction="Probe endpoint",
+            action={"tool": "curl_get", "target": "", "params": {"url": "http://x"}},
+            status=TaskStatus.READY,
+        )
     )
-    entry = memory.get("legacy-1")
+    entry = memory.get("typed-1")
     assert entry is not None
     assert entry.goal == "Probe endpoint"
 

@@ -7,6 +7,8 @@ from darwin.prompts.evaluator import SYSTEM_PROMPT_EVALUATOR
 from darwin.prompts.memory import SYSTEM_PROMPT_MEMORY
 from darwin.prompts.planner import SYSTEM_PROMPT_PLANNER
 from darwin.prompts.research import SYSTEM_PROMPT_RESEARCH
+from darwin.core.contracts import TaskStatus
+from darwin.core.task import Task, deps_from_task_ids
 from darwin.data_model import ExploitationPlan, VulnerabilityHypothesis
 
 
@@ -54,6 +56,24 @@ def _plan_with(task):
     return ExploitationPlan(plan_id="p16", phase="exploit", goal="g", tasks=[task])
 
 
+def _task_from_dict(d):
+    return Task(
+        id=str(d["id"]),
+        type="task",
+        goal=d.get("goal", "") or d.get("instruction", ""),
+        instruction=d.get("instruction", ""),
+        action={
+            "tool": d.get("tool", ""),
+            "target": d.get("endpoint", ""),
+            "params": dict(d.get("params") or {}),
+        },
+        dependencies=deps_from_task_ids(
+            d.get("dependent_task_ids") or d.get("dependencies") or []
+        ),
+        status=TaskStatus.READY,
+    )
+
+
 @pytest.mark.asyncio
 async def test_review_plan_uses_planner_prompt(
     fake_llm, fake_gateway, make_orchestrator
@@ -61,18 +81,17 @@ async def test_review_plan_uses_planner_prompt(
     llm = fake_llm(content="[]")
     orch = make_orchestrator(llm, fake_gateway({}), fake_gateway({}))
     orch.exploitation_plan = _plan_with(
-        {
+        _task_from_dict({
             "id": "t1",
             "instruction": "x",
             "tool": "curl_get",
             "params": {"url": "http://x"},
-            "status": "pending",
             "dependent_task_ids": [],
-        }
+        })
     )
 
     await orch._review_and_update_plan(
-        {"id": "t1", "instruction": "x", "tool": "curl_get"},
+        _task_from_dict({"id": "t1", "instruction": "x", "tool": "curl_get"}),
         False,
         "failed",
     )
@@ -95,7 +114,9 @@ async def test_fix_analysis_uses_evaluator_prompt(
     orch = make_orchestrator(llm, fake_gateway({}), fake_gateway({}))
 
     fix = await orch._analyze_and_fix_task(
-        {"id": "t1", "instruction": "fetch", "tool": "curl_get", "params": {"url": "bad"}},
+        _task_from_dict(
+            {"id": "t1", "instruction": "fetch", "tool": "curl_get", "params": {"url": "bad"}}
+        ),
         "missing required argument",
     )
 
@@ -114,14 +135,13 @@ async def test_review_plan_injects_provenance(
     llm = fake_llm(content="[]")
     orch = make_orchestrator(llm, fake_gateway({}), fake_gateway({}))
     orch.exploitation_plan = _plan_with(
-        {
+        _task_from_dict({
             "id": "t1",
             "instruction": "x",
             "tool": "curl_get",
             "params": {"url": "http://x"},
-            "status": "pending",
             "dependent_task_ids": [],
-        }
+        })
     )
     orch.dkg.add_node(
         "Vulnerability",
@@ -132,7 +152,7 @@ async def test_review_plan_injects_provenance(
     )
 
     await orch._review_and_update_plan(
-        {"id": "t1", "instruction": "x", "tool": "curl_get"},
+        _task_from_dict({"id": "t1", "instruction": "x", "tool": "curl_get"}),
         False,
         "failed",
     )

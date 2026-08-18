@@ -179,22 +179,36 @@ def _render_plan(plan: Any, caps: SnapshotCaps) -> str:
         tasks = list(getattr(plan, "tasks", None) or [])
     except Exception:
         return ""
-    done = sum(1 for t in tasks if isinstance(t, dict) and t.get("status") == "done")
+
+    def _status(t: Any) -> str:
+        status = getattr(t, "status", None)
+        if status is None and isinstance(t, dict):
+            status = t.get("status")
+        if status is None:
+            return ""
+        return status.value if hasattr(status, "value") else str(status)
+
+    def _field(t: Any, name: str, default: Any = "") -> Any:
+        if isinstance(t, dict):
+            return t.get(name, default)
+        return getattr(t, name, default)
+
+    done = sum(1 for t in tasks if _status(t) in ("success", "done"))
     failed = sum(
         1 for t in tasks
-        if isinstance(t, dict) and t.get("status") in ("failed", "skipped", "exhausted")
+        if _status(t) in ("failed", "skipped", "exhausted", "abandoned")
     )
     pending = [
         t for t in tasks
-        if isinstance(t, dict) and t.get("status") in ("pending", None, "")
+        if _status(t) in ("pending", "ready", "created", "")
     ]
     lines = [
         f"Plan: {done}/{len(tasks)} done, {failed} failed, {len(pending)} pending"
     ]
     for t in pending[: caps.plan_tasks]:
-        tid = t.get("id", "?")
-        instr = _clip(t.get("instruction", "") or t.get("goal", "") or "", 100)
-        deps = t.get("dependent_task_ids") or t.get("dependencies") or []
+        tid = str(_field(t, "id", "?"))
+        instr = _clip(_field(t, "instruction", "") or _field(t, "goal", "") or "", 100)
+        deps = _field(t, "dependent_task_ids") or _field(t, "dependencies") or []
         dep_str = f" (waits: {', '.join(str(d) for d in deps[:3])})" if deps else ""
         lines.append(f"  - {tid}: {instr}{dep_str}")
     if len(pending) > caps.plan_tasks:

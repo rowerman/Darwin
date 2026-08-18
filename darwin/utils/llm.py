@@ -92,7 +92,7 @@ class LLMSession:
             logging.getLogger(__name__).warning("LLM config not found at %s", config_path)
             return cls()
 
-        with open(config_path) as f:
+        with open(config_path, encoding="utf-8") as f:
             cfg = yaml.safe_load(f)
 
         profile_cfg = cfg.get(profile, cfg.get("default", {}))

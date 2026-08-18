@@ -2514,7 +2514,7 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
                 import yaml as _yaml
                 _config_path = Path(__file__).parent.parent.parent / "config" / "darwin.yaml"
                 if _config_path.exists():
-                    with open(_config_path) as _f:
+                    with open(_config_path, encoding="utf-8") as _f:
                         _cfg = _yaml.safe_load(_f) or {}
                     api_token = (_cfg.get("wpscan", {}) or {}).get("api_token", "") or ""
             except Exception:
@@ -5104,7 +5104,7 @@ def create_attack_gateway() -> MCPGateway:
         _config_path = os.path.join(os.path.dirname(__file__), "..", "..", "config", "darwin.yaml")
         _config_path = os.path.abspath(_config_path)
         if os.path.exists(_config_path):
-            with open(_config_path) as _fh:
+            with open(_config_path, encoding="utf-8") as _fh:
                 _cfg = yaml.safe_load(_fh) or {}
             _domains = _cfg.get("tools", {}).get("enabled_domains", None)
             if _domains is not None and isinstance(_domains, list):

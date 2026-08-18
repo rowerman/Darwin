@@ -26,6 +26,7 @@ from darwin.core.contracts import (
     Objective,
     ReplanRecommendation,
     TaskOutcome,
+    TaskStatus,
 )
 from darwin.core.evaluator import (
     Evaluation,
@@ -37,8 +38,15 @@ from darwin.core.memory import MemoryManager
 from darwin.core.metrics import MetricsCalculator
 from darwin.core.replan import Replanner
 from darwin.core.runtime import Runtime
-from darwin.core.task import Task
-from darwin.core.task_graph import TaskGraph
+from darwin.core.scheduler import ParityScheduler
+from darwin.core.schemas import (
+    parse_analyze_output,
+    parse_plan_tasks,
+    parse_research_findings,
+    parse_service_research_findings,
+)
+from darwin.core.task import Task, deps_from_task_ids
+from darwin.core.task_graph import TaskGraph, dependency_task_ids
 from darwin.core.belief import (
     node_ids_by_type,
     render_belief_snapshot,
@@ -104,54 +112,36 @@ class _RuntimePlannerAdapter:
             orch.exploitation_plan = await orch._generate_exploitation_plan(
                 self.target_url, self.cteg_hints
             )
-        return TaskGraph(
-            [Task.from_legacy_dict(t) for t in orch.exploitation_plan.tasks]
-        )
+        return TaskGraph(list(orch.exploitation_plan.tasks))
 
     async def replan(self, state, graph, evaluation, memory):
         orch = self.orch
         task = graph.get(evaluation.task_id) if evaluation.task_id else None
         if task is not None:
-            legacy = task.to_legacy_dict()
             success = evaluation.outcome is TaskOutcome.SUCCESS
             await orch._review_and_update_plan(
-                legacy, success, legacy.get("result_summary", "") or ""
+                task, success, task.result_summary or ""
             )
-            # Mirror the legacy loop, where the plan-task dict and the
-            # executed task are the same object: persist the reviewed
-            # status/attempts back into the plan. (When the LLM returns
-            # an empty task list, _review_and_update_plan does not rewrite
-            # exploitation_plan.tasks at all.)
-            for t in orch.exploitation_plan.tasks:
-                if isinstance(t, dict) and t.get("id") == legacy.get("id"):
-                    t.update(
-                        {
-                            "status": legacy.get("status", t.get("status")),
-                            "attempts": legacy.get("attempts", t.get("attempts", 0)),
-                            "result_summary": legacy.get(
-                                "result_summary", t.get("result_summary", "")
-                            ),
-                        }
-                    )
+        else:
+            # Runtime stall (no ready task) → legacy plan-exhausted review.
+            if not getattr(orch, "_plan_review_exhausted", False):
+                orch._plan_review_exhausted = True
+                summary = orch._build_plan_exhaustion_context()
+                await orch._review_and_update_plan(
+                    Task(
+                        id="plan-exhausted",
+                        type="review",
+                        goal="Plan exhausted",
+                        instruction="Plan exhausted",
+                        action={"tool": "", "target": "", "params": {}},
+                        status=TaskStatus.SUCCESS,
+                        attempt_count=1,
+                        result_summary=summary,
+                    ),
+                    True, summary,
+                )
         # The review mutates exploitation_plan — re-sync the graph.
-        return TaskGraph(
-            [Task.from_legacy_dict(t) for t in orch.exploitation_plan.tasks]
-        )
-
-
-class _RuntimeSchedulerAdapter:
-    """Runtime Scheduler adapter (P15 2b): next READY task from the graph.
-
-    Note: the legacy exploit-first priority ordering is not reproduced in
-    stage 2b; ordering equivalence is validated once real scenarios exist.
-    """
-
-    def __init__(self, orch):
-        self.orch = orch
-
-    def next_ready(self, graph, budget):
-        ready = graph.ready_tasks()
-        return ready[0] if ready else None
+        return TaskGraph(list(orch.exploitation_plan.tasks))
 
 
 class _RuntimeExecutorAdapter:
@@ -165,9 +155,8 @@ class _RuntimeExecutorAdapter:
 
     async def execute(self, task: Task) -> CoreExecutionResult:
         orch = self.orch
-        legacy = task.to_legacy_dict()
         execution = await orch._execute_task_with_policies(
-            legacy, self.tool_defs
+            task, self.tool_defs
         )
         if execution.skip:
             orch._runtime_skip_task = True
@@ -183,10 +172,11 @@ class _RuntimeExecutorAdapter:
                 elapsed_ms=0.0,
             )
         orch._runtime_skip_task = False
+        _tool = str((task.action or {}).get("tool", "") or "")
         core_res = CoreExecutionResult(
             task_id=task.id,
-            tool=str(legacy.get("tool", "") or ""),
-            planned_tool=str(legacy.get("tool", "") or ""),
+            tool=_tool,
+            planned_tool=_tool,
             adherence=True,
             success=execution.success,
             stdout=execution.result_text[:4000],
@@ -309,7 +299,9 @@ class Orchestrator:
         # P10/P11/P13: Memory layers — plan rationale + execution history
         # feed the replan fallback; preserve-level / key-tool executions
         # are shared to CTEG as cross-task experience.
-        self.memory = MemoryManager(experience=self.cteg)
+        # v2: WorkingMemory layer (DKG) is wired through the manager; all
+        # world-state reads go through _get_state() -> memory.working_snapshot().
+        self.memory = MemoryManager(working=self.dkg, experience=self.cteg)
         # O3.1/O3.3: belief provider renders the CURRENT cognition snapshot
         # at compression time, so decision-critical facts (beliefs, plan,
         # defense, rationale) ride the preserved payload verbatim.
@@ -388,7 +380,7 @@ class Orchestrator:
             import yaml
             _config_path = getattr(self, "_config_path", "config/darwin.yaml")
             if os.path.exists(_config_path):
-                with open(_config_path) as _fh:
+                with open(_config_path, encoding="utf-8") as _fh:
                     _cfg = yaml.safe_load(_fh) or {}
                 _darwin = _cfg.get("darwin", {})
                 _log_dir = _darwin.get("log_dir", "log")
@@ -763,11 +755,8 @@ class Orchestrator:
                             metadata={"vulns_total": len(self.vulnerabilities),
                                       "vulns_researched": _researched})
 
-                # Phase 4: Unified LLM loop (plan → exploit → replan)
-                if os.environ.get("DARWIN_USE_RUNTIME", "") == "1":
-                    result = await self._run_with_runtime(target_url, cteg_hints)
-                else:
-                    result = await self._unified_llm_loop(target_url, cteg_hints)
+                # Phase 4: Runtime-driven loop (plan → execute → evaluate → replan)
+                result = await self._run_with_runtime(target_url, cteg_hints)
 
                 # Allow up to 3 solo iterations before marking exhausted
                 self._solo_iterations += 1
@@ -775,8 +764,10 @@ class Orchestrator:
                     if self._solo_iterations >= 5:
                         self._solo_exhausted = True
                     # Fast exhaust: 2 consecutive plan-exhausted runs with 0 done tasks
-                    _done_count = sum(1 for t in (self.exploitation_plan.tasks if self.exploitation_plan else [])
-                                     if isinstance(t, dict) and t.get("status") == "done")
+                    _done_count = sum(
+                        1 for t in (self.exploitation_plan.tasks if self.exploitation_plan else [])
+                        if t.status is TaskStatus.SUCCESS
+                    )
                     _prev_done = getattr(self, '_prev_solo_done_count', -1)
                     if result is None and _done_count == _prev_done:
                         _empty_runs = getattr(self, '_solo_empty_runs', 0) + 1
@@ -792,6 +783,7 @@ class Orchestrator:
 
                 # Checkpoint DKG after each loop iteration
                 self.dkg.save(self._checkpoint_path(f"loop_{self._loop_count}"))
+                self._persist_plan(f"loop_{self._loop_count}")
 
             # ── Last resort: generic flag search ──────────────────
             if result is None or not result.success:
@@ -2252,10 +2244,18 @@ class Orchestrator:
     # ── Unified State Access ──────────────────────────────────────
 
     def _get_state(self) -> PipelineState:
-        """Return a typed snapshot of the current DKG state.
+        """Return a typed snapshot of the current world state.
 
-        All phases call this instead of raw dkg.query_nodes() + dict access.
+        Reads through the MemoryManager WorkingMemory adapter (DKG) so the
+        orchestrator has a single typed read path. Falls back to a direct
+        DKG normalisation if the adapter is unavailable.
         """
+        try:
+            snapshot = self.memory.working_snapshot()
+            if snapshot is not None:
+                return snapshot
+        except Exception:
+            pass
         return normalize_dkg_state(self.dkg)
 
     def _belief_context(self, *, compact: bool = False) -> str:
@@ -2313,7 +2313,7 @@ class Orchestrator:
 
     def _apply_vulnerability_feedback(
         self,
-        task: dict,
+        task: Task,
         *,
         success: bool,
         failure_type: str | None = None,
@@ -2329,7 +2329,8 @@ class Orchestrator:
         """
         if not self.vulnerabilities:
             return
-        params = task.get("params", {}) or {}
+        _task_action = task.action or {}
+        params = _task_action.get("params", {}) or {}
         if isinstance(params, str):
             try:
                 params = json.loads(params)
@@ -2338,7 +2339,7 @@ class Orchestrator:
         if not isinstance(params, dict):
             params = {}
         endpoint = str(
-            task.get("endpoint", "")
+            _task_action.get("target", "")
             or params.get("url", "")
             or params.get("target_url", "")
             or ""
@@ -2615,7 +2616,7 @@ class Orchestrator:
 
     async def _execute_task_with_policies(
         self,
-        task: dict,
+        task: Task,
         tool_defs: list[dict],
         iteration: int = 0,
         max_iter: int = 25,
@@ -2638,15 +2639,18 @@ class Orchestrator:
         except Exception:
             self._cognition_before = None
 
-        task_instruction = task.get("instruction", "unknown")
-        task_tool = task.get("tool", "")
-        task_params = task.get("params", {})
+        task_instruction = task.instruction or "unknown"
+        task_action = task.action or {}
+        task_tool = str(task_action.get("tool", "") or "")
+        task_params = task_action.get("params", {}) or {}
         # LLM can produce params as a JSON string — normalize to dict
         if isinstance(task_params, str):
             try:
                 task_params = json.loads(task_params)
             except (json.JSONDecodeError, TypeError):
                 task_params = {"url": str(task_params)}
+        if not isinstance(task_params, dict):
+            task_params = {"value": task_params}
 
         # ── Direct execution for concrete tasks ──────────────────────
         # When the plan specifies exact tool + params, execute directly
@@ -2670,13 +2674,13 @@ class Orchestrator:
             # Execute directly — plan params are authoritative
             task_tool_calls = [{
                 "name": task_tool, "arguments": task_params,
-                "id": f"direct-{task.get('id')}",
+                "id": f"direct-{task.id}",
             }]
-            print(f"\n[solo:{iteration}] task={task.get('id','')} → {task_tool} [direct]")
+            print(f"\n[solo:{iteration}] task={task.id} → {task_tool} [direct]")
         else:
             # LLM-driven execution for flexible/exploratory tasks
             self._maybe_compress()
-            if "-manual" in task.get("id", ""):
+            if "-manual" in task.id:
                 # Manual retry: force the LLM to use send_payload with the
                 # tested param. History shows it tends to wander to other
                 # endpoints otherwise.
@@ -2737,13 +2741,13 @@ class Orchestrator:
                 )
             if not task_tool_calls:
                 log.info("[PLAN] task %s: LLM produced no tool calls — skipping",
-                         task.get("id", ""))
-                task["status"] = "skipped"
+                         task.id)
+                task.status = TaskStatus.ABANDONED
                 execution.skip = True
                 execution.result_text = "LLM produced no tool calls"
                 return execution
             tc_names = [tc.get('name', '?') for tc in task_tool_calls]
-            print(f"\n[solo:{iteration}] task={task.get('id','')} → "
+            print(f"\n[solo:{iteration}] task={task.id} → "
                   f"{', '.join(tc_names)}")
 
         # Execute tool calls for this task
@@ -2795,19 +2799,24 @@ class Orchestrator:
                 # the normalized ExecutionResult fields unchanged.
                 try:
                     result = await self.executor.execute(
-                        Task.from_legacy_dict({
-                            "id": task.get("id", "") or tc_id,
-                            "instruction": task_instruction,
-                            "tool": tc_name,
-                            "params": tc_args,
-                            "endpoint": str(
-                                tc_args.get("url", tc_args.get("target_url", ""))
-                            ),
-                        })
+                        Task(
+                            id=task.id or tc_id,
+                            type=task.type,
+                            goal=task_instruction,
+                            instruction=task_instruction,
+                            action={
+                                "tool": tc_name,
+                                "target": str(
+                                    tc_args.get("url", tc_args.get("target_url", ""))
+                                ),
+                                "params": dict(tc_args),
+                            },
+                            status=TaskStatus.RUNNING,
+                        )
                     )
                 except Exception as e:
                     result = CoreExecutionResult(
-                        task_id=task.get("id", "") or tc_id,
+                        task_id=task.id or tc_id,
                         tool=tc_name,
                         planned_tool=tc_name,
                         adherence=True,
@@ -2970,10 +2979,10 @@ class Orchestrator:
             # ── Trace: record final tool result (Execution Memory seed) ──
             self._task_log_event(
                 "info", "tool_result",
-                task_id=task.get("id", ""),
+                task_id=task.id,
                 tool=tc_name,
-                planned_tool=task.get("tool", "") or "",
-                adherence=(tc_name == task.get("tool", "")),
+                planned_tool=task_tool,
+                adherence=(tc_name == task_tool),
                 success=bool(getattr(result, "success", False)),
                 exit_code=getattr(result, "exit_code", -1),
                 elapsed_ms=getattr(result, "elapsed_ms", 0),
@@ -3141,7 +3150,7 @@ class Orchestrator:
 
         # ── Fix-and-retry: LLM analyzes failures, fixes param errors ──
         _fix_attempts = 0
-        _task_tool = task.get("tool", "")
+        _task_tool = task_tool
         while not task_success and _fix_attempts < 2 and _task_tool:
             fix = await self._analyze_and_fix_task(task, task_result_text)
             if not fix:
@@ -3152,7 +3161,7 @@ class Orchestrator:
                 creds = fix.get("credentials") or {}
                 if creds.get("username"):
                     _cred_id = f"cred-partial-{int(time.time())}"
-                    _cred_port = int(task.get("params", {}).get("port", 0))
+                    _cred_port = int(task_params.get("port", 0))
                     _cred_user = creds["username"]
                     _cred_pass = creds.get("password", "")
                     _cred_type = str(creds.get("cred_type", "mssql"))
@@ -3186,14 +3195,17 @@ class Orchestrator:
             # Merge corrected params into existing ones — the LLM
             # returns only the fields that need correction, not the
             # full parameter set. Replacing would drop host/command/etc.
-            task["params"] = {**task["params"], **fix["corrected_params"]}
+            _merged_params = dict(task_params)
+            _merged_params.update(fix.get("corrected_params", {}) or {})
+            task_action = dict(task.action or {})
+            task_action["params"] = _merged_params
+            task.action = task_action
+            task_params = _merged_params
             reason = fix.get("reason", "corrected params")
-            print(f"  [FIX] {task.get('id')}: {reason[:120]}")
+            print(f"  [FIX] {task.id}: {reason[:120]}")
             self.step_count += 1
 
-            retry_result = await self.executor.execute(
-                Task.from_legacy_dict(task)
-            )
+            retry_result = await self.executor.execute(task)
             retry_stdout = retry_result.stdout or ""
             retry_stderr = retry_result.stderr or ""
 
@@ -3207,7 +3219,7 @@ class Orchestrator:
                 flags = self.flag_pattern.findall(retry_stdout)
                 if flags:
                     is_valid, reason_flag = await self._verify_flag(
-                        flags[0], retry_stdout, task.get("params", {}),
+                        flags[0], retry_stdout, task_params,
                         retry_result.elapsed_ms,
                         tool_name=_task_tool,
                     )
@@ -3238,11 +3250,11 @@ class Orchestrator:
 
         # ── P7: local-first replan (rule-based, before LLM plan review) ──
         if not task_success:
-            _task_obj = Task.from_legacy_dict(task)
+            _task_obj = task
             _core_res = CoreExecutionResult(
-                task_id=task.get("id", ""),
-                tool=task.get("tool", "") or "",
-                planned_tool=task.get("tool", "") or "",
+                task_id=task.id,
+                tool=_task_tool,
+                planned_tool=_task_tool,
                 adherence=True,
                 success=False,
                 stdout=task_result_text[:4000],
@@ -3269,7 +3281,7 @@ class Orchestrator:
                 pass
             self._task_log_event(
                 "info", "replan_requested",
-                task_id=task.get("id", ""),
+                task_id=task.id,
                 action=_repair.action,
                 failure_type=(
                     _eval2.failure_type.value if _eval2.failure_type else None
@@ -3278,31 +3290,29 @@ class Orchestrator:
                 rejected_duplicate=_repair.rejected_duplicate,
             )
             if _repair.action == "replace" and _repair.replacement is not None:
-                _rep_legacy = _repair.replacement.to_legacy_dict()
-                _rep_legacy["source"] = "replanner"
+                _rep_task = _repair.replacement
+                _rep_task.source = "replanner"
                 _plan_tasks = (
                     self.exploitation_plan.tasks
                     if self.exploitation_plan
                     else []
                 )
-                if not self._is_duplicate_task(_rep_legacy, _plan_tasks):
-                    _plan_tasks.append(_rep_legacy)
+                if not self._is_duplicate_task(_rep_task, _plan_tasks):
+                    _plan_tasks.append(_rep_task)
                     print(
-                        f"[REPLAN] {task.get('id','')} → "
+                        f"[REPLAN] {task.id} → "
                         f"{_repair.replacement.id} ({_repair.reason})"
                     )
             elif _repair.action == "invalidate":
-                _failed_id = task.get("id", "")
+                _failed_id = task.id
                 for _t in (
                     self.exploitation_plan.tasks
                     if self.exploitation_plan
                     else []
                 ):
-                    if isinstance(_t, dict) and _failed_id in (
-                        _t.get("dependent_task_ids") or []
-                    ):
-                        _t["status"] = "skipped"
-                        _t["result_summary"] = (
+                    if _failed_id in dependency_task_ids(_t):
+                        _t.status = TaskStatus.ABANDONED
+                        _t.result_summary = (
                             f"invalidated: dependent task {_failed_id} failed (P7)"
                         )
 
@@ -3313,14 +3323,13 @@ class Orchestrator:
     async def _run_with_runtime(
         self, target_url: str, cteg_hints: dict | None = None
     ) -> TaskResult | None:
-        """P15 2b: Runtime-driven main loop (DARWIN_USE_RUNTIME=1).
+        """Runtime-driven main loop (v2, sole execution path).
 
         Outer loop control (plan -> schedule -> execute -> evaluate ->
         replan -> terminate) is delegated to ``core.Runtime``; the per-task
         execution + post-processing stays here as the injected Executor.
-        Behavior parity is verified by mock scenarios until real benchmark
-        scenarios are available (known 2b limitations: scheduler ordering
-        and plan-exhaustion review are simplified).
+        Scheduler ordering and plan-exhaustion review replicate the legacy
+        loop (ParityScheduler + stall review).
         """
         self._plan_review_exhausted = False
         if not self._solo_cycle_context_injected:
@@ -3335,6 +3344,55 @@ class Orchestrator:
             self.exploitation_plan = await self._generate_exploitation_plan(
                 target_url, cteg_hints
             )
+
+        # Inject the same initial world context the unified loop used, so
+        # LLM-driven execution sees services/endpoints/session state even
+        # though plan generation runs as a separate call.
+        try:
+            state = self._get_state()
+            services_text = "\n".join(
+                f"- port {s.port}/{s.protocol}: {s.version or s.banner}"
+                for s in state.services[:10] if s.port
+            )
+            endpoints_text = "\n".join(
+                f"- {ep.url} [{ep.method}]"
+                + (f" params={', '.join(ep.params)}" if ep.params else "")
+                for ep in state.endpoints[:12]
+            )
+            session_cookies = ""
+            if self.client._session and self.client._session.cookie_jar:
+                jar_cookies = list(self.client._session.cookie_jar)
+                if jar_cookies:
+                    cookie_str = "; ".join(
+                        f"{ck.key}={ck.value}" for ck in jar_cookies
+                    )
+                    session_cookies = (
+                        f"\n## ACTIVE SESSION — YOU ARE LOGGED IN\n"
+                        f"Session cookie: {cookie_str[:200]}\n"
+                        f"Use the 'cookie' parameter on EVERY curl_get and "
+                        f"http_post call:\n"
+                        f'  curl_get(url="http://localhost:8000/admin", '
+                        f'cookie="{cookie_str[:150]}")\n'
+                        f"FIRST: try /admin, /dashboard, /profile, /config "
+                        f"with the cookie.\n"
+                        f"THEN: try IDOR — same cookie, different IDs in "
+                        f"URL paths.\n"
+                    )
+            belief_block = self._belief_context(compact=True)
+            if belief_block:
+                belief_block = f"\n{belief_block}\n"
+            plan_status = self._format_plan_status() if self.exploitation_plan else ""
+            self.llm.add_context_message(
+                f"Target: {target_url}\n\n"
+                f"## Discovered Services\n{services_text}\n\n"
+                f"## Discovered Endpoints\n{endpoints_text}\n"
+                f"{session_cookies}\n"
+                f"{plan_status}\n"
+                f"{belief_block}",
+                role="user",
+            )
+        except Exception:
+            pass
 
         tool_defs = [
             d for d in self.attack_gateway.get_tool_definitions()
@@ -3359,7 +3417,7 @@ class Orchestrator:
         self._runtime_skip_task = False
         runtime = Runtime(
             planner=_RuntimePlannerAdapter(self, target_url, cteg_hints),
-            scheduler=_RuntimeSchedulerAdapter(self),
+            scheduler=ParityScheduler(self._exhausted_task_ids),
             executor=_RuntimeExecutorAdapter(self, tool_defs),
             evaluator=_RuntimeEvaluatorAdapter(self),
             memory=self.memory,
@@ -3392,367 +3450,69 @@ class Orchestrator:
         self._generate_phase_summary("exploit")
         return None
 
-    async def _unified_llm_loop(
-        self, target_url: str, cteg_hints: dict | None = None
-    ) -> TaskResult | None:
-        """Unified LLM loop: from bootstrap onward, the LLM drives all actions.
+    def _build_plan_exhaustion_context(self) -> str:
+        """Build the plan-exhausted review summary (legacy loop parity).
 
-        No separate recon/analyze/systematic phases. The LLM receives bootstrap
-        nmap results + all tools, then plans and executes everything: HTTP probe,
-        fingerprint, enumerate, authenticate, data discovery, exploit.
-
-        Plan → execute → observe → replan, all in one loop.
+        Reproduces the thin-plan warning and [RECONSIDER] context the
+        unified loop injected when no ready task remained, so the
+        Runtime-driven path asks the same question at stall time.
         """
-        MAX_ITER = 25
-        self._plan_review_exhausted = False  # reset for each entry
-        if not self._solo_cycle_context_injected:
-            self.llm.replace_system_prompt(SYSTEM_PROMPT_ORCHESTRATOR_UNIFIED)
-            self._solo_cycle_context_injected = True
-        else:
-            self._maybe_compress()
-            cycle_summary = self._build_cycle_summary()
-            self.llm.add_context_message(cycle_summary.to_prompt_block(), role="user")
-
-        if not hasattr(self, '_exploit_chain'):
-            self._exploit_chain: list[dict] = []
-
-        # Generate initial plan (or regenerate when all tasks are resolved)
-        _needs_regenerate = (
-            not self.exploitation_plan
-            or not self.exploitation_plan.tasks
-            or all(
-                t.get("status") in ("done", "failed", "skipped", "exhausted")
-                for t in self.exploitation_plan.tasks
-                if isinstance(t, dict)
-            )
-        )
-        if _needs_regenerate:
-            self.exploitation_plan = await self._generate_exploitation_plan(target_url, cteg_hints)
-
-            # ── Phase log: plan ──
-            if self.phase_logger and self.exploitation_plan:
-                _plan = self.exploitation_plan
-                _plan_text = f"Plan {_plan.plan_id}: {_plan.goal}\n"
-                for t in _plan.tasks[:30]:
-                    _plan_text += f"  [{t.get('status','?')}] {t.get('instruction','')[:120]}\n"
-                if len(_plan.tasks) > 30:
-                    _plan_text += f"  ... and {len(_plan.tasks) - 30} more tasks\n"
-                self.phase_logger.log_phase("plan", _plan_text,
-                    metadata={"task_count": len(_plan.tasks), "plan_id": _plan.plan_id})
-
-            # ── Trace: plan generation event ──
-            self._task_log_event(
-                "info", "plan_generated",
-                plan_id=self.exploitation_plan.plan_id,
-                task_count=len(self.exploitation_plan.tasks),
-                goal=self.exploitation_plan.goal[:160],
-            )
-
-        # Plan already generated before systematic exploit — skip duplicate
-
-        # Build tool definitions from recon + attack gateways + MCP servers
-        # Filter blacklisted tools so the LLM never sees them as callable functions.
-        tool_defs = [
-            d for d in self.attack_gateway.get_tool_definitions()
-            if d.get("function", {}).get("name") not in self._BLACKLISTED_TOOLS
-        ]
-        tool_defs += [
-            d for d in self.recon_gateway.get_tool_definitions()
-            if d.get("function", {}).get("name") not in self._BLACKLISTED_TOOLS
-        ]
-        try:
-            mcp_defs = self.mcp_pool.get_tool_definitions()
-            if mcp_defs:
-                tool_defs += mcp_defs
-        except Exception:
-            pass
-
-        # Check if we have active session cookies from auto_login
-        session_cookies = ""
-        if self.client._session and self.client._session.cookie_jar:
-            jar_cookies = list(self.client._session.cookie_jar)
-            if jar_cookies:
-                cookie_str = "; ".join(
-                    f"{ck.key}={ck.value}" for ck in jar_cookies
-                )
-                session_cookies = (
-                    f"\n## ACTIVE SESSION — YOU ARE LOGGED IN\n"
-                    f"Session cookie: {cookie_str[:200]}\n"
-                    f"Use the 'cookie' parameter on EVERY curl_get and http_post call:\n"
-                    f'  curl_get(url="http://localhost:8000/admin", cookie="{cookie_str[:150]}")\n'
-                    f'  curl_get(url="http://localhost:8000/dashboard?id=2", cookie="{cookie_str[:150]}")\n'
-                    f"FIRST: try /admin, /dashboard, /profile, /config with the cookie.\n"
-                    f"THEN: try IDOR — same cookie, different IDs in URL paths.\n"
-                )
-
-        # Build context from typed PipelineState
         state = self._get_state()
-
-        api_endpoints_text = ""
-        post_eps = [ep for ep in state.endpoints if ep.method == "POST"]
-        if post_eps:
-            api_endpoints_text = "\n## API Endpoints (from OpenAPI spec):\n"
-            for ep in post_eps[:10]:
-                params_str = ", ".join(ep.params)
-                bf_hint = f" body_format={ep.body_format}" if ep.body_format else ""
-                api_endpoints_text += (
-                    f"  POST {ep.url} [params: {params_str}{bf_hint}]\n"
-                )
-
-        endpoints_text = "\n".join(
-            f"- {ep.url} [{ep.method}]"
-            + (f" params={', '.join(ep.params)}" if ep.params else "")
-            + (f" body_format={ep.body_format}" if ep.body_format else "")
-            for ep in state.endpoints[:12]
+        plan = self.exploitation_plan
+        n_tasks = len(plan.tasks) if plan else 0
+        n_endpoints = len(state.endpoints)
+        n_services = len(state.services)
+        n_done = sum(
+            1 for t in (plan.tasks or [])
+            if t.status is TaskStatus.SUCCESS
         )
-        services_text = "\n".join(
-            f"- port {s.port}/{s.protocol}: {s.version or s.banner}"
-            for s in state.services[:10]
-            if s.port
+        ep_list = [f"{ep.method} {ep.url}" for ep in state.endpoints[-10:]]
+        svc_list = [f"{s.port}/{s.protocol} {s.version or s.banner}"
+                    for s in state.services[-5:] if s.port]
+
+        # Thin-plan detection: too few tasks given the attack surface.
+        thin_warning = ""
+        if n_tasks <= 3 and n_done <= 4 and (n_endpoints >= 3 or n_services >= 1):
+            thin_warning = (
+                f"\nWARNING: Only {n_tasks} tasks ({n_done} done) for "
+                f"{n_endpoints} endpoints + {n_services} services. "
+                f"The plan was too thin. "
+                f"\nSTEP 1 — ENUMERATE: You have dirb_scan and gobuster_dir — "
+                f"USE THEM on every HTTP endpoint to discover hidden paths. "
+                f"Also curl_get common paths: /api, /admin, /login, /config, "
+                f"/.env, /backup, /robots.txt, /.git/HEAD, plus any "
+                f"framework-specific paths for the detected technology stack. "
+                f"A simple index page often hides complex apps behind other paths."
+                f"\nSTEP 2 — EXPLOIT: After enumeration, based on what you "
+                f"DISCOVERED, add exploitation tasks. Look at EVERY endpoint: "
+                f"could it be vulnerable to SQLi, LFI, command injection, SSTI, "
+                f"auth bypass, XXE, SSRF, file upload, or credential stuffing? "
+                f"Aim for 8-15 tasks covering multiple attack vectors.\n"
+                f"IMPORTANT: Prioritize the ORIGINAL vulnerability type "
+                f"detected during analysis. If the primary vulnerability "
+                f"has not been fully exploited, try MANY variations "
+                f"(different credentials, parameters, payloads) before "
+                f"moving on to unrelated endpoints. Exhaust the primary "
+                f"target first — don't abandon it for newly discovered ports.\n"
+            )
+        return (
+            f"Plan exhausted. {n_tasks} tasks ({n_done} completed).\n"
+            + (f"Known endpoints ({n_endpoints}): {', '.join(ep_list)}"
+               if ep_list else "No endpoints discovered.")
+            + (f"\nKnown services ({n_services}): {', '.join(svc_list)}"
+               if svc_list else "")
+            + (f"\nCredentials: {len(state.credentials)} known"
+               if state.credentials else "")
+            + thin_warning
+            + "\n[RECONSIDER] No flag found after exhausting the plan. "
+            "The evidence you've relied on may be incomplete or "
+            "misleading. What ELSE could this application be? "
+            "Also review the tools you used — some support multiple "
+            "services or operations beyond what you tried. If you "
+            "only used a subset of a tool's capabilities, explore "
+            "its other functions; the attack surface may be broader "
+            "than what the initial evidence suggested."
         )
-
-        # Use CTEG hints passed from run() (dynamic patterns from prior tasks)
-        cteg_text = ""
-        if cteg_hints:
-            parts = []
-            for es in cteg_hints.get("exploit_strategies", []):
-                parts.append(f"Learned: {es.get('description','')}")
-                for t in es.get("techniques", []):
-                    parts.append(f"  → {t}")
-            for bs in cteg_hints.get("bypass_strategies", []):
-                parts.append(f"Bypass: {bs.get('mechanism','')} — {bs.get('description','')}")
-            # Inject known credentials from CTEG
-            _known_creds = cteg_hints.get("known_credentials", [])
-            if _known_creds:
-                parts.append("Known credentials (from prior runs — try these FIRST):")
-                for _kc in _known_creds:
-                    parts.append(f"  → {_kc}")
-            if parts:
-                cteg_text = "\n## Prior Experience (CTEG):\n" + "\n".join(parts) + "\n"
-
-        vuln_text = ""
-        if self.vulnerabilities:
-            vuln_parts = ["\n## Vulnerability Hypotheses (from analysis):\n"]
-            for i, v in enumerate(self.vulnerabilities):
-                vuln_parts.append(f"  {i+1}. [{v.vuln_type}] {v.endpoint}")
-                if v.param:
-                    vuln_parts[-1] += f" param={v.param}"
-                vuln_parts[-1] += f" confidence={v.confidence:.2f}"
-                if v.evidence:
-                    vuln_parts.append(f"     Evidence: {v.evidence[:150]}")
-                if v.suggested_tool:
-                    tool_line = f"     Suggested tool: {v.suggested_tool}"
-                    if v.tool_args:
-                        tool_line += f" with args: {json.dumps(v.tool_args)[:150]}"
-                    vuln_parts.append(tool_line)
-            vuln_parts.append("\n## Execute the suggested tools for each vulnerability above.\n")
-            vuln_text = "\n".join(vuln_parts)
-
-        plan_status = self._format_plan_status() if self.exploitation_plan else ""
-
-        # Build data-driven guidance (replaces static checklist)
-        endpoints = self.dkg.query_nodes("Endpoint")
-        params_list = [e.get("url","") for e in endpoints if e.get("params")]
-        post_list = [f"{e.get('url','')} (body_format={e.get('body_format','form')})"
-                     for e in endpoints if e.get("method","GET") == "POST"]
-        param_endpoints = ", ".join(params_list[:5]) if params_list else "none"
-        post_endpoints = ", ".join(post_list[:5]) if post_list else "none"
-        # Collect tested combos from systematic pass for the "already tested" hint
-        systematic_tested = "none"
-        sys_vulns = self.dkg.query_nodes("Vulnerability")
-        sys_tested = [v for v in sys_vulns if v.get("tested_at")]
-        if sys_tested:
-            systematic_tested = "; ".join(
-                f"{v.get('test_tool','tool')} on {v.get('endpoint','')}"
-                for v in sys_tested[:5]
-            )
-
-        # O1.3: unified cognition snapshot injected into the loop's initial
-        # context so plan generation and execution start from one world view.
-        belief_block = self._belief_context(compact=True)
-        if belief_block:
-            belief_block = f"\n{belief_block}\n"
-
-        initial_prompt = f"""Target: {target_url}
-
-## Discovered Services
-{services_text}
-
-## Discovered Endpoints
-{endpoints_text}
-{api_endpoints_text}
-{session_cookies}
-{cteg_text}
-
-## Guidance:
-- Endpoints with params: {param_endpoints}
-- POST endpoints: {post_endpoints}
-- Auto-login tried: test/test (failed), admin/admin (failed)
-- Already tested: {systematic_tested}
-- For POST endpoints, check body_format before choosing content_type
-- Use knowledge_search for technique guidance; if results are poor, use an available web search tool for current info
-
-{plan_status}
-{vuln_text}
-{belief_block}
-"""
-
-        # Inject initial context into LLM conversation (no tool calling yet).
-        # The plan-driven loop below will start task execution.
-        self.llm.add_context_message(initial_prompt, role="user")
-
-        print(f"\n[solo] Starting plan-driven loop: "
-              f"{len(self.exploitation_plan.tasks) if self.exploitation_plan else 0} tasks, "
-              f"token_count={self.llm.token_count}")
-
-        # ── Systematic exploit pass (pre-plan, no LLM cost) ──
-        systematic_result = await self._systematic_exploit_pass(target_url)
-
-        # ── Phase log: systematic exploit ──
-        if self.phase_logger:
-            _vulns_tested = sum(
-                1 for v in self.dkg.query_nodes("Vulnerability")
-                if v.get("tested_at")
-            )
-            _vulns_total = len(self.dkg.query_nodes("Vulnerability"))
-            self.phase_logger.log_phase("systematic_exploit",
-                f"[systematic] Tested {_vulns_tested}/{_vulns_total} vulnerabilities",
-                metadata={"vulns_tested": _vulns_tested,
-                          "vulns_total": _vulns_total,
-                          "flag_found": bool(systematic_result and systematic_result.success)})
-
-        if systematic_result and systematic_result.success:
-            return systematic_result
-
-        # ── Inject intermediate artifacts from systematic pass ──
-        _sys_artifacts = self._extract_recent_artifacts()
-        if _sys_artifacts:
-            self.llm.add_context_message(_sys_artifacts, role="user")
-
-        # ── Plan-driven execution loop (VulnBot-style, dynamic) ──
-        # LLM generated a plan. Execute tasks one by one.
-        # After EACH task: LLM reviews and updates the plan.
-        # When plan is exhausted: LLM can add more tasks or enter free-form.
-        for iteration in range(1, MAX_ITER + 1):
-            if self._time_exceeded() or self._tokens_exceeded():
-                break
-
-            task = self._select_next_plan_task()
-            if not task:
-                # Plan exhausted — ask LLM if it wants to add more tasks
-                if not getattr(self, '_plan_review_exhausted', False):
-                    self._plan_review_exhausted = True
-                    state = self._get_state()
-                    plan = self.exploitation_plan
-                    n_tasks = len(plan.tasks) if plan else 0
-                    n_endpoints = len(state.endpoints)
-                    n_services = len(state.services)
-                    n_done = sum(1 for t in (plan.tasks or []) if t.get("status") == "done")
-
-                    ep_list = [f"{ep.method} {ep.url}" for ep in state.endpoints[-10:]]
-                    svc_list = [f"{s.port}/{s.protocol} {s.version or s.banner}"
-                               for s in state.services[-5:] if s.port]
-
-                    # Thin-plan detection: too few tasks given the attack surface.
-                    # Also fires for non-HTTP targets (0 endpoints, ≥1 service).
-                    thin_warning = ""
-                    if n_tasks <= 3 and n_done <= 4 and (n_endpoints >= 3 or n_services >= 1):
-                        thin_warning = (
-                            f"\nWARNING: Only {n_tasks} tasks ({n_done} done) for "
-                            f"{n_endpoints} endpoints + {n_services} services. "
-                            f"The plan was too thin. "
-                            f"\nSTEP 1 — ENUMERATE: You have dirb_scan and gobuster_dir — "
-                            f"USE THEM on every HTTP endpoint to discover hidden paths. "
-                            f"Also curl_get common paths: /api, /admin, /login, /config, "
-                            f"/.env, /backup, /robots.txt, /.git/HEAD, plus any "
-                            f"framework-specific paths for the detected technology stack. "
-                            f"A simple index page often hides complex apps behind other paths."
-                            f"\nSTEP 2 — EXPLOIT: After enumeration, based on what you "
-                            f"DISCOVERED, add exploitation tasks. Look at EVERY endpoint: "
-                            f"could it be vulnerable to SQLi, LFI, command injection, SSTI, "
-                            f"auth bypass, XXE, SSRF, file upload, or credential stuffing? "
-                            f"Aim for 8-15 tasks covering multiple attack vectors.\n"
-                            f"IMPORTANT: Prioritize the ORIGINAL vulnerability type "
-                            f"detected during analysis. If the primary vulnerability "
-                            f"has not been fully exploited, try MANY variations "
-                            f"(different credentials, parameters, payloads) before "
-                            f"moving on to unrelated endpoints. Exhaust the primary "
-                            f"target first — don't abandon it for newly discovered ports.\n"
-                        )
-
-                    exhaustion_summary = (
-                        f"Plan exhausted. {n_tasks} tasks ({n_done} completed).\n"
-                        + (f"Known endpoints ({n_endpoints}): {', '.join(ep_list)}" if ep_list else "No endpoints discovered.")
-                        + (f"\nKnown services ({n_services}): {', '.join(svc_list)}" if svc_list else "")
-                        + (f"\nCredentials: {len(state.credentials)} known" if state.credentials else "")
-                        + thin_warning
-                        + "\n[RECONSIDER] No flag found after exhausting the plan. "
-                        "The evidence you've relied on may be incomplete or "
-                        "misleading. What ELSE could this application be? "
-                        "Also review the tools you used — some support multiple "
-                        "services or operations beyond what you tried. If you "
-                        "only used a subset of a tool's capabilities, explore "
-                        "its other functions; the attack surface may be broader "
-                        "than what the initial evidence suggested."
-                    )
-                    await self._review_and_update_plan(
-                        {"id": "plan-exhausted", "instruction": "Plan exhausted",
-                         "tool": "", "params": {}, "status": "done",
-                         "attempts": 0, "result_summary": exhaustion_summary},
-                        True, exhaustion_summary
-                    )
-                    # Try again — LLM may have added new tasks
-                    if self._select_next_plan_task():
-                        continue
-                self._generate_phase_summary("exploit")
-                log.info("Solo loop: plan exhausted after %d iterations", iteration - 1)
-                break
-
-            # ── Trace: task scheduling event ──
-            self._task_log_event(
-                "info", "task_scheduled",
-                task_id=task.get("id", ""),
-                tool=task.get("tool", ""),
-                iteration=iteration,
-            )
-            # P10/P11: persist plan rationale before execution so the
-            # replan fallback can see why this task exists.
-            self.memory.record_task(task)
-
-            execution = await self._execute_task_with_policies(
-                task, tool_defs, iteration, MAX_ITER
-            )
-            if execution.flag_result is not None:
-                return execution.flag_result
-            if execution.skip:
-                continue
-            task_success = execution.success
-            task_result_text = execution.result_text
-
-            await self._review_and_update_plan(
-                task, task_success, task_result_text
-            )
-            log.info("[PLAN REVIEW] task %s → %s, plan updated",
-                     task.get("id", ""), "done" if task_success else "failed")
-            self._print_plan_status()
-
-        log.info("_unified_llm_loop: %d iterations, flag not found", iteration)
-        self._generate_phase_summary("exploit")
-
-        # ── Phase log: exploit ──
-        if self.phase_logger and self.exploitation_plan:
-            _plan = self.exploitation_plan
-            _done = sum(1 for t in _plan.tasks if t.get("status") == "done")
-            _failed = sum(1 for t in _plan.tasks
-                         if t.get("status") in ("failed", "skipped", "exhausted"))
-            self.phase_logger.log_phase("exploit",
-                f"Plan-driven exploit completed: {_done} done, {_failed} failed "
-                f"of {len(_plan.tasks)} tasks ({iteration} iterations)",
-                metadata={"tasks_done": _done, "tasks_failed": _failed,
-                          "tasks_total": len(_plan.tasks),
-                          "iterations": iteration})
-
-        return None
 
     # DEPRECATED: not currently wired into the main run() loop.
     # Kept for potential future use in automated vuln-to-tool mapping.
@@ -4697,7 +4457,15 @@ class Orchestrator:
 
         # Parse LLM's vulnerability hypotheses
         try:
-            parsed = self._extract_json(content)
+            _parsed_model, _schema_err = parse_analyze_output(content)
+            if _parsed_model is None:
+                self._task_log_event(
+                    "warning", "schema_violation",
+                    boundary="analyze", error=str(_schema_err)[:400],
+                )
+                parsed = self._extract_json(content)
+            else:
+                parsed = _parsed_model.model_dump()
             # New format: {{"application_understanding": "...", "vulnerabilities": [...]}}
             # Old format (backward compat): [...] flat array
             if isinstance(parsed, dict):
@@ -5618,7 +5386,15 @@ class Orchestrator:
 
         # ── Parse findings from final content ──
         try:
-            findings = self._extract_json(content)
+            _findings_model, _schema_err = parse_research_findings(content)
+            if _findings_model is None:
+                self._task_log_event(
+                    "warning", "schema_violation",
+                    boundary="research", error=str(_schema_err)[:400],
+                )
+                findings = self._extract_json(content)
+            else:
+                findings = [f.model_dump() for f in _findings_model]
             if isinstance(findings, list):
                 for f in findings:
                     if isinstance(f, dict) and f.get("vuln_type"):
@@ -5632,8 +5408,6 @@ class Orchestrator:
                                     v.evidence = (v.evidence or "") + f" Techniques: {f['key_techniques']}"
                                     v.research_techniques = list(f["key_techniques"])
                                 if f.get("credentials_to_try"):
-                                    cred_list = ", ".join(str(c) for c in f["credentials_to_try"][:15])
-                                    v.evidence = (v.evidence or "") + f" Credentials: [{cred_list}]"
                                     v.tool_args = v.tool_args or {}
                                     if not v.tool_args.get("credentials"):
                                         v.tool_args["credentials"] = list(f["credentials_to_try"])
@@ -5739,7 +5513,15 @@ class Orchestrator:
         # Store findings in DKG Service nodes
         if content:
             try:
-                findings = self._extract_json(content)
+                _svc_model, _schema_err = parse_service_research_findings(content)
+                if _svc_model is None:
+                    self._task_log_event(
+                        "warning", "schema_violation",
+                        boundary="service_research", error=str(_schema_err)[:400],
+                    )
+                    findings = self._extract_json(content)
+                else:
+                    findings = [f.model_dump() for f in _svc_model]
                 if isinstance(findings, list):
                     for f in findings:
                         if isinstance(f, dict):
@@ -5957,13 +5739,39 @@ class Orchestrator:
     # Plans are LLM-generated, dynamically updated after each task,
     # and persisted in DKG for cross-phase/cross-agent visibility.
 
-    def _sanitize_plan_tools(self, tasks: list[dict]) -> None:
+    def _sanitize_plan_tools(self, tasks: list[Task]) -> None:
         """Replace blacklisted tools in-place across ALL plan tasks.
 
         Called after every plan generation / review / replan to ensure
         time-wasting tools (e.g. hydra_ssh_brute) never reach execution,
         regardless of which code path injected them.
         """
+        # v2: the plan is stored as typed Tasks; this sanitizer keeps its
+        # legacy dict-based transformation logic verbatim by working on a
+        # mutable legacy view, then writes the mutated fields back onto the
+        # Task objects and converts any newly appended hint tasks to Tasks.
+        _caller_list = tasks
+        _plan_tasks = list(tasks)
+        _VIEW_STATUS = {
+            TaskStatus.READY: "pending",
+            TaskStatus.CREATED: "pending",
+            TaskStatus.SUCCESS: "done",
+            TaskStatus.FAILED: "failed",
+            TaskStatus.ABANDONED: "skipped",
+        }
+        tasks = [
+            {
+                "id": t.id,
+                "instruction": t.instruction,
+                "tool": str((t.action or {}).get("tool", "") or ""),
+                "params": (t.action or {}).get("params", {}) or {},
+                "status": _VIEW_STATUS.get(t.status, t.status.value),
+                "dependent_task_ids": dependency_task_ids(t),
+                "source": t.source,
+            }
+            for t in _plan_tasks
+        ]
+
         # Resolve $credentials.* placeholders from DKG state
         _dkg_creds = self.dkg.query_nodes("Credential")
         _resolved_user = ""
@@ -6507,10 +6315,51 @@ class Orchestrator:
                 if "command" in t.get("params", {}):
                     del t["params"]["command"]
 
+        # ── Write back to typed Task objects ──────────────────────
+        for t, d in zip(_plan_tasks, tasks[: len(_plan_tasks)]):
+            action = dict(t.action or {})
+            action["tool"] = str(d.get("tool", "") or "")
+            _params = d.get("params")
+            if isinstance(_params, dict):
+                action["params"] = _params
+            t.action = action
+            t.instruction = d.get("instruction", t.instruction)
+            if str(d.get("status", "")) == "skipped":
+                t.status = TaskStatus.ABANDONED
+        # Newly appended hint tasks (credential/session hints) become Tasks.
+        for d in tasks[len(_plan_tasks):]:
+            _plan_tasks.append(
+                Task(
+                    id=str(d.get("id", "")),
+                    type="task",
+                    goal=d.get("goal", "") or d.get("instruction", "") or "",
+                    instruction=str(d.get("instruction", "") or ""),
+                    action={
+                        "tool": str(d.get("tool", "") or ""),
+                        "target": str(d.get("endpoint", "") or ""),
+                        "params": dict(d.get("params") or {})
+                        if isinstance(d.get("params"), dict)
+                        else {},
+                    },
+                    dependencies=deps_from_task_ids(
+                        d.get("dependent_task_ids") or d.get("dependencies") or []
+                    ),
+                    status=(
+                        TaskStatus.ABANDONED
+                        if str(d.get("status", "")) == "skipped"
+                        else TaskStatus.READY
+                    ),
+                    source=str(d.get("source", "") or ""),
+                    vuln_type=str(d.get("vuln_type", "") or ""),
+                )
+            )
+        # Sync appended hint tasks back to the caller's list.
+        _caller_list[:] = _plan_tasks
+
     async def _generate_exploitation_plan(self, target_url: str, cteg_hints: dict | None = None) -> ExploitationPlan:
         """Generate a structured plan from bootstrap state (nmap results only).
 
-        Called at the start of _unified_llm_loop(). The LLM receives bootstrap
+        Called at the start of _run_with_runtime(). The LLM receives bootstrap
         nmap data, all tools (recon + attack), and decides what to do first.
         """
         plan_id = f"plan-{int(time.time())}"
@@ -6578,7 +6427,10 @@ class Orchestrator:
         if summaries:
             phase_summary = "\n## Previous Loop Summary\n"
             for s in summaries[-2:]:
-                phase_summary += f"- {s.get('phase','')}: {s.get('key_findings','')[:300]}\n"
+                _kf = s.get('key_findings', '')
+                if isinstance(_kf, dict):
+                    _kf = json.dumps(_kf, ensure_ascii=False)
+                phase_summary += f"- {s.get('phase','')}: {str(_kf)[:300]}\n"
 
         # ── RAG knowledge injection ────────────────────────────────
         # Search RAG for attack patterns matching discovered services.
@@ -7020,6 +6872,13 @@ have already been completed. Each task should test or exploit a vulnerability:
 - tool: exact exploit tool name (sqlmap_test, command_injection_test, etc.)
 - params: tool parameters dict
 - reason: which vulnerability this targets
+- priority (optional): 0.0-1.0 execution priority hint
+
+**Task object contract**: each task MUST contain ONLY these keys:
+id, dependent_task_ids, instruction, tool, params, reason, priority.
+Do NOT include "status", "dependencies", or any other key — the system
+owns task status. dependent_task_ids is a JSON array of strings (empty
+array for independent tasks). params is a JSON object of tool arguments.
 
 **CRITICAL: Generate at most 15 tasks.** Include diverse attack strategies
 (SQLi, XSS, CMDi, LFI, file upload, auth bypass, etc.) even for medium-confidence
@@ -7104,7 +6963,30 @@ Output ONLY valid JSON array (3-20 tasks depending on complexity. More tasks != 
                 content = ""
 
         try:
-            tasks = [t for t in (self._extract_json_array(content) or []) if isinstance(t, dict)]
+            _plan_model, _schema_err = parse_plan_tasks(content)
+            if _plan_model is None:
+                self._task_log_event(
+                    "warning", "schema_violation",
+                    boundary="plan", error=str(_schema_err)[:400],
+                )
+                raw_tasks = [t for t in (self._extract_json_array(content) or []) if isinstance(t, dict)]
+                tasks = [self._task_from_llm_dict(t) for t in raw_tasks]
+            else:
+                tasks = [
+                    Task(
+                        id=t.id,
+                        type="task",
+                        goal=t.instruction,
+                        instruction=t.instruction,
+                        action={"tool": t.tool, "target": "", "params": dict(t.params)},
+                        priority=t.priority,
+                        dependencies=deps_from_task_ids(t.dependent_task_ids),
+                        status=TaskStatus.READY,
+                        source=t.source,
+                        vuln_type=t.vuln_type,
+                    )
+                    for t in _plan_model
+                ]
             # Validate tool names against actual registry
             all_valid_tools = (self.attack_gateway.get_tool_names()
                                + self.recon_gateway.get_tool_names())
@@ -7114,18 +6996,16 @@ Output ONLY valid JSON array (3-20 tasks depending on complexity. More tasks != 
             except Exception:
                 pass
             for t in tasks:
-                t.setdefault("status", "pending")
-                t.setdefault("dependent_task_ids", t.pop("dependencies", []))
-                tool = t.get("tool", "")
+                tool = str((t.action or {}).get("tool", "") or "")
                 if tool and tool not in all_valid_tools:
                     from difflib import get_close_matches
                     matches = get_close_matches(tool, all_valid_tools, n=1, cutoff=0.3)
                     if matches:
                         log.info("Plan: corrected tool '%s' → '%s'", tool, matches[0])
-                        t["tool"] = matches[0]
+                        t.action["tool"] = matches[0]
                     else:
                         log.warning("Plan: unknown tool '%s' — removing from plan", tool)
-                        t["tool"] = self._guess_tool(t.get("vuln_type", ""))
+                        t.action["tool"] = self._guess_tool(t.vuln_type)
             plan.tasks = tasks
         except Exception as e:
             log.warning("Plan generation JSON parse failed: %s — using fallback", e)
@@ -7134,21 +7014,36 @@ Output ONLY valid JSON array (3-20 tasks depending on complexity. More tasks != 
         if not plan.tasks and self.vulnerabilities:
             plan.tasks = []
             for i, v in enumerate(self.vulnerabilities):
-                task = {
-                    "id": f"task-{i+1}",
-                    "instruction": f"Test {v.vuln_type} on {v.endpoint}" + (f" param={v.param}" if v.param else ""),
-                    "tool": v.suggested_tool or self._guess_tool(v.vuln_type),
-                    "params": v.tool_args if v.tool_args else {"url": v.endpoint, "param": v.param} if v.param else {"url": v.endpoint},
-                    "reason": v.evidence[:100] if v.evidence else f"Hypothesized {v.vuln_type}",
-                    "dependent_task_ids": [],
-                    "status": "pending",
-                }
+                params = dict(v.tool_args) if v.tool_args else (
+                    {"url": v.endpoint, "param": v.param}
+                    if v.param else {"url": v.endpoint}
+                )
                 # Inject suggested payloads from RAG analysis
                 if v.suggested_payloads:
-                    task["params"]["payload"] = v.suggested_payloads[0]
+                    params["payload"] = v.suggested_payloads[0]
                     if len(v.suggested_payloads) > 1:
-                        task["params"]["payload_batch"] = v.suggested_payloads
-                plan.tasks.append(task)
+                        params["payload_batch"] = list(v.suggested_payloads)
+                plan.tasks.append(
+                    Task(
+                        id=f"task-{i+1}",
+                        type="task",
+                        goal=f"Test {v.vuln_type} on {v.endpoint}",
+                        instruction=(
+                            f"Test {v.vuln_type} on {v.endpoint}"
+                            + (f" param={v.param}" if v.param else "")
+                        ),
+                        hypothesis=v.vuln_type,
+                        rationale=v.evidence[:100] if v.evidence else f"Hypothesized {v.vuln_type}",
+                        evidence=list(v.research_techniques),
+                        action={
+                            "tool": v.suggested_tool or self._guess_tool(v.vuln_type),
+                            "target": v.endpoint,
+                            "params": params,
+                        },
+                        status=TaskStatus.READY,
+                        vuln_type=v.vuln_type,
+                    )
+                )
 
         plan.updated_at = time.strftime("%Y-%m-%dT%H:%M:%S")
 
@@ -7156,17 +7051,22 @@ Output ONLY valid JSON array (3-20 tasks depending on complexity. More tasks != 
         self._sanitize_plan_tools(plan.tasks)
 
         # ── Plan generation summary ─────────────────────────────────
-        done = sum(1 for t in plan.tasks if t.get("status") == "done")
-        pending = sum(1 for t in plan.tasks if t.get("status") == "pending")
+        done = sum(1 for t in plan.tasks if t.status is TaskStatus.SUCCESS)
+        pending = sum(
+            1 for t in plan.tasks
+            if t.status in (TaskStatus.READY, TaskStatus.CREATED)
+        )
         print(f"\n[PLAN] Generated {len(plan.tasks)} tasks ({done} done, {pending} pending)")
         for t in plan.tasks[:12]:
-            status = t.get("status", "pending").upper()
-            deps = t.get("dependent_task_ids", []) or t.get("dependencies", [])
+            status = t.status.value.upper()
+            deps = dependency_task_ids(t)
             dep_str = f" (depends on: {', '.join(deps)})" if deps else ""
-            print(f"  [{status:<8}] {t.get('instruction','')[:100]}{dep_str}")
+            print(f"  [{status:<8}] {t.instruction[:100]}{dep_str}")
         if len(plan.tasks) > 12:
             print(f"  ... and {len(plan.tasks) - 12} more tasks")
 
+        # Task-level plan state is persisted alongside the DKG snapshots.
+        self._persist_plan("plan")
         return plan
 
     def _guess_tool(self, vuln_type: str) -> str:
@@ -7181,20 +7081,71 @@ Output ONLY valid JSON array (3-20 tasks depending on complexity. More tasks != 
         if "ssrf" in vt: return "curl_get"
         return "curl_get"
 
-    def _topological_sort(self, tasks: list) -> list:
+    @staticmethod
+    def _task_from_llm_dict(d: dict) -> Task:
+        """Build a typed Task from a raw LLM task dict (lenient fallback).
+
+        Used only when the pydantic plan schema failed and the legacy
+        tolerant extraction produced unvalidated dicts. Status strings map
+        onto TaskStatus with the legacy vocabulary; unknown statuses become
+        CREATED (safe, never executable).
+        """
+        params = d.get("params", {})
+        if isinstance(params, str):
+            try:
+                params = json.loads(params)
+            except (json.JSONDecodeError, TypeError):
+                params = {"url": str(params)}
+        if not isinstance(params, dict):
+            params = {"value": params}
+        deps = d.get("dependent_task_ids") or d.get("dependencies") or []
+        if not isinstance(deps, list):
+            deps = [deps]
+        status_str = str(d.get("status", "pending") or "pending")
+        status_map = {
+            "pending": TaskStatus.READY,
+            "done": TaskStatus.SUCCESS,
+            "failed": TaskStatus.FAILED,
+            "skipped": TaskStatus.ABANDONED,
+            "exhausted": TaskStatus.ABANDONED,
+        }
+        status = status_map.get(status_str)
+        if status is None:
+            try:
+                status = TaskStatus(status_str)
+            except ValueError:
+                status = TaskStatus.CREATED
+        return Task(
+            id=str(d.get("id", "")),
+            type=d.get("type", "task"),
+            goal=d.get("goal", "") or d.get("instruction", "") or "",
+            instruction=str(d.get("instruction", "") or ""),
+            action={
+                "tool": str(d.get("tool", "") or ""),
+                "target": str(d.get("endpoint", "") or ""),
+                "params": params,
+            },
+            dependencies=deps_from_task_ids(deps),
+            priority=float(d.get("priority", 0.5)),
+            status=status,
+            source=str(d.get("source", "") or ""),
+            vuln_type=str(d.get("vuln_type", "") or ""),
+        )
+
+    def _topological_sort(self, tasks: list[Task]) -> list[Task]:
         """Sort tasks by dependency order using Kahn's algorithm."""
         from collections import deque
-        task_map = {t.get("id") or str(id(t)): t for t in tasks}
+        task_map = {t.id or str(id(t)): t for t in tasks}
         in_degree = {tid: 0 for tid in task_map}
         adj = {tid: [] for tid in task_map}
         for t in tasks:
-            tid = t.get("id") or str(id(t))
-            for dep_id in t.get("dependent_task_ids", []) or t.get("dependencies", []):
+            tid = t.id or str(id(t))
+            for dep_id in dependency_task_ids(t):
                 if dep_id in task_map:
                     adj[dep_id].append(tid)
-                    in_degree[t["id"]] += 1
+                    in_degree[tid] += 1
                 else:
-                    log.warning("Task '%s' depends on unknown task '%s' — ignored", t.get("id", "?"), dep_id)
+                    log.warning("Task '%s' depends on unknown task '%s' — ignored", tid, dep_id)
         queue = deque([tid for tid, deg in in_degree.items() if deg == 0])
         result = []
         while queue:
@@ -7204,16 +7155,16 @@ Output ONLY valid JSON array (3-20 tasks depending on complexity. More tasks != 
                 in_degree[neighbor] -= 1
                 if in_degree[neighbor] == 0:
                     queue.append(neighbor)
-        result.extend([task_map[tid] for tid in in_degree if tid not in {r.get("id") or str(id(r)) for r in result}])
+        result.extend([task_map[tid] for tid in in_degree if tid not in {r.id for r in result}])
         return result
 
     @staticmethod
-    def _detect_cycle(tasks: list) -> list[str]:
+    def _detect_cycle(tasks: list[Task]) -> list[str]:
         """Detect cycles in task dependency graph using DFS.
 
         Returns list of task IDs involved in the first cycle found, or empty list.
         """
-        task_map = {t.get("id") or str(id(t)): t for t in tasks}
+        task_map = {t.id or str(id(t)): t for t in tasks}
         visited: set[str] = set()
         rec_stack: set[str] = set()
         parent_map: dict[str, str | None] = {}
@@ -7235,8 +7186,7 @@ Output ONLY valid JSON array (3-20 tasks depending on complexity. More tasks != 
             if tid not in task_map:
                 return None
             rec_stack.add(tid)
-            for dep_id in (task_map[tid].get("dependent_task_ids", [])
-                           or task_map[tid].get("dependencies", [])):
+            for dep_id in dependency_task_ids(task_map[tid]):
                 if dep_id in task_map:
                     parent_map[dep_id] = tid
                     result = _dfs(dep_id)
@@ -7255,18 +7205,22 @@ Output ONLY valid JSON array (3-20 tasks depending on complexity. More tasks != 
         return []
 
     @staticmethod
-    def _break_cycle(tasks: list, cycle: list[str]) -> None:
+    def _break_cycle(tasks: list[Task], cycle: list[str]) -> None:
         """Break a dependency cycle by removing the last edge in the cycle."""
         if len(cycle) < 2:
             return
         last = cycle[-1]
         for t in tasks:
-            deps = t.get("dependent_task_ids", []) or t.get("dependencies", [])
-            if isinstance(deps, list) and last in deps:
-                deps.remove(last)
-                return
+            deps = [d for d in (t.dependencies or [])]
+            for d in deps:
+                if isinstance(d, dict) and d.get("type") == "requires_task_success" and d.get("task_id") == last:
+                    t.dependencies.remove(d)
+                    return
+                if d == last:
+                    t.dependencies.remove(d)
+                    return
 
-    def _select_next_plan_task(self, plan: ExploitationPlan | None = None) -> dict | None:
+    def _select_next_plan_task(self, plan: ExploitationPlan | None = None) -> Task | None:
         """Return the first pending task whose dependencies are all done.
 
         Exploit tasks (command_injection_test, sqlmap_test, etc.) are prioritized
@@ -7323,29 +7277,33 @@ Output ONLY valid JSON array (3-20 tasks depending on complexity. More tasks != 
         ready_probe = []
         ready_low = []
         for task in self._topological_sort(plan.tasks):
-            if task.get("status") == "exhausted" or task.get("id") in self._exhausted_task_ids:
+            if task.status is TaskStatus.ABANDONED or task.id in self._exhausted_task_ids:
                 continue
-            if task.get("status") != "pending":
+            if task.status not in (TaskStatus.READY, TaskStatus.CREATED):
                 continue
-            dep_ids = task.get("dependent_task_ids", []) or task.get("dependencies", [])
+            dep_ids = dependency_task_ids(task)
             deps_met = True
             all_deps_failed = True if dep_ids else False
             for dep_id in dep_ids:
-                dep_task = next((t for t in plan.tasks if t.get("id") == dep_id), None)
-                if not dep_task or dep_task.get("status") not in ("done", "failed", "exhausted", "skipped"):
+                dep_task = next((t for t in plan.tasks if t.id == dep_id), None)
+                if not dep_task or dep_task.status not in (
+                    TaskStatus.SUCCESS,
+                    TaskStatus.FAILED,
+                    TaskStatus.ABANDONED,
+                ):
                     deps_met = False
                     break
-                if dep_task.get("status") != "failed":
+                if dep_task.status is not TaskStatus.FAILED:
                     all_deps_failed = False
             # When ALL credential-test dependencies failed, the dependent task
             # cannot succeed (e.g. "If any credential succeeded, enumerate DBs"
             # when every credential task returned Login failed).
             if deps_met and all_deps_failed:
-                task["status"] = "skipped"
+                task.status = TaskStatus.ABANDONED
                 continue
             if deps_met:
-                tool = task.get("tool", "")
-                source = task.get("source", "")
+                tool = str((task.action or {}).get("tool", "") or "")
+                source = task.source
                 # Semantic priority: task instructions containing exploit
                 # keywords (bypass, exploit, assume, inject, takeover, etc.)
                 # are exploitation tasks regardless of their declared tool.
@@ -7354,8 +7312,8 @@ Output ONLY valid JSON array (3-20 tasks depending on complexity. More tasks != 
                     "inject", "takeover", "token", "flag",
                     " privilege", "admin role", "forgery",
                 ]
-                def _has_exploit_semantics(t: dict) -> bool:
-                    inst = (t.get("instruction") or "").lower()
+                def _has_exploit_semantics(t: Task) -> bool:
+                    inst = (t.instruction or "").lower()
                     return any(kw in inst for kw in _EXPLOIT_KEYWORDS)
                 # Credential-hint tasks unlock downstream exploitation and
                 # should execute ASAP — treat them as exploit-priority
@@ -7538,17 +7496,25 @@ Output ONLY valid JSON array (3-20 tasks depending on complexity. More tasks != 
         plan = getattr(self, 'exploitation_plan', None)
         if not plan or not plan.tasks:
             return "(no plan)"
-        done = sum(1 for t in plan.tasks if t.get("status") == "done")
-        failed = sum(1 for t in plan.tasks if t.get("status") in ("failed", "skipped", "exhausted"))
-        pending = sum(1 for t in plan.tasks if t.get("status") == "pending")
-        exhausted = sum(1 for t in plan.tasks if t.get("status") == "exhausted"
-                       or t.get("id") in self._exhausted_task_ids)
+        done = sum(1 for t in plan.tasks if t.status is TaskStatus.SUCCESS)
+        failed = sum(
+            1 for t in plan.tasks
+            if t.status in (TaskStatus.FAILED, TaskStatus.ABANDONED)
+        )
+        pending = sum(
+            1 for t in plan.tasks
+            if t.status in (TaskStatus.READY, TaskStatus.CREATED)
+        )
+        exhausted = sum(
+            1 for t in plan.tasks
+            if t.status is TaskStatus.ABANDONED or t.id in self._exhausted_task_ids
+        )
         lines = [f"## Exploitation Plan ({done}/{len(plan.tasks)} done, {failed} failed, {exhausted} exhausted, {pending} pending)"]
         for t in self._topological_sort(plan.tasks):
-            status = t.get("status", "pending").upper()
-            deps = t.get("dependent_task_ids", []) or t.get("dependencies", [])
+            status = t.status.value.upper()
+            deps = dependency_task_ids(t)
             dep_str = f" (waits for: {', '.join(deps)})" if deps else ""
-            lines.append(f"  {t.get('id','?')}: [{status}] {t.get('instruction','')[:100]}{dep_str}")
+            lines.append(f"  {t.id}: [{status}] {t.instruction[:100]}{dep_str}")
         return "\n".join(lines)
 
     def _build_cycle_summary(self) -> "CycleTransitionSummary":
@@ -7560,21 +7526,27 @@ Output ONLY valid JSON array (3-20 tasks depending on complexity. More tasks != 
         from darwin.data_model import CycleTransitionSummary
 
         plan = getattr(self, 'exploitation_plan', None)
-        tasks_done = sum(1 for t in (plan.tasks or []) if t.get("status") == "done") if plan else 0
-        tasks_failed = sum(1 for t in (plan.tasks or []) if t.get("status") == "failed") if plan else 0
-        tasks_exhausted = sum(1 for t in (plan.tasks or [])
-                            if t.get("status") == "exhausted"
-                            or t.get("id") in self._exhausted_task_ids) if plan else 0
+        tasks_done = sum(
+            1 for t in (plan.tasks or [])
+            if t.status is TaskStatus.SUCCESS
+        ) if plan else 0
+        tasks_failed = sum(
+            1 for t in (plan.tasks or [])
+            if t.status is TaskStatus.FAILED
+        ) if plan else 0
+        tasks_exhausted = sum(
+            1 for t in (plan.tasks or [])
+            if t.status is TaskStatus.ABANDONED or t.id in self._exhausted_task_ids
+        ) if plan else 0
 
         failed_approaches = []
         successful_approaches = []
         if plan:
             for t in plan.tasks:
-                instr = t.get("instruction", "")
-                status = t.get("status", "")
-                if status == "failed":
+                instr = t.instruction
+                if t.status is TaskStatus.FAILED:
                     failed_approaches.append(instr)
-                elif status == "done":
+                elif t.status is TaskStatus.SUCCESS:
                     successful_approaches.append(instr)
 
         state = self._get_state()
@@ -7620,21 +7592,22 @@ Output ONLY valid JSON array (3-20 tasks depending on complexity. More tasks != 
         )
 
     async def _analyze_and_fix_task(
-        self, task: dict, output: str
+        self, task: Task, output: str
     ) -> dict | None:
         """Ask LLM whether task failure is fixable (wrong params) or not.
 
         Returns dict with corrected_params + reason if fixable, None otherwise.
         """
-        instruction = task.get("instruction", "")[:200]
-        tool = task.get("tool", "")
-        params = task.get("params", {})
+        instruction = (task.instruction or "")[:200]
+        _action = task.action or {}
+        tool = str(_action.get("tool", "") or "")
+        params = _action.get("params", {}) or {}
         params_str = json.dumps(params)
         output_trunc = output[:1500]
 
         # ── P6: rule-based failure classification first (Evaluator) ──
         _cls_result = CoreExecutionResult(
-            task_id=task.get("id", ""),
+            task_id=task.id,
             tool=tool,
             planned_tool=tool,
             adherence=True,
@@ -7645,11 +7618,11 @@ Output ONLY valid JSON array (3-20 tasks depending on complexity. More tasks != 
             elapsed_ms=0.0,
         )
         _evaluation = await self.evaluator.evaluate(
-            Task.from_legacy_dict(task), _cls_result
+            task, _cls_result
         )
         self._task_log_event(
             "info", "task_evaluated",
-            task_id=task.get("id", ""),
+            task_id=task.id,
             outcome=_evaluation.outcome.value,
             failure_type=(
                 _evaluation.failure_type.value if _evaluation.failure_type else None
@@ -7669,7 +7642,7 @@ Output ONLY valid JSON array (3-20 tasks depending on complexity. More tasks != 
         if _evaluation.failure_type in _NO_LLM_FIX_TYPES:
             log.info(
                 "[EVAL] task %s → %s (rule-based, no LLM fix)",
-                task.get("id", ""),
+                task.id,
                 _evaluation.failure_type.value,
             )
             return None
@@ -7779,7 +7752,7 @@ Output ONLY valid JSON:
         return None
 
     async def _extract_credentials_from_task(
-        self, task: dict, raw_stdouts: list[str]
+        self, task: Task, raw_stdouts: list[str]
     ) -> None:
         """Extract discovered credentials from task stdout → DKG + CTEG.
 
@@ -7792,7 +7765,7 @@ Output ONLY valid JSON:
         making them available for $credentials.* placeholder resolution in
         subsequent tasks.
         """
-        tool = str(task.get("tool", "") or "")
+        tool = str((task.action or {}).get("tool", "") or "")
         if tool not in ("shell_exec", "ssh_exec", "test_credential",
                         "aws_cli", "curl_get", "ssrf_probe"):
             return
@@ -7863,7 +7836,7 @@ Output ONLY valid JSON:
         # ── LLM extraction (isolated session, classifier profile) ──
         _port = ""
         _svc_name = "ssh"
-        _task_params = task.get("params", {}) or {}
+        _task_params = (task.action or {}).get("params", {}) or {}
         if isinstance(_task_params, dict):
             _port = str(_task_params.get("port", ""))
             _cmd = str(_task_params.get("command", ""))
@@ -7953,42 +7926,42 @@ Output ONLY valid JSON:
     # ── Plan task dedup + capping helpers ──────────────────────────────
 
     @staticmethod
-    def _is_duplicate_task(new_task: dict, existing_tasks: list[dict]) -> bool:
+    def _is_duplicate_task(new_task: Task, existing_tasks: list[Task]) -> bool:
         """Check if *new_task* is a semantic duplicate of any pending task.
 
         Two checks:
         1. Same tool + same endpoint → definite duplicate
         2. Instruction word overlap > 75% → near-duplicate
         """
-        _nt_inst = (new_task.get("instruction") or "").lower()
-        _nt_tool = (new_task.get("tool") or "").lower()
+        _nt_inst = (new_task.instruction or "").lower()
+        _nt_tool = str((new_task.action or {}).get("tool", "") or "").lower()
+        _nt_params = (new_task.action or {}).get("params", {}) or {}
         _nt_endpoint = (
-            new_task.get("endpoint")
-            or new_task.get("params", {}).get("target_url", "")
-            or new_task.get("params", {}).get("url", "")
-            or new_task.get("params", {}).get("target", "")
-            or new_task.get("params", {}).get("host", "")
+            (new_task.action or {}).get("target", "")
+            or _nt_params.get("target_url", "")
+            or _nt_params.get("url", "")
+            or _nt_params.get("target", "")
+            or _nt_params.get("host", "")
         ).lower()
 
         for pt in existing_tasks:
-            if not isinstance(pt, dict):
-                continue
-            if pt.get("status") != "pending":
+            if pt.status not in (TaskStatus.READY, TaskStatus.CREATED):
                 continue
             # Same tool + same endpoint = definite duplicate
-            _pt_tool = (pt.get("tool") or "").lower()
+            _pt_tool = str((pt.action or {}).get("tool", "") or "").lower()
+            _pt_params = (pt.action or {}).get("params", {}) or {}
             _pt_endpoint = (
-                pt.get("endpoint")
-                or pt.get("params", {}).get("target_url", "")
-                or pt.get("params", {}).get("url", "")
-                or pt.get("params", {}).get("target", "")
-                or pt.get("params", {}).get("host", "")
+                (pt.action or {}).get("target", "")
+                or _pt_params.get("target_url", "")
+                or _pt_params.get("url", "")
+                or _pt_params.get("target", "")
+                or _pt_params.get("host", "")
             ).lower()
             if _nt_tool and _pt_tool and _nt_endpoint and _pt_endpoint:
                 if _nt_tool == _pt_tool and _nt_endpoint == _pt_endpoint:
                     return True
             # Word overlap ratio check (fallback)
-            _pt_inst = (pt.get("instruction") or "").lower()
+            _pt_inst = (pt.instruction or "").lower()
             if _nt_inst and _pt_inst:
                 _nt_words = set(_nt_inst.split())
                 _pt_words = set(_pt_inst.split())
@@ -7998,8 +7971,8 @@ Output ONLY valid JSON:
                         return True
         return False
 
-    def _cap_pending_tasks(self, tasks: list[dict], max_total: int = 20,
-                           max_new_this_cycle: int = 8) -> list[dict]:
+    def _cap_pending_tasks(self, tasks: list[Task], max_total: int = 20,
+                           max_new_this_cycle: int = 8) -> list[Task]:
         """Trim lowest-quality pending tasks when plan exceeds *max_total*.
 
         Quality heuristic (in priority order):
@@ -8013,32 +7986,40 @@ Output ONLY valid JSON:
         if len(tasks) <= max_total:
             return tasks
 
-        _pending = [t for t in tasks if t.get("status") == "pending"]
-        _non_pending = [t for t in tasks if t.get("status") != "pending"]
+        _pending = [
+            t for t in tasks
+            if t.status in (TaskStatus.READY, TaskStatus.CREATED)
+        ]
+        _non_pending = [
+            t for t in tasks
+            if t.status not in (TaskStatus.READY, TaskStatus.CREATED)
+        ]
         _keep_pending = max(0, max_total - len(_non_pending))
 
         if len(_pending) <= _keep_pending:
             return tasks
 
         def _quality_key(t):
-            deps = len(t.get("dependent_task_ids", []))
-            has_tool = 1 if t.get("tool", "") else 0
+            deps = len(dependency_task_ids(t))
+            has_tool = 1 if (t.action or {}).get("tool", "") else 0
             # -has_tool: tasks WITH tool (key=-1) sort BEFORE tasks without (key=0)
             return (deps, -has_tool)
 
         _pending.sort(key=_quality_key)
-        _to_remove = set(t["id"] for t in _pending[_keep_pending:])
+        _to_remove = set(t.id for t in _pending[_keep_pending:])
         trimmed = _pending[:_keep_pending]
         _removed_count = len(_to_remove)
 
         if _removed_count > 0:
-            _removed_tools = [t.get("tool", "?") for t in _pending[_keep_pending:]]
+            _removed_tools = [
+                (t.action or {}).get("tool", "?") for t in _pending[_keep_pending:]
+            ]
             print(f"\n[PLAN-CAP] Trimmed {_removed_count} low-quality pending task(s): {_removed_tools}")
 
-        return [t for t in tasks if t.get("id") not in _to_remove]
+        return [t for t in tasks if t.id not in _to_remove]
 
     async def _review_and_update_plan(
-        self, task: dict, success: bool, task_result: str = ""
+        self, task: Task, success: bool, task_result: str = ""
     ) -> None:
         """LLM reviews and updates the plan after every task (VulnBot-style).
 
@@ -8049,17 +8030,18 @@ Output ONLY valid JSON:
             return
 
         # Mark task status with retry enforcement
-        task["attempts"] = task.get("attempts", 0) + 1
+        _task_tool = str((task.action or {}).get("tool", "") or "")
+        task.attempt_count += 1
         if success:
-            task["status"] = "done"
-        elif task["attempts"] >= self._task_attempt_limit:
-            task["status"] = "exhausted"
-            self._exhausted_task_ids.add(task["id"])
+            task.status = TaskStatus.SUCCESS
+        elif task.attempt_count >= self._task_attempt_limit:
+            task.status = TaskStatus.ABANDONED
+            self._exhausted_task_ids.add(task.id)
             log.warning("Task %s exhausted after %d attempts",
-                        task.get("id"), task["attempts"])
+                        task.id, task.attempt_count)
         else:
-            task["status"] = "failed"
-        task["result_summary"] = task_result[:2000]
+            task.status = TaskStatus.FAILED
+        task.result_summary = task_result[:2000]
         # O2.2: keep PlanMemory status in sync — the entry recorded before
         # execution still said "pending"; replan_context() relies on the
         # status to decide which rationale is still active.
@@ -8146,7 +8128,7 @@ Output ONLY valid JSON:
             # aws_cli indefinitely against local simulators that don't
             # fully implement the AWS API.  Signal to switch tools.
             _aws_fail_reminder = ""
-            if (not success and task.get("tool") == "aws_cli"
+            if (not success and _task_tool == "aws_cli"
                     and any(kw in task_result_lower for kw in
                             ("could not connect", "connection refused",
                              "not found", "internal server error",
@@ -8202,18 +8184,18 @@ Output ONLY valid JSON:
         if plan and plan.tasks:
             failed_primary = [
                 t for t in plan.tasks
-                if t.get("status") == "failed"
-                and not any(kw in (t.get("instruction", "") or "").lower()
+                if t.status is TaskStatus.FAILED
+                and not any(kw in (t.instruction or "").lower()
                            for kw in ("probe ", "whatweb", "identify ", "check if port"))
             ]
             pending_primary = [
                 t for t in plan.tasks
-                if t.get("status") == "pending"
-                and not any(kw in (t.get("instruction", "") or "").lower()
+                if t.status in (TaskStatus.READY, TaskStatus.CREATED)
+                and not any(kw in (t.instruction or "").lower()
                            for kw in ("probe ", "whatweb", "identify ", "check if port"))
             ]
             if failed_primary:
-                failed_insts = [t.get("instruction", "")[:100] for t in failed_primary[:4]]
+                failed_insts = [t.instruction[:100] for t in failed_primary[:4]]
                 focus_reminder = (
                     f"\nFOCUS: You have {len(failed_primary)} FAILED exploitation "
                     f"tasks that MUST be retried with corrected tools/params:\n"
@@ -8238,17 +8220,19 @@ Output ONLY valid JSON:
         if plan and plan.tasks:
             _shell_tools = {"shell_exec", "ssh_exec", "ssh_key_exec", "docker_exec"}
             _has_shell = any(
-                t.get("status") == "done" and t.get("tool", "") in _shell_tools
+                t.status is TaskStatus.SUCCESS
+                and str((t.action or {}).get("tool", "") or "") in _shell_tools
                 for t in plan.tasks
             )
             # Also check if the current task output shows shell/container access
-            if not _has_shell and task and task.get("tool", "") in _shell_tools and success:
+            if not _has_shell and _task_tool in _shell_tools and success:
                 _has_shell = True
 
             if _has_shell:
                 _done_flag_hunt = any(
-                    t.get("status") == "done" and "flag" in (t.get("instruction", "") or "").lower()
-                    and t.get("tool", "") in _shell_tools
+                    t.status is TaskStatus.SUCCESS
+                    and "flag" in (t.instruction or "").lower()
+                    and str((t.action or {}).get("tool", "") or "") in _shell_tools
                     for t in plan.tasks
                 )
                 if not _done_flag_hunt:
@@ -8267,7 +8251,7 @@ Output ONLY valid JSON:
         # history) so the replan LLM never loses decision provenance.
         _memory_text = ""
         try:
-            _mem_ctx = self.memory.replan_context(task.get("id", ""))
+            _mem_ctx = self.memory.replan_context(task.id)
             if _mem_ctx:
                 _memory_text = (
                     f"## Preserved Memory (rationale & evidence)\n"
@@ -8301,8 +8285,8 @@ Output ONLY valid JSON:
             pass
 
         prompt = (
-            f"Just completed: {task.get('instruction','')}\n"
-            f"Tool: {task.get('tool','')}\n"
+            f"Just completed: {task.instruction}\n"
+            f"Tool: {_task_tool}\n"
             f"Result: {success and 'SUCCESS' or 'FAILED'}\n"
             f"Output: {task_result[:4000]}\n"
             f"{cred_reminder}"
@@ -8338,6 +8322,9 @@ Output ONLY valid JSON:
             f"- If the plan has >40 tasks, aggressively CULL low-value/redundant pending "
             f"tasks. Prefer 10-20 high-quality exploitation tasks over 50+ probe tasks.\n\n"
             f"Output the COMPLETE updated task list as a JSON array. "
+            f"Each task object MUST contain ONLY these keys: id, dependent_task_ids, "
+            f"instruction, tool, params, reason, priority. Do NOT include status or "
+            f"dependencies — the system owns task status. "
             f"Preserve done/failed tasks. Output ONLY valid JSON array."
         )
 
@@ -8348,17 +8335,30 @@ Output ONLY valid JSON:
                 system_prompt=SYSTEM_PROMPT_PLANNER,
                 stage="plan_review",
             )
-            new_tasks = self._extract_json_array(content) or []
+            _review_model, _schema_err = parse_plan_tasks(content)
+            if _review_model is None:
+                self._task_log_event(
+                    "warning", "schema_violation",
+                    boundary="plan_review", error=str(_schema_err)[:400],
+                )
+                new_tasks = self._extract_json_array(content) or []
+            else:
+                new_tasks = [t.model_dump() for t in _review_model]
             if new_tasks and isinstance(new_tasks, list) and len(new_tasks) > 0:
                 # Keep done/failed tasks, replace pending with LLM's updated list
                 preserved = [t for t in self.exploitation_plan.tasks
-                           if isinstance(t, dict)
-                           and t.get("status") in ("done", "failed", "skipped", "exhausted", "pending")
-                           and t.get("id") != task.get("id")]
+                             if t.status in (
+                                 TaskStatus.SUCCESS,
+                                 TaskStatus.FAILED,
+                                 TaskStatus.ABANDONED,
+                                 TaskStatus.READY,
+                                 TaskStatus.CREATED,
+                             )
+                             and t.id != task.id]
                 # Add the just-completed task with updated status
                 preserved.append(task)
                 # Merge in new tasks from LLM (avoid duplicate IDs)
-                existing_ids = {t["id"] for t in preserved}
+                existing_ids = {t.id for t in preserved}
                 # Collect LLM's dependency updates for existing tasks
                 llm_dep_updates: dict[str, list] = {}
                 _new_added_this_cycle = 0
@@ -8366,11 +8366,12 @@ Output ONLY valid JSON:
                 for nt in new_tasks:
                     if not isinstance(nt, dict):
                         continue
-                    nt.setdefault("status", "pending")
-                    nt.setdefault("dependent_task_ids", nt.pop("dependencies", []))
-                    if nt["id"] not in existing_ids:
+                    nt_task = self._task_from_llm_dict(nt)
+                    if not nt_task.id:
+                        continue
+                    if nt_task.id not in existing_ids:
                         # Dedup using shared helper
-                        if self._is_duplicate_task(nt, preserved):
+                        if self._is_duplicate_task(nt_task, preserved):
                             continue
                         # Per-cycle new task limit: prevent LLM from
                         # explosive one-shot plan expansion.  The plan can
@@ -8379,32 +8380,35 @@ Output ONLY valid JSON:
                             print(f"\n[PLAN-CAP] Review cycle new-task limit reached "
                                   f"({_MAX_NEW_PER_CYCLE}).  Additional tasks deferred.")
                             break
-                        preserved.append(nt)
-                        existing_ids.add(nt["id"])
+                        preserved.append(nt_task)
+                        existing_ids.add(nt_task.id)
                         _new_added_this_cycle += 1
                     else:
                         # LLM updated an existing task — capture its dependency changes,
                         # but only if the update doesn't block a previously-independent task.
-                        if "dependent_task_ids" in nt:
-                            pt = next((t for t in preserved if t.get("id") == nt["id"]), None)
-                            if pt and pt.get("status") == "pending":
-                                _orig_deps = pt.get("dependent_task_ids") or []
-                                _new_deps = nt["dependent_task_ids"]
+                        if "dependent_task_ids" in nt or "dependencies" in nt:
+                            pt = next((t for t in preserved if t.id == nt_task.id), None)
+                            _new_deps = (
+                                nt.get("dependent_task_ids")
+                                or nt.get("dependencies")
+                                or []
+                            )
+                            if pt and pt.status in (TaskStatus.READY, TaskStatus.CREATED):
+                                _orig_deps = dependency_task_ids(pt)
                                 # Allow: (a) task was already independent, or
                                 #        (b) new deps are a subset of original (trimming)
                                 if not _orig_deps or set(_new_deps).issubset(set(_orig_deps)):
-                                    llm_dep_updates[nt["id"]] = _new_deps
+                                    llm_dep_updates[nt_task.id] = list(_new_deps)
                                 # Otherwise: ignore LLM's dependency change —
                                 # retroactively adding blocking dependencies
                                 # to independent tasks breaks plan execution.
                             else:
                                 # Done/failed tasks can have their deps updated freely
-                                llm_dep_updates[nt["id"]] = nt["dependent_task_ids"]
+                                llm_dep_updates[nt_task.id] = list(_new_deps)
                 # Apply LLM's dependency updates to preserved tasks
                 for t in preserved:
-                    tid = t.get("id", "")
-                    if tid in llm_dep_updates:
-                        t["dependent_task_ids"] = llm_dep_updates[tid]
+                    if t.id in llm_dep_updates:
+                        t.dependencies = deps_from_task_ids(llm_dep_updates[t.id])
                 self.exploitation_plan.tasks = preserved
 
                 # Smart cap: trim lowest-quality pending tasks when plan
@@ -8416,10 +8420,10 @@ Output ONLY valid JSON:
                 # ── Dependency resolution: rewrite stale references ──
                 # LLM may reference task IDs that were renamed or removed.
                 # Resolve broken dependencies by matching on instruction similarity.
-                _valid_ids = {t.get("id", "") for t in self.exploitation_plan.tasks}
+                _valid_ids = {t.id for t in self.exploitation_plan.tasks}
                 _all_tasks = list(self.exploitation_plan.tasks)
                 for _t in self.exploitation_plan.tasks:
-                    _deps = _t.get("dependent_task_ids", [])
+                    _deps = dependency_task_ids(_t)
                     if not _deps:
                         continue
                     _resolved = []
@@ -8429,38 +8433,42 @@ Output ONLY valid JSON:
                             # EXHAUSTED task cannot continue to block downstream tasks.
                             _dep_status = ""
                             for _ot in _all_tasks:
-                                if _ot.get("id") == _dep_id:
-                                    _dep_status = _ot.get("status", "")
+                                if _ot.id == _dep_id:
+                                    _dep_status = _ot.status
                                     break
-                            if _dep_status in ("done", "failed", "skipped", "exhausted"):
+                            if _dep_status in (
+                                TaskStatus.SUCCESS,
+                                TaskStatus.FAILED,
+                                TaskStatus.ABANDONED,
+                            ):
                                 continue  # dependency satisfied, no longer blocking
                             _resolved.append(_dep_id)
                             continue
                         # Try to find a replacement by instruction keyword overlap
                         _dep_inst = ""
                         for _ot in _all_tasks:
-                            if _ot.get("id") == _dep_id:
-                                _dep_inst = (_ot.get("instruction") or "").lower()
+                            if _ot.id == _dep_id:
+                                _dep_inst = (_ot.instruction or "").lower()
                                 break
                         _best, _best_score = None, 0.0
                         if _dep_inst:
                             _dep_words = set(_dep_inst.split())
                             for _ct in self.exploitation_plan.tasks:
-                                if _ct.get("id") == _t.get("id"):
+                                if _ct.id == _t.id:
                                     continue
-                                _ct_inst = (_ct.get("instruction") or "").lower()
+                                _ct_inst = (_ct.instruction or "").lower()
                                 _ct_words = set(_ct_inst.split())
                                 if _dep_words and _ct_words:
                                     _score = len(_dep_words & _ct_words) / len(_dep_words)
                                     if _score > _best_score:
                                         _best_score = _score
-                                        _best = _ct.get("id")
+                                        _best = _ct.id
                         if _best and _best_score > 0.4:
                             _resolved.append(_best)
                         else:
                             log.warning("Task '%s' depends on unknown task '%s' — "
-                                        "dependency removed", _t.get("id"), _dep_id)
-                    _t["dependent_task_ids"] = _resolved
+                                        "dependency removed", _t.id, _dep_id)
+                    _t.dependencies = deps_from_task_ids(_resolved)
 
                 # Sanitize: replace blacklisted tools in any LLM-generated tasks
                 self._sanitize_plan_tools(self.exploitation_plan.tasks)
@@ -8472,59 +8480,83 @@ Output ONLY valid JSON:
                                 " -> ".join(cycle))
                     self._break_cycle(self.exploitation_plan.tasks, cycle)
 
-                self._sync_plan_to_dkg()
+                self._persist_plan("plan_review")
                 log.info("[PLAN REVIEW] plan updated: %d tasks (%d done, %d failed, %d exhausted, %d pending)",
                          len(preserved),
-                         sum(1 for t in preserved if t.get("status") == "done"),
-                         sum(1 for t in preserved if t.get("status") in ("failed", "skipped")),
-                         sum(1 for t in preserved if t.get("status") == "exhausted"),
-                         sum(1 for t in preserved if t.get("status") == "pending"))
+                         sum(1 for t in preserved if t.status is TaskStatus.SUCCESS),
+                         sum(1 for t in preserved if t.status in (TaskStatus.FAILED, TaskStatus.ABANDONED)),
+                         sum(1 for t in preserved if t.status is TaskStatus.ABANDONED),
+                         sum(1 for t in preserved if t.status in (TaskStatus.READY, TaskStatus.CREATED)))
 
                 # ── Phase log: plan review ──
                 if self.phase_logger:
                     _review_text = (
-                        f"Task '{task.get('id','')}' → {task.get('status','?')}\n"
+                        f"Task '{task.id}' → {task.status.value}\n"
                         f"Plan: {len(preserved)} tasks — "
-                        f"{sum(1 for t in preserved if t.get('status') == 'done')} done, "
-                        f"{sum(1 for t in preserved if t.get('status') in ('failed','skipped'))} failed, "
-                        f"{sum(1 for t in preserved if t.get('status') == 'pending')} pending"
+                        f"{sum(1 for t in preserved if t.status is TaskStatus.SUCCESS)} done, "
+                        f"{sum(1 for t in preserved if t.status in (TaskStatus.FAILED, TaskStatus.ABANDONED))} failed, "
+                        f"{sum(1 for t in preserved if t.status in (TaskStatus.READY, TaskStatus.CREATED))} pending"
                     )
                     self.phase_logger.log_phase("plan_review", _review_text,
-                        metadata={"task_id": task.get("id",""),
-                                  "task_status": task.get("status",""),
+                        metadata={"task_id": task.id,
+                                  "task_status": task.status.value,
                                   "total_tasks": len(preserved)})
         except Exception as e:
             log.warning("Plan review failed: %s — keeping current plan", e)
-            self._sync_plan_to_dkg()
+            self._persist_plan("plan_review")
 
-    def _sync_plan_to_dkg(self):
-        """Sync in-memory plan state to DKG nodes."""
+    def _persist_plan(self, phase: str = "exploit") -> None:
+        """Persist the full typed plan (TaskGraph) to a JSON checkpoint.
+
+        Task-level state (status, attempts, dependencies, result summaries)
+        is the plan's source of truth for resumability — the legacy aggregate
+        Plan DKG node write is removed (PlanMemory + this file own plan state).
+        """
         plan = getattr(self, 'exploitation_plan', None)
         if not plan:
             return
-        done = sum(1 for t in plan.tasks if t.get("status") == "done")
-        failed = sum(1 for t in plan.tasks if t.get("status") in ("failed", "skipped", "exhausted"))
-        self.dkg.add_node("Plan", plan.plan_id, {
-            "plan_id": plan.plan_id, "phase": plan.phase, "goal": plan.goal,
-            "total_tasks": len(plan.tasks), "completed": done, "failed": failed,
-            "status": plan.status, "created_at": plan.created_at,
-            "updated_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
-        })
+        sanitized = re.sub(r"[^a-zA-Z0-9_.-]", "_", self.target_url)
+        path = os.path.join("checkpoints", f"plan_{sanitized}_{phase}.json")
+        try:
+            os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump({
+                    "plan_id": plan.plan_id,
+                    "phase": plan.phase,
+                    "goal": plan.goal,
+                    "status": plan.status,
+                    "created_at": plan.created_at,
+                    "updated_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+                    "tasks": [t.to_dict() for t in plan.tasks],
+                }, f, indent=2, default=str)
+        except Exception as e:
+            log.warning("Plan persistence failed for %s: %s", phase, e)
 
     def _generate_phase_summary(self, phase: str = "exploit") -> str:
         """Summarize completed phase for the next phase's planning context."""
         plan = getattr(self, 'exploitation_plan', None)
         if not plan or not plan.tasks:
             return ""
-        completed = [t.get("instruction", "") for t in plan.tasks if t.get("status") == "done"]
-        failed = [t.get("instruction", "") for t in plan.tasks if t.get("status") in ("failed", "skipped", "exhausted")]
+        completed = [
+            t.instruction for t in plan.tasks
+            if t.status is TaskStatus.SUCCESS
+        ]
+        failed = [
+            t.instruction for t in plan.tasks
+            if t.status in (TaskStatus.FAILED, TaskStatus.ABANDONED)
+        ]
         flags = [n.get("value", "") for n in self.dkg.query_nodes("Flag") if n.get("value", "").startswith("flag{")]
         summary_id = f"summary-{phase}-{plan.plan_id}"
         summary = {
             "summary_id": summary_id, "source_plan_id": plan.plan_id, "phase": phase,
-            "completed_tasks": json.dumps(completed),
-            "key_findings": json.dumps({"flags_found": flags, "endpoints": len(self.dkg.query_nodes("Endpoint"))}),
-            "failed_approaches": json.dumps(failed),
+            # Structured (non-double-encoded) fields; readers tolerate
+            # legacy JSON-string values from older checkpoints.
+            "completed_tasks": completed,
+            "key_findings": {
+                "flags_found": flags,
+                "endpoints": len(self.dkg.query_nodes("Endpoint")),
+            },
+            "failed_approaches": failed,
             "created_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
         }
         self.dkg.add_node("PlanSummary", summary_id, summary)

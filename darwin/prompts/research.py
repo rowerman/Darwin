@@ -62,4 +62,9 @@ When done, output a JSON array of findings:
   "confidence_adjustment": 0.0}]
 For service research:
 [{"service": "...", "exploits_found": [...], "cves": [...], "notes": "..."}]
+Each finding object MUST contain ONLY the keys shown above for its format
+(vuln findings OR service findings — never mix). credentials_to_try is a
+structured list of "user:pass" strings; do not inline credentials into other
+fields. All list fields are JSON arrays of strings; confidence_adjustment is a
+number. Do NOT include status or any other key.
 Output ONLY valid JSON."""

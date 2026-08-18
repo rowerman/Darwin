@@ -59,19 +59,30 @@ Orchestrator.run() → recon → analyze → exploit → bypass → verify
                        DKG      LLM     DPM+DAVE   DAVE(L1-L4)
 ```
 
-The main loop (`_unified_llm_loop`) is plan → execute → evaluate → replan:
+The main loop (`core.Runtime`, the sole execution path) is
+plan → schedule → execute → evaluate → replan:
 the LLM produces an exploitation plan, each task is consumed as a
-structured `Task` and executed by the Task-based Executor, failures are
-classified by the rule-based Evaluator, and local repairs are applied by
-the Replanner before the LLM review fallback. All execution goes through
+typed `Task` (single `TaskStatus` vocabulary) and executed by the Task-based
+Executor, failures are classified by the rule-based Evaluator, local repairs
+are applied by the Replanner, and the LLM plan review runs after every task
+(`_review_and_update_plan`). Task selection uses `ParityScheduler`
+(exploit-first, dependency-aware); the plan-exhausted stall triggers the
+legacy [RECONSIDER] review. All execution goes through
 `darwin/core/executor.py` — the orchestrator never calls tools directly.
+
+Memory is four layers: DKG = WorkingMemory (world facts; the typed
+`PipelineState` snapshot is the single read path), PlanMemory = task rationale,
+ExecutionMemory = execution history with preserve/compress/discard grading,
+CTEG = cross-task experience. Inter-phase LLM outputs are validated by
+versioned pydantic schemas (`darwin/core/schemas.py`); task state persists to
+`checkpoints/plan_*_<phase>.json`.
 
 ### Module roles
 
 | Module | Role |
 |--------|------|
-| `darwin/orchestrator.py` (~9600 lines) | Solo main loop (`_unified_llm_loop`): plan sanitization, Task-based execution, failure analysis+retry, local replan, defense probes, credential extraction, flag verification. Multi-agent dispatch was removed (M0). |
-| `darwin/core/` | v2 control plane: Task model, TaskGraph, Executor, Evaluator/FailureAnalyzer, Replanner, Capabilities, schema-driven Parameter validation, Memory (plan/execution + compression grading), Metrics. |
+| `darwin/orchestrator.py` (~8800 lines) | Orchestrator wiring: recon/analyze/research, Runtime-driven exploit loop, Task-based execution, failure analysis+retry, local replan, defense probes, credential extraction, flag verification. Multi-agent dispatch was removed (M0). |
+| `darwin/core/` | v2 control plane: Task model, TaskGraph, Runtime loop, ParityScheduler, Executor, Evaluator/FailureAnalyzer, Replanner, Capabilities, pydantic phase schemas, Memory (DKG working snapshot + plan/execution + compression grading), Metrics. |
 | `darwin/dkg.py` | Dynamic Knowledge Graph (NetworkX MultiDiGraph). Thread-safe. World state with provenance (source/evidence/timestamp); no inter-agent messaging exists in Solo mode. |
 | `darwin/dpm.py` | Defense Perception Module. 3-layer detection: rule-based → WAF signature → LLM classifier. CDF (Cloud Defense Fingerprinting) for cloud-native defenses. |
 | `darwin/dave.py` | 4-layer verification: L1 HTTP response, L2 Playwright browser, L3 defense integrity, L4 impact confirmation (flag extraction + honeypot detection). |

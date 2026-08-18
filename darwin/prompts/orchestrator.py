@@ -315,6 +315,9 @@ Output a single JSON object with three keys:
   ]
 }}
 ```
+Each key above is required; do NOT add extra keys (e.g. no "status" field on
+vulnerabilities). The attack_paths item key is "path_id" (the system maps it
+to the internal "id"); steps are objects with step/vuln_type/endpoint/param/goal.
 If no viable multi-step attack path exists (single-vulnerability target), provide
 at least one single-step path. The attack_paths field helps downstream exploitation
 planning create properly sequenced tasks with correct dependencies.

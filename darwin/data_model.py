@@ -180,10 +180,12 @@ class VulnerabilityInfo:
 
     @classmethod
     def from_dkg(cls, raw: Dict[str, Any]) -> "VulnerabilityInfo":
+        # DKG canonicalizes param → parameter (v2); only the canonical
+        # field is consumed now.
         return cls(
             vuln_type=str(raw.get("vuln_type", "") or ""),
             endpoint=str(raw.get("endpoint", "") or ""),
-            param=str(raw.get("parameter", "") or raw.get("param", "") or ""),
+            param=str(raw.get("parameter", "") or ""),
             confidence=float(raw.get("confidence", 0.5)),
             evidence=str(raw.get("evidence", "") or ""),
             suggested_tool=str(raw.get("suggested_tool", "") or ""),
@@ -201,8 +203,9 @@ class CredentialInfo:
 
     @classmethod
     def from_dkg(cls, raw: Dict[str, Any]) -> "CredentialInfo":
+        # DKG canonicalizes user → username (v2); only canonical fields.
         return cls(
-            username=str(raw.get("user", "") or raw.get("username", "") or ""),
+            username=str(raw.get("username", "") or ""),
             password=str(raw.get("password", "") or ""),
             hash_value=str(raw.get("hash", "") or ""),
             source_host=str(raw.get("source_host", "") or ""),

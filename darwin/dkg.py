@@ -9,11 +9,14 @@ Reference:
 from __future__ import annotations
 
 import json
+import logging
 import threading
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
 import networkx as nx
+
+log = logging.getLogger(__name__)
 
 
 # Node types
@@ -27,7 +30,6 @@ NODE_TYPES = [
     "Domain",         # name, functional_level, trusts
     "Flag",           # value, location, verified, is_honeypot_flag
     "Plan",           # plan_id, phase, goal, total_tasks, completed, failed, status
-    "Task",           # plan_id, instruction, tool, params, status, dependencies, attempts
     "PlanSummary",    # source_plan_id, phase, completed_tasks, key_findings, failed_approaches
     "Analysis",       # phase, type, content — application understanding from analyze phase
 
@@ -42,6 +44,26 @@ NODE_TYPES = [
     "K8sSA",            # name, namespace, secrets, annotations
     "TrustRelationship",# source_account, target_account, principal, condition, type
 ]
+
+# Canonical property fields per node type, with accepted alias names.
+# ``add_node`` renames aliases to the canonical field and logs unknown keys
+# (debug level) so writers converge on one vocabulary. Host is intentionally
+# free-form: cloud/AD/K8s discovery modules attach arbitrary metadata without
+# touching this table.
+NODE_PROPERTY_SCHEMAS: Dict[str, Dict[str, Tuple[str, ...]]] = {
+    "Endpoint": {
+        "url": ("uri",),
+        "params": (),  # DKG layer stores a comma-joined string; typed layer splits
+    },
+    "Vulnerability": {
+        "parameter": ("param",),
+    },
+    "Credential": {
+        "username": ("user",),
+    },
+}
+
+_FREE_FORM_NODE_TYPES = {"Host"}
 
 # Edge types
 EDGE_TYPES = [
@@ -121,7 +143,7 @@ class DKG:
             raise ValueError(f"Unknown node type: {node_type}. Valid: {NODE_TYPES}")
         with self._lock:
             is_new = node_id not in self.graph
-            props = properties or {}
+            props = self._normalize_properties(node_type, properties or {})
             if source or evidence or timestamp:
                 provenance: Dict[str, str] = {}
                 if source:
@@ -142,6 +164,49 @@ class DKG:
             self._persist()
 
         return node_id
+
+    @staticmethod
+    def _normalize_properties(
+        node_type: str, props: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Canonicalize alias fields and DKG-layer storage types.
+
+        - Renames declared aliases to their canonical field (e.g.
+          Vulnerability ``param`` → ``parameter``, Credential ``user`` →
+          ``username``).
+        - Endpoint ``params`` is stored as a comma-joined string at the DKG
+          layer; lists are joined here so readers never see two shapes.
+        - Unknown keys are preserved (never dropped) but logged at debug so
+          drift is visible without breaking discovery modules.
+        - Host nodes are free-form by design (cloud/AD/K8s metadata).
+        """
+        schema = NODE_PROPERTY_SCHEMAS.get(node_type)
+        if node_type in _FREE_FORM_NODE_TYPES or not schema:
+            return props
+        alias_to_canonical = {
+            alias: canonical
+            for canonical, aliases in schema.items()
+            for alias in aliases
+        }
+        out: Dict[str, Any] = {}
+        for key, value in props.items():
+            canonical = alias_to_canonical.get(key)
+            if canonical:
+                if canonical not in out:
+                    out[canonical] = value
+                else:
+                    log.debug(
+                        "DKG %s: alias '%s' ignored (canonical '%s' already set)",
+                        node_type, key, canonical,
+                    )
+                continue
+            if node_type == "Endpoint" and key == "params" and isinstance(value, list):
+                out[key] = ", ".join(str(p) for p in value)
+                continue
+            if key not in schema:
+                log.debug("DKG %s node: unknown property '%s' (kept)", node_type, key)
+            out[key] = value
+        return out
 
     def get_provenance(self, node_id: str) -> Dict[str, str] | None:
         """Return the provenance dict for a node.

@@ -10,6 +10,8 @@ Verifies:
 """
 
 from darwin.core.belief import SNAPSHOT_MARKER, node_ids_by_type
+from darwin.core.contracts import TaskStatus
+from darwin.core.task import Task, deps_from_task_ids
 from darwin.data_model import ExploitationPlan, VulnerabilityHypothesis
 from darwin.tools.mcp_gateway import ToolResult
 
@@ -27,17 +29,45 @@ def _plan_with(task):
 
 def _task(tool, params, **extra):
     base = {
-        "id": f"t-{tool}",
+        "id": extra.pop("id", f"t-{tool}"),
+        "goal": f"Run {tool}",
         "instruction": f"Run {tool}",
-        "tool": tool,
-        "params": params,
-        "status": "pending",
-        "dependent_task_ids": [],
-        "attempts": 0,
-        "result_summary": "",
+        "dependent_task_ids": extra.pop("dependent_task_ids", []),
+        "attempts": extra.pop("attempts", 0),
+        "result_summary": extra.pop("result_summary", ""),
+        "rationale": extra.pop("rationale", ""),
+        "hypothesis": extra.pop("hypothesis", ""),
+        "evidence": extra.pop("evidence", []),
+        "source": extra.pop("source", ""),
+        "vuln_type": extra.pop("vuln_type", ""),
     }
     base.update(extra)
-    return base
+    return Task(
+        id=str(base["id"]),
+        type=base.get("type", "task"),
+        goal=base.get("goal", base["instruction"]),
+        instruction=str(base["instruction"]),
+        rationale=str(base.get("rationale", "") or ""),
+        hypothesis=str(base.get("hypothesis", "") or ""),
+        evidence=list(base.get("evidence") or []),
+        action={"tool": tool, "target": "", "params": dict(params)},
+        dependencies=deps_from_task_ids(base.get("dependent_task_ids") or []),
+        status=TaskStatus.READY,
+        attempt_count=int(base.get("attempts", 0)),
+        result_summary=str(base.get("result_summary", "") or ""),
+        source=str(base.get("source", "") or ""),
+        vuln_type=str(base.get("vuln_type", "") or ""),
+    )
+
+
+def _feedback_task(url, params):
+    return Task(
+        id="t-feedback",
+        type="task",
+        goal="feedback",
+        action={"tool": "", "target": url, "params": dict(params)},
+        status=TaskStatus.READY,
+    )
 
 
 class TestReviewPrompt:
@@ -144,7 +174,7 @@ class TestConfidenceFeedback:
     async def test_hypothesis_rejected_lowers_confidence(self, make_orchestrator):
         orch = await self._orch_with_vuln(make_orchestrator)
         orch._apply_vulnerability_feedback(
-            {"endpoint": "http://t/login", "params": {"url": "http://t/login"}},
+            _feedback_task("http://t/login", {"url": "http://t/login"}),
             success=False,
             failure_type="hypothesis_rejected",
             delta=-0.5,
@@ -158,7 +188,7 @@ class TestConfidenceFeedback:
     async def test_success_raises_confidence(self, make_orchestrator):
         orch = await self._orch_with_vuln(make_orchestrator)
         orch._apply_vulnerability_feedback(
-            {"endpoint": "http://t/login", "params": {"url": "http://t/login"}},
+            _feedback_task("http://t/login", {"url": "http://t/login"}),
             success=True,
         )
         assert orch.vulnerabilities[0].confidence == pytest.approx(0.75)
@@ -167,7 +197,7 @@ class TestConfidenceFeedback:
     async def test_tool_error_keeps_confidence(self, make_orchestrator):
         orch = await self._orch_with_vuln(make_orchestrator)
         orch._apply_vulnerability_feedback(
-            {"endpoint": "http://t/login", "params": {"url": "http://t/login"}},
+            _feedback_task("http://t/login", {"url": "http://t/login"}),
             success=False,
             failure_type="tool_error",
             delta=0.0,
@@ -178,7 +208,7 @@ class TestConfidenceFeedback:
     async def test_no_matching_endpoint_is_noop(self, make_orchestrator):
         orch = await self._orch_with_vuln(make_orchestrator)
         orch._apply_vulnerability_feedback(
-            {"endpoint": "http://other/", "params": {}},
+            _feedback_task("http://other/", {}),
             success=True,
         )
         assert orch.vulnerabilities[0].confidence == pytest.approx(0.7)

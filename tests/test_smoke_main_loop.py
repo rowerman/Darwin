@@ -1,10 +1,10 @@
 """Smoke tests for the orchestrator main loop (P5c).
 
-These drive the real ``_unified_llm_loop`` with a fake LLM and fake tool
+These drive the real ``_run_with_runtime`` loop with a fake LLM and fake tool
 gateways to verify the strict Task-consumption contract end to end:
 
-    - the loop consumes plan tasks through ``Task.from_legacy_dict`` and
-      ``executor.execute`` (no direct gateway calls in the execution path);
+    - the loop consumes typed ``Task`` plans and ``executor.execute``
+      (no direct gateway calls in the execution path);
     - post-processing (flag verification) still works on the normalized
       ExecutionResult;
     - direct-execution tasks bypass the LLM entirely.
@@ -15,6 +15,8 @@ import time
 import pytest
 
 from darwin.data_model import ExploitationPlan
+from darwin.core.contracts import TaskStatus
+from darwin.core.task import Task
 from darwin.orchestrator import Orchestrator
 from darwin.tools.mcp_gateway import ToolResult
 
@@ -131,16 +133,14 @@ def _plan_with(task):
 
 
 def _task(tool, params):
-    return {
-        "id": f"t-{tool}",
-        "instruction": f"Run {tool}",
-        "tool": tool,
-        "params": params,
-        "status": "pending",
-        "dependent_task_ids": [],
-        "attempts": 0,
-        "result_summary": "",
-    }
+    return Task(
+        id=f"t-{tool}",
+        type="task",
+        goal=f"Run {tool}",
+        instruction=f"Run {tool}",
+        action={"tool": tool, "target": "", "params": dict(params)},
+        status=TaskStatus.READY,
+    )
 
 
 def _make_orchestrator(llm, recon_gw, attack_gw, monkeypatch):
@@ -200,7 +200,7 @@ async def test_llm_driven_task_executes_via_executor_and_finds_flag(monkeypatch)
     )
     executed = _spy_executor(orch)
 
-    result = await orch._unified_llm_loop("http://target:8000/")
+    result = await orch._run_with_runtime("http://target:8000/")
 
     assert result is not None
     assert result.success is True
@@ -244,7 +244,7 @@ async def test_direct_task_skips_llm_and_executes_via_executor(monkeypatch):
     )
     executed = _spy_executor(orch)
 
-    result = await orch._unified_llm_loop("http://target:8000/")
+    result = await orch._run_with_runtime("http://target:8000/")
 
     assert result is not None
     assert result.success is True
@@ -265,15 +265,19 @@ async def test_review_plan_injects_preserved_memory(monkeypatch):
     orch = _make_orchestrator(llm, recon_gw, attack_gw, monkeypatch)
     orch.exploitation_plan = _plan_with(_task("curl_get", {"url": "http://target:8000/"}))
     orch.memory.record_task(
-        {
-            "id": "t-curl_get",
-            "instruction": "Fetch the target page",
-            "rationale": "ssh creds found in prior run",
-            "tool": "curl_get",
-            "params": {"url": "http://target:8000/"},
-            "status": "pending",
-            "dependent_task_ids": [],
-        }
+        Task(
+            id="t-curl_get",
+            type="task",
+            goal="Fetch the target page",
+            instruction="Fetch the target page",
+            rationale="ssh creds found in prior run",
+            action={
+                "tool": "curl_get",
+                "target": "",
+                "params": {"url": "http://target:8000/"},
+            },
+            status=TaskStatus.READY,
+        )
     )
     orch.memory.record_execution(
         ToolResult(
@@ -287,7 +291,14 @@ async def test_review_plan_injects_preserved_memory(monkeypatch):
     )
 
     await orch._review_and_update_plan(
-        {"id": "t-curl_get", "instruction": "Fetch the target page", "tool": "curl_get"},
+        Task(
+            id="t-curl_get",
+            type="task",
+            goal="Fetch the target page",
+            instruction="Fetch the target page",
+            action={"tool": "curl_get", "target": "", "params": {}},
+            status=TaskStatus.READY,
+        ),
         False,
         "connection refused",
     )

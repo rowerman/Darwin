@@ -27,6 +27,7 @@ from enum import Enum
 from typing import Any
 
 from darwin.core.task import Task
+from darwin.data_model import normalize_dkg_state
 
 
 # ── Unified execution record ────────────────────────────────────────
@@ -241,9 +242,7 @@ class PlanMemory:
     def __init__(self) -> None:
         self._entries: dict[str, PlanEntry] = {}
 
-    def record_task(self, task: Task | dict) -> PlanEntry:
-        if isinstance(task, dict):
-            task = Task.from_legacy_dict(task)
+    def record_task(self, task: Task) -> PlanEntry:
         entry = PlanEntry.from_task(task)
         existing = self._entries.get(entry.task_id)
         if existing is not None:
@@ -369,7 +368,7 @@ class MemoryManager:
     ) -> None:
         self.plan = plan_memory or PlanMemory()
         self.execution = execution_memory or ExecutionMemory()
-        self.working = working  # DKG adapter (interface mapping in P10)
+        self.working = working  # DKG adapter (WorkingMemory layer)
         self.experience = experience  # CTEG adapter (interface mapping in P10)
         self.classifier = ImportanceClassifier()
         # O3.1/O3.3: callable() -> str rendering the CURRENT cognition
@@ -379,7 +378,21 @@ class MemoryManager:
         # rendered at compression time (no stale flush needed).
         self.belief_provider = None
 
-    def record_task(self, task: Task | dict) -> PlanEntry:
+    def working_snapshot(self) -> Any:
+        """Typed read of the WorkingMemory layer (DKG).
+
+        Returns a ``PipelineState`` snapshot normalised from the DKG when
+        a DKG is attached, else an empty PipelineState. Never raises — the
+        world-state read path must not break the run.
+        """
+        if self.working is None:
+            return None
+        try:
+            return normalize_dkg_state(self.working)
+        except Exception:
+            return None
+
+    def record_task(self, task: Task) -> PlanEntry:
         return self.plan.record_task(task)
 
     def record_execution(

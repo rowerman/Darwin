@@ -1,13 +1,15 @@
-"""P15 2b: mock behavior-parity tests for the Runtime-driven main loop.
+"""Mock behavior tests for the Runtime-driven main loop (sole v2 path).
 
-The same mock scenario must produce the same result through the legacy
-loop and the Runtime-driven path (DARWIN_USE_RUNTIME=1). Real benchmark
-parity is deferred until real scenarios are available.
+These scenarios verify the Runtime loop end to end with fake LLM/gateways:
+plan generation, direct + LLM-driven task execution, per-task plan review,
+memory/metrics recording, and the plan-exhausted stall review.
 """
 
 import pytest
 
 from darwin.data_model import ExploitationPlan
+from darwin.core.contracts import TaskStatus
+from darwin.core.task import Task
 from darwin.tools.mcp_gateway import ToolResult
 
 
@@ -15,16 +17,14 @@ FLAG = "flag{runtime-path-ok}"
 
 
 def plan_task(tool, params):
-    return {
-        "id": f"t-{tool}",
-        "instruction": f"Run {tool}",
-        "tool": tool,
-        "params": params,
-        "status": "pending",
-        "dependent_task_ids": [],
-        "attempts": 0,
-        "result_summary": "",
-    }
+    return Task(
+        id=f"t-{tool}",
+        type="task",
+        goal=f"Run {tool}",
+        instruction=f"Run {tool}",
+        action={"tool": tool, "target": "", "params": dict(params)},
+        status=TaskStatus.READY,
+    )
 
 
 def make_plan(task):

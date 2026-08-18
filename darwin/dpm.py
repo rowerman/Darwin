@@ -172,7 +172,7 @@ class DefensePerceptionModule:
         if path.endswith(".yaml") or path.endswith(".yml"):
             try:
                 import yaml
-                with open(path) as f:
+                with open(path, encoding="utf-8") as f:
                     data = yaml.safe_load(f)
                 self._waf_signatures = data.get("wafs", [])
             except ImportError:
@@ -181,7 +181,7 @@ class DefensePerceptionModule:
                     "DPM: PyYAML not installed, cannot load WAF fingerprint database from %s", path
                 )
         elif path.endswith(".json"):
-            with open(path) as f:
+            with open(path, encoding="utf-8") as f:
                 data = json.load(f)
             self._waf_signatures = data.get("wafs", [])
 

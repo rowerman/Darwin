@@ -8,7 +8,7 @@ so milestone acceptance can be run as a group (``pytest -m acceptance``).
 import pytest
 
 from darwin.core.capabilities import Capability, CapabilityRegistry
-from darwin.core.contracts import TaskOutcome
+from darwin.core.contracts import TaskOutcome, TaskStatus
 from darwin.core.evaluator import Evaluation, FailureAnalyzer, FailureType
 from darwin.core.executor import ToolExecutor
 from darwin.core.replan import Replanner
@@ -21,16 +21,14 @@ FLAG = "flag{failure-sample-ok}"
 
 
 def plan_task(tool, params):
-    return {
-        "id": f"t-{tool}",
-        "instruction": f"Run {tool}",
-        "tool": tool,
-        "params": params,
-        "status": "pending",
-        "dependent_task_ids": [],
-        "attempts": 0,
-        "result_summary": "",
-    }
+    return Task(
+        id=f"t-{tool}",
+        type="task",
+        goal=f"Run {tool}",
+        instruction=f"Run {tool}",
+        action={"tool": tool, "target": "", "params": dict(params)},
+        status=TaskStatus.READY,
+    )
 
 
 def make_plan(task):
@@ -75,7 +73,7 @@ async def test_m2_plan_adherence_detects_execution_deviation(
         plan_task("sqlmap_test", {"url": "http://target:8000/", "param": "user"})
     )
 
-    result = await orch._unified_llm_loop("http://target:8000/")
+    result = await orch._run_with_runtime("http://target:8000/")
 
     assert result is not None and result.success is True
     report = orch.metrics_report()

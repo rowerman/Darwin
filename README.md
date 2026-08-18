@@ -180,14 +180,39 @@ Orchestrator.run()
       ↓
 bootstrap recon → DKG world state
       ↓
-_unified_llm_loop: plan → Task → Executor → evaluate → replan
+Runtime loop: plan → Task → Executor → evaluate → replan
       ↓
 DPM defense handling / DAVE flag verification
 ```
 
 Darwin v2 is a single-agent control plane: the LLM decides (plans structured
 Tasks), the system executes (the Executor consumes Tasks through the
-Capability layer), and Memory/Metrics keep the loop observable.
+Capability layer), and Memory/Metrics keep the loop observable. The
+`core.Runtime` loop is the sole execution path — plan → schedule → execute →
+evaluate → replan — with `ParityScheduler` preserving legacy task ordering.
+
+### Memory layers (v2)
+
+- **DKG (WorkingMemory)**: world facts (endpoints/services/credentials/
+  sessions/flags/hosts) with provenance; the typed `PipelineState` snapshot
+  is the single read path for all phases.
+- **PlanMemory**: why each task exists (goal/hypothesis/rationale/evidence) —
+  preserved verbatim for replanning.
+- **ExecutionMemory**: what actually happened (normalized tool results,
+  failure types, preserve/compress/discard grading for compression).
+- **CTEG (ExperienceMemory)**: cross-task exploit/bypass patterns and
+  credentials, persisted to `cteg_state.json`.
+
+### Phase data contracts
+
+Inter-phase LLM outputs are validated against versioned pydantic schemas in
+`darwin/core/schemas.py` (analyze, research, plan generation, plan review).
+On schema violation the orchestrator records a `schema_violation` event and
+falls back to the legacy lenient parser — no behavior regression.
+
+Task state uses the canonical `TaskStatus` enum (created/ready/running/success/
+failed/blocked/invalidated/needs_replan/abandoned) and is persisted per phase
+to `checkpoints/plan_*_<phase>.json` alongside DKG snapshots.
 
 ### Operating Mode
 
