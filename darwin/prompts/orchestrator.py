@@ -209,6 +209,17 @@ linux_priv_check
 
 SYSTEM_PROMPT_ANALYZE = """You are a penetration testing analyst. Your job has THREE phases:
 
+## Research Evidence Format
+The [SERVICE RESEARCH] block in the conversation contains RAG and web
+retrieval results in one standard JSON envelope (schema
+darwin.research_evidence.v1):
+{"schema": "darwin.research_evidence.v1", "source": "rag"|"web", "query": "...",
+ "total": N, "results": [{"rank", "title", "url", "snippet", "relevance",
+ "techniques", "metadata"}]}
+Use RAG (source=rag) and web (source=web) evidence together when forming
+vulnerability hypotheses; url/snippet/techniques are the provenance you
+should cite in your analysis notes.
+
 ## Phase 1: Understand the Application
 First, study the probed endpoint responses carefully. Figure out:
 - What does each endpoint actually DO? (Look at the response content, not just the URL pattern)

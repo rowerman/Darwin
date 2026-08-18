@@ -22,6 +22,7 @@ def test_planner_prompt_has_planning_responsibilities():
 
 def test_research_prompt_has_research_guidance():
     assert "knowledge_search" in SYSTEM_PROMPT_RESEARCH
+    assert "darwin.research_evidence.v1" in SYSTEM_PROMPT_RESEARCH
     assert "research specialist" in SYSTEM_PROMPT_RESEARCH
     assert "MANDATORY" in SYSTEM_PROMPT_RESEARCH
     assert "Output ONLY valid JSON" in SYSTEM_PROMPT_RESEARCH

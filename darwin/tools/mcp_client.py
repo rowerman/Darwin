@@ -391,7 +391,17 @@ def load_mcp_config(config_path: str = "config/mcp_servers.yaml") -> List[MCPSer
         return []
 
     import yaml
-    with open(config_path) as f:
+    import re as _re
+
+    def _expand_env(value: str) -> str:
+        """Expand ${ENV_VAR} placeholders so API keys can stay in the
+        environment instead of the (gitignored) YAML file."""
+        m = _re.fullmatch(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}", value)
+        if m:
+            return os.environ.get(m.group(1), value)
+        return value
+
+    with open(config_path, encoding="utf-8") as f:
         data = yaml.safe_load(f)
 
     servers = []
@@ -400,7 +410,7 @@ def load_mcp_config(config_path: str = "config/mcp_servers.yaml") -> List[MCPSer
             name=name,
             command=cfg.get("command", ""),
             args=cfg.get("args", []),
-            env=cfg.get("env", {}),
+            env={k: _expand_env(v) for k, v in cfg.get("env", {}).items()},
             enabled=cfg.get("enabled", True),
         ))
     return servers

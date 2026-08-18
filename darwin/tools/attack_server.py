@@ -1276,8 +1276,15 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
         negatives when knowledge entries use different category tags than the
         LLM expects. The LLM-provided category is only used if the initial
         unfiltered search returns >10 results, as a precision refinement pass.
+
+        Returns results in the unified research-evidence JSON envelope
+        (schema darwin.research_evidence.v1) shared with web search.
         """
         try:
+            from darwin.search_evidence import (
+                empty_evidence,
+                format_rag_evidence,
+            )
             from darwin.rag import get_rag
             rag = get_rag()
             # Phase 2: two-stage retrieval first (routes to the taxonomy
@@ -1294,36 +1301,34 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
                     kb = KnowledgeBase()
                     kb_entries = kb.search(query, category="", top_k=5)
                     if kb_entries:
-                        output = "## Knowledge Base (keyword match)\n\n"
-                        for i, e in enumerate(kb_entries, 1):
-                            output += f"### {i}. {e.title} ({e.category}/{e.subcategory})"
-                            if e.mitre_attack:
-                                output += f" MITRE:{e.mitre_attack}"
-                            output += f"\n{e.description}\n"
-                            if e.techniques:
-                                output += "**Techniques:**\n"
-                                for t in e.techniques[:5]:
-                                    output += f"  - {t}\n"
-                            output += "\n"
+                        output = format_rag_evidence(
+                            query,
+                            [
+                                {
+                                    "id": f"kb-{i}",
+                                    "title": e.title,
+                                    "description": e.description,
+                                    "category": e.category,
+                                    "subcategory": e.subcategory,
+                                    "techniques": list(e.techniques)[:5],
+                                    "score": None,
+                                    "source": f"knowledge:{e.category}/{e.subcategory}",
+                                    "path": [e.category, e.subcategory],
+                                    "confidence": getattr(e, "confidence", None),
+                                    "mitre_attack": e.mitre_attack,
+                                }
+                                for i, e in enumerate(kb_entries, 1)
+                            ],
+                        )
                         return ToolResult(tool_name="knowledge_search", success=True,
                             stdout=output, stderr="", exit_code=0, elapsed_ms=0)
                 except ImportError:
                     pass
                 return ToolResult(tool_name="knowledge_search", success=True,
-                    stdout="No matching knowledge patterns found.", stderr="", exit_code=0, elapsed_ms=0)
+                    stdout=empty_evidence("rag", query),
+                    stderr="", exit_code=0, elapsed_ms=0)
 
-            output = "## Knowledge Base\n\n"
-            for i, r in enumerate(results, 1):
-                path = r.get("path") or []
-                path_str = "/".join(path) if path else f"{r.get('collection','')}/{r['category']}"
-                guid = r.get("guid") or ""
-                output += f"### {i}. {r['title']} (score:{r['score']:.3f}, {path_str}{' ' + guid if guid else ''})\n"
-                output += f"{r['description']}\n"
-                if r.get('techniques'):
-                    output += "**Techniques:**\n"
-                    for t in r.get('techniques', [])[:5]:
-                        output += f"  - {t}\n"
-                output += "\n"
+            output = format_rag_evidence(query, results)
             return ToolResult(tool_name="knowledge_search", success=True,
                 stdout=output, stderr="", exit_code=0, elapsed_ms=0)
         except Exception as e:
@@ -1340,21 +1345,30 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
         },
     )
 
-    # ── DuckDuckGo Web Search (Python ddgs, replaces broken MCP) ────
+    # ── DuckDuckGo Web Search (Python ddgs) ─────────────────────────
     async def ddg_web_search(query: str, max_results: int = 8) -> ToolResult:
         """Search the internet via DuckDuckGo for up-to-date exploitation
         techniques, default credentials, version-specific PoCs, and recent CVEs.
         Use TOGETHER with knowledge_search — RAG covers general techniques,
         web search provides current service-specific details.
 
-        This replaces the unreliable Node MCP ddg-search server (all 3 backends
-        — web-search, iask-search, monica-search — were timing out).
+        Returns results in the unified research-evidence JSON envelope
+        (schema darwin.research_evidence.v1) shared with knowledge_search.
         """
         try:
+            from darwin.search_evidence import empty_evidence, format_web_evidence
             from ddgs import DDGS
-            # Only use engines that work in restricted network environments.
-            # yandex + mojeek are the only ones accessible from mainland China.
-            # DuckDuckGo/Google/Brave/Yahoo/Startpage all timeout (GFW).
+            # ddgs ships a Yandex engine but ships it disabled. Re-enable it:
+            # in restricted networks (mainland China) Yandex is reachable while
+            # DuckDuckGo/Google/Brave/Yahoo/Startpage time out or return 403.
+            try:
+                from ddgs.engines import ENGINES as _DDGS_ENGINES
+                from ddgs.engines.yandex import Yandex as _DDGS_Yandex
+                if "yandex" not in _DDGS_ENGINES.get("text", {}):
+                    _DDGS_Yandex.disabled = False
+                    _DDGS_ENGINES["text"]["yandex"] = _DDGS_Yandex
+            except Exception:
+                pass
             results = list(DDGS(timeout=8).text(
                 query,
                 max_results=max(1, min(max_results, 15)),
@@ -1362,24 +1376,20 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
             ))
             if not results:
                 return ToolResult(tool_name="ddg_web_search", success=True,
-                    stdout="No results found.", stderr="", exit_code=0, elapsed_ms=0)
-            lines = []
-            for i, r in enumerate(results):
-                lines.append(f"{i+1}. **{r.get('title', '')}**")
-                lines.append(f"   URL: {r.get('href', '')}")
-                body = r.get('body', '') or ''
-                if body:
-                    lines.append(f"   {body[:300]}")
-                lines.append("")
+                    stdout=empty_evidence("web", query),
+                    stderr="", exit_code=0, elapsed_ms=0)
+            output = format_web_evidence(query, results)
             return ToolResult(tool_name="ddg_web_search", success=True,
-                stdout="\n".join(lines), stderr="", exit_code=0, elapsed_ms=0)
+                stdout=output, stderr="", exit_code=0, elapsed_ms=0)
         except ImportError:
             return ToolResult(tool_name="ddg_web_search", success=False,
-                stdout="ddgs library not installed. Run: pip install ddgs",
-                stderr="", exit_code=1, elapsed_ms=0)
+                stdout=empty_evidence("web", query),
+                stderr="ddgs library not installed. Run: pip install ddgs",
+                exit_code=1, elapsed_ms=0)
         except Exception as e:
             return ToolResult(tool_name="ddg_web_search", success=False,
-                stdout=f"Search failed: {e}", stderr="", exit_code=1, elapsed_ms=0)
+                stdout=empty_evidence("web", query),
+                stderr=f"Search failed: {e}", exit_code=1, elapsed_ms=0)
 
     gateway.register(
         name="ddg_web_search",

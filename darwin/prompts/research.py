@@ -27,6 +27,21 @@ go_exploitdb_search, ddg_web_search, curl_get
 - For non-HTTP DB services (Redis, MySQL, PostgreSQL, MSSQL, Oracle, MongoDB),
   call knowledge_search for techniques AND ddg_web_search for specific PoCs.
 
+## Evidence Format (READ CAREFULLY)
+knowledge_search and web search return results in the SAME JSON envelope
+(schema darwin.research_evidence.v1). Every result block looks like:
+{"schema": "darwin.research_evidence.v1", "source": "rag"|"web", "query": "...",
+ "total": N, "results": [{"rank": 1, "title": "...", "url": "...",
+ "snippet": "...", "relevance": <score|null>, "techniques": [...],
+ "metadata": {...}}]}
+- source tells you whether the evidence came from the knowledge base (rag) or
+  the internet (web). Treat both as equally valid research evidence.
+- url is a knowledge path (knowledge:...) for RAG or a page URL for web.
+- snippet is the description / answer excerpt. relevance is a RAG score or null.
+- techniques lists exploitation steps/commands when the source provides them.
+Use these fields directly as the basis for your findings — do not paraphrase
+away the url/snippet evidence when reporting key_techniques or credentials.
+
 ## Research Workflow
 - **MANDATORY**: for EVERY discovered technology or service version, search for
   known vulnerabilities and the correct exploitation approach BEFORE any attack

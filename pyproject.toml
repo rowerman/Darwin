@@ -19,6 +19,7 @@ dependencies = [
     "pyyaml>=6.0",
     "rich>=13.8",
     "langgraph>=1.0",
+    "ddgs>=8.0",
 ]
 
 [project.optional-dependencies]

@@ -2478,7 +2478,8 @@ class Orchestrator:
             _INFO_TOOLS = {"wpscan_enum", "knowledge_search", "nmap_port_range",
                            "nmap_full_scan", "nikto_scan", "dirb_scan",
                            "gobuster_dir", "nvd_search_cves", "searchsploit_search",
-                           "metasploit_search", "go_exploitdb_search"}
+                           "metasploit_search", "go_exploitdb_search",
+                           "ddg_web_search"}
             _stdout_limit = 5000 if tc_name in _INFO_TOOLS else 1500
             parts.append(f"STDOUT: {stdout[:_stdout_limit]}")
         if stderr:
@@ -5218,7 +5219,9 @@ class Orchestrator:
                 except Exception:
                     pass
 
-                # RAG knowledge_search for non-HTTP database services
+                # RAG knowledge_search for non-HTTP database services.
+                # Results use the unified research-evidence JSON envelope
+                # (darwin.research_evidence.v1) shared with web search.
                 _NON_HTTP_RAG_PORTS = {22, 6379, 3306, 5432, 1433, 1521, 27017, 11211, 9200, 8086, 5984, 9042, 9092, 4444}
                 if port in _NON_HTTP_RAG_PORTS:
                     try:
@@ -5230,7 +5233,7 @@ class Orchestrator:
                         )
                         if rag_result and getattr(rag_result, 'success', False):
                             rag_text = (rag_result.stdout or rag_result.stderr or "")[:800]
-                            if rag_text and "no results" not in rag_text.lower():
+                            if rag_text and '"total": 0' not in rag_text:
                                 service_research_text += (
                                     f"\n  [RAG Knowledge for {svc_name}]: {rag_text}\n"
                                 )
@@ -5293,7 +5296,7 @@ class Orchestrator:
         _local_research_tool_names = {
             "knowledge_search", "cve_lookup", "metasploit_search",
             "searchsploit_search", "go_exploitdb_search", "curl_get",
-            "ddg_web_search",  # Python DuckDuckGo — replaces broken MCP web-search
+            "ddg_web_search",  # Python DuckDuckGo web search
         }
         for gw in [self.attack_gateway]:
             for td in gw.get_tool_definitions():
@@ -5481,7 +5484,7 @@ class Orchestrator:
         except Exception:
             pass
 
-        # ddg_web_search — Python DuckDuckGo (replaces broken MCP web-search)
+        # ddg_web_search — Python DuckDuckGo web search (unified evidence JSON)
         try:
             _tasks["web"] = asyncio.create_task(
                 self.attack_gateway.call("ddg_web_search",
