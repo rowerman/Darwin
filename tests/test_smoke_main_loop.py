@@ -307,3 +307,83 @@ async def test_review_plan_injects_preserved_memory(monkeypatch):
     assert prompts
     assert "Preserved Memory" in prompts[0]
     assert "ssh creds found in prior run" in prompts[0]
+
+
+@pytest.mark.asyncio
+async def test_plan_generation_injects_matched_cteg_hints_only(monkeypatch):
+    """P4: gated CTEG hints reach the plan prompt only when non-empty."""
+    llm = FakeLLM(content="[]")
+    orch = _make_orchestrator(llm, FakeGateway({}), FakeGateway({}), monkeypatch)
+    captured = {}
+
+    async def _fake_generate(prompt, system_prompt=None, stage=None):
+        captured["prompt"] = prompt
+        return "[]", None
+
+    monkeypatch.setattr(orch, "_generate_with_registry_lookup", _fake_generate)
+    monkeypatch.setattr("darwin.rag.get_rag", lambda: None)
+
+    matched = {
+        "bypass_strategies": [{"mechanism": "double_encode", "overlap": 0.9}],
+        "exploit_strategies": [],
+        "known_credentials": [],
+    }
+    await orch._generate_exploitation_plan("http://target:8000", cteg_hints=matched)
+    assert "Prior Cross-Task Experience (matched)" in captured["prompt"]
+    assert "double_encode" in captured["prompt"]
+
+    await orch._generate_exploitation_plan("http://target:8000", cteg_hints={})
+    assert "Prior Cross-Task Experience (matched)" not in captured["prompt"]
+
+
+class _AnalyzeStubCTEG:
+    """Configurable CTEG stand-in so the analyze path can exercise the gate."""
+
+    def __init__(self):
+        self.suggestions = {}
+
+    def get_suggestions(self, *args, **kwargs):
+        return self.suggestions
+
+    def get_credentials(self, *args, **kwargs):
+        return []
+
+    def add_credential(self, **kwargs):
+        pass
+
+    def commit_task(self, *args, **kwargs):
+        pass
+
+
+@pytest.mark.asyncio
+async def test_analyze_injects_cteg_section_only_when_matched(monkeypatch):
+    """P4: analyze prompt shows the CTEG section only on a scenario match."""
+    llm = FakeLLM(content='{"application_understanding": "test app", "vulnerabilities": []}')
+    orch = _make_orchestrator(llm, FakeGateway({}), FakeGateway({}), monkeypatch)
+    orch._task_description = "analyze test"
+    stub_cteg = _AnalyzeStubCTEG()
+    orch.cteg = stub_cteg
+    captured = {}
+
+    async def _fake_probe():
+        return ""
+
+    async def _fake_generate(prompt, system_prompt=None, stage=None):
+        captured["prompt"] = prompt
+        return '{"application_understanding": "test app", "vulnerabilities": []}', None, False
+
+    monkeypatch.setattr(orch, "_probe_endpoints", _fake_probe)
+    monkeypatch.setattr(orch, "_generate_with_registry_lookup", _fake_generate)
+
+    stub_cteg.suggestions = {
+        "bypass_strategies": [{"mechanism": "double_encode", "overlap": 0.9}],
+        "exploit_strategies": [],
+    }
+    await orch._analyze_phase()
+    assert "Prior Cross-Task Experience (matched)" in captured["prompt"]
+    assert "double_encode" in captured["prompt"]
+
+    captured["prompt"] = ""
+    stub_cteg.suggestions = {}
+    await orch._analyze_phase()
+    assert "Prior Cross-Task Experience (matched)" not in captured["prompt"]

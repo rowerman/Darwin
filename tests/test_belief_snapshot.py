@@ -11,9 +11,11 @@ from darwin.core.belief import (
     SNAPSHOT_MARKER,
     node_ids_by_type,
     render_belief_snapshot,
+    render_critical_facts,
     render_new_discoveries,
 )
 from darwin.data_model import (
+    CredentialInfo,
     EndpointInfo,
     ExploitationPlan,
     PipelineState,
@@ -37,6 +39,38 @@ def _plan(tasks=None) -> ExploitationPlan:
         goal="capture flag",
         tasks=tasks or [],
     )
+
+
+class TestRenderCriticalFacts:
+    def test_empty_state_returns_empty(self):
+        assert render_critical_facts(PipelineState()) == ""
+
+    def test_includes_full_secret_values(self):
+        state = _state(
+            credentials=[
+                CredentialInfo(username="admin", password="p@ss", source_host="t")
+            ],
+            flags=["flag{abc}"],
+            sessions=[
+                {"user": "root", "host": "t", "access_level": "root", "token": "tok123"}
+            ],
+            vulnerabilities=[
+                SimpleNamespace(vuln_type="SQLI", endpoint="/login", param="user", confidence=0.7)
+            ],
+            services=[ServiceInfo(port=8080, protocol="tcp", version="Apache 2.4")],
+        )
+        text = render_critical_facts(state)
+        assert "p@ss" in text
+        assert "flag{abc}" in text
+        assert "tok123" in text
+        assert "/login" in text
+        assert "param=user" in text
+
+    def test_never_raises_on_malformed_input(self):
+        text = render_critical_facts(
+            SimpleNamespace(credentials=[object()], sessions=[object()])
+        )
+        assert isinstance(text, str)
 
 
 class TestRenderBeliefSnapshot:

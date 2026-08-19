@@ -20,7 +20,8 @@ from typing import Any, Dict, List, Optional
 
 log = logging.getLogger(__name__)
 
-from darwin.cteg import CTEG, TaskRecord
+from darwin.cteg import CTEG, TaskRecord, build_scenario_profile
+from darwin.core.context import ContextManager
 from darwin.core.contracts import (
     Budget,
     Objective,
@@ -50,6 +51,7 @@ from darwin.core.task_graph import TaskGraph, dependency_task_ids
 from darwin.core.belief import (
     node_ids_by_type,
     render_belief_snapshot,
+    render_critical_facts,
     render_new_discoveries,
 )
 from darwin.data_model import (
@@ -261,7 +263,7 @@ class Orchestrator:
         llm_session: LLMSession | None = None,
         time_budget: int = 1200,
         token_budget: int = 200000,
-        max_context_tokens: int = 180000,
+        max_context_tokens: int = 384000,
         compression_threshold: float = 0.4,
         browser_enabled: bool = False,
         dkg: DKG | None = None,
@@ -306,6 +308,21 @@ class Orchestrator:
         # at compression time, so decision-critical facts (beliefs, plan,
         # defense, rationale) ride the preserved payload verbatim.
         self.memory.belief_provider = lambda: self._belief_context(compact=True)
+        # P2: full-value critical facts (passwords, tokens, flags) for the
+        # structured compression digest — compression path only.
+        self.memory.critical_facts_provider = lambda: render_critical_facts(
+            self._get_state()
+        )
+        # P3: compression orchestration lives in ContextManager; the
+        # orchestrator only delegates (thin loop controller).
+        self.context = ContextManager(
+            llm=self.llm,
+            memory=self.memory,
+            dkg=self.dkg,
+            max_context_tokens=self.max_context_tokens,
+            compression_threshold=self.compression_threshold,
+            event_logger=self._task_log_event,
+        )
 
         # Task log — structured event log written to file
         self._task_log: List[Dict[str, Any]] = []
@@ -513,18 +530,13 @@ class Orchestrator:
                 for s in state.services[:5]
                 if s.version or s.banner
             )
-            # P15 G3: reverse-path closure via the MemoryManager; pass the
-            # primary vulnerability type so learned exploit patterns can
-            # actually come back (get_suggestions with vuln_type="" returns
-            # exploit_strategies=[]).
-            _primary_vuln = (
-                str(self.vulnerabilities[0].vuln_type or "").lower()
-                if self.vulnerabilities
-                else ""
-            )
+            # P4: scenario-matched CTEG retrieval — only patterns whose
+            # vuln/defense/tech/domain fingerprint overlaps the current task
+            # are injected (hard gate, no placeholder when empty).
             cteg_hints = self.memory.experience_hints(
-                defense_type=self.defense_state.waf_type or "",
-                vuln_type=_primary_vuln,
+                profile=build_scenario_profile(
+                    state, self.vulnerabilities, self.defense_state
+                )
             )
             if cteg_hints.get("bypass_strategies") or cteg_hints.get("exploit_strategies"):
                 self._task_log_event("info", "cteg_hints", hints=cteg_hints)
@@ -4391,14 +4403,15 @@ class Orchestrator:
             f"6. CRITICAL: Use the EXACT parameter names from 'Known Parameter Names' above. "
             f"Do NOT guess parameter names from response field names."
         )
+        # P4: hard-gated scenario match — no CTEG text at all when nothing
+        # overlaps (the old unconditional "no prior experience" filler is gone).
         cteg_suggestions = self.cteg.get_suggestions(
-            defense_type=self.defense_state.waf_type or "",
-            vuln_type="",
+            profile=build_scenario_profile(
+                state, self.vulnerabilities, self.defense_state
+            )
         )
         if cteg_suggestions.get("bypass_strategies") or cteg_suggestions.get("exploit_strategies"):
-            prompt += f"\n\nPrior cross-task experience suggests:\n{json.dumps(cteg_suggestions, indent=2)}"
-        else:
-            prompt += "\n\nNo prior cross-task experience available for this target type."
+            prompt += f"\n\n## Prior Cross-Task Experience (matched)\n{json.dumps(cteg_suggestions, indent=2, ensure_ascii=False)}"
 
         self._maybe_compress()
         tokens_before = self.llm.token_count
@@ -6836,6 +6849,20 @@ class Orchestrator:
               "contract before writing each task. Do NOT guess parameter names.\n"
         )
 
+        # P4: gated CTEG hints finally reach the plan LLM. cteg_hints is
+        # already filtered by scenario overlap upstream (strict gate); render
+        # it verbatim, and nothing at all when it is empty.
+        _cteg_block = ""
+        if cteg_hints and (
+            cteg_hints.get("bypass_strategies")
+            or cteg_hints.get("exploit_strategies")
+            or cteg_hints.get("known_credentials")
+        ):
+            _cteg_block = (
+                "\n## Prior Cross-Task Experience (matched)\n"
+                + json.dumps(cteg_hints, indent=2, ensure_ascii=False)
+            )
+
         prompt = f"""Target: {target_url}
 
 ## Discovered Services (from nmap)
@@ -6845,7 +6872,7 @@ class Orchestrator:
 - {len(state.endpoints)} endpoints discovered so far
 - {len(state.services)} services detected
 - Credentials: {len(state.credentials)} known
-{phase_summary}
+{phase_summary}{_cteg_block}
 ## Analyzed Vulnerabilities
 {self._format_vulnerability_summary()}
 {rag_context}
@@ -8768,122 +8795,26 @@ Output ONLY valid JSON:
         return (time.time() - self.start_time) > self.time_budget
 
     def _tokens_exceeded(self) -> bool:
-        """Check if token budget is exceeded. Attempts compression first."""
-        if self.llm.token_count <= self.token_budget:
-            return False
-        # Try compression before giving up
-        if self._maybe_compress():
-            return self.llm.token_count > self.token_budget
-        return True
+        """Check if token budget is exceeded. Attempts compression first.
+
+        Thin delegate — the logic lives in ContextManager (P3).
+        """
+        return self.context.tokens_exceeded(self.token_budget)
 
     def _maybe_compress(self) -> bool:
         """Compress conversation history if context load exceeds threshold.
 
-        Returns True if compression was performed.
+        Thin delegate — the logic lives in ContextManager (P3). Returns True
+        if a compression pass saved tokens.
         """
-        if self.llm.context_load < self.compression_threshold:
-            return False
-
-        # Build truncation context from current DKG state so the LLM
-        # has structured facts even when conversation history is truncated
-        trunc_ctx = self._build_truncation_context()
-
-        # P15 G1: decision-critical execution records are injected
-        # verbatim; only compressible material may be summarized away;
-        # discarded records are low-value noise.
-        preserved_text, compressible_text, discarded_count = (
-            self.memory.compression_payload()
-        )
-        if preserved_text or compressible_text or discarded_count:
-            log.debug(
-                "compression: preserved=%d chars, compressible=%d chars, "
-                "discarded=%d records",
-                len(preserved_text), len(compressible_text), discarded_count,
-            )
-        saved = self.llm.compress(
-            max_context_tokens=self.max_context_tokens,
-            compression_threshold=self.compression_threshold,
-            truncation_context=trunc_ctx,
-            preserved_context=preserved_text,
-        )
-        if saved > 0:
-            self._task_log_event("info", "context_compressed",
-                tokens_saved=saved,
-                new_token_count=self.llm.token_count,
-                compression_count=self.llm._compressed_count,
-            )
-            log.info("Context compressed: saved ~%d tokens (total: %d, load: %.1f%%)",
-                     saved, self.llm.token_count, self.llm.context_load * 100)
-            return True
-        elif saved < 0:
-            log.warning("Context compression failed, continuing with high context load")
-        return False
+        return self.context.maybe_compress()
 
     def _build_truncation_context(self) -> str:
         """Build structured DKG state summary for injection when conversation is truncated.
 
-        O3.4: reuses the unified cognition snapshot (facts + beliefs + plan +
-        defense), falling back to the legacy manual DKG summary when the
-        snapshot is unavailable. Called by _maybe_compress() when the
-        conversation history is truncated (max_compressions reached).
+        Thin delegate — the logic lives in ContextManager (P3).
         """
-        try:
-            ctx = self._belief_context(compact=True)
-            if ctx:
-                return ctx
-        except Exception:
-            pass
-        lines = ["[DKG STATE AT TRUNCATION — structured facts preserved]"]
-        try:
-            # Flags captured so far
-            flags = self.dkg.query_nodes("Flag")
-            if flags:
-                lines.append("Flags: " + ", ".join(
-                    f.get("value", "?") for f in flags
-                ))
-
-            # Credentials discovered
-            creds = self.dkg.query_nodes("Credential")
-            if creds:
-                lines.append(f"Credentials ({len(creds)}):")
-                for c in creds[:8]:
-                    lines.append(
-                        f"  {c.get('cred_type','?')} {c.get('username','?')}"
-                        f"@{c.get('source_host','?')}"
-                        + (f" (confirmed)" if c.get("confirmed") else "")
-                    )
-
-            # Active sessions
-            sessions = self.dkg.query_nodes("Session")
-            if sessions:
-                lines.append(f"Sessions ({len(sessions)}):")
-                for s in sessions[:5]:
-                    lines.append(
-                        f"  {s.get('session_type','?')} on {s.get('host','?')}"
-                    )
-
-            # Services discovered (non-HTTP only to save space)
-            services = self.dkg.query_nodes("Service")
-            db_svcs = [s for s in services if s.get("port") and s.get("port") not in (80, 443, 8080, 8443)]
-            if db_svcs:
-                lines.append(f"Non-HTTP services ({len(db_svcs)}):")
-                for s in db_svcs[:10]:
-                    lines.append(
-                        f"  {s.get('service_name','?')} on :{s.get('port')}"
-                        f" ({s.get('version','')})".rstrip()
-                    )
-
-            # Vulnerability summary
-            vulns = self.dkg.query_nodes("Vulnerability")
-            if vulns:
-                lines.append(f"Known vulnerabilities ({len(vulns)}):")
-                for v in vulns[:10]:
-                    lines.append(
-                        f"  {v.get('vuln_type','?')} @ {v.get('endpoint','?')}"
-                    )
-        except Exception:
-            lines.append("  (error reading DKG state)")
-        return "\n".join(lines)
+        return self.context.truncation_context()
 
     @staticmethod
     def _extract_json_array(text: str) -> list | None:

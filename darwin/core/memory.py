@@ -377,6 +377,11 @@ class MemoryManager:
         # preserved payload, so the block rides compression verbatim and is
         # rendered at compression time (no stale flush needed).
         self.belief_provider = None
+        # P2: callable() -> str rendering FULL-VALUE critical facts (credential
+        # passwords, session tokens, flags, confirmed vuln parameters) for the
+        # structured compression digest. Compression-only: the everyday belief
+        # snapshot intentionally omits secret values.
+        self.critical_facts_provider = None
 
     def working_snapshot(self) -> Any:
         """Typed read of the WorkingMemory layer (DKG).
@@ -542,3 +547,52 @@ class MemoryManager:
             if belief:
                 preserved_text = f"{belief}\n" + preserved_text if preserved_text else belief
         return preserved_text, _render(view.compressible), view.discarded_count
+
+    def compression_digest(self, max_compressible: int = 30) -> str:
+        """Build the structured digest for the compression summarizer (P2).
+
+        Priority input for LLMSession.compress(structured_input=...): full-value
+        critical facts from the working layer (DKG), active plan rationale, and
+        one-line summaries of COMPRESS-graded execution records. Any subsection
+        that fails to render is skipped silently — prompt construction must
+        never break the compression path.
+        """
+        parts: list[str] = []
+        if self.critical_facts_provider is not None:
+            try:
+                facts = self.critical_facts_provider()
+            except Exception:
+                facts = ""
+            if facts:
+                parts.append(f"## Critical Facts (full values)\n{facts}")
+        try:
+            entries = self.plan.active_entries()
+            if entries:
+                lines = ["## Preserved Plan Rationale"]
+                for e in entries[-5:]:
+                    line = f"- [{e.task_id}] {e.goal}"
+                    if e.hypothesis:
+                        line += f" | hypothesis: {e.hypothesis}"
+                    for ev in list(e.evidence or [])[:2]:
+                        line += f" | evidence: {ev}"
+                    lines.append(line)
+                parts.append("\n".join(lines))
+        except Exception:
+            pass
+        view = self.compression_view(max_compressible=max_compressible)
+        if view.compressible:
+            lines = ["## Compressible Execution History (one-line records)"]
+            for record in view.compressible:
+                status = "OK" if record.success else "FAIL"
+                output = str(record.stdout or "").strip().replace("\n", " ")[:120]
+                line = f"- [{record.tool}] task={record.task_id} {status}"
+                if output:
+                    line += f": {output}"
+                lines.append(line)
+            parts.append("\n".join(lines))
+        if view.discarded_count:
+            parts.append(
+                f"[DISCARDED] {view.discarded_count} low-value execution "
+                "records omitted from the digest."
+            )
+        return "\n\n".join(parts)

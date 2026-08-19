@@ -176,3 +176,84 @@ class TestCompressMarkedMessages:
         llm.compress(keep_recent=1, compression_threshold=0.0)
         assert called["n"] == 0  # nothing compressible -> no LLM summarizer call
         assert "Belief: X" in llm._pending_compressed_context
+
+
+class TestContextLimit384K:
+    def test_default_max_context_tokens_is_384k(self):
+        llm = LLMSession()
+        assert llm.max_context_tokens == 384000
+
+    def test_context_load_uses_instance_max(self, monkeypatch):
+        monkeypatch.setattr(
+            "darwin.utils.llm.litellm.token_counter",
+            lambda **kwargs: 500,
+        )
+        llm = LLMSession(max_context_tokens=1000)
+        assert llm.context_load == pytest.approx(0.5)
+        big = LLMSession()
+        assert big.context_load == pytest.approx(500 / 384000)
+
+    def test_compress_uses_effective_max_for_load_check(self, monkeypatch):
+        monkeypatch.setattr(
+            "darwin.utils.llm.litellm.token_counter",
+            lambda **kwargs: len(kwargs.get("messages", [])) * 100,
+        )
+        monkeypatch.setattr(
+            "darwin.utils.llm.litellm.completion", _fake_completion()
+        )
+        llm = LLMSession(max_context_tokens=1000)
+        llm.conversation_history = [
+            {"role": "user", "content": "a"},
+            {"role": "user", "content": "b"},
+            {"role": "user", "content": "c"},
+            {"role": "user", "content": "d"},
+            {"role": "user", "content": "e"},
+            {"role": "user", "content": "f"},
+            {"role": "user", "content": "g"},
+            {"role": "user", "content": "h"},
+        ]
+        # threshold 0.15 with 200/1000=0.2 load -> compresses
+        assert llm.compress(keep_recent=2, compression_threshold=0.15) > 0
+
+
+class TestStructuredDigestFirst:
+    @staticmethod
+    def _history(n_unmarked=6):
+        history = [{"role": "system", "content": "sys"}]
+        for i in range(n_unmarked):
+            history.append({"role": "user", "content": f"raw tool output line {i}"})
+        return history
+
+    def test_summarizer_prefers_structured_digest(self, monkeypatch):
+        seen = {}
+
+        def _spy(**kwargs):
+            seen["messages"] = kwargs.get("messages", [])
+            return _fake_completion()(**kwargs)
+
+        monkeypatch.setattr("darwin.utils.llm.litellm.completion", _spy)
+        llm = LLMSession()
+        llm.conversation_history = self._history()
+        llm.compress(
+            keep_recent=2,
+            compression_threshold=0.0,
+            structured_input="## Critical Facts\nCredential admin@t password=secret",
+        )
+        joined = json.dumps(seen["messages"], ensure_ascii=False)
+        assert "STRUCTURED DIGEST" in joined
+        assert "password=secret" in joined
+        assert "raw tool output" not in joined
+
+    def test_empty_structured_falls_back_to_raw_conversation(self, monkeypatch):
+        seen = {}
+
+        def _spy(**kwargs):
+            seen["messages"] = kwargs.get("messages", [])
+            return _fake_completion()(**kwargs)
+
+        monkeypatch.setattr("darwin.utils.llm.litellm.completion", _spy)
+        llm = LLMSession()
+        llm.conversation_history = self._history()
+        llm.compress(keep_recent=2, compression_threshold=0.0, structured_input="")
+        joined = json.dumps(seen["messages"], ensure_ascii=False)
+        assert "raw tool output" in joined

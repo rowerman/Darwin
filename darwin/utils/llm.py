@@ -40,12 +40,14 @@ class LLMSession:
         base_url: str | None = None,
         temperature: float = 0.7,
         max_tokens: int = 4096,
+        max_context_tokens: int = 384000,
         thought_logger: Any = None,
     ):
         self.model = f"{provider}/{model}" if provider != "openai" else model
         self.provider = provider
         self.temperature = temperature
         self.max_tokens = max_tokens
+        self.max_context_tokens = max_context_tokens
         self.conversation_history: List[Dict[str, Any]] = []
         # P0/P1: optional chain-of-thought observer (duck-typed — needs only
         # record_call() / record_tool_result()). Owns its own persistence.
@@ -292,15 +294,16 @@ class LLMSession:
     @property
     def context_load(self) -> float:
         """Context load ratio (0.0-1.0)."""
-        return min(self.token_count / 180000, 1.0)
+        return min(self.token_count / max(self.max_context_tokens, 1), 1.0)
 
     def compress(
         self,
         keep_recent: int = 6,
-        max_context_tokens: int = 180000,
+        max_context_tokens: int | None = None,
         compression_threshold: float = 0.4,
         truncation_context: str = "",
         preserved_context: str = "",
+        structured_input: str = "",
     ) -> int:
         """Compress conversation history by summarizing older messages.
 
@@ -312,6 +315,11 @@ class LLMSession:
         Limits cascading re-compression to _max_compressions passes.
 
         Args:
+            structured_input: Structured memory digest (DKG critical facts +
+                plan rationale + graded execution records) built by the memory
+                layer. When non-empty the summarizer consumes it PREFERENTIALLY
+                over the raw serialized conversation; when empty the legacy
+                serialization path is used unchanged.
             truncation_context: Optional structured summary injected when
                 max compressions reached and oldest messages are truncated.
                 Should contain DKG-derived facts (flags, creds, sessions,
@@ -320,7 +328,9 @@ class LLMSession:
                 VERBATIM into the compressed context — it must never be
                 summarized away.
         """
-        if self.context_load < compression_threshold:
+        effective_max_context = max_context_tokens or self.max_context_tokens
+        load = self.token_count / max(effective_max_context, 1)
+        if load < compression_threshold:
             return 0
 
         if len(self.conversation_history) <= keep_recent + 2:
@@ -440,13 +450,27 @@ class LLMSession:
             # messages at all — neither via the serialized prompt nor via the
             # conversation history it would otherwise receive.
             _history_backup = list(self.conversation_history)
-            self.conversation_history = [
-                m for m in _history_backup
-                if SNAPSHOT_MARKER not in str(m.get("content", "") or "")
-            ]
+            if structured_input and structured_input.strip():
+                # P2: when a structured digest is provided it REPLACES the raw
+                # conversation for the summarizer call — the digest is the
+                # priority input and stale raw history must not dilute it.
+                self.conversation_history = []
+            else:
+                self.conversation_history = [
+                    m for m in _history_backup
+                    if SNAPSHOT_MARKER not in str(m.get("content", "") or "")
+                ]
             try:
+                if structured_input and structured_input.strip():
+                    digest_text = (
+                        "[STRUCTURED DIGEST — priority summary input from the "
+                        "memory layers; prefer these facts over raw conversation]\n\n"
+                        + structured_input.strip()
+                    )
+                else:
+                    digest_text = serialized
                 summary, _ = self.generate(
-                    prompt=compression_prompt + serialized,
+                    prompt=compression_prompt + digest_text,
                     system_prompt=SYSTEM_PROMPT_COMPRESS,
                     stage="compress",
                 )

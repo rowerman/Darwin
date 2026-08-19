@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import re
 import threading
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -149,6 +150,212 @@ _TOOL_VULN_TYPES = {
     "http_post": "http",
     "curl_get": "http",
 }
+
+
+# ── Scenario-aware retrieval (P4) ─────────────────────────────────
+
+# Coarse target-domain derivation. Patterns do NOT persist a domain field;
+# both the pattern side and the profile side derive it deterministically
+# from vulnerability types (plus service/protocol heuristics on the state
+# side), so no persistence/schema migration is needed.
+_DOMAIN_BY_VULN = {
+    "sqli": "web", "xss": "web", "cmdi": "web", "lfi": "web", "rfi": "web",
+    "file_upload": "web", "ssrf": "web", "idor": "web", "auth": "web",
+    "rce": "web", "deserialization": "web", "ssti": "web", "injection": "web",
+    "fuzz": "web", "http": "web", "default_creds": "web",
+    "sql": "db", "redis": "db", "nosql": "db", "database": "db",
+    "cloud": "cloud", "iam": "cloud", "s3": "cloud",
+    "k8s": "k8s", "container": "container",
+    "ad": "ad", "kerberos": "ad", "ldap": "ad",
+    "network": "network", "smb": "network", "ssh": "network",
+}
+
+_DOMAIN_BY_PROTO = {
+    "http": "web", "https": "web", "mysql": "db", "postgresql": "db",
+    "mssql": "db", "mongodb": "db", "redis": "db", "elasticsearch": "db",
+    "kubernetes": "k8s", "docker": "container", "ssh": "network",
+    "smb": "network", "ftp": "network", "ldap": "ad", "kerberos": "ad",
+}
+
+# Multi-dimension matching weights. An exact primary-dimension match
+# (vuln or defense) scores 1.0 and therefore passes the default gate;
+# tech-stack and domain overlaps only boost or jointly qualify.
+_W_VULN = 1.0
+_W_DEF = 1.0
+_W_TECH = 0.3
+_W_DOMAIN = 0.2
+
+# App-level technology keywords surfaced in analysis notes.
+_APP_TECH_KEYWORDS = (
+    "wordpress", "drupal", "joomla", "tomcat", "jenkins", "django",
+    "laravel", "rails", "php", "asp.net", "confluence", "gitlab",
+    "magento", "prestashop", "fastapi", "flask", "node.js", "express",
+    "spring", "mysql", "postgresql", "mongodb", "redis", "elasticsearch",
+    "kubernetes", "docker", "nginx", "apache", "iis",
+)
+
+_TECH_STOPWORDS = {
+    "tcp", "udp", "http", "https", "date", "server", "up", "via",
+    "the", "and", "for", "with", "open", "port",
+}
+
+
+@dataclass
+class ScenarioProfile:
+    """Current-task scenario fingerprint used to gate CTEG retrieval."""
+
+    vuln_types: set = field(default_factory=set)
+    defense_types: set = field(default_factory=set)
+    tech_stack: set = field(default_factory=set)
+    domains: set = field(default_factory=set)
+
+
+def _domain_for_vulns(vulns: list[str]) -> set:
+    return {_DOMAIN_BY_VULN.get(str(v).strip().lower(), "") for v in vulns} - {""}
+
+
+def _tech_terms_from_text(text: str) -> set:
+    out = set()
+    for token in re.findall(r"[a-z0-9][a-z0-9.\-+]*", text.lower()):
+        if len(token) >= 3 and token not in _TECH_STOPWORDS:
+            out.add(token)
+    return out
+
+
+def build_scenario_profile(
+    state: Any, vulnerabilities: list | None = None, defense: Any = None
+) -> ScenarioProfile:
+    """Build the current-task fingerprint from typed world state.
+
+    Pure function (no IO, no LLM, never raises): merges vulnerability
+    hypotheses (typed state + passed list), detected defense types, tech
+    stack terms from services/analysis notes, and derived domains.
+    """
+    vuln_types: set = set()
+    try:
+        for v in list(getattr(state, "vulnerabilities", None) or []):
+            vt = str(getattr(v, "vuln_type", "") or "").strip().lower()
+            if vt:
+                vuln_types.add(vt)
+    except Exception:
+        pass
+    for v in vulnerabilities or []:
+        try:
+            vt = str(getattr(v, "vuln_type", "") or "").strip().lower()
+        except Exception:
+            vt = ""
+        if vt:
+            vuln_types.add(vt)
+
+    defense_types: set = set()
+    try:
+        waf = str(getattr(defense, "waf_type", "") or "").strip().lower()
+        if waf:
+            defense_types.add(waf)
+    except Exception:
+        pass
+
+    tech_stack: set = set()
+    try:
+        for s in list(getattr(state, "services", None) or []):
+            ver = str(getattr(s, "version", "") or "")
+            banner = str(getattr(s, "banner", "") or "")
+            proto = str(getattr(s, "protocol", "") or "")
+            tech_stack |= _tech_terms_from_text(f"{ver} {banner}")
+            if proto:
+                tech_stack |= _tech_terms_from_text(proto)
+    except Exception:
+        pass
+    try:
+        for note in list(getattr(state, "analysis_notes", None) or []):
+            note_l = str(note).lower()
+            for kw in _APP_TECH_KEYWORDS:
+                if kw in note_l:
+                    tech_stack.add(kw)
+    except Exception:
+        pass
+
+    domains = _domain_for_vulns(sorted(vuln_types))
+    try:
+        for s in list(getattr(state, "services", None) or []):
+            proto = str(getattr(s, "protocol", "") or getattr(s, "proto", "") or "")
+            d = _DOMAIN_BY_PROTO.get(proto.strip().lower())
+            if d:
+                domains.add(d)
+    except Exception:
+        pass
+
+    return ScenarioProfile(
+        vuln_types=vuln_types,
+        defense_types=defense_types,
+        tech_stack=tech_stack,
+        domains=domains,
+    )
+
+
+def match_score(pattern: Any, profile: ScenarioProfile) -> float:
+    """Weighted scenario-overlap score for one CTEG pattern.
+
+    Per-dimension scores: exact intersection = 1.0, "any"/unknown wildcard =
+    0.5, no overlap = 0. Returns the weighted sum
+    (w_vuln*vuln + w_def*def + w_tech*tech + w_domain*domain), so a single
+    exact primary-dimension match (1.0) clears the default gate of 0.5 while
+    tech/domain overlaps alone do not.
+    """
+    vuln_score = 0.0
+    def_score = 0.0
+    tech_score = 0.0
+    domain_score = 0.0
+
+    applicable_vulns = list(
+        getattr(pattern, "applicable_vuln_types", None) or []
+    )
+    vuln_type = getattr(pattern, "vulnerability_type", "") or ""
+    if applicable_vulns:
+        norm = {str(v).strip().lower() for v in applicable_vulns}
+        if "any" in norm:
+            vuln_score = 0.5 if profile.vuln_types else 0.0
+        elif norm & {str(v).strip().lower() for v in profile.vuln_types}:
+            vuln_score = 1.0
+        pattern_vulns = list(norm)
+    elif vuln_type:
+        vt = vuln_type.strip().lower()
+        if vt in {str(v).strip().lower() for v in profile.vuln_types}:
+            vuln_score = 1.0
+        elif vt in ("any", "unknown", ""):
+            vuln_score = 0.5 if profile.vuln_types else 0.0
+        pattern_vulns = [vt]
+    else:
+        pattern_vulns = []
+
+    applicable_defs = list(
+        getattr(pattern, "applicable_defense_types", None) or []
+    )
+    if applicable_defs:
+        norm_defs = {str(d).strip().lower() for d in applicable_defs}
+        if "any" in norm_defs:
+            def_score = 0.5 if profile.defense_types else 0.0
+        elif norm_defs & {str(d).strip().lower() for d in profile.defense_types}:
+            def_score = 1.0
+
+    tech_stack = list(getattr(pattern, "technology_stack", None) or [])
+    if tech_stack:
+        pattern_tech = {
+            str(t).strip().lower() for t in tech_stack
+        } | _tech_terms_from_text(" ".join(str(t) for t in tech_stack))
+        if pattern_tech & profile.tech_stack:
+            tech_score = 1.0
+
+    pattern_domains = _domain_for_vulns(pattern_vulns)
+    if pattern_domains & profile.domains:
+        domain_score = 1.0
+
+    return (
+        _W_VULN * vuln_score
+        + _W_DEF * def_score
+        + _W_TECH * tech_score
+        + _W_DOMAIN * domain_score
+    )
 
 
 class CTEG:
@@ -566,37 +773,104 @@ class CTEG:
         return results
 
     def get_suggestions(
-        self, defense_type: str = "", vuln_type: str = "", top_k: int = 3,
+        self,
+        defense_type: str = "",
+        vuln_type: str = "",
+        tech_stack: tuple = (),
+        top_k: int = 3,
+        min_overlap: float = 0.5,
+        profile: ScenarioProfile | None = None,
     ) -> Dict[str, Any]:
-        """Get CTEG learned pattern suggestions for bypass and exploitation.
+        """Get scenario-matched CTEG pattern suggestions (P4).
 
-        Queries CTEG's graph for dynamic patterns learned from prior tasks.
-        Does NOT include static knowledge — use DarwinRAG for that.
+        Hard-gated retrieval: only patterns whose weighted scenario overlap
+        with the current task reaches ``min_overlap`` are returned, sorted by
+        (overlap score, success_rate * decay) and capped at ``top_k``. When
+        nothing matches, both strategy lists are empty — callers must inject
+        nothing rather than placeholder text.
 
-        Returns:
-            Dict with bypass_strategies and exploit_strategies from learned patterns.
+        Backward compatible: without ``profile`` the legacy scalar arguments
+        (defense_type / vuln_type / tech_stack) are folded into a profile.
         """
-        bypass = self.query_bypass_patterns(defense_type, vuln_type, top_k)
-        exploit = self.query_exploit_patterns(vuln_type, top_k) if vuln_type else []
+        if profile is None:
+            profile = ScenarioProfile(
+                vuln_types={vuln_type} if vuln_type else set(),
+                defense_types={defense_type} if defense_type else set(),
+                tech_stack=set(tech_stack),
+                domains=_domain_for_vulns([vuln_type]) if vuln_type else set(),
+            )
 
-        exploit_strategies = []
-        for e in exploit:
-            exploit_strategies.append({
-                "mechanism": e.mechanism,
-                "description": e.abstract_description,
-                "success_rate": e.success_rate,
-                "context": e.required_context,
-                "techniques": e.concrete_techniques,
-                "source": "learned",
-            })
+        bypass: list[tuple[float, BypassPattern, float]] = []
+        exploit: list[tuple[float, ExploitPattern, float]] = []
+        with self._lock:
+            for nid, data in self.graph.nodes(data=True):
+                ntype = data.get("type", "")
+                if ntype == "BypassPattern":
+                    pattern = BypassPattern(
+                        pattern_id=data.get("pattern_id", ""),
+                        mechanism=data.get("mechanism", ""),
+                        abstract_description=data.get("abstract_description", ""),
+                        applicable_defense_types=data.get("applicable_defense_types", []),
+                        applicable_vuln_types=data.get("applicable_vuln_types", []),
+                        preconditions=data.get("preconditions", []),
+                        total_attempts=data.get("total_attempts", 0),
+                        total_successes=data.get("total_successes", 0),
+                        last_successful_use=data.get("last_successful_use", ""),
+                        half_life_days=data.get("half_life_days", 30),
+                        reinforcement_count=data.get("reinforcement_count", 0),
+                    )
+                    score = match_score(pattern, profile)
+                    if score >= min_overlap:
+                        bypass.append((score, pattern, self._compute_decay(data)))
+                elif ntype == "ExploitPattern":
+                    pattern = ExploitPattern(
+                        pattern_id=data.get("pattern_id", ""),
+                        mechanism=data.get("mechanism", ""),
+                        abstract_description=data.get("abstract_description", ""),
+                        vulnerability_type=data.get("vulnerability_type", ""),
+                        required_context=data.get("required_context", ""),
+                        total_attempts=data.get("total_attempts", 0),
+                        total_successes=data.get("total_successes", 0),
+                        last_successful_use=data.get("last_successful_use", ""),
+                        half_life_days=data.get("half_life_days", 30),
+                        created_from_task=data.get("created_from_task", ""),
+                        concrete_techniques=data.get("concrete_techniques", []),
+                        technology_stack=data.get("technology_stack", []),
+                    )
+                    score = match_score(pattern, profile)
+                    if score >= min_overlap:
+                        exploit.append((score, pattern, self._compute_decay(data)))
+
+        def _key(item: tuple[float, Any, float]) -> tuple[float, float]:
+            score, pattern, decay = item
+            return (score, decay * pattern.success_rate)
+
+        bypass.sort(key=_key, reverse=True)
+        exploit.sort(key=_key, reverse=True)
 
         return {
             "bypass_strategies": [
-                {"mechanism": b.mechanism, "description": b.abstract_description,
-                 "success_rate": b.success_rate, "preconditions": b.preconditions}
-                for b in bypass
+                {
+                    "mechanism": b.mechanism,
+                    "description": b.abstract_description,
+                    "success_rate": b.success_rate,
+                    "preconditions": b.preconditions,
+                    "overlap": round(s, 3),
+                }
+                for s, b, _ in bypass[:top_k]
             ],
-            "exploit_strategies": exploit_strategies,
+            "exploit_strategies": [
+                {
+                    "mechanism": e.mechanism,
+                    "description": e.abstract_description,
+                    "success_rate": e.success_rate,
+                    "context": e.required_context,
+                    "techniques": e.concrete_techniques,
+                    "source": "learned",
+                    "overlap": round(s, 3),
+                }
+                for s, e, _ in exploit[:top_k]
+            ],
         }
 
     # ── Decay & Maintenance ──────────────────────────────────────

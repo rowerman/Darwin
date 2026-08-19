@@ -357,3 +357,39 @@ def test_experience_hints_wraps_get_suggestions():
 def test_experience_hints_ignores_missing_method():
     manager = MemoryManager(experience=FakeExperience())  # no get_suggestions
     assert manager.experience_hints() == {}
+
+
+def test_compression_digest_includes_facts_rationale_and_compressible():
+    manager = MemoryManager()
+    manager.critical_facts_provider = (
+        lambda: "## Critical Facts\nCredential admin@t password=secret123"
+    )
+    manager.record_task(Task(id="x", type="t", goal="exploit target", status=TaskStatus.READY))
+    manager.record_execution(sample_result(task_id="x", tool="curl_get", stdout="dir listing"))
+
+    digest = manager.compression_digest()
+    assert "secret123" in digest
+    assert "exploit target" in digest
+    assert "[curl_get]" in digest
+    assert "OK" in digest
+
+
+def test_compression_digest_tolerates_failing_provider():
+    manager = MemoryManager()
+    manager.critical_facts_provider = lambda: (_ for _ in ()).throw(RuntimeError("boom"))
+    manager.record_execution(sample_result(tool="curl_get", stdout="dir listing"))
+    digest = manager.compression_digest()
+    assert isinstance(digest, str)
+    assert "[curl_get]" in digest
+
+
+def test_compression_digest_counts_discarded_records():
+    manager = MemoryManager()
+    manager.record_execution(sample_result(stdout="", stderr=""))
+    digest = manager.compression_digest()
+    assert "DISCARDED" in digest
+
+
+def test_compression_digest_empty_when_nothing_to_report():
+    manager = MemoryManager()
+    assert manager.compression_digest() == ""

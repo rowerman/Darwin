@@ -289,6 +289,111 @@ def render_belief_snapshot(
     return f"## {SNAPSHOT_MARKER} Current Cognition\n" + "\n\n".join(sections)
 
 
+def render_critical_facts(state: Any, caps: SnapshotCaps | None = None) -> str:
+    """Compression-only structured extraction with FULL secret values.
+
+    Used by ``MemoryManager.compression_digest()`` at compression time so the
+    summarizer (or the preserved payload) never loses credential passwords,
+    session tokens, flag values or confirmed vulnerability parameters. Unlike
+    the everyday belief snapshot, this renderer includes the actual secret
+    values — it must therefore only be used inside the compression path.
+
+    Returns "" when there is nothing to report. Never raises on malformed
+    input; a section that fails to render is skipped.
+    """
+    caps = caps or SnapshotCaps()
+    lines: list[str] = []
+    try:
+        flags = list(getattr(state, "flags", None) or [])
+        if flags:
+            lines.append(f"Flags: {', '.join(str(f) for f in flags[:5])}")
+    except Exception:
+        pass
+    try:
+        creds = list(getattr(state, "credentials", None) or [])
+        if creds:
+            _c = []
+            for c in creds[: caps.credentials]:
+                user = getattr(c, "username", "") or ""
+                host = getattr(c, "source_host", "") or ""
+                secret = getattr(c, "password", "") or ""
+                hash_val = getattr(c, "hash_value", "") or ""
+                if secret:
+                    _c.append(f"{user}@{host} password={secret}")
+                elif hash_val:
+                    _c.append(f"{user}@{host} hash={hash_val[:40]}")
+                else:
+                    _c.append(f"{user}@{host}")
+            lines.append("Credentials (full values):\n" + "\n".join(f"  - {x}" for x in _c))
+    except Exception:
+        pass
+    try:
+        sessions = list(getattr(state, "sessions", None) or [])
+        if sessions:
+            _s = []
+            for s in sessions[: caps.sessions]:
+                if isinstance(s, dict):
+                    host = s.get("host", "?")
+                    user = s.get("user", "?")
+                    access = s.get("access_level", "user")
+                    token = s.get("token") or s.get("cookie") or s.get("shell_type") or ""
+                    entry = f"{user}@{host}[{access}]"
+                    if token:
+                        entry += f" token={str(token)[:80]}"
+                    _s.append(entry)
+                else:
+                    _s.append(str(s))
+            lines.append("Sessions (with tokens when known): " + " | ".join(_s))
+    except Exception:
+        pass
+    try:
+        vulns = list(getattr(state, "vulnerabilities", None) or [])
+        if vulns:
+            _v = []
+            for v in vulns[: caps.vulns]:
+                vt = getattr(v, "vuln_type", "") or ""
+                ep = getattr(v, "endpoint", "") or ""
+                param = getattr(v, "param", "") or ""
+                conf = float(getattr(v, "confidence", 0.5) or 0.5)
+                _v.append(f"[{vt}] {ep}" + (f" param={param}" if param else "") + f" conf={conf:.0%}")
+            lines.append("Vulnerabilities:\n" + "\n".join(f"  - {x}" for x in _v))
+    except Exception:
+        pass
+    try:
+        services = list(getattr(state, "services", None) or [])
+        _svc = []
+        for s in services[: caps.services]:
+            port = getattr(s, "port", 0) or 0
+            proto = getattr(s, "protocol", "tcp") or "tcp"
+            ver = getattr(s, "version", "") or getattr(s, "banner", "") or ""
+            _svc.append(f":{port}/{proto} {_clip(ver, 80)}".strip())
+        if _svc:
+            lines.append("Services: " + " | ".join(_svc))
+    except Exception:
+        pass
+    try:
+        endpoints = list(getattr(state, "endpoints", None) or [])
+        _ep = []
+        for ep in endpoints[: caps.endpoints]:
+            method = getattr(ep, "method", "GET") or "GET"
+            url = getattr(ep, "url", "") or ""
+            params = list(getattr(ep, "params", None) or [])
+            _ep.append(f"{method} {url}" + (f" params={','.join(params)}" if params else ""))
+        if _ep:
+            lines.append("Endpoints:\n" + "\n".join(f"  - {_clip(e, caps.line_len)}" for e in _ep))
+    except Exception:
+        pass
+    try:
+        notes = list(getattr(state, "analysis_notes", None) or [])
+        if notes:
+            lines.append("Application understanding: " + _clip(notes[-1], 200))
+    except Exception:
+        pass
+    if not lines:
+        return ""
+    return "\n".join(lines)
+
+
 # ── Per-task discovery diff (O1.2) ─────────────────────────────────
 
 TRACKED_NODE_TYPES = (
