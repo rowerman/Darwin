@@ -5004,6 +5004,36 @@ spec:
         },
     )
 
+    # ── Tool registry introspection (meta tools) ──────────────────
+    # Read-only discovery tools so the LLM can resolve tool names and exact
+    # parameter contracts from the live registry instead of a static prompt
+    # catalog. No domain tag: always registered regardless of domain filter.
+    gateway.register(
+        name="tool_registry_list",
+        func=gateway.tool_registry_list,
+        description=("List available tools. Returns compact entries (name, "
+                     "description, domains, capability, executor) filtered by "
+                     "optional domain/capability/keyword. Use BEFORE selecting "
+                     "a tool to discover what is available for the current "
+                     "scenario (web, db, cloud, k8s, container, ad, network)."),
+        parameters={
+            "domain": {"type": "string", "description": "Optional domain filter (e.g. web, db, cloud, k8s, container, ad, network).", "default": ""},
+            "capability": {"type": "string", "description": "Optional exact capability name filter.", "default": ""},
+            "keyword": {"type": "string", "description": "Optional substring match against tool name or description.", "default": ""},
+        },
+    )
+    gateway.register(
+        name="tool_registry_get",
+        func=gateway.tool_registry_get,
+        description=("Return the full contract (ToolSpec) for ONE tool: "
+                     "parameter names with types/required/defaults, aliases, "
+                     "executor, dependencies. ALWAYS call this before writing "
+                     "task params so parameter names are exact."),
+        parameters={
+            "name": {"type": "string", "description": "Exact tool name from tool_registry_list."},
+        },
+    )
+
     return gateway
 
 

@@ -4292,41 +4292,12 @@ class Orchestrator:
 
         # Build typed pipeline state from DKG (single source of truth)
         state = normalize_dkg_state(self.dkg)
-        # Build tool lists for analyze system prompt.
-        # Include required parameter names so the LLM can write correct
-        # tool_args without guessing (e.g. "service" not "command" for aws_cli).
-        def _fmt_tool_list(gateway) -> str:
-            lines = []
-            for d in sorted(gateway.get_tool_definitions(),
-                           key=lambda d: d["function"]["name"]):
-                name = d["function"]["name"]
-                props = d["function"]["parameters"].get("properties", {})
-                required = d["function"]["parameters"].get("required", [])
-                req_params = [p for p in required if p in props]
-                opt_params = [p for p in props if p not in required]
-                # Show required params, hint optional ones with ?
-                sig = ", ".join(req_params)
-                if opt_params:
-                    sig += (", " if sig else "") + ", ".join(f"{p}?" for p in opt_params)
-                # Include description snippet so the LLM knows what the
-                # tool can do (e.g. aws_cli supports S3, IAM, STS, etc.).
-                # First 140 chars — enough for 1-2 sentences.
-                desc = d["function"].get("description", "")
-                if len(desc) > 140:
-                    # Truncate at last complete word before the limit
-                    _cut = desc[:140].rfind(" ")
-                    desc = desc[:_cut] + "..."
-                _hint = f"  → {desc}" if desc else ""
-                lines.append(
-                    f"  {name}({sig}){_hint}" if sig
-                    else f"  {name}{_hint}"
-                )
-            return "\n".join(lines)
-
-        analyze_system_prompt = SYSTEM_PROMPT_ANALYZE.format(
-            attack_tools=_fmt_tool_list(self.attack_gateway),
-            recon_tools=_fmt_tool_list(self.recon_gateway),
-        )
+        # The analyze system prompt points the LLM at the tool registry
+        # (tool_registry_list / tool_registry_get) instead of embedding the
+        # full catalog; the registry query loop in
+        # _generate_with_registry_lookup gives it a channel to fetch
+        # contracts during analysis.
+        analyze_system_prompt = SYSTEM_PROMPT_ANALYZE
         self._analyze_prompt_formatted = analyze_system_prompt
 
         # Transition to analyze phase (preserve history, swap system prompt)
@@ -4438,7 +4409,7 @@ class Orchestrator:
               f"{len(state.services)} services, "
               f"{len(state.vulnerabilities)} vulns")
 
-        content, _ = self.llm.generate(
+        content, _, _ = await self._generate_with_registry_lookup(
             prompt=prompt,
             stage="analyze",
         )
@@ -6356,6 +6327,75 @@ class Orchestrator:
         # Sync appended hint tasks back to the caller's list.
         _caller_list[:] = _plan_tasks
 
+    async def _generate_with_registry_lookup(
+        self,
+        prompt: str,
+        system_prompt: str | None = None,
+        stage: str | None = None,
+        max_rounds: int = 3,
+    ) -> tuple[str, list | None, bool]:
+        """Run an LLM generation round where the model may query the tool
+        registry (tool_registry_list / tool_registry_get) before producing
+        its final response.
+
+        Returns ``(content, tool_calls, registry_used)``. When the gateways
+        do not expose the registry tools (tests, minimal deployments), this
+        degrades to a single plain generation call.
+        """
+        registry_tools: list[dict] = []
+        try:
+            for _td in self.attack_gateway.get_tool_definitions():
+                _name = _td.get("function", {}).get("name", "")
+                if _name in ("tool_registry_list", "tool_registry_get"):
+                    registry_tools.append(_td)
+        except Exception:
+            pass
+
+        if not registry_tools:
+            content, tool_calls = self.llm.generate(
+                prompt=prompt, system_prompt=system_prompt, stage=stage,
+            )
+            return content, tool_calls, False
+
+        registry_used = False
+        content = ""
+        tool_calls = None
+        for _round in range(max_rounds):
+            _round_prompt = (
+                prompt if _round == 0
+                else "Continue. When you have the tool details you need, "
+                     "output your final JSON response."
+            )
+            content, tool_calls = self.llm.generate(
+                prompt=_round_prompt,
+                system_prompt=system_prompt,
+                tools=registry_tools,
+                stage=stage,
+            )
+            if not tool_calls:
+                return content, tool_calls, registry_used
+            registry_used = True
+            for tc in tool_calls:
+                tc_name = tc.get("name", "")
+                tc_args = tc.get("arguments", {})
+                tc_id = tc.get("id", "")
+                try:
+                    if tc_name in self.attack_gateway.get_tool_names():
+                        result = await self.attack_gateway.call(tc_name, tc_args)
+                    elif tc_name in self.recon_gateway.get_tool_names():
+                        result = await self.recon_gateway.call(tc_name, tc_args)
+                    else:
+                        continue
+                    tool_stdout = self._format_tool_feedback(
+                        tc_name, tc_args, result, ""
+                    )
+                    self.llm.add_tool_result(tc_id, tool_stdout[:3000])
+                except Exception as _exc:
+                    self.llm.add_tool_result(
+                        tc_id, f"Tool '{tc_name}' failed: {_exc} — skipping"
+                    )
+        return content, tool_calls, registry_used
+
     async def _generate_exploitation_plan(self, target_url: str, cteg_hints: dict | None = None) -> ExploitationPlan:
         """Generate a structured plan from bootstrap state (nmap results only).
 
@@ -6369,48 +6409,6 @@ class Orchestrator:
         )
 
         state = self._get_state()
-        # All tools: recon + attack, since LLM drives everything.
-        # Filter blacklisted tools so the LLM never generates plans using them.
-        all_tools = sorted(set(
-            self.attack_gateway.get_tool_names() +
-            self.recon_gateway.get_tool_names()
-        ))
-        # Include MCP tools (nvd_search_cves, github code search, etc.)
-        try:
-            for t in self.mcp_pool.get_tool_names():
-                if t not in all_tools:
-                    all_tools.append(t)
-        except Exception:
-            pass
-        all_tools = [t for t in all_tools if t not in self._BLACKLISTED_TOOLS]
-
-        # Build a tool catalog with parameter schemas so the LLM generates
-        # plans with correct parameter names (e.g. "host"+"port" not "target").
-        _tool_catalog_parts = []
-        _tdefs = list(self.attack_gateway.get_tool_definitions() +
-                      self.recon_gateway.get_tool_definitions())
-        # Include MCP tool definitions so the LLM knows correct parameters
-        try:
-            _tdefs += self.mcp_pool.get_tool_definitions()
-        except Exception:
-            pass
-        for tdef in _tdefs:
-            tname = tdef["function"]["name"]
-            if tname in self._BLACKLISTED_TOOLS:
-                continue
-            params = tdef["function"].get("parameters", {})
-            props = params.get("properties", {})
-            required = params.get("required", [])
-            param_strs = []
-            for pname, pinfo in props.items():
-                ptype = pinfo.get("type", "string")
-                pdesc = (pinfo.get("description", "") or "")[:80]
-                req = "required" if pname in required else "optional"
-                param_strs.append(f"    {pname}: {ptype} ({req}) — {pdesc}")
-            param_block = "\n".join(param_strs) if param_strs else "    (no parameters)"
-            desc = (tdef["function"].get("description", "") or "")[:200]
-            _tool_catalog_parts.append(f"### {tname}\n{desc}\nParameters:\n{param_block}")
-        tool_catalog = "\n\n".join(_tool_catalog_parts)
 
         # Services context
         services_lines = []
@@ -6820,6 +6818,24 @@ class Orchestrator:
             log.info("[ARTIFACT-BRIDGE] %d recommendations: %s",
                      len(_artifact_lines), ", ".join(sorted(_artifact_seen)))
 
+        # Tool candidates derived from the current hypotheses — a compact
+        # fallback so planning never degrades if the LLM skips registry lookup.
+        _candidate_tools: list[str] = []
+        for _v in self.vulnerabilities:
+            if _v.suggested_tool and _v.suggested_tool not in _candidate_tools:
+                _candidate_tools.append(_v.suggested_tool)
+            _gt = self._guess_tool(_v.vuln_type)
+            if _gt and _gt not in _candidate_tools:
+                _candidate_tools.append(_gt)
+        _candidate_tools_section = (
+            "\n## Tool Candidates (hints — verify details in the registry)\n"
+            "Candidate tools for the current hypotheses: "
+            + (", ".join(_candidate_tools) if _candidate_tools
+               else "(none — use tool_registry_list)")
+            + "\nUse tool_registry_get(name) to fetch the exact parameter "
+              "contract before writing each task. Do NOT guess parameter names.\n"
+        )
+
         prompt = f"""Target: {target_url}
 
 ## Discovered Services (from nmap)
@@ -6858,8 +6874,14 @@ entries are the authoritative source for service-specific defaults.
 - If the analyze phase produced attack_paths, translate each path into a chain of tasks with dependent_task_ids reflecting the path's step ordering. A 4-step path becomes 4 tasks where each depends on the previous one.
 - Tasks targeting DIFFERENT services or vulnerabilities with no shared prerequisites should have empty dependent_task_ids so they can execute in parallel.
 
-## Available Tools (all recon + attack)
-{', '.join(all_tools)}
+## Tool Discovery
+The full tool list is NOT embedded in this prompt — use the read-only
+registry tools to discover tools and their exact parameter contracts:
+- tool_registry_list(domain=..., capability=..., keyword=...) — find
+  candidate tools for the current scenario.
+- tool_registry_get(name) — fetch the FULL contract (exact parameter names,
+  required vs optional, aliases) for one tool.
+{_candidate_tools_section}
 
 {chr(10).join(['## RAG-Endpoint Probe Results (verified — these ENDPOINTS EXIST on the target):'] + probed_rag_endpoints) if probed_rag_endpoints else ''}
 
@@ -6946,7 +6968,11 @@ Output ONLY valid JSON array (3-20 tasks depending on complexity. More tasks != 
 
         self._maybe_compress()
         try:
-            content, _ = self.llm.generate(prompt=prompt, system_prompt=SYSTEM_PROMPT_ORCHESTRATOR_UNIFIED, timeout=180.0, stage="plan")
+            content, _, _ = await self._generate_with_registry_lookup(
+                prompt=prompt,
+                system_prompt=SYSTEM_PROMPT_ORCHESTRATOR_UNIFIED,
+                stage="plan",
+            )
         except Exception as e:
             log.warning("Plan generation LLM call failed: %s — retrying with shorter prompt", e)
             self._maybe_compress()
@@ -8218,7 +8244,17 @@ Output ONLY valid JSON:
         # to search for flag files BEFORE doing anything else.
         _post_exploit_reminder = ""
         if plan and plan.tasks:
-            _shell_tools = {"shell_exec", "ssh_exec", "ssh_key_exec", "docker_exec"}
+            # Target-side execution tools only. shell_exec runs on the DARWIN
+            # host, NOT on the target, so it never counts as target access and
+            # must never be used for flag file hunting (flags found by local
+            # filesystem searches are rejected by _verify_flag).
+            _shell_tools = {
+                "ssh_exec", "ssh_key_exec", "kubectl_exec", "kubectl_run",
+                "nsenter_exec", "container_escape_docker_sock",
+                "container_escape_docker_api", "container_escape_cgroup",
+                "container_escape_mount_disk", "container_escape_cap_dac",
+                "container_escape_runc", "container_escape_procfs",
+            }
             _has_shell = any(
                 t.status is TaskStatus.SUCCESS
                 and str((t.action or {}).get("tool", "") or "") in _shell_tools
@@ -8237,14 +8273,18 @@ Output ONLY valid JSON:
                 )
                 if not _done_flag_hunt:
                     _post_exploit_reminder = (
-                        f"\nFLAG HUNT (HIGHEST PRIORITY): You have shell/container access! "
-                        f"IMMEDIATELY add tasks to search for flag files:\n"
-                        f"  1. shell_exec: ls -la / && cat /flag* /root/flag* /tmp/flag* "
-                        f"/home/*/flag* /app/flag* 2>/dev/null\n"
-                        f"  2. shell_exec: find / -maxdepth 4 -name '*flag*' -type f 2>/dev/null\n"
-                        f"  3. shell_exec: env | grep -i flag; cat /etc/hostname\n"
-                        f"Flag files are the #1 CTF pattern. Do NOT enumerate databases or " 
-                        f"configure services before running these commands.\n"
+                        f"\nFLAG HUNT (HIGHEST PRIORITY): You have target-side "
+                        f"shell/container access! IMMEDIATELY add tasks to search "
+                        f"for flag files ON THE TARGET filesystem:\n"
+                        f"  - Use the tool that granted remote execution (ssh_exec, "
+                        f"ssh_key_exec, kubectl_exec, container escape tools). NEVER "
+                        f"use shell_exec — it runs on the DARWIN host, not the target, "
+                        f"and its flags are rejected.\n"
+                        f"  - Command template: ls -la / && cat /flag* /root/flag* "
+                        f"/tmp/flag* /home/*/flag* /app/flag* 2>/dev/null; "
+                        f"find / -maxdepth 4 -name '*flag*' -type f 2>/dev/null | head -10\n"
+                        f"Flag files are the #1 CTF pattern. Do NOT enumerate databases "
+                        f"or configure services before hunting flags on the target.\n"
                     )
 
         # P10/P11: inject preserved memory (task rationale + execution
@@ -8330,7 +8370,7 @@ Output ONLY valid JSON:
 
         try:
             self._maybe_compress()
-            content, _ = self.llm.generate(
+            content, _, _ = await self._generate_with_registry_lookup(
                 prompt=prompt,
                 system_prompt=SYSTEM_PROMPT_PLANNER,
                 stage="plan_review",

@@ -1,8 +1,8 @@
 {
   "schema_version": "1.0.0",
-  "generated_at": "2026-08-17T10:51:45+00:00",
+  "generated_at": "2026-08-19T13:56:36+00:00",
   "source": "darwin.tools.manifest",
-  "tool_count": 130,
+  "tool_count": 132,
   "tools": [
     {
       "name": "aws_cli",
@@ -4614,6 +4614,67 @@
       ],
       "executor": "shell",
       "command_template": "python3 -c \"import requests, base64\nb64 = '{payload_b64}'.encode()\ndata = base64.b64decode(b64)\nfiles = {{'file': ('{filename}', data)}}\ntry:\n    r = requests.{http_method}('{target_url}', files=files, timeout=30, verify=False)\n    print(f'Status: {{r.status_code}}')\n    print(r.text[:2000])\nexcept Exception as e:\n    print(f'Error: {{e}}')\n\" 2>&1",
+      "shell_args": [],
+      "split_params": [],
+      "dependencies": [],
+      "flags": {},
+      "output_contract": {},
+      "aliases": {},
+      "deprecated": false,
+      "auto": true
+    },
+    {
+      "name": "tool_registry_get",
+      "version": "1.0.0",
+      "description": "Return the full contract (ToolSpec) for ONE tool: parameter names with types/required/defaults, aliases, executor, dependencies. ALWAYS call this before writing task params so parameter names are exact.",
+      "domains": [],
+      "capability": "",
+      "parameters": {
+        "name": {
+          "type": "string",
+          "description": "Exact tool name from tool_registry_list."
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "executor": "python",
+      "command_template": "",
+      "shell_args": [],
+      "split_params": [],
+      "dependencies": [],
+      "flags": {},
+      "output_contract": {},
+      "aliases": {},
+      "deprecated": false,
+      "auto": true
+    },
+    {
+      "name": "tool_registry_list",
+      "version": "1.0.0",
+      "description": "List available tools. Returns compact entries (name, description, domains, capability, executor) filtered by optional domain/capability/keyword. Use BEFORE selecting a tool to discover what is available for the current scenario (web, db, cloud, k8s, container, ad, network).",
+      "domains": [],
+      "capability": "",
+      "parameters": {
+        "domain": {
+          "type": "string",
+          "description": "Optional domain filter (e.g. web, db, cloud, k8s, container, ad, network).",
+          "default": ""
+        },
+        "capability": {
+          "type": "string",
+          "description": "Optional exact capability name filter.",
+          "default": ""
+        },
+        "keyword": {
+          "type": "string",
+          "description": "Optional substring match against tool name or description.",
+          "default": ""
+        }
+      },
+      "required": [],
+      "executor": "python",
+      "command_template": "",
       "shell_args": [],
       "split_params": [],
       "dependencies": [],

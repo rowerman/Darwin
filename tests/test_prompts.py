@@ -5,6 +5,10 @@ import pytest
 
 from darwin.prompts.evaluator import SYSTEM_PROMPT_EVALUATOR
 from darwin.prompts.memory import SYSTEM_PROMPT_MEMORY
+from darwin.prompts.orchestrator import (
+    SYSTEM_PROMPT_ANALYZE,
+    SYSTEM_PROMPT_ORCHESTRATOR_UNIFIED,
+)
 from darwin.prompts.planner import SYSTEM_PROMPT_PLANNER
 from darwin.prompts.research import SYSTEM_PROMPT_RESEARCH
 from darwin.core.contracts import TaskStatus
@@ -20,6 +24,38 @@ def test_planner_prompt_has_planning_responsibilities():
     assert "Multi-step attacks" in SYSTEM_PROMPT_PLANNER
     assert "Recognize exhaustion" in SYSTEM_PROMPT_PLANNER
     assert "dependent_task_ids" in SYSTEM_PROMPT_PLANNER
+
+
+def test_unified_prompt_uses_registry_instead_of_static_catalog():
+    assert "tool_registry_list" in SYSTEM_PROMPT_ORCHESTRATOR_UNIFIED
+    assert "tool_registry_get" in SYSTEM_PROMPT_ORCHESTRATOR_UNIFIED
+    assert "scenario-based categories" not in SYSTEM_PROMPT_ORCHESTRATOR_UNIFIED
+    assert "file:///PATH" not in SYSTEM_PROMPT_ORCHESTRATOR_UNIFIED
+
+
+def test_planner_prompt_uses_registry_instead_of_static_catalog():
+    assert "tool_registry_list" in SYSTEM_PROMPT_PLANNER
+    assert "tool_registry_get" in SYSTEM_PROMPT_PLANNER
+    assert "scenario-based categories" not in SYSTEM_PROMPT_PLANNER
+
+
+def test_analyze_prompt_uses_registry_instead_of_static_catalog():
+    assert "tool_registry_list" in SYSTEM_PROMPT_ANALYZE
+    assert "tool_registry_get" in SYSTEM_PROMPT_ANALYZE
+    assert "{attack_tools}" not in SYSTEM_PROMPT_ANALYZE
+    assert "{recon_tools}" not in SYSTEM_PROMPT_ANALYZE
+
+
+def test_unified_prompt_flag_hunt_is_target_side_only():
+    # shell_exec runs on the DARWIN host; the prompt must never teach the LLM
+    # to hunt target flags with it (those flags are rejected by _verify_flag).
+    assert "shell_exec runs on the DARWIN host" in SYSTEM_PROMPT_ORCHESTRATOR_UNIFIED
+    assert "NEVER use shell_exec" in SYSTEM_PROMPT_ORCHESTRATOR_UNIFIED
+
+
+def test_planner_prompt_flag_hunt_is_target_side_only():
+    assert "shell_exec runs on the DARWIN host" in SYSTEM_PROMPT_PLANNER
+    assert "Never use shell_exec" in SYSTEM_PROMPT_PLANNER
 
 
 def test_research_prompt_has_research_guidance():

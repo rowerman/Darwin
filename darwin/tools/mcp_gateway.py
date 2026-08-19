@@ -13,6 +13,7 @@ commands without a shell (``register_shell_argv_tool``).
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import re
 import subprocess
@@ -595,6 +596,78 @@ class MCPGateway:
     def get_execution_log(self) -> List[ToolResult]:
         """Get all tool execution results."""
         return self._execution_log
+
+    # ── Tool registry introspection (meta tools) ──────────────────
+    def tool_registry_list(
+        self,
+        domain: str = "",
+        capability: str = "",
+        keyword: str = "",
+    ) -> ToolResult:
+        """List registered tools as compact entries for LLM tool discovery.
+
+        Filters are optional and ANDed: domain matches one of the tool's
+        declared domains, capability must match exactly, keyword is a
+        case-insensitive substring of the tool name or description.
+        """
+        try:
+            specs = self.get_tool_specs()
+        except Exception as e:  # pragma: no cover - defensive
+            return ToolResult(
+                tool_name="tool_registry_list", success=False,
+                stdout="", stderr=f"failed to collect specs: {e}",
+                exit_code=1, elapsed_ms=0,
+            )
+        items = []
+        for name in sorted(specs):
+            spec = specs[name]
+            if domain and domain not in spec.domains:
+                continue
+            if capability and spec.capability != capability:
+                continue
+            if keyword and keyword.lower() not in name.lower() \
+                    and keyword.lower() not in spec.description.lower():
+                continue
+            items.append({
+                "name": name,
+                "description": spec.description[:200],
+                "domains": list(spec.domains),
+                "capability": spec.capability,
+                "executor": spec.executor,
+            })
+        payload = {"count": len(items), "tools": items}
+        return ToolResult(
+            tool_name="tool_registry_list", success=True,
+            stdout=json.dumps(payload, ensure_ascii=False, indent=1),
+            stderr="", exit_code=0, elapsed_ms=0,
+            parsed_output=payload,
+        )
+
+    def tool_registry_get(self, name: str) -> ToolResult:
+        """Return the full ToolSpec contract (parameters, required, aliases,
+        executor, dependencies) for one registered tool."""
+        try:
+            specs = self.get_tool_specs()
+        except Exception as e:  # pragma: no cover - defensive
+            return ToolResult(
+                tool_name="tool_registry_get", success=False,
+                stdout="", stderr=f"failed to collect specs: {e}",
+                exit_code=1, elapsed_ms=0,
+            )
+        spec = specs.get(name)
+        if spec is None:
+            return ToolResult(
+                tool_name="tool_registry_get", success=False,
+                stdout="", stderr=f"tool '{name}' not found in registry",
+                exit_code=1, elapsed_ms=0,
+            )
+        data = spec.to_dict()
+        return ToolResult(
+            tool_name="tool_registry_get", success=True,
+            stdout=json.dumps(data, ensure_ascii=False, indent=1),
+            stderr="", exit_code=0, elapsed_ms=0,
+            parsed_output=data,
+        )
 
 
 class _ToolEntry:
