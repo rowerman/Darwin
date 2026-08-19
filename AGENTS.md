@@ -231,19 +231,18 @@ unified / planner / analyze 等 LLM prompt **不再内嵌静态工具目录**。
 
 ## 7. 测试标准
 
-运行前提：先 `pip install -e ".[dev]"`（当前环境缺少 `litellm` 时 pytest 收集会失败，不要绕过）。
+标准环境是 conda `deeplearn`（Python 3.12，已包含 `litellm`）。
 
 ```bash
-pytest tests/ -v                       # 全量（最低合入标准：全绿）
-pytest tests/ -m acceptance -v         # 里程碑验收 / 失败样本回归
-pytest tests/ -v --cov=darwin --cov=experiments --cov-report=term
-pytest tests/test_dkg.py::test_name -v # 单测
+conda run -n deeplearn python -m pytest -q
+conda run --no-capture-output -n deeplearn python -m pytest -m integration -v
+conda run -n deeplearn python -m pytest -m acceptance -v
 ```
 
-约定（`pyproject.toml` 已配置 `asyncio_mode = "auto"` 与 `acceptance` marker）：
+约定（`pyproject.toml` 已配置 `asyncio_mode = "auto"`、`acceptance` 和 `integration` marker）：
 
-- 类分组命名（不要用 `unittest.TestCase`），补边界用例（`test_empty` / `test_missing`），善用 `@pytest.mark.parametrize`、`pytest.approx`、`tmp_path`。
-- 优先复用 `tests/conftest.py` 的夹具：`FakeLLM`、`FakeGateway`、`FakeMCPPool`、`FakeCTEG`、`make_orchestrator`；不要触碰真实的 `cteg_state.json`、外部网络或 LLM。
-- 关键一致性测试不可破坏：manifest 与注册表同步（`test_coverage_audit`）、taxonomy 叶子 → 工具/能力/知识引用有效、ToolSpec 校验（`test_tool_spec`）、Runtime 唯一执行路径（`test_runtime_path`）、RAG 分层路由与回退（`test_rag_hierarchical`）。
-- 修改工具/知识/核心循环后，除对应单测外还要跑 `-m acceptance`；benchmark 场景改动（如涉及 run.py 参数）要 smoke 验证。
-- 不要伪造或跳过失败测试；提交前全量测试必须通过，manifest/taxonomy 变更必须与代码变更同时提交。
+- 新增局部逻辑先补单元测试；涉及跨模块执行路径必须补 `integration`；修改核心循环、工具注册或知识库还要跑 `acceptance`；Docker/benchmark 行为另跑显式 live 测试。
+- 未标记测试是隔离单测；`integration` 使用本地 HTTP 靶场、确定性 LLM replay 和 CLI stubs，必须经过 `Orchestrator.run()`、Runtime、MCPGateway、DPM/DAVE，禁止外网、真实 LLM 和 Docker。
+- Docker/benchmark 联调属于显式 live 测试，不进入默认回归。
+- 修改工具、知识库或核心循环后，跑全量测试及相关 `integration/acceptance`；manifest/taxonomy 必须同步校验。
+- 复用 `tests/conftest.py` fixtures；未知工具必须失败，不得用默认成功的 fake 掩盖错误；不伪造或跳过失败测试。

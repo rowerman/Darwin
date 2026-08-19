@@ -79,10 +79,17 @@ class FakeGateway:
 
     async def call(self, name, params):
         self.calls.append((name, params))
-        return self.responses.get(
-            name,
-            ToolResult(tool_name=name, success=True, stdout="ok", stderr="", exit_code=0, elapsed_ms=1.0),
-        )
+        result = self.responses.get(name)
+        if result is None:
+            return ToolResult(
+                tool_name=name,
+                success=False,
+                stdout="",
+                stderr=f"Tool '{name}' not configured in test gateway",
+                exit_code=-1,
+                elapsed_ms=1.0,
+            )
+        return result
 
 
 class FakeMCPPool:

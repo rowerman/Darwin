@@ -38,4 +38,5 @@ testpaths = ["tests"]
 asyncio_mode = "auto"
 markers = [
     "acceptance: milestone acceptance / failure-sample regression tests",
+    "integration: deterministic local cross-module integration tests",
 ]
