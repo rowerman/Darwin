@@ -51,6 +51,7 @@ knowledge/                 静态知识：web/ windows_ad/ cloud/ network/、sce
 config/                    darwin.yaml / llm.yaml / waf_fingerprints.yaml / mcp_servers.yaml（已 gitignore）
 checkpoints/、log/、cteg_state.json   运行时产物（gitignore）
 tools_manifest.json        130 个工具的机器可读契约（提交入库，作为锁文件）
+docs/                      与生产源码层级对应的模块导航文档（不替代源码/API 契约）
 ```
 
 ### 关键设计决策（改动前必须保持的约束）
@@ -81,6 +82,18 @@ Orchestrator.run()
 - 修改知识库：`tools/ingest_*` 入库 → `tools/build_taxonomy.py` 重建 → `python -m tools.audit_coverage` 校验引用 → 补测试。
 - 修改核心循环：对应 `tests/test_core_*.py` 或 `tests/test_runtime_path.py`，并跑 `pytest tests/ -m acceptance -v`。
 - 任何改动完成前：全量 `pytest tests/ -v` 必须通过。
+
+### 模块文档与源码同步
+
+`docs/` 是生产源码的导航入口，目标是让维护者先了解模块职责和阅读路径，再进入源码。文档是概览，不是 API 手册；详细行为始终以源码、schema 和 `tools_manifest.json` 为准。
+
+- 修改生产源码前，先阅读对应模块文档：例如 `darwin/core/runtime.py` 对应 `docs/darwin/core/runtime.md`。
+- 当模块职责、主要入口、数据流或关键约束发生变化时，在同一变更中同步更新对应 Markdown 文档。
+- 新增、删除或移动生产模块时，同步创建、删除或移动 `docs/` 下的镜像文档。
+- `__init__.py` 的导出或包职责变化同步到所在目录的 `docs/**/README.md`。
+- 文档与源码不一致时以源码为事实来源，先完成代码判断，再修正文档。
+- 文档镜像范围包括 `darwin/**/*.py`、根目录 `run.py`、`tools/*.py` 和 `config/*`；`experiments/`、`tests/`、`knowledge/`、`wordlists/`、缓存及运行时产物不在范围内。
+- `config/` 文档只记录配置区域、默认结构和环境变量关系，不记录真实密钥。
 
 ## 4. 依赖环境与配置
 

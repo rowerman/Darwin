@@ -1,0 +1,32 @@
+# `darwin/cloud_topology.py`
+
+## 模块定位
+
+把云环境、Kubernetes 拓扑、RBAC、Pod 安全和 IAM 信任关系映射到 DKG。
+
+## 所在链路
+
+云侦察与分析阶段，位于工具输出和攻击路径推理之间。
+
+## 关键入口
+
+- `CloudTopologyMapper`：维护拓扑映射。
+- `discover_cloud_topology()`：异步发现并写入拓扑。
+- `CloudTopology`、`K8sRBACBinding`、`PodSecurityProfile`：拓扑结果模型。
+
+## 输入/输出概览
+
+输入为 `DKG` 和云工具观察结果；输出为 `CloudTopology`，并更新图中的事实和关系。
+
+## 相关模块
+
+`dkg.py`、`cloud_attack_path.py`、`dpm.py`、`tools/attack_server.py`。
+
+## 阅读建议
+
+先理解结果模型，再看 `CloudTopologyMapper` 的写图逻辑和发现入口。
+
+## 维护提示
+
+拓扑字段或关系变化时同步检查攻击路径和防御探测的消费者。
+
