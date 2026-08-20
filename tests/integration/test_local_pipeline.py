@@ -366,6 +366,19 @@ async def test_gateway_shell_parser_exit_code_timeout_and_retry(tmp_path):
     assert timed_out.exit_code == -1
     assert "timed out" in timed_out.stderr.lower()
 
+    gateway.register_shell_tool(
+        "shell_timeout",
+        f'"{sys.executable}" "{slow_script}"',
+        "deterministic shell timeout command",
+        {},
+        timeout=0.05,
+        retries=1,
+    )
+    shell_timed_out = await gateway.call("shell_timeout", {})
+    assert shell_timed_out.success is False
+    assert shell_timed_out.exit_code == -1
+    assert "timed out" in shell_timed_out.stderr.lower()
+
 
 @pytest.mark.asyncio
 async def test_runtime_replan_persists_memory_metrics_and_cteg(tmp_path):

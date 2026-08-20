@@ -73,6 +73,21 @@ _SUBSTRING_MIN_LEN = 3         # minimum chars for a substring to match
 _SUBSTRING_MIN_RATIO = 0.4     # minimum ratio of substring / declared-param length
 
 
+async def _kill_and_reap(proc: asyncio.subprocess.Process) -> None:
+    """Terminate a timed-out child and drain its pipes before returning."""
+    try:
+        proc.kill()
+    except (ProcessLookupError, OSError):
+        pass
+    try:
+        await asyncio.wait_for(proc.communicate(), timeout=2.0)
+    except (asyncio.TimeoutError, ProcessLookupError, OSError):
+        try:
+            await asyncio.wait_for(proc.wait(), timeout=0.5)
+        except (asyncio.TimeoutError, ProcessLookupError, OSError):
+            pass
+
+
 @dataclass
 class ToolResult:
     """Standardized tool execution result."""
@@ -255,7 +270,7 @@ class MCPGateway:
                         )
                     try:
                         if proc is not None:
-                            proc.kill()
+                            await _kill_and_reap(proc)
                     except Exception:
                         pass
 
@@ -394,7 +409,7 @@ class MCPGateway:
                         )
                     try:
                         if proc is not None:
-                            proc.kill()
+                            await _kill_and_reap(proc)
                     except Exception:
                         pass
 

@@ -231,13 +231,27 @@ unified / planner / analyze 等 LLM prompt **不再内嵌静态工具目录**。
 
 ## 7. 测试标准
 
-标准环境是 conda `deeplearn`（Python 3.12，已包含 `litellm`）。
+环境是通过conda创建的虚拟环境，具体env_name需要列举一下
 
 ```bash
-conda run -n deeplearn python -m pytest -q
-conda run --no-capture-output -n deeplearn python -m pytest -m integration -v
-conda run -n deeplearn python -m pytest -m acceptance -v
+conda run -n env_name python -m pytest -q
+conda run --no-capture-output -n env_name python -m pytest -m integration -v
+conda run -n env_name python -m pytest -m acceptance -v
 ```
+
+后续测试按以下顺序执行：
+
+1. 先在 `env_name` 环境运行与改动直接相关的单测；确认失败原因后再扩大范围。
+2. 涉及多个模块或公共控制面的改动，运行 `pytest -m integration -v`。integration 测试必须使用本地靶场、确定性 LLM replay、CLI stubs 和临时目录，禁止外网、真实 LLM、真实 CLI 与 Docker。
+3. 修改核心循环、工具注册、工具契约或知识库时，运行 `pytest -m acceptance -v`，并分别执行 manifest/taxonomy 校验：
+
+   ```bash
+   conda run -n deeplearn python -m darwin.tools.manifest --out tools_manifest.json --check
+   conda run -n deeplearn python -m tools.audit_coverage
+   ```
+
+4. 在提交前运行全量回归 `conda run -n deeplearn python -m pytest -q`，同时检查 `git diff --check`。Windows 下涉及子进程或异步管道的测试应使用 `-W default`，不得遗留 transport、pipe 或 running subprocess 警告。
+5. 只有在显式 live 联调时才运行 Docker/benchmark 场景；这类测试不纳入默认回归，必须记录所需外部工具、服务和命令结果。Mutation testing 仅在环境提供 `mutmut`、`cosmic-ray` 等 runner 时执行；没有 runner 时不得声称已完成，应记录为环境限制。
 
 约定（`pyproject.toml` 已配置 `asyncio_mode = "auto"`、`acceptance` 和 `integration` marker）：
 
