@@ -21,7 +21,8 @@ DARWIN（Defense-Aware Adaptive Penetration Testing Agent Framework）是一个 
 ```
 run.py                     CLI 入口（参数解析、LLM 配置加载、结果汇总）
 darwin/
-  orchestrator.py          主编排器：recon/analyze/exploit/defense/verify 全流程
+  orchestrator.py          主编排器（薄门面）：状态容器 + 对 orchestration/ 各 Coordinator 的方法委托
+  orchestration/           阶段协调层：context.py（共享上下文）、ports.py（工具端口）+ 5 个 Coordinator
   core/                    v2 控制面：task, task_graph, scheduler, runtime,
                            executor, evaluator, replan, capabilities,
                            parameters, memory, metrics, schemas, contracts,
@@ -46,7 +47,7 @@ darwin/
   utils/                   llm.py（LiteLLM 封装）、http_client、thought_logger、phase_logger
 experiments/               runner.py / parallel_runner.py / scenario_loader.py 等评测入口
 tools/                     知识入库与审计脚本（ingest_*、build_taxonomy、audit_coverage、eval_knowledge_retrieval）
-tests/                     pytest 测试（34 个测试文件）
+tests/                     pytest 测试（38 个测试文件）
 knowledge/                 静态知识：web/ windows_ad/ cloud/ network/、scenarios/、taxonomy.json
 config/                    darwin.yaml / llm.yaml / waf_fingerprints.yaml / mcp_servers.yaml（已 gitignore）
 checkpoints/、log/、cteg_state.json   运行时产物（gitignore）
@@ -56,7 +57,7 @@ docs/                      与生产源码层级对应的模块导航文档（�
 
 ### 关键设计决策（改动前必须保持的约束）
 
-1. 所有工具执行都经过 `darwin/tools/mcp_gateway.py` 网关和 `darwin/core/executor.py`；编排器不得直接调用外部工具。
+1. 所有工具执行都经过 `darwin/tools/mcp_gateway.py` 网关和 `darwin/core/executor.py`；编排器不得直接调用外部工具，编排层 Coordinator 只能经 `darwin/orchestration/ports.py` 注入的 `_call_tool()` 端口调用网关。
 2. `core.Runtime` 是唯一执行路径：plan → schedule → execute → evaluate → replan。
 3. 阶段间 LLM 输出必须走 `darwin/core/schemas.py` 的版本化 pydantic 模型；校验失败时记录 `schema_violation` 并回退 legacy 解析（零回归保证）。
 4. 上下文接近阈值时用 `LLMSession.compress()` 压缩，不做硬重置；DKG 结构化状态跨阶段承载。
@@ -68,7 +69,7 @@ docs/                      与生产源码层级对应的模块导航文档（�
 ### 运行时数据流
 
 ```
-Orchestrator.run()
+Orchestrator.run()（委托 LifecycleCoordinator，各阶段由 orchestration/ 下对应 Coordinator 执行）
   → bootstrap recon（nmap 端口发现 → HTTP 探测 → DKG）
   → Runtime loop：plan → schedule → execute → evaluate → replan
   → DPM 防御检测/绕过、DAVE flag 验证
@@ -81,6 +82,7 @@ Orchestrator.run()
 - 修改工具：先读 `tools_manifest.json` 中该工具的 `ToolSpec` → 改注册（`attack_server.py` / `recon_server.py`）→ 重新生成 manifest 并 `--check` → 补/改测试。
 - 修改知识库：`tools/ingest_*` 入库 → `tools/build_taxonomy.py` 重建 → `python -m tools.audit_coverage` 校验引用 → 补测试。
 - 修改核心循环：对应 `tests/test_core_*.py` 或 `tests/test_runtime_path.py`，并跑 `pytest tests/ -m acceptance -v`。
+- 修改编排阶段逻辑（`darwin/orchestration/*.py`）：先读 `docs/darwin/orchestration/README.md` 与对应 Coordinator 文档；Coordinator 内 `self.<attr>`/`self.<method>` 经共享上下文转发、工具调用必须走 `self._call_tool()` 端口；改后跑全量 `pytest tests/ -v`。
 - 任何改动完成前：全量 `pytest tests/ -v` 必须通过。
 
 ### 模块文档与源码同步
