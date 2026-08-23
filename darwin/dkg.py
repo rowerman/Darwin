@@ -114,6 +114,17 @@ class DKG:
         self.storage_path = storage_path
         self._lock = threading.RLock()
         self._created_at = datetime.now().isoformat()
+        self._revision = 0
+        self._attack_path_cache: tuple[int, list] | None = None
+
+    @property
+    def revision(self) -> int:
+        """Monotonic revision for consumers that cache graph snapshots."""
+        with self._lock:
+            return self._revision
+
+    def _touch(self) -> None:
+        self._revision += 1
 
     # ── Node Operations ─────────────────────────────────────────────
 
@@ -161,6 +172,7 @@ class DKG:
             else:
                 props["_version"] = self.graph.nodes[node_id].get("_version", 0) + 1
             self.graph.add_node(node_id, **props)
+            self._touch()
             self._persist()
 
         return node_id
@@ -270,6 +282,7 @@ class DKG:
                 self.graph.nodes[node_id].get("_version", 0) + 1
             )
             self.graph.nodes[node_id]["updated_at"] = datetime.now().isoformat()
+            self._touch()
             self._persist()
         return True
 
@@ -286,6 +299,7 @@ class DKG:
             props["type"] = edge_type
             props.setdefault("created_at", datetime.now().isoformat())
             self.graph.add_edge(from_id, to_id, **props)
+            self._touch()
             self._persist()
 
     def query_edges(
@@ -321,6 +335,144 @@ class DKG:
                 target_data = dict(self.graph.nodes[target])
                 results.append({"id": target, "edge_type": data.get("type"), **target_data})
         return results
+
+    def topology_snapshot(
+        self,
+        anchor_ids: list[str] | None = None,
+        *,
+        max_hops: int = 2,
+        max_nodes: int = 48,
+        max_edges: int = 96,
+    ) -> Dict[str, Any]:
+        """Return a deterministic, bounded local topology snapshot."""
+        with self._lock:
+            all_ids = sorted(str(nid) for nid in self.graph.nodes)
+            anchors = [str(nid) for nid in (anchor_ids or []) if nid in self.graph]
+            if not anchors:
+                preferred = {"Session", "Host", "Service", "Endpoint"}
+                anchors = [
+                    nid for nid in all_ids
+                    if self.graph.nodes[nid].get("type") in preferred
+                ][:max_nodes]
+            if not anchors:
+                anchors = all_ids[:max_nodes]
+
+            selected = set(anchors)
+            frontier = set(anchors)
+            undirected = self.graph.to_undirected(as_view=True)
+            for _ in range(max(0, int(max_hops))):
+                if len(selected) >= max_nodes:
+                    break
+                next_frontier: set[str] = set()
+                for nid in sorted(frontier):
+                    next_frontier.update(str(x) for x in undirected.neighbors(nid))
+                next_frontier -= selected
+                room = max_nodes - len(selected)
+                selected.update(sorted(next_frontier)[:room])
+                frontier = next_frontier
+
+            nodes = []
+            for nid in sorted(selected):
+                nodes.append({"id": nid, **dict(self.graph.nodes[nid])})
+            # Canonical edge view: dedupe parallel edges with the same
+            # (from, to, type), keeping the first (earliest) record in
+            # deterministic order, then apply the max_edges bound.
+            edge_rows = sorted(
+                self.graph.edges(keys=True, data=True),
+                key=lambda item: (
+                    str(item[0]), str(item[1]), str(item[2]),
+                    str(item[3].get("type", "")),
+                ),
+            )
+            seen_edges: set[tuple[str, str, str]] = set()
+            edges = []
+            for src, dst, _key, data in edge_rows:
+                if str(src) in selected and str(dst) in selected:
+                    edge_type = str(data.get("type", ""))
+                    edge_key = (str(src), str(dst), edge_type)
+                    if edge_key in seen_edges:
+                        continue
+                    seen_edges.add(edge_key)
+                    edges.append({"from": str(src), "to": str(dst), **dict(data)})
+                    if len(edges) >= max_edges:
+                        break
+            return {
+                "revision": self._revision,
+                "anchors": sorted(set(anchors)),
+                "nodes": nodes,
+                "edges": edges,
+            }
+
+    def attack_path_summary(self, max_paths: int = 12) -> list:
+        """Return a bounded attack-path summary, gated and cached by revision.
+
+        Only computes cloud/K8s attack paths when the graph actually contains
+        the node types the four finders depend on; the result is cached for
+        the current revision so repeated ``normalize_dkg_state()`` calls do
+        not re-run the BFS analyses.
+        """
+        with self._lock:
+            if (
+                self._attack_path_cache is not None
+                and self._attack_path_cache[0] == self._revision
+            ):
+                return list(self._attack_path_cache[1])
+
+            gate_types = {"IAMRole", "K8sPod", "K8sSA", "TrustRelationship"}
+            if not any(
+                data.get("type") in gate_types
+                for _nid, data in self.graph.nodes(data=True)
+            ):
+                self._attack_path_cache = (self._revision, [])
+                return []
+
+            # Lazy import avoids a circular dependency: cloud_attack_path
+            # imports DKG at module level.
+            from darwin.cloud_attack_path import compute_attack_paths
+
+            try:
+                report = compute_attack_paths(self)
+                paths = list(report.paths[: max(0, int(max_paths))])
+            except Exception:
+                # Keep the previous silent-fallback behavior; do not cache
+                # failures so a later call can retry.
+                return []
+            self._attack_path_cache = (self._revision, paths)
+            return list(paths)
+
+    @staticmethod
+    def topology_diff(
+        before: Dict[str, Any] | None,
+        after: Dict[str, Any] | None,
+    ) -> Dict[str, Any]:
+        """Compute stable added/removed/updated node and edge records."""
+        before = before or {}
+        after = after or {}
+        bnodes = {
+            str(n.get("id")): n for n in before.get("nodes", [])
+            if n.get("id") is not None
+        }
+        anodes = {
+            str(n.get("id")): n for n in after.get("nodes", [])
+            if n.get("id") is not None
+        }
+        edge_key = lambda e: (
+            str(e.get("from")), str(e.get("to")), str(e.get("type", ""))
+        )
+        bedges = {edge_key(e): e for e in before.get("edges", [])}
+        aedges = {edge_key(e): e for e in after.get("edges", [])}
+        return {
+            "from_revision": before.get("revision", 0),
+            "to_revision": after.get("revision", 0),
+            "added_nodes": [anodes[k] for k in sorted(set(anodes) - set(bnodes))],
+            "removed_nodes": [bnodes[k] for k in sorted(set(bnodes) - set(anodes))],
+            "updated_nodes": [
+                anodes[k] for k in sorted(set(anodes) & set(bnodes))
+                if anodes[k] != bnodes[k]
+            ],
+            "added_edges": [aedges[k] for k in sorted(set(aedges) - set(bedges))],
+            "removed_edges": [bedges[k] for k in sorted(set(bedges) - set(aedges))],
+        }
 
     # ── High-Level Queries ──────────────────────────────────────────
 
@@ -377,6 +529,7 @@ class DKG:
                     for u, v, data in self.graph.edges(data=True)
                 ],
                 "created_at": self._created_at,
+                "revision": self._revision,
             }
 
     @classmethod
@@ -391,6 +544,8 @@ class DKG:
             v = edge.pop("to")
             dkg.graph.add_edge(u, v, **edge)
         dkg._created_at = data.get("created_at", datetime.now().isoformat())
+        dkg._revision = int(data.get("revision", 0) or 0)
+        dkg._attack_path_cache = None
         return dkg
 
     def save(self, path: str) -> None:
@@ -412,3 +567,5 @@ class DKG:
         with self._lock:
             self.graph.clear()
             self._created_at = datetime.now().isoformat()
+            self._attack_path_cache = None
+            self._touch()

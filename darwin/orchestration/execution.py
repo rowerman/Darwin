@@ -573,6 +573,10 @@ class ExecutionCoordinator(CoordinatorContext):
             self._cognition_before = node_ids_by_type(self.dkg)
         except Exception:
             self._cognition_before = None
+        try:
+            self._topology_before = self.dkg.topology_snapshot()
+        except Exception:
+            self._topology_before = None
 
         task_instruction = task.instruction or "unknown"
         task_action = task.action or {}
@@ -1356,6 +1360,7 @@ class ExecutionCoordinator(CoordinatorContext):
             executor=_RuntimeExecutorAdapter(self, tool_defs),
             evaluator=_RuntimeEvaluatorAdapter(self),
             memory=self.memory,
+            state_provider=self._get_state,
         )
         try:
             outcome = await runtime.run(

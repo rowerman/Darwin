@@ -49,6 +49,92 @@ class TaskResult:
 
 
 @dataclass
+class TopologyNode:
+    """Bounded graph node exposed to planning and replanning."""
+
+    id: str
+    node_type: str = ""
+    properties: Dict[str, Any] = field(default_factory=dict)
+    confidence: float | None = None
+    provenance: Dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "id": self.id,
+            "type": self.node_type,
+            "properties": dict(self.properties),
+            "confidence": self.confidence,
+            "provenance": dict(self.provenance),
+        }
+
+
+@dataclass
+class TopologyEdge:
+    """Typed relationship between two topology nodes."""
+
+    from_id: str
+    to_id: str
+    edge_type: str = ""
+    properties: Dict[str, Any] = field(default_factory=dict)
+    confidence: float | None = None
+    provenance: Dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "from": self.from_id,
+            "to": self.to_id,
+            "type": self.edge_type,
+            "properties": dict(self.properties),
+            "confidence": self.confidence,
+            "provenance": dict(self.provenance),
+        }
+
+
+@dataclass
+class AttackPathSummary:
+    """LLM-facing summary of a computed attack path."""
+
+    path_id: str
+    category: str = ""
+    description: str = ""
+    steps: List[dict] = field(default_factory=list)
+    prerequisites: List[str] = field(default_factory=list)
+    recommended_tools: List[str] = field(default_factory=list)
+    confidence: float = 0.0
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "path_id": self.path_id,
+            "category": self.category,
+            "description": self.description,
+            "steps": list(self.steps),
+            "prerequisites": list(self.prerequisites),
+            "recommended_tools": list(self.recommended_tools),
+            "confidence": self.confidence,
+        }
+
+
+@dataclass
+class TopologySnapshot:
+    """Bounded, serializable view of the DKG graph."""
+
+    revision: int = 0
+    anchors: List[str] = field(default_factory=list)
+    nodes: List[TopologyNode] = field(default_factory=list)
+    edges: List[TopologyEdge] = field(default_factory=list)
+    attack_paths: List[AttackPathSummary] = field(default_factory=list)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "revision": self.revision,
+            "anchors": list(self.anchors),
+            "nodes": [node.to_dict() for node in self.nodes],
+            "edges": [edge.to_dict() for edge in self.edges],
+            "attack_paths": [path.to_dict() for path in self.attack_paths],
+        }
+
+
+@dataclass
 class VulnerabilityHypothesis:
     """A hypothesized vulnerability for testing."""
     vuln_type: str
@@ -230,6 +316,7 @@ class PipelineState:
     hosts: List[dict] = field(default_factory=list)
     sessions: List[dict] = field(default_factory=list)
     domains: List[dict] = field(default_factory=list)
+    topology: TopologySnapshot = field(default_factory=TopologySnapshot)
 
     def get_endpoint(self, url: str) -> Optional[EndpointInfo]:
         """Find an endpoint by URL (loose match)."""
@@ -421,6 +508,65 @@ def normalize_dkg_state(dkg: Any) -> PipelineState:
         PipelineState with all data validated and normalised.
     """
     state = PipelineState()
+
+    # Topology is optional for legacy stand-ins and old checkpoints.  Keep
+    # normalization tolerant while exposing graph relationships when DKG
+    # provides the bounded snapshot API.
+    try:
+        raw_topology = dkg.topology_snapshot()
+        node_models = []
+        for raw in raw_topology.get("nodes", []):
+            props = dict(raw)
+            node_id = str(props.pop("id", ""))
+            node_type = str(props.pop("type", ""))
+            confidence = props.pop("confidence", None)
+            provenance = props.pop("provenance", {})
+            node_models.append(TopologyNode(
+                id=node_id,
+                node_type=node_type,
+                properties=props,
+                confidence=confidence,
+                provenance=provenance if isinstance(provenance, dict) else {},
+            ))
+        edge_models = []
+        for raw in raw_topology.get("edges", []):
+            props = dict(raw)
+            from_id = str(props.pop("from", ""))
+            to_id = str(props.pop("to", ""))
+            edge_type = str(props.pop("type", ""))
+            confidence = props.pop("confidence", None)
+            provenance = props.pop("provenance", {})
+            edge_models.append(TopologyEdge(
+                from_id=from_id,
+                to_id=to_id,
+                edge_type=edge_type,
+                properties=props,
+                confidence=confidence,
+                provenance=provenance if isinstance(provenance, dict) else {},
+            ))
+        state.topology = TopologySnapshot(
+            revision=int(raw_topology.get("revision", 0) or 0),
+            anchors=[str(x) for x in raw_topology.get("anchors", [])],
+            nodes=node_models,
+            edges=edge_models,
+        )
+        try:
+            state.topology.attack_paths = [
+                AttackPathSummary(
+                    path_id=str(path.path_id),
+                    category=str(path.category),
+                    description=str(path.description),
+                    steps=list(path.steps),
+                    prerequisites=list(path.prerequisites),
+                    recommended_tools=list(path.recommended_tools),
+                    confidence=float(path.confidence),
+                )
+                for path in dkg.attack_path_summary(max_paths=12)
+            ]
+        except Exception:
+            pass
+    except Exception:
+        pass
 
     # Endpoints
     for raw in dkg.query_nodes("Endpoint"):

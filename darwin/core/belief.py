@@ -60,6 +60,17 @@ def _clip(text: Any, limit: int) -> str:
     return text if len(text) <= limit else text[: limit - 3] + "..."
 
 
+def _format_confidence(value: Any) -> str:
+    """Render a confidence value tolerantly: numeric -> percent, else raw."""
+    if value is None:
+        return ""
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return str(value)
+    return f"{number:.0%}"
+
+
 def _compact(caps: SnapshotCaps, compact: bool) -> SnapshotCaps:
     """Return tighter caps for compact rendering (compression/truncation)."""
     if not compact:
@@ -137,6 +148,90 @@ def _render_facts(state: Any, caps: SnapshotCaps) -> str:
             lines.append("Endpoints:\n" + "\n".join(f"  - {_clip(e, caps.line_len)}" for e in _ep))
     except Exception:
         pass
+    return "\n".join(lines)
+
+
+def _render_topology(state: Any, caps: SnapshotCaps) -> str:
+    """Render a bounded local graph and computed attack-path summaries."""
+    topology = getattr(state, "topology", None)
+    if topology is None:
+        return ""
+    nodes = list(getattr(topology, "nodes", None) or [])
+    edges = list(getattr(topology, "edges", None) or [])
+    paths = list(getattr(topology, "attack_paths", None) or [])
+    if not nodes and not edges and not paths:
+        return ""
+
+    def node_id(node: Any) -> str:
+        return str(getattr(node, "id", "?") or "?")
+
+    lines = [
+        f"Topology (revision={getattr(topology, 'revision', 0)}, "
+        f"anchors={','.join(str(x) for x in (getattr(topology, 'anchors', []) or [])[:6]) or 'none'}):"
+    ]
+    for node in sorted(nodes, key=node_id)[: caps.services + caps.endpoints + caps.sessions]:
+        props = dict(getattr(node, "properties", None) or {})
+        label = node_id(node)
+        node_type = str(getattr(node, "node_type", "") or "")
+        identity = props.get("url") or props.get("name") or props.get("ip") or props.get("port")
+        if identity:
+            label += f" ({identity})"
+        conf = getattr(node, "confidence", None)
+        conf_text = f" conf={_format_confidence(conf)}" if conf is not None else ""
+        lines.append(f"  - {node_type}:{label}{conf_text}")
+        if node_type == "Credential":
+            for key in ("username", "password", "hash", "source_host", "port"):
+                if props.get(key) not in (None, ""):
+                    lines.append(f"      {key}={props[key]}")
+
+    # Keep credentials available even when the graph relation is not yet
+    # connected to an anchor (common immediately after discovery).
+    credentials = list(getattr(state, "credentials", None) or [])
+    if credentials:
+        lines.append("Credential values (benchmark context):")
+        for cred in credentials[: caps.credentials]:
+            user = getattr(cred, "username", "") or ""
+            host = getattr(cred, "source_host", "") or ""
+            password = getattr(cred, "password", "") or ""
+            hash_value = getattr(cred, "hash_value", "") or ""
+            secret = f"password={password}" if password else (f"hash={hash_value}" if hash_value else "")
+            lines.append(f"  - {user}@{host} {secret}".rstrip())
+
+    if credentials and edges:
+        lines.append("")
+    for edge in sorted(
+        edges,
+        key=lambda e: (
+            str(getattr(e, "from_id", "")),
+            str(getattr(e, "to_id", "")),
+            str(getattr(e, "edge_type", "")),
+        ),
+    )[: caps.plan_tasks * 4]:
+        src = str(getattr(edge, "from_id", "?"))
+        dst = str(getattr(edge, "to_id", "?"))
+        edge_type = str(getattr(edge, "edge_type", "") or "relationship")
+        conf = getattr(edge, "confidence", None)
+        suffix = f" conf={_format_confidence(conf)}" if conf is not None else ""
+        lines.append(f"  - {src} -[{edge_type}]-> {dst}{suffix}")
+
+    if paths:
+        lines.append("Attack paths:")
+        for path in sorted(paths, key=lambda p: str(getattr(p, "path_id", "")))[:caps.vulns]:
+            desc = _clip(getattr(path, "description", ""), caps.line_len)
+            conf = float(getattr(path, "confidence", 0.0) or 0.0)
+            lines.append(f"  - [{getattr(path, 'category', '')}] {desc} conf={conf:.0%}")
+            prereqs = list(getattr(path, "prerequisites", None) or [])
+            if prereqs:
+                lines.append(f"    prerequisites: {', '.join(str(x) for x in prereqs[:4])}")
+            tools = list(getattr(path, "recommended_tools", None) or [])
+            if tools:
+                lines.append(f"    tools: {', '.join(str(x) for x in tools[:5])}")
+            for step in list(getattr(path, "steps", None) or [])[:4]:
+                if isinstance(step, dict):
+                    lines.append(
+                        f"    step: {step.get('action', '')} "
+                        f"tool={step.get('tool', '')} target={step.get('target', '')}"
+                    )
     return "\n".join(lines)
 
 
@@ -273,6 +368,7 @@ def render_belief_snapshot(
     sections: list[str] = []
     for renderer in (
         lambda: _render_facts(state, caps),
+        lambda: _render_topology(state, caps),
         lambda: _render_beliefs(vulnerabilities or [], caps),
         lambda: _render_plan(plan, caps),
         lambda: _render_defense(defense),

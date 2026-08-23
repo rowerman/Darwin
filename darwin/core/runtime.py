@@ -83,12 +83,25 @@ class Runtime:
         executor: Executor,
         evaluator: Evaluator,
         memory=None,
+        state_provider=None,
     ) -> None:
         self.planner = planner
         self.scheduler = scheduler
         self.executor = executor
         self.evaluator = evaluator
         self.memory = memory
+        self.state_provider = state_provider
+
+    def _current_state(self, fallback: WorldState) -> WorldState:
+        """Refresh working state when the composition root supplies a provider."""
+        if callable(self.state_provider):
+            try:
+                refreshed = self.state_provider()
+                if refreshed is not None:
+                    return refreshed
+            except Exception:
+                pass
+        return fallback
 
     async def run(
         self,
@@ -101,6 +114,7 @@ class Runtime:
         graph: TaskGraph | None = None
         started = time.monotonic()
         stall_tried = False
+        current_state = self._current_state(state)
 
         for iteration in range(1, budget.max_loops + 1):
             if time.monotonic() - started > budget.time_budget_seconds:
@@ -108,7 +122,7 @@ class Runtime:
                 break
 
             if graph is None:
-                graph = await self.planner.plan(state, objective, self.memory)
+                graph = await self.planner.plan(current_state, objective, self.memory)
 
             task = self.scheduler.next_ready(graph, budget)
             if task is None:
@@ -116,15 +130,17 @@ class Runtime:
                     outcome.stopped_reason = "plan_exhausted"
                     break
                 stall_tried = True
+                current_state = self._current_state(current_state)
                 graph = await self.planner.replan(
-                    state, graph, _STALL_EVALUATION, self.memory
+                    current_state, graph, _STALL_EVALUATION, self.memory
                 ) or graph
                 outcome.replan_count += 1
                 continue
 
             graph.transition(task.id, TaskStatus.RUNNING)
             result = await self.executor.execute(task)
-            evaluation = await self.evaluator.evaluate(task, result, state)
+            current_state = self._current_state(current_state)
+            evaluation = await self.evaluator.evaluate(task, result, current_state)
             if self.memory is not None:
                 self.memory.record_task(task)
                 self.memory.record_execution(
@@ -140,8 +156,9 @@ class Runtime:
             outcome.executed_tasks.append(task.id)
 
             if evaluation.replan is not ReplanRecommendation.NONE:
+                current_state = self._current_state(current_state)
                 graph = await self.planner.replan(
-                    state, graph, evaluation, self.memory
+                    current_state, graph, evaluation, self.memory
                 ) or graph
                 outcome.replan_count += 1
                 stall_tried = False

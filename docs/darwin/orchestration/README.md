@@ -28,6 +28,8 @@ Coordinator，通过「组合 + 共享上下文」协作，`Orchestrator` 退化
 | `execution.py` | `ExecutionCoordinator` + Runtime 适配器：任务执行策略/提权 |
 | `lifecycle.py` | `LifecycleCoordinator`：`run()` 主循环/状态与日志/工具检查 |
 
+所有 Coordinator 通过 `_belief_context()` 读取统一 Cognition Snapshot；其中包含 DKG 的有界局部拓扑、攻击路径摘要和任务前后拓扑 diff。拓扑节点属性按 benchmark 配置可包含完整凭证值，调用方必须将其视为敏感上下文。
+
 ## 阅读建议
 
 先读 `context.py` 与 `ports.py` 理解共享上下文与端口契约，再按

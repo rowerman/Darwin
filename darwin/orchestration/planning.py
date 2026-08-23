@@ -1222,6 +1222,11 @@ class PlanCoordinator(CoordinatorContext):
                 + json.dumps(cteg_hints, indent=2, ensure_ascii=False)
             )
 
+        try:
+            _topology_context = self._belief_context(compact=True)
+        except Exception:
+            _topology_context = ""
+
         prompt = f"""Target: {target_url}
 
 ## Discovered Services (from nmap)
@@ -1232,6 +1237,7 @@ class PlanCoordinator(CoordinatorContext):
 - {len(state.services)} services detected
 - Credentials: {len(state.credentials)} known
 {phase_summary}{_cteg_block}
+{_topology_context}
 ## Analyzed Vulnerabilities
 {self._format_vulnerability_summary()}
 {rag_context}
@@ -2464,6 +2470,39 @@ Output ONLY valid JSON:
 
         # Build prompt: what just happened + current plan + new DKG state
         state = self._get_state()
+        _topology_diff_text = ""
+        try:
+            before_topology = getattr(self, "_topology_before", None)
+            # Only emit a per-task topology diff when a real baseline was
+            # captured before execution. Stall/plan-exhausted reviews have no
+            # baseline; diffing against an empty snapshot would misreport the
+            # whole graph as newly added.
+            if before_topology is not None:
+                after_topology = self.dkg.topology_snapshot()
+                diff = self.dkg.topology_diff(before_topology, after_topology)
+                changed = any(diff.get(key) for key in (
+                    "added_nodes", "removed_nodes", "updated_nodes",
+                    "added_edges", "removed_edges",
+                ))
+                if changed:
+                    lines = [
+                        "## Topology Changes This Task",
+                        f"revision {diff.get('from_revision', 0)} -> {diff.get('to_revision', 0)}",
+                    ]
+                    for key, label in (
+                        ("added_nodes", "added nodes"),
+                        ("removed_nodes", "removed nodes"),
+                        ("updated_nodes", "updated nodes"),
+                        ("added_edges", "added edges"),
+                        ("removed_edges", "removed edges"),
+                    ):
+                        rows = diff.get(key) or []
+                        if rows:
+                            lines.append(f"{label}: {json.dumps(rows[:8], default=str)[:1200]}")
+                    _topology_diff_text = "\n" + "\n".join(lines) + "\n"
+            self._topology_before = None
+        except Exception:
+            pass
         # O1.2: diff-based discoveries — the review LLM sees exactly which
         # nodes this task added to the world model. Falls back to the legacy
         # "latest endpoints/credentials" view when there is no per-task
@@ -2723,6 +2762,7 @@ Output ONLY valid JSON:
             f"{_post_exploit_reminder}\n"
             f"{self._format_plan_status()}\n"
             f"{new_discoveries}"
+            f"{_topology_diff_text}"
             f"{_absent_text}\n\n"
             f"{_provenance_text}"
             f"{_memory_text}"

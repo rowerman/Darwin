@@ -11,6 +11,7 @@
 ## 关键入口
 
 - `PipelineState`：阶段快照的主要载体。
+- `TopologySnapshot`：PipelineState 中的有界节点/边关系和攻击路径摘要。
 - `TaskResult`：对外运行结果。
 - `ExploitationPlan`、`VulnerabilityHypothesis`：旧/新规划数据。
 - `normalize_dkg_state()`：将动态 DKG 转换为快照。
@@ -25,9 +26,8 @@
 
 ## 阅读建议
 
-先看 `PipelineState` 字段和归一化函数，再看各阶段如何填充它。
+先看 `PipelineState` 字段和归一化函数，再看各阶段如何填充它。拓扑通过 DKG revision 刷新，旧 checkpoint 缺少该字段时使用空快照。
 
 ## 维护提示
 
 这里的字段是跨阶段契约，变更时同步 schema、checkpoint 和消费方。
-

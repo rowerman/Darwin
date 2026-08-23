@@ -44,8 +44,9 @@ FLAG = "flag{local-integration-ok}"
 class ReplayLLM:
     """Scripted LLMSession-compatible object with no network access."""
 
-    def __init__(self, plan_url: str):
+    def __init__(self, plan_url: str, root_url: str | None = None):
         self.plan_url = plan_url
+        self.root_url = root_url or plan_url.rsplit("/flag", 1)[0]
         self.model = "replay/test"
         self.provider = "replay"
         self.token_count = 0
@@ -76,16 +77,18 @@ class ReplayLLM:
         if "research" in stage_text:
             return "[]", None
         if "task_execution" in stage_text:
+            url = self.plan_url if "Fetch the target flag" in str(prompt) else self.root_url
             return "", [{
                 "name": "curl_get",
-                "arguments": {"url": self.plan_url},
+                "arguments": {"url": url},
                 "id": "replay-task-1",
             }]
         if "plan" in stage_text or "review" in stage_text or not stage_text:
             return (
-                '[{"id":"local-flag","instruction":"Fetch the target flag",'
-                f'"tool":"curl_get","params":{{"url":"{self.plan_url}"}},'
-                '"dependent_task_ids":[]}]'
+                '[{"id":"local-root","instruction":"Fetch the local target root page",'
+                f'"tool":"curl_get","params":{{"url":"{self.root_url}"}},"dependent_task_ids":[]}},'
+                '{"id":"local-flag","instruction":"Fetch the target flag",'
+                f'"tool":"curl_get","params":{{"url":"{self.plan_url}"}},"dependent_task_ids":["local-root"]}}]'
             ), None
         return "[]", None
 
@@ -264,6 +267,11 @@ async def test_public_orchestrator_run_uses_local_target_and_real_gateways(
     endpoint_nodes = orchestrator.dkg.query_nodes("Endpoint", with_provenance=True)
     assert endpoint_nodes and all(isinstance(node["provenance"], dict) for node in endpoint_nodes)
     assert any(call[0] == "generate" for call in llm.calls)
+    review_prompts = [
+        str(entry[2]) for entry in llm.calls
+        if entry[0] == "generate" and entry[1] == "plan_review"
+    ]
+    assert any("Topology (revision=" in p for p in review_prompts)
     assert orchestrator.phase.value == "done"
     stub_calls = (cli_stub_path / "calls.log").read_text(encoding="utf-8")
     assert "nmap" in stub_calls
