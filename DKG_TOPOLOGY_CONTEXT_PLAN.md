@@ -477,3 +477,114 @@ git diff --check
 - 关系上下文只展示与当前任务相关的内容，并对不确定关系使用简短状态标签。
 - 作用域保护只用于 checkpoint 和显式外部 DKG 复用，不改变单 benchmark 默认行为。
 - benchmark 的固定对外端口范围是环境分类的前置假设；轻量探针只在基础扫描出现云/K8s 信号后执行。
+
+
+----------------------------------------------------------------------------------------------
+
+# DARWIN 拓扑上下文下一轮计划
+
+本轮基础闭环已完成：
+
+- DKG 关系按 `(from, to, type)` 幂等 upsert；历史重复边可折叠；变更 journal 和 scope 可持久化。
+- 基础扫描后使用规则分类器区分 `WEB_DB`、`PRIVATE_CLOUD`、`PUBLIC_CLOUD`、`HYBRID`、`UNKNOWN`。
+- 云/K8s discovery 只在分类命中后执行，K8s 只读命令通过 gateway tool port。
+- Host/Service/Endpoint 基础关系、K8s Service selector → Pod 关系已接入。
+- `DKG.topology_context()` 提供全局摘要、局部图、增量变化和 coverage；belief/research/replan 可消费云上下文。
+- 攻击路径支持稳定 `path_id`、confidence、status、evidence 和 checkpoint 持久化。
+
+## 下一轮优先级
+
+1. **RelationAnalyzer**
+   - 新增确定性 `TopologyAnalysisResult`。
+   - 分析 K8s selector、labels、Ingress、EndpointSlice、RBAC、NetworkPolicy。
+   - 分析 IAM trust/permission policy、网络可达性、服务调用和资源依赖。
+   - 只让 observed/inferred 关系生成高优先级任务。
+
+2. **完整 K8s 资源采集**
+   - Deployment、StatefulSet、DaemonSet、EndpointSlice、Ingress、NetworkPolicy。
+   - Role、ClusterRole、RoleBinding、ClusterRoleBinding、Secret、ConfigMap。
+   - 采集结果必须经过 discovery gateway，并使用现有 canonical 关系名。
+
+3. **AWS 资源采集**
+   - Account、VPC、Subnet、RouteTable、SecurityGroup、ENI、EC2、EKS、LoadBalancer、RDS、S3。
+   - IAMPolicy 与 Role/Resource 关系。
+   - 完成 AWS + Kubernetes hybrid 关系合并和资源去重。
+
+4. **攻击路径 replan 完善**
+   - 将稳定 `path_id` 映射到任务依赖。
+   - 根据 Evaluator 结果更新路径 confidence/status。
+   - 只重算受影响路径，不重算无关路径。
+
+5. **测试与验收**
+   - K8s/AWS/Hybrid fixture 和 CLI stubs。
+   - 验证普通 Web/DB 不触发云采集。
+   - 验证 topology diff、coverage、路径状态和 checkpoint 作用域。
+
+## 保持不变的约束
+
+- 外部命令必须经 MCPGateway/Executor；mapper 不得直接创建子进程。
+- 原始 DKG 不截断，`max_nodes/max_edges` 只限制 LLM 视图。
+- 不引入同义关系双写；新关系必须先进入语义注册表。
+- Azure/GCP 本轮仍只保留 provider-neutral 分类和扩展接口。
+
+-------------------------------------------------------------------------------------------
+拓扑关系分析与完整 K8s 采集
+
+## Summary
+
+以当前工作区未提交改动为基线继续推进，不回滚已有 DKG、环境分类和拓扑上下文实现。当前相关测试及全量回归均通过（`575 passed`）；下一轮聚焦“确定性 RelationAnalyzer + 完整 K8s 资源关系”，AWS 资源采集延后。
+
+## Implementation Changes
+
+1. **先修当前隐藏回归**
+   - 修复 `darwin/orchestration/execution.py` 中 `_apply_attack_path_feedback()` 对未定义 `matched/endpoint/delta` 的日志引用。
+   - 增加带 `path_id` 的成功、失败、降级和终止状态测试，确保攻击路径反馈不会因日志代码抛异常。
+
+2. **新增确定性 `RelationAnalyzer`**
+   - 新增 `darwin/topology_analysis.py` 及对应文档。
+   - 提供 `TopologyAnalysisResult`：`before_revision`、`after_revision`、新增/更新关系数、受影响路径、coverage、warnings。
+   - `analyze(dkg, classification)` 只基于已采集事实推导关系，不调用 LLM；所有写入统一走 `DKG.upsert_edge()`。
+   - 第一版覆盖：
+     - Service selector/Pod labels；
+     - Deployment、StatefulSet、DaemonSet ownerReferences；
+     - EndpointSlice/Service/Ingress 后端关系；
+     - Role、ClusterRole 与 Binding、ServiceAccount 的 RBAC 关系；
+     - NetworkPolicy 的 allow/deny 关系。
+   - 关系状态明确区分 `observed`、`inferred`、`hypothesized`；只有前两类关系可生成高优先级任务，弱推断只能作为低优先级候选。
+   - 所有新增关系先登记到 DKG 的 `EDGE_TYPES`/`EDGE_SEMANTICS`，禁止同义关系双写。
+
+3. **扩展 K8s 只读采集**
+   - 扩展 `CloudTopology` 数据结构和 `CloudTopologyMapper`，采集：
+     `Deployment`、`StatefulSet`、`DaemonSet`、`EndpointSlice`、`Ingress`、`NetworkPolicy`、`Role`、`ClusterRole`、`RoleBinding`、`ClusterRoleBinding`、`Secret`、`ConfigMap`。
+   - 在 `cloud_discovery_command` allowlist 中加入对应固定命令，并重新生成、校验 `tools_manifest.json`。
+   - 采集结果必须经 gateway tool port；发现失败记录 `discovery_failure` 和 `coverage=incomplete`，不得阻断普通 Web/DB 流程。
+   - Secret/ConfigMap 默认只写元数据和 key 名称，不把完整敏感值注入拓扑上下文。
+
+4. **接入编排与任务优先级**
+   - `ReconCoordinator` 在 `PRIVATE_CLOUD`/`HYBRID` 分类下执行 K8s 采集后调用 `RelationAnalyzer`；`WEB_DB`/`UNKNOWN` 不执行完整云采集。
+   - 将分析结果写入 DKG Analysis 节点，并让 research/plan/replan 继续复用现有 `topology_context()`。
+   - 为由 `observed/inferred` 关系生成的任务保留稳定 `path_id`，执行结果通过 evaluator 更新路径 confidence/status；本轮只更新受影响路径状态，完整 AWS 路径重算留待后续阶段。
+
+5. **同步文档**
+   - 更新 `docs/darwin/cloud_topology.md`、新增分析器文档，并同步编排/recon 文档中的调用链、失败语义和覆盖率说明。
+   - 保留 `DKG_TOPOLOGY_CONTEXT_PLAN_v1.md` 作为后续 AWS/Hybrid 阶段的边界说明。
+
+## Test Plan
+
+- 单元测试：每种 K8s 资源 JSON fixture 的解析、canonical 节点/关系、selector/owner/RBAC/Ingress/NetworkPolicy 推导、幂等 upsert、provenance/status。
+- 编排测试：Web/DB 场景不调用云 discovery；K8s 场景调用完整 allowlist；单条 discovery 失败仍能继续运行。
+- 路径测试：`path_id` 映射、成功增信、失败降级、连续失败后 `stale/rejected`。
+- 验收命令：
+  - `conda run -n deeplearn python -m pytest -q`
+  - `conda run -n deeplearn python -m pytest -m integration -v`
+  - `conda run -n deeplearn python -m pytest -m acceptance -v`
+  - `conda run -n deeplearn python -m darwin.tools.manifest --out tools_manifest.json --check`
+  - `conda run -n deeplearn python -m tools.audit_coverage`
+  - `git diff --check`
+
+## Assumptions
+
+- 本轮不实现 AWS Account/VPC/IAM 资源采集；仅保留现有 provider-neutral 分类接口。
+- 不调用真实云 API、真实 kubectl 集群或外网，全部使用本地 fixture、gateway stub 和确定性测试数据。
+- 原始 DKG 保持完整，节点/边上限只限制 LLM 视图。
+- 当前工作区已有改动视为用户上一轮成果，实施时按模块审阅后增量修改，不覆盖或重置

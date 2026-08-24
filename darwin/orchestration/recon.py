@@ -656,16 +656,27 @@ class ReconCoordinator(CoordinatorContext):
         # with RBAC mapping, pod security analysis, and IAM enumeration.
         try:
             from darwin.cloud_topology import discover_cloud_topology
+            from darwin.topology_analysis import RelationAnalyzer
             if classification.cloud_enabled:
                 self._cloud_topology = await discover_cloud_topology(
                     self.dkg, tool_port=self._call_tool
                 )
+                self._topology_analysis = RelationAnalyzer().analyze(
+                    self.dkg, environment=classification
+                )
             else:
                 self._cloud_topology = None
+                self._topology_analysis = None
             log.info("CTAGE: cloud topology mapped — %d pods, %d RBAC bindings, %d IAM roles",
                      len(self._cloud_topology.pods) if self._cloud_topology else 0,
                      len(self._cloud_topology.rbac_bindings) if self._cloud_topology else 0,
                      len(self._cloud_topology.iam_roles) if self._cloud_topology else 0)
+            if self._topology_analysis is not None:
+                log.info(
+                    "CTAGE: relation analysis — %d changed relations, %d affected paths",
+                    self._topology_analysis.added_relations,
+                    len(self._topology_analysis.affected_path_ids),
+                )
             if self._cloud_topology and self._cloud_topology.high_risk_pods:
                 log.info("CTAGE: %d high-risk pods identified", len(self._cloud_topology.high_risk_pods))
                 for profile in self._cloud_topology.high_risk_pods[:5]:

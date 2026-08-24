@@ -156,6 +156,28 @@ def test_cloud_relations_enter_topology_with_attack_paths():
     assert state.topology.attack_paths[0].category == "privilege_escalation"
 
 
+@pytest.mark.asyncio
+async def test_attack_path_feedback_updates_state_without_unbound_logging(
+    make_orchestrator, fake_llm, fake_gateway
+):
+    orch = make_orchestrator(fake_llm(content="[]"), fake_gateway({}), fake_gateway({}))
+    orch.dkg.upsert_attack_path("path-k8s", confidence=0.5, status="active")
+    task = Task(
+        id="task-path", type="exploit", goal="follow path",
+        instruction="follow path_id=path-k8s",
+        action={"path_id": "path-k8s", "params": {}},
+    )
+
+    orch.execution._apply_attack_path_feedback(
+        task, success=False, failure_type="strategy_failed"
+    )
+
+    state = orch.dkg.attack_path_states()[0]
+    assert state["path_id"] == "path-k8s"
+    assert state["confidence"] == pytest.approx(0.3)
+    assert state["status"] == "active"
+
+
 def test_topology_render_survives_non_numeric_confidence():
     dkg = DKG()
     dkg.add_node("Host", "host-a", {"ip": "10.0.0.1", "confidence": "high"})

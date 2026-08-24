@@ -110,6 +110,15 @@ class CloudTopology:
     nodes: list[dict] = field(default_factory=list)
     namespaces: list[str] = field(default_factory=list)
     pods: list[dict] = field(default_factory=list)
+    services: list[dict] = field(default_factory=list)
+    workloads: list[dict] = field(default_factory=list)
+    endpoint_slices: list[dict] = field(default_factory=list)
+    ingresses: list[dict] = field(default_factory=list)
+    network_policies: list[dict] = field(default_factory=list)
+    rbac_roles: list[dict] = field(default_factory=list)
+    rbac_resources: list[dict] = field(default_factory=list)
+    secrets: list[dict] = field(default_factory=list)
+    configmaps: list[dict] = field(default_factory=list)
     pod_security_profiles: list[PodSecurityProfile] = field(default_factory=list)
     rbac_bindings: list[K8sRBACBinding] = field(default_factory=list)
     service_accounts: list[dict] = field(default_factory=list)
@@ -149,8 +158,15 @@ class CloudTopologyMapper:
             await self._discover_nodes(topology)
             await self._discover_namespaces(topology)
             await self._discover_pods(topology)
+            await self._discover_services(topology)
+            await self._discover_workloads(topology)
+            await self._discover_endpoint_slices(topology)
+            await self._discover_ingresses(topology)
+            await self._discover_network_policies(topology)
             await self._discover_service_accounts(topology)
             await self._discover_rbac(topology)
+            await self._discover_rbac_resources(topology)
+            await self._discover_sensitive_metadata(topology)
 
         # Phase 2: Pod security analysis
         topology.pod_security_profiles = self._analyze_pod_security(topology.pods)
@@ -356,6 +372,110 @@ class CloudTopologyMapper:
         except Exception as e:
             log.debug("CloudTopologyMapper: SA discovery failed: %s", e)
 
+    async def _json_items(self, command: str, *, timeout: float = 10) -> list[dict]:
+        """Read an allow-listed Kubernetes JSON list, returning empty on failure."""
+        try:
+            ok, out = await self._run_discovery(command, timeout=timeout)
+            if not ok or not out.strip().startswith("{"):
+                return []
+            payload = _json.loads(out)
+            return [item for item in payload.get("items", []) if isinstance(item, dict)]
+        except Exception as exc:
+            log.debug("CloudTopologyMapper: %s failed: %s", command, exc)
+            return []
+
+    async def _discover_services(self, topology: CloudTopology) -> None:
+        for item in await self._json_items("kubectl get svc -A -o json"):
+            meta = item.get("metadata", {})
+            spec = item.get("spec", {})
+            topology.services.append({
+                "name": meta.get("name", ""),
+                "namespace": meta.get("namespace", ""),
+                "selector": spec.get("selector", {}),
+                "type": spec.get("type", "ClusterIP"),
+                "ports": spec.get("ports", []),
+                "cluster_ip": spec.get("clusterIP", ""),
+            })
+
+    async def _discover_workloads(self, topology: CloudTopology) -> None:
+        commands = (
+            ("kubectl get deployments -A -o json", "Deployment"),
+            ("kubectl get statefulsets -A -o json", "StatefulSet"),
+            ("kubectl get daemonsets -A -o json", "DaemonSet"),
+        )
+        for command, kind in commands:
+            for item in await self._json_items(command):
+                meta = item.get("metadata", {})
+                topology.workloads.append({
+                    "kind": kind,
+                    "name": meta.get("name", ""),
+                    "namespace": meta.get("namespace", ""),
+                    "labels": meta.get("labels", {}),
+                    "owner_references": meta.get("ownerReferences", []),
+                    "selector": item.get("spec", {}).get("selector", {}).get("matchLabels", {}),
+                })
+
+    async def _discover_endpoint_slices(self, topology: CloudTopology) -> None:
+        for item in await self._json_items("kubectl get endpointslices -A -o json"):
+            meta = item.get("metadata", {})
+            labels = meta.get("labels", {})
+            topology.endpoint_slices.append({
+                "name": meta.get("name", ""),
+                "namespace": meta.get("namespace", ""),
+                "service_name": labels.get("kubernetes.io/service-name", ""),
+                "address_type": item.get("addressType", ""),
+                "endpoints": item.get("endpoints", []),
+                "ports": item.get("ports", []),
+            })
+
+    async def _discover_ingresses(self, topology: CloudTopology) -> None:
+        for item in await self._json_items("kubectl get ingress -A -o json"):
+            meta = item.get("metadata", {})
+            spec = item.get("spec", {})
+            backend_services: list[dict] = []
+            default_backend = spec.get("defaultBackend", {}).get("service", {})
+            if default_backend.get("name"):
+                backend_services.append({"name": default_backend["name"], "port": default_backend.get("port", {})})
+            for rule in spec.get("rules", []):
+                for path in rule.get("http", {}).get("paths", []):
+                    service = path.get("backend", {}).get("service", {})
+                    if service.get("name"):
+                        backend_services.append({"name": service["name"], "port": service.get("port", {})})
+            topology.ingresses.append({
+                "name": meta.get("name", ""),
+                "namespace": meta.get("namespace", ""),
+                "class_name": spec.get("ingressClassName", ""),
+                "backend_services": backend_services,
+                "tls_hosts": [host for tls in spec.get("tls", []) for host in tls.get("hosts", [])],
+            })
+
+    async def _discover_network_policies(self, topology: CloudTopology) -> None:
+        for item in await self._json_items("kubectl get networkpolicies -A -o json"):
+            meta = item.get("metadata", {})
+            spec = item.get("spec", {})
+            topology.network_policies.append({
+                "name": meta.get("name", ""),
+                "namespace": meta.get("namespace", ""),
+                "pod_selector": spec.get("podSelector", {}),
+                "policy_types": spec.get("policyTypes", []),
+                "ingress": spec.get("ingress", []),
+                "egress": spec.get("egress", []),
+            })
+
+    async def _discover_sensitive_metadata(self, topology: CloudTopology) -> None:
+        for item in await self._json_items("kubectl get secrets -A -o json"):
+            meta = item.get("metadata", {})
+            topology.secrets.append({
+                "name": meta.get("name", ""), "namespace": meta.get("namespace", ""),
+                "type": item.get("type", ""), "data_keys": sorted(item.get("data", {}).keys()),
+            })
+        for item in await self._json_items("kubectl get configmaps -A -o json"):
+            meta = item.get("metadata", {})
+            topology.configmaps.append({
+                "name": meta.get("name", ""), "namespace": meta.get("namespace", ""),
+                "data_keys": sorted(item.get("data", {}).keys()),
+            })
+
     async def _discover_rbac(self, topology: CloudTopology) -> None:
         """Enumerate K8s RBAC bindings (Roles + RoleBindings + ClusterRoles + ClusterRoleBindings)."""
         # ClusterRoleBindings
@@ -394,6 +514,35 @@ class CloudTopologyMapper:
                     ))
         except Exception as e:
             log.debug("CloudTopologyMapper: RB discovery failed: %s", e)
+
+    async def _discover_rbac_resources(self, topology: CloudTopology) -> None:
+        for command, kind in (
+            ("kubectl get roles -A -o json", "Role"),
+            ("kubectl get clusterroles -o json", "ClusterRole"),
+        ):
+            for item in await self._json_items(command):
+                meta = item.get("metadata", {})
+                topology.rbac_roles.append({
+                    "kind": kind,
+                    "name": meta.get("name", ""),
+                    "namespace": meta.get("namespace", ""),
+                    "rules": item.get("rules", []),
+                })
+        for command, kind in (
+            ("kubectl get rolebindings -A -o json", "RoleBinding"),
+            ("kubectl get clusterrolebindings -o json", "ClusterRoleBinding"),
+        ):
+            for item in await self._json_items(command):
+                meta = item.get("metadata", {})
+                role_ref = item.get("roleRef", {})
+                topology.rbac_resources.append({
+                    "kind": kind,
+                    "name": meta.get("name", ""),
+                    "namespace": meta.get("namespace", ""),
+                    "role_name": role_ref.get("name", ""),
+                    "role_kind": role_ref.get("kind", "Role"),
+                    "subjects": item.get("subjects", []),
+                })
 
     # ── Phase 2: Pod security analysis ─────────────────────────────────
 
@@ -704,6 +853,88 @@ class CloudTopologyMapper:
                                 "source": "k8s_rbac",
                             })
                             self.dkg.add_edge(said, rid, "sa_bound_to_role")
+
+        # ── Services and first-class Kubernetes resources ──
+        for service in topology.services:
+            sid = f"k8s-service-{service.get('namespace', '')}-{service.get('name', '')}"
+            self.dkg.add_node("Service", sid, {
+                "name": service.get("name", ""),
+                "k8s_namespace": service.get("namespace", ""),
+                "k8s_selector": service.get("selector", {}),
+                "k8s_type": service.get("type", "ClusterIP"),
+                "ports": service.get("ports", []),
+                "cluster_ip": service.get("cluster_ip", ""),
+            }, source="cloud_discovery:k8s_service")
+
+        for workload in topology.workloads:
+            kind = str(workload.get("kind", "Deployment"))
+            wid = f"k8s-{kind.lower()}-{workload.get('namespace', '')}-{workload.get('name', '')}"
+            self.dkg.add_node(kind, wid, {
+                "name": workload.get("name", ""),
+                "namespace": workload.get("namespace", ""),
+                "labels": workload.get("labels", {}),
+                "selector": workload.get("selector", {}),
+                "owner_references": workload.get("owner_references", []),
+            }, source="cloud_discovery:k8s_workload")
+
+        for endpoint_slice in topology.endpoint_slices:
+            eid = f"k8s-endpointslice-{endpoint_slice.get('namespace', '')}-{endpoint_slice.get('name', '')}"
+            self.dkg.add_node("EndpointSlice", eid, {
+                "name": endpoint_slice.get("name", ""),
+                "namespace": endpoint_slice.get("namespace", ""),
+                "service_name": endpoint_slice.get("service_name", ""),
+                "address_type": endpoint_slice.get("address_type", ""),
+                "endpoints": endpoint_slice.get("endpoints", []),
+                "ports": endpoint_slice.get("ports", []),
+            }, source="cloud_discovery:k8s_endpointslice")
+
+        for ingress in topology.ingresses:
+            iid = f"k8s-ingress-{ingress.get('namespace', '')}-{ingress.get('name', '')}"
+            self.dkg.add_node("Ingress", iid, {
+                "name": ingress.get("name", ""),
+                "namespace": ingress.get("namespace", ""),
+                "class_name": ingress.get("class_name", ""),
+                "backend_services": ingress.get("backend_services", []),
+                "tls_hosts": ingress.get("tls_hosts", []),
+            }, source="cloud_discovery:k8s_ingress")
+
+        for policy in topology.network_policies:
+            pid = f"k8s-networkpolicy-{policy.get('namespace', '')}-{policy.get('name', '')}"
+            self.dkg.add_node("NetworkPolicy", pid, {
+                "name": policy.get("name", ""),
+                "namespace": policy.get("namespace", ""),
+                "pod_selector": policy.get("pod_selector", {}),
+                "policy_types": policy.get("policy_types", []),
+                "ingress": policy.get("ingress", []),
+                "egress": policy.get("egress", []),
+            }, source="cloud_discovery:k8s_networkpolicy")
+
+        for role in topology.rbac_roles:
+            kind = str(role.get("kind", "Role"))
+            rid = f"k8s-{kind.lower()}-{role.get('namespace', 'cluster')}-{role.get('name', '')}"
+            self.dkg.add_node(kind, rid, {
+                "name": role.get("name", ""),
+                "namespace": role.get("namespace", ""),
+                "rules": role.get("rules", []),
+            }, source="cloud_discovery:k8s_rbac")
+
+        for binding in topology.rbac_resources:
+            kind = str(binding.get("kind", "RoleBinding"))
+            bid = f"k8s-{kind.lower()}-{binding.get('namespace', 'cluster')}-{binding.get('name', '')}"
+            self.dkg.add_node(kind, bid, {
+                "name": binding.get("name", ""),
+                "namespace": binding.get("namespace", ""),
+                "role_name": binding.get("role_name", ""),
+                "role_kind": binding.get("role_kind", "Role"),
+                "subjects": binding.get("subjects", []),
+            }, source="cloud_discovery:k8s_rbac")
+
+        for item in topology.secrets:
+            sid = f"k8s-secret-{item.get('namespace', '')}-{item.get('name', '')}"
+            self.dkg.add_node("Secret", sid, item, source="cloud_discovery:k8s_secret_metadata")
+        for item in topology.configmaps:
+            cid = f"k8s-configmap-{item.get('namespace', '')}-{item.get('name', '')}"
+            self.dkg.add_node("ConfigMap", cid, item, source="cloud_discovery:k8s_configmap_metadata")
 
         # ── Cloud IAM ──
         for role in topology.iam_roles:

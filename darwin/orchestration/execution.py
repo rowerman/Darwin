@@ -350,11 +350,10 @@ class ExecutionCoordinator(CoordinatorContext):
             path_id, confidence=confidence, status=status,
             evidence=[failure_type] if failure_type else ["success"] if success else [],
         )
-        if matched:
-            log.debug(
-                "O2.1 belief feedback: endpoint=%s delta=%+.2f status=%s",
-                endpoint, delta, status or "-",
-            )
+        log.debug(
+            "attack path feedback: path_id=%s confidence=%.2f status=%s",
+            path_id, confidence, status,
+        )
 
     # ── Tool Result Feedback ─────────────────────────────────────
 

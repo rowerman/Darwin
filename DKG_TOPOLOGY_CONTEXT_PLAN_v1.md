@@ -9,18 +9,23 @@
 - `DKG.topology_context()` 提供全局摘要、局部图、增量变化和 coverage；belief/research/replan 可消费云上下文。
 - 攻击路径支持稳定 `path_id`、confidence、status、evidence 和 checkpoint 持久化。
 
-## 下一轮优先级
+## 本轮已完成
 
-1. **RelationAnalyzer**
-   - 新增确定性 `TopologyAnalysisResult`。
-   - 分析 K8s selector、labels、Ingress、EndpointSlice、RBAC、NetworkPolicy。
+- `RelationAnalyzer` 已加入，覆盖 Service selector、Pod ownerReferences、EndpointSlice、Ingress、RBAC Binding 和 NetworkPolicy，并返回确定性的 `TopologyAnalysisResult`。
+- K8s discovery 已扩展到 Service、Deployment、StatefulSet、DaemonSet、EndpointSlice、Ingress、NetworkPolicy、Role/ClusterRole、Binding、Secret/ConfigMap 元数据。
+- 新增关系已登记到 DKG canonical relation registry；所有写入仍通过 `upsert_edge()` 幂等合并。
+- cloud bootstrap 已在 discovery 后调用关系分析器，分析结果记录 revision、coverage 和受影响路径。
+- 攻击路径反馈日志回归已修复，并增加 `path_id` 失败反馈测试。
+
+## 后续待完成任务
+
+1. **RelationAnalyzer 深化**
    - 分析 IAM trust/permission policy、网络可达性、服务调用和资源依赖。
-   - 只让 observed/inferred 关系生成高优先级任务。
+   - 将关系状态进一步映射到 Planner 任务优先级。
 
-2. **完整 K8s 资源采集**
-   - Deployment、StatefulSet、DaemonSet、EndpointSlice、Ingress、NetworkPolicy。
-   - Role、ClusterRole、RoleBinding、ClusterRoleBinding、Secret、ConfigMap。
-   - 采集结果必须经过 discovery gateway，并使用现有 canonical 关系名。
+2. **K8s 采集验收深化**
+   - 为全部新增 allow-listed 命令补 CLI stub integration fixture。
+   - 增加 NetworkPolicy allow/deny、workload owner 和资源 coverage 的端到端断言。
 
 3. **AWS 资源采集**
    - Account、VPC、Subnet、RouteTable、SecurityGroup、ENI、EC2、EKS、LoadBalancer、RDS、S3。
@@ -36,6 +41,7 @@
    - K8s/AWS/Hybrid fixture 和 CLI stubs。
    - 验证普通 Web/DB 不触发云采集。
    - 验证 topology diff、coverage、路径状态和 checkpoint 作用域。
+   - 当前新增测试已覆盖关系幂等、资源写入、Secret 元数据脱敏和路径反馈；仍需补 Web/DB 不触发云采集的 integration 场景。
 
 ## 保持不变的约束
 

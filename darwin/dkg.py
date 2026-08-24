@@ -108,6 +108,11 @@ EDGE_TYPES = [
     "credential_for_role",         # Credential → IAMRole
     # Service/resource and network relations used by topology analysis.
     "service_targets_pod",          # Service → K8sPod
+    "workload_owns_pod",            # Deployment/StatefulSet/DaemonSet → K8sPod
+    "binding_subject",              # RoleBinding/ClusterRoleBinding → K8sSA
+    "binding_targets_role",          # RoleBinding/ClusterRoleBinding → Role/ClusterRole
+    "ingress_routes_service",        # Ingress → Service
+    "endpoint_slice_backed_by_service",  # EndpointSlice → Service
     "service_exposes_endpoint",    # Service → Endpoint
     "endpoint_backed_by_service",  # Endpoint → Service
     "host_reaches_host",            # Host → Host
@@ -133,6 +138,11 @@ EDGE_SEMANTICS: Dict[str, Dict[str, str]] = {
     "credential_for": {"from": "Credential", "to": "Host"},
     "credential_for_role": {"from": "Credential", "to": "IAMRole"},
     "service_targets_pod": {"from": "Service", "to": "K8sPod"},
+    "workload_owns_pod": {"from": "Workload", "to": "K8sPod"},
+    "binding_subject": {"from": "Binding", "to": "K8sSA"},
+    "binding_targets_role": {"from": "Binding", "to": "Role"},
+    "ingress_routes_service": {"from": "Ingress", "to": "Service"},
+    "endpoint_slice_backed_by_service": {"from": "EndpointSlice", "to": "Service"},
     "service_exposes_endpoint": {"from": "Service", "to": "Endpoint"},
     "endpoint_backed_by_service": {"from": "Endpoint", "to": "Service"},
     "host_reaches_host": {"from": "Host", "to": "Host"},
