@@ -112,6 +112,8 @@ AWS/Hybrid 拓扑闭环与局部 Replan
 - IAMPolicy 版本文档解析已接入；`policy_document` 优先于 `policy_detail`。
 - `priority_hints` 已接入 Planner（仅提升、弱推断不提升）；局部 replan 将 stale/rejected 路径的 blocked 任务迁移为 `needs_replan`；exploit 任务注入目标相关拓扑子图。
 - 新增 Hybrid integration（K8s + AWS 同时采集、EKS crosswalk 去重）。
+- **Host 唯一主机模型重构**：EC2/K8sNode 统一写入 `Host`，ENI 折叠为 `network_interfaces` 属性；`host_reaches_host` 成为主机间唯一连通边（同子网/SG inferred、同 cluster hypothesized）。
+- 修复评测发现的 bug：anchor IP 精确匹配、脏 Port 安全转换、ConfigMap IP:port 误报、死代码清理；合成 Endpoint 渲染 `[virtual]` 标注。
 
 ### 后续待完成任务
 
@@ -119,3 +121,4 @@ AWS/Hybrid 拓扑闭环与局部 Replan
 2. **局部 replan 深化**：补充路径索引缺失时升级为路径族/全局重算的运行时指标，并将 `needs_replan` 任务的实际分支替换纳入 replan 测试。
 3. **RelationAnalyzer 深化**：补充 DNS/URL/环境变量来源的服务调用推断与 AWS simulator 分页/部分权限失败 fixture。
 4. **提交当前改动**：本轮文件改动仍未提交；提交前确认全量回归、manifest、coverage 和 `git diff --check` 全部通过。
+5. **Host 模型遗留**：旧 checkpoint 中的 EC2/K8sNode/ENI 节点仅保留读取兼容，不迁移历史数据；如需统一历史数据，需增加一次性迁移脚本。

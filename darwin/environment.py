@@ -99,14 +99,23 @@ class EnvironmentClassifier:
                     for row in dkg.query_nodes()
                 }
                 if node_types & {
-                    "K8sCluster", "K8sNode", "K8sPod", "K8sSA",
+                    "K8sCluster", "K8sPod", "K8sSA",
                     "Deployment", "StatefulSet", "DaemonSet",
                 }:
                     k8s = True
                     signals.append("dkg:k8s-resource")
-                if node_types & {"CloudAccount", "IAMPolicy", "VPC", "EC2", "S3"}:
+                if node_types & {"CloudAccount", "IAMPolicy", "VPC", "S3"}:
                     public = True
                     signals.append("dkg:cloud-resource")
+                for row in dkg.query_nodes("Host"):
+                    provider = str(row.get("provider", "") or "").lower()
+                    if provider == "k8s":
+                        k8s = True
+                        signals.append("dkg:k8s-host")
+                    elif provider == "aws":
+                        public = True
+                        signals.append("dkg:aws-host")
+                        providers.append("aws")
                 for row in dkg.query_nodes("IAMRole"):
                     provider = str(row.get("provider", "") or "").lower()
                     if provider in {"aws", "azure", "gcp"}:

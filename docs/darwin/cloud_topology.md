@@ -17,6 +17,7 @@
 - `cloud_discovery_aws` 只允许通过 gateway 执行读取型 STS/EC2/EKS/ELB/RDS/S3/IAM action；AWS 资源使用 ARN 或规范化复合 ID。
 - ConfigMap 采集保存非敏感 `data`（单值截断 200 字符、排除 secret 类 key）；IAMPolicy 额外按 `DefaultVersionId` 拉取 `get-policy-version` 文档。
 - RouteTable 与 Subnet 的 association 写为 `route_table_routes_to`；EKS `name`/`ClusterName` 均登记为 crosswalk 查找键。
+- **Host 唯一主机模型**：K8s 节点与 AWS EC2 实例统一写入 `Host` 节点（`provider=k8s/aws`，属性保留 cluster/internal_ip/InstanceId/SubnetId/Groups 等）；ENI 折叠为 Host 的 `network_interfaces` 属性，不再单独建节点。`EC2`/`K8sNode`/`ENI` 仅为旧 checkpoint 的 legacy 类型，新环境不再产生。
 
 ## 输入/输出概览
 

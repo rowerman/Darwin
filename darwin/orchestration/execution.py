@@ -234,12 +234,14 @@ class ExecutionCoordinator(CoordinatorContext):
         ).strip()
         if not target:
             return []
+        import ipaddress
         from urllib.parse import urlparse
 
         try:
             host = urlparse(target if "://" in target else f"http://{target}").hostname
         except Exception:
             host = None
+        host = (host or "").lower()
         anchors: list[str] = []
         if host:
             host_id = f"host-{host}"
@@ -249,9 +251,28 @@ class ExecutionCoordinator(CoordinatorContext):
             node_id = str(row.get("id", ""))
             url = str(row.get("url", "") or "")
             ip = str(row.get("ip", "") or "")
+            internal_ip = str(row.get("internal_ip", "") or "")
             if node_id in anchors:
                 continue
-            if (ip and ip in target) or (url and (url in target or target in url)):
+            matched = False
+            for candidate in (ip, internal_ip):
+                if not candidate or not host:
+                    continue
+                try:
+                    if ipaddress.ip_address(candidate) == ipaddress.ip_address(host):
+                        matched = True
+                        break
+                except ValueError:
+                    if candidate == host:
+                        matched = True
+                        break
+            if not matched and url and host:
+                try:
+                    node_host = urlparse(url if "://" in url else f"http://{url}").hostname
+                    matched = bool(node_host and node_host.lower() == host)
+                except Exception:
+                    matched = False
+            if matched:
                 anchors.append(node_id)
         return list(dict.fromkeys(anchors))[:5]
 

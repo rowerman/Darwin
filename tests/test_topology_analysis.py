@@ -102,15 +102,11 @@ def test_analyzer_generates_service_endpoint_and_configmap_call_relations():
 
 def test_analyzer_generates_host_resource_and_rbac_permission_relations():
     dkg = DKG()
-    dkg.add_node("Host", "host-a", {"ip": "10.0.0.5"})
-    dkg.add_node("Host", "host-b", {"ip": "10.0.0.6"})
-    dkg.add_node("EC2", "aws:ec2-a", {
-        "InstanceId": "i-a", "PrivateIpAddress": "10.0.0.5",
-        "SubnetId": "subnet-1", "Groups": [{"GroupId": "sg-1"}],
+    dkg.add_node("Host", "host-a", {
+        "ip": "10.0.0.5", "subnet_id": "subnet-1", "groups": [{"GroupId": "sg-1"}],
     })
-    dkg.add_node("EC2", "aws:ec2-b", {
-        "InstanceId": "i-b", "PrivateIpAddress": "10.0.0.6",
-        "SubnetId": "subnet-1", "Groups": [{"GroupId": "sg-1"}],
+    dkg.add_node("Host", "host-b", {
+        "ip": "10.0.0.6", "subnet_id": "subnet-1", "groups": [{"GroupId": "sg-1"}],
     })
     dkg.add_node("K8sNamespace", "k8s-ns-default", {"name": "default"})
     dkg.add_node("Role", "role-reader", {
@@ -122,7 +118,6 @@ def test_analyzer_generates_host_resource_and_rbac_permission_relations():
     edges = {(row["from"], row["to"], row["type"]) for row in dkg.query_edges()}
 
     assert ("host-a", "host-b", "host_reaches_host") in edges
-    assert any(e[2] == "resource_reaches_resource" for e in edges)
     assert ("role-reader", "k8s-ns-default", "role_grants_permission") in edges
 
 

@@ -914,10 +914,20 @@ class CloudTopologyMapper:
 
     # ── Phase 4: Write to DKG ──────────────────────────────────────────
 
+    def _find_host_by_ip(self, ip: str) -> str | None:
+        """Return an existing Host node id whose ip/internal_ip equals ``ip``."""
+        if not ip:
+            return None
+        for row in self.dkg.query_nodes("Host"):
+            if str(row.get("ip", "") or "") == ip or str(row.get("internal_ip", "") or "") == ip:
+                return str(row.get("id", ""))
+        return None
+
     def _write_to_dkg(self, topology: CloudTopology) -> None:
         """Populate DKG with structured cloud/K8s topology nodes and edges."""
 
         # ── K8s Clusters ──
+        k8s_host_ids: dict[str, str] = {}
         for cluster in topology.clusters:
             cid = f"k8s-cluster-{cluster['name']}"
             self.dkg.add_node("K8sCluster", cid, {
@@ -926,17 +936,21 @@ class CloudTopologyMapper:
                 "version": cluster.get("version", ""),
             })
 
-            # ── K8s Nodes ──
+            # ── K8s Nodes → unified Host nodes ──
             for node in topology.nodes:
                 if node.get("cluster") == cluster["name"]:
-                    nid = f"k8s-node-{node['name']}"
-                    self.dkg.add_node("K8sNode", nid, {
+                    internal_ip = str(node.get("internal_ip", "") or "")
+                    nid = self._find_host_by_ip(internal_ip) or f"host-k8s-{node['name']}"
+                    self.dkg.add_node("Host", nid, {
                         "name": node["name"],
-                        "internal_ip": node.get("internal_ip", ""),
+                        "cluster": cluster["name"],
+                        "internal_ip": internal_ip,
                         "is_control_plane": node.get("is_control_plane", False),
                         "labels": _json.dumps(node.get("labels", {})),
                         "taints": _json.dumps(node.get("taints", [])),
-                    })
+                        "provider": "k8s",
+                    }, source="cloud_discovery:k8s_node")
+                    k8s_host_ids[str(node["name"])] = nid
                     self.dkg.add_edge(cid, nid, "cluster_contains_node")
 
             # ── Namespaces ──
@@ -968,8 +982,8 @@ class CloudTopologyMapper:
 
                 # Pod → Node
                 if pod.get("node_name"):
-                    nid = f"k8s-node-{pod['node_name']}"
-                    if nid in self.dkg.graph:
+                    nid = k8s_host_ids.get(str(pod.get("node_name", "")))
+                    if nid and nid in self.dkg.graph:
                         self.dkg.add_edge(nid, pid, "node_hosts_pod")
 
             # ── Service Accounts ──
@@ -1127,7 +1141,7 @@ class CloudTopologyMapper:
 
         aws_ids: dict[str, dict[str, str]] = {}
         for node_type, rows in topology.aws_resources.items():
-            if node_type == "CloudAccount":
+            if node_type in {"CloudAccount", "EC2", "ENI"}:
                 continue
             for row in rows:
                 rid = str(row.get("resource_id", "") or "")
@@ -1161,24 +1175,85 @@ class CloudTopologyMapper:
                         confidence=1.0, status="observed",
                     )
 
+        # ── EC2 instances → unified Host nodes; ENIs fold into Host props ──
+        eni_by_instance: dict[str, list[dict]] = {}
+        eni_by_ip: dict[str, list[dict]] = {}
+        for row in topology.aws_resources.get("ENI", []):
+            attachment = row.get("Attachment", {}) if isinstance(row.get("Attachment"), dict) else {}
+            instance_id = str(attachment.get("InstanceId", "") or "")
+            private_ip = str(row.get("PrivateIpAddress", row.get("private_ip", "")) or "")
+            if instance_id:
+                eni_by_instance.setdefault(instance_id, []).append(row)
+            if private_ip:
+                eni_by_ip.setdefault(private_ip, []).append(row)
+
+        ec2_host_ids: dict[str, str] = {}
+        for row in topology.aws_resources.get("EC2", []):
+            instance_id = str(row.get("InstanceId", "") or "")
+            private_ip = str(row.get("PrivateIpAddress", row.get("private_ip", "")) or "")
+            nid = self._find_host_by_ip(private_ip)
+            if not nid and instance_id:
+                nid = f"host-ec2-{instance_id}"
+            if not nid:
+                topology.aws_warnings.append(f"EC2 instance without id/ip skipped: {row}")
+                continue
+            props = {
+                "ip": private_ip,
+                "instance_id": instance_id,
+                "arn": row.get("Arn", row.get("arn", "")),
+                "provider": "aws",
+                "account_id": row.get("account_id", ""),
+                "region": row.get("region", ""),
+                "subnet_id": row.get("SubnetId", ""),
+                "groups": row.get("Groups", []),
+            }
+            props = {key: value for key, value in props.items() if value not in (None, "")}
+            enis = eni_by_instance.get(instance_id, []) or eni_by_ip.get(private_ip, [])
+            if enis:
+                props["network_interfaces"] = [
+                    {
+                        "id": eni.get("NetworkInterfaceId", ""),
+                        "subnet_id": eni.get("SubnetId", ""),
+                        "groups": [
+                            str(group.get("GroupId", ""))
+                            for group in eni.get("Groups", []) if isinstance(group, dict)
+                        ],
+                        "private_ip": eni.get("PrivateIpAddress", ""),
+                    }
+                    for eni in enis
+                ]
+            self.dkg.add_node("Host", nid, props, source="cloud_discovery_aws:ec2")
+            ec2_host_ids[instance_id] = nid
+            if account_node_id:
+                self.dkg.add_edge(
+                    account_node_id, nid, "account_contains_resource",
+                    source="cloud_discovery_aws", evidence="EC2",
+                    confidence=1.0, status="observed",
+                )
+        orphan_enis = [
+            row for row in topology.aws_resources.get("ENI", [])
+            if not str(
+                (row.get("Attachment") if isinstance(row.get("Attachment"), dict) else {}).get("InstanceId", "") or ""
+            )
+        ]
+        if orphan_enis:
+            topology.aws_warnings.append(f"orphan ENIs without instance skipped: {len(orphan_enis)}")
+
         # Stable AWS relationship joins by IDs returned by the APIs.
         for row in topology.aws_resources.get("Subnet", []):
             subnet_id = aws_ids.get("Subnet", {}).get(str(row.get("SubnetId", "")), {}).get("id", "")
             vpc_id = aws_ids.get("VPC", {}).get(str(row.get("VpcId", "")), {}).get("id", "")
             if subnet_id and vpc_id:
                 self.dkg.add_edge(vpc_id, subnet_id, "resource_contains", source="cloud_discovery_aws", evidence="VpcId", confidence=1.0)
-        for node_type in ("ENI", "EC2"):
-            for row in topology.aws_resources.get(node_type, []):
-                resource_id = aws_ids.get(node_type, {}).get(str(
-                    row.get("NetworkInterfaceId") or row.get("InstanceId") or ""
-                ), {}).get("id", "")
-                subnet_id = aws_ids.get("Subnet", {}).get(str(row.get("SubnetId", "")), {}).get("id", "")
-                if resource_id and subnet_id:
-                    self.dkg.add_edge(resource_id, subnet_id, "resource_in_subnet", source="cloud_discovery_aws", evidence="SubnetId", confidence=1.0)
-                for group in row.get("Groups", []) if isinstance(row.get("Groups"), list) else []:
-                    group_id = aws_ids.get("SecurityGroup", {}).get(str(group.get("GroupId", "")), {}).get("id", "")
-                    if group_id and resource_id:
-                        self.dkg.add_edge(group_id, resource_id, "security_group_attaches", source="cloud_discovery_aws", evidence="Groups", confidence=0.9, status="inferred")
+        for row in topology.aws_resources.get("EC2", []):
+            nid = ec2_host_ids.get(str(row.get("InstanceId", "")), "")
+            subnet_id = aws_ids.get("Subnet", {}).get(str(row.get("SubnetId", "")), {}).get("id", "")
+            if nid and subnet_id:
+                self.dkg.add_edge(nid, subnet_id, "resource_in_subnet", source="cloud_discovery_aws", evidence="SubnetId", confidence=1.0)
+            for group in row.get("Groups", []) if isinstance(row.get("Groups"), list) else []:
+                group_id = aws_ids.get("SecurityGroup", {}).get(str(group.get("GroupId", "")), {}).get("id", "")
+                if group_id and nid:
+                    self.dkg.add_edge(group_id, nid, "security_group_attaches", source="cloud_discovery_aws", evidence="Groups", confidence=0.9, status="inferred")
 
         for row in topology.aws_resources.get("RouteTable", []):
             route_table_id = aws_ids.get("RouteTable", {}).get(str(row.get("RouteTableId", "")), {}).get("id", "")

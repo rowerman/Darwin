@@ -130,7 +130,7 @@ class RelationAnalyzer:
 
         resource_by_arn = {
             str(node.get("arn", node.get("Arn", ""))): self._node_id(node)
-            for node_type in ("S3", "EC2", "RDS", "EKS", "LoadBalancer", "VPC")
+            for node_type in ("S3", "Host", "RDS", "EKS", "LoadBalancer", "VPC")
             for node in self._nodes(dkg, node_type)
             if node.get("arn", node.get("Arn", ""))
         }
@@ -149,9 +149,20 @@ class RelationAnalyzer:
                     if target:
                         self._edge(dkg, result, changed_ids, "relation_analyzer:iam_permission", str(arn), 1.0, "observed", policy_id, target, "policy_grants_resource")
 
+    @staticmethod
+    def _host_groups(node: dict[str, Any]) -> set[str]:
+        groups = node.get("groups", node.get("Groups", [])) or []
+        out: set[str] = set()
+        for group in groups:
+            if isinstance(group, dict):
+                out.add(str(group.get("GroupId", group.get("group_id", "")) or ""))
+            else:
+                out.add(str(group))
+        return {value for value in out if value}
+
     def _analyze_network(self, dkg: DKG, result: TopologyAnalysisResult, changed_ids: set[str]) -> None:
+        """SecurityGroup peer reachability stays a non-host resource relation."""
         groups = self._nodes(dkg, "SecurityGroup")
-        resources = [node for node_type in ("ENI", "EC2") for node in self._nodes(dkg, node_type)]
         group_ids = {str(group.get("GroupId", group.get("group_id", ""))): self._node_id(group) for group in groups}
         for group in groups:
             source_id = self._node_id(group)
@@ -160,20 +171,18 @@ class RelationAnalyzer:
                     target_id = group_ids.get(str(pair.get("GroupId", "")))
                     if target_id:
                         self._edge(dkg, result, changed_ids, "relation_analyzer:security_group", str(pair.get("GroupId")), 0.8, "inferred", source_id, target_id, "resource_reaches_resource")
-        for resource in resources:
-            subnet = str(resource.get("SubnetId", "") or "")
-            if not subnet:
-                continue
-            for other in resources:
-                if self._node_id(other) == self._node_id(resource):
-                    continue
-                if subnet == str(other.get("SubnetId", "") or ""):
-                    self._edge(dkg, result, changed_ids, "relation_analyzer:subnet_reachability", subnet, 0.55, "hypothesized", self._node_id(resource), self._node_id(other), "resource_reaches_resource")
 
     @staticmethod
     def _endpoint_url(host: str, port: int) -> str:
         scheme = "https" if port == 443 else "http"
         return f"{scheme}://{host}:{port}"
+
+    @staticmethod
+    def _safe_port(value: Any, default: int) -> int:
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return default
 
     def _analyze_service_endpoints(
         self, dkg: DKG, result: TopologyAnalysisResult, changed_ids: set[str],
@@ -192,12 +201,15 @@ class RelationAnalyzer:
                 port = port_row.get("port", port_row.get("targetPort"))
                 if not port:
                     continue
+                port_num = self._safe_port(port, 0)
+                if not port_num:
+                    continue
                 eid = f"endpoint-svc-{service.get('k8s_namespace', service.get('namespace', ''))}-{service.get('name', '')}-{port}"
-                url = self._endpoint_url(cluster_ip or "cluster.local", int(port))
+                url = self._endpoint_url(cluster_ip or "cluster.local", port_num)
                 if eid not in dkg.graph:
                     dkg.add_node(
                         "Endpoint", eid,
-                        {"url": url, "params": "", "discovered_by": "relation_analyzer:service_spec"},
+                        {"url": url, "params": "", "discovered_by": "relation_analyzer:service_spec", "virtual": True},
                         source="relation_analyzer:service_spec",
                     )
                 if sid and eid:
@@ -220,7 +232,6 @@ class RelationAnalyzer:
             (str(s.get("k8s_namespace", s.get("namespace", ""))), str(s.get("name", ""))): self._node_id(s)
             for s in services
         }
-        pod_by_id = {self._node_id(p): p for p in pods}
         for configmap in configmaps:
             cm_ns = str(configmap.get("namespace", ""))
             data = self._json(configmap.get("data", {}), {})
@@ -231,8 +242,14 @@ class RelationAnalyzer:
                 text = str(value)
                 for match in re.finditer(r"https?://([a-z0-9.-]+)(?::(\d+))?", text, re.I):
                     refs.add((match.group(1).lower(), match.group(2) or ""))
-                for match in re.finditer(r"\b([a-z0-9-]+):(\d{1,5})\b", text):
-                    refs.add((match.group(1).lower(), match.group(2)))
+                # Strip bare IPv4 (optionally with port) so 10.0.0.5:8080 never
+                # degrades into a bogus "5:8080" service reference.
+                text_without_ips = re.sub(
+                    r"\b\d{1,3}(?:\.\d{1,3}){3}(?::\d{1,5})?\b", " ", text
+                )
+                for match in re.finditer(r"\b([a-z0-9-]+):(\d{1,5})\b", text_without_ips):
+                    name = match.group(1).lower()
+                    refs.add((name, match.group(2)))
             if not refs:
                 continue
             # Consumers: Services selecting Pods that mount this ConfigMap.
@@ -265,40 +282,35 @@ class RelationAnalyzer:
     def _analyze_host_reachability(
         self, dkg: DKG, result: TopologyAnalysisResult, changed_ids: set[str],
     ) -> None:
-        """Link AWS EC2/ENI private IPs to Host nodes and infer host reachability."""
+        """Infer host reachability from the unified Host model."""
         hosts = self._nodes(dkg, "Host")
-        host_by_ip = {str(h.get("ip", "")): self._node_id(h) for h in hosts}
-        aws_nodes = [n for node_type in ("EC2", "ENI") for n in self._nodes(dkg, node_type)]
-        host_to_resource: dict[str, list[dict[str, Any]]] = {}
-        for node in aws_nodes:
-            private_ip = str(node.get("PrivateIpAddress", node.get("private_ip", "")) or "")
-            host_id = host_by_ip.get(private_ip)
-            if host_id:
-                host_to_resource.setdefault(host_id, []).append(node)
-                self._edge(dkg, result, changed_ids, "relation_analyzer:private_ip", private_ip, 1.0, "observed", self._node_id(node), host_id, "resource_reaches_resource")
-                self._edge(dkg, result, changed_ids, "relation_analyzer:private_ip", private_ip, 1.0, "observed", host_id, self._node_id(node), "resource_reaches_resource")
-        host_ids = list(host_to_resource)
+        by_id = {self._node_id(host): host for host in hosts}
+        host_ids = list(by_id)
         for i, source_host in enumerate(host_ids):
             for target_host in host_ids[i + 1:]:
-                shared_subnet = False
-                shared_group = False
-                for source_node in host_to_resource[source_host]:
-                    for target_node in host_to_resource[target_host]:
-                        if source_node.get("SubnetId") and source_node.get("SubnetId") == target_node.get("SubnetId"):
-                            shared_subnet = True
-                        source_groups = {
-                            str(g.get("GroupId", "")) for g in source_node.get("Groups", []) if isinstance(g, dict)
-                        }
-                        target_groups = {
-                            str(g.get("GroupId", "")) for g in target_node.get("Groups", []) if isinstance(g, dict)
-                        }
-                        if source_groups & target_groups:
-                            shared_group = True
+                source = by_id[source_host]
+                target = by_id[target_host]
+                shared_subnet = bool(
+                    str(source.get("subnet_id", source.get("SubnetId", "")) or "")
+                    and str(source.get("subnet_id", source.get("SubnetId", "")))
+                    == str(target.get("subnet_id", target.get("SubnetId", "")))
+                )
+                shared_group = bool(self._host_groups(source) & self._host_groups(target))
+                same_cluster = bool(
+                    str(source.get("cluster", "") or "")
+                    and str(source.get("cluster", "")) == str(target.get("cluster", ""))
+                )
                 if shared_subnet or shared_group:
                     evidence = "shared_subnet" if shared_subnet else "shared_security_group"
                     self._edge(
                         dkg, result, changed_ids, "relation_analyzer:host_reachability",
                         evidence, 0.7, "inferred", source_host, target_host, "host_reaches_host",
+                    )
+                elif same_cluster:
+                    self._edge(
+                        dkg, result, changed_ids, "relation_analyzer:host_reachability",
+                        "same_k8s_cluster", 0.5, "hypothesized",
+                        source_host, target_host, "host_reaches_host",
                     )
 
     def _analyze_resource_exposure(
@@ -315,7 +327,7 @@ class RelationAnalyzer:
                     endpoint = self._json(row.get("Endpoint", {}), {})
                     if isinstance(endpoint, dict):
                         host = str(endpoint.get("Address", "") or "")
-                        port = int(endpoint.get("Port", 5432) or 5432)
+                        port = self._safe_port(endpoint.get("Port", 5432) or 5432, 5432)
                 if not host:
                     continue
                 eid = f"endpoint-aws-{node_type.lower()}-{self._node_id(row).split(':')[-1]}"
@@ -323,7 +335,7 @@ class RelationAnalyzer:
                 if eid not in dkg.graph:
                     dkg.add_node(
                         "Endpoint", eid,
-                        {"url": url, "params": "", "discovered_by": "relation_analyzer:aws_exposure"},
+                        {"url": url, "params": "", "discovered_by": "relation_analyzer:aws_exposure", "virtual": True},
                         source="relation_analyzer:aws_exposure",
                     )
                 self._edge(dkg, result, changed_ids, "relation_analyzer:aws_exposure", url, 0.9, "observed", self._node_id(row), eid, "resource_exposed_via")
@@ -338,7 +350,7 @@ class RelationAnalyzer:
             if eid not in dkg.graph:
                 dkg.add_node(
                     "Endpoint", eid,
-                    {"url": url, "params": "", "discovered_by": "relation_analyzer:aws_exposure"},
+                    {"url": url, "params": "", "discovered_by": "relation_analyzer:aws_exposure", "virtual": True},
                     source="relation_analyzer:aws_exposure",
                 )
             self._edge(dkg, result, changed_ids, "relation_analyzer:aws_exposure", url, 0.9, "observed", self._node_id(row), eid, "resource_exposed_via")

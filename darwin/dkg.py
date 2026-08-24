@@ -38,13 +38,13 @@ NODE_TYPES = [
     "IAMRole",          # name, arn, trust_policy, permissions_boundary
     "IAMPolicy",        # name, arn, actions, resources, effect
     "K8sCluster",       # name, api_url, version, node_count
-    "K8sNode",          # name, cluster, internal_ip, is_control_plane, labels, taints
+    "K8sNode",          # LEGACY — host machines are unified as Host; kept for old checkpoints
     "K8sNamespace",     # name, cluster, labels
     "K8sPod",           # name, namespace, node, sa_name, privileged, capabilities, host_pid, phase
     "K8sSA",            # name, namespace, secrets, annotations
     "TrustRelationship",# source_account, target_account, principal, condition, type
     # Explicit cloud resources and Kubernetes control-plane resources.
-    "VPC", "Subnet", "RouteTable", "SecurityGroup", "ENI", "EC2",
+    "VPC", "Subnet", "RouteTable", "SecurityGroup", "ENI", "EC2",  # EC2/ENI legacy; new writes use Host
     "EKS", "LoadBalancer", "RDS", "S3",
     "Deployment", "StatefulSet", "DaemonSet", "EndpointSlice", "Ingress",
     "NetworkPolicy", "Role", "ClusterRole", "RoleBinding",
@@ -139,7 +139,8 @@ EDGE_STATUS_VALUES = {"observed", "inferred", "hypothesized", "stale"}
 EDGE_SEMANTICS: Dict[str, Dict[str, str]] = {
     "host_has_service": {"from": "Host", "to": "Service"},
     "host_has_endpoint": {"from": "Host", "to": "Endpoint"},
-    "node_hosts_pod": {"from": "K8sNode", "to": "K8sPod"},
+    "node_hosts_pod": {"from": "Host", "to": "K8sPod"},
+    "cluster_contains_node": {"from": "K8sCluster", "to": "Host"},
     "pod_mounts_sa": {"from": "K8sPod", "to": "K8sSA"},
     "sa_bound_to_role": {"from": "K8sSA", "to": "IAMRole"},
     "role_has_policy": {"from": "IAMRole", "to": "IAMPolicy"},
@@ -153,9 +154,9 @@ EDGE_SEMANTICS: Dict[str, Dict[str, str]] = {
     "ingress_routes_service": {"from": "Ingress", "to": "Service"},
     "endpoint_slice_backed_by_service": {"from": "EndpointSlice", "to": "Service"},
     "account_contains_resource": {"from": "CloudAccount", "to": "Resource"},
-    "resource_in_subnet": {"from": "Resource", "to": "Subnet"},
+    "resource_in_subnet": {"from": "Host", "to": "Subnet"},
     "route_table_routes_to": {"from": "RouteTable", "to": "Resource"},
-    "security_group_attaches": {"from": "SecurityGroup", "to": "Resource"},
+    "security_group_attaches": {"from": "SecurityGroup", "to": "Host"},
     "policy_grants_resource": {"from": "IAMPolicy", "to": "Resource"},
     "eks_links_k8s_cluster": {"from": "EKS", "to": "K8sCluster"},
     "resource_reaches_resource": {"from": "Resource", "to": "Resource"},
@@ -769,7 +770,7 @@ class DKG:
                         } if node_type in {"IAMRole", "IAMPolicy", "CloudAccount", "EKS"} else set())
                         categories.update({
                             "container_escape", "lateral_move"
-                        } if node_type in {"K8sPod", "K8sSA", "NetworkPolicy", "SecurityGroup", "ENI", "EC2"} else set())
+                        } if node_type in {"K8sPod", "K8sSA", "NetworkPolicy", "SecurityGroup", "Host"} else set())
                     for src, dst, edge_type in affected_edge_keys:
                         if edge_type in {"role_can_assume", "role_has_policy", "policy_grants_resource"}:
                             categories.update({"privilege_escalation", "cross_account"})

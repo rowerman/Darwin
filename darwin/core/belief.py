@@ -176,6 +176,8 @@ def _render_topology(state: Any, caps: SnapshotCaps) -> str:
         identity = props.get("url") or props.get("name") or props.get("ip") or props.get("port")
         if identity:
             label += f" ({identity})"
+        if props.get("virtual"):
+            label += " [virtual]"
         conf = getattr(node, "confidence", None)
         conf_text = f" conf={_format_confidence(conf)}" if conf is not None else ""
         lines.append(f"  - {node_type}:{label}{conf_text}")
