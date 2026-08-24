@@ -80,6 +80,21 @@ def test_topology_snapshot_dedupes_parallel_edges_and_diff_reports_real_adds():
     assert diff["to_revision"] > diff["from_revision"]
 
 
+def test_topology_context_reports_summary_coverage_and_incremental_changes():
+    dkg = DKG()
+    dkg.set_scope(engagement_id="e1", target_scope="target", environment_scope="web_db")
+    dkg.add_node("Host", "host-a", {})
+    baseline = dkg.revision
+    dkg.add_node("Service", "svc-a", {"port": 80})
+    dkg.add_edge("host-a", "svc-a", "host_has_service")
+    context = dkg.topology_context(anchors=["host-a"], since_revision=baseline,
+                                   max_nodes=1, max_edges=1)
+    assert context["scope"]["engagement_id"] == "e1"
+    assert context["summary"]["total_nodes"] == 2
+    assert context["changes"]
+    assert "omitted_count" in context
+
+
 def test_dkg_revision_persists_and_legacy_checkpoint_loads_with_zero(tmp_path):
     dkg = DKG()
     dkg.add_node("Host", "host-a", {"ip": "10.0.0.1"})

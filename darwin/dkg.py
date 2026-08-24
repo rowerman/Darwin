@@ -43,6 +43,13 @@ NODE_TYPES = [
     "K8sPod",           # name, namespace, node, sa_name, privileged, capabilities, host_pid, phase
     "K8sSA",            # name, namespace, secrets, annotations
     "TrustRelationship",# source_account, target_account, principal, condition, type
+    # Explicit cloud resources and Kubernetes control-plane resources.
+    "VPC", "Subnet", "RouteTable", "SecurityGroup", "ENI", "EC2",
+    "EKS", "LoadBalancer", "RDS", "S3",
+    "Deployment", "StatefulSet", "DaemonSet", "EndpointSlice", "Ingress",
+    "NetworkPolicy", "Role", "ClusterRole", "RoleBinding",
+    "ClusterRoleBinding", "Secret", "ConfigMap",
+    "AttackPath",
 ]
 
 # Canonical property fields per node type, with accepted alias names.
@@ -99,7 +106,43 @@ EDGE_TYPES = [
     # Session / credential access
     "session_has_cloud_cred",      # Session → Credential (cloud-specific: IAM keys, SA tokens)
     "credential_for_role",         # Credential → IAMRole
+    # Service/resource and network relations used by topology analysis.
+    "service_targets_pod",          # Service → K8sPod
+    "service_exposes_endpoint",    # Service → Endpoint
+    "endpoint_backed_by_service",  # Endpoint → Service
+    "host_reaches_host",            # Host → Host
+    "service_calls_service",        # Service → Service
+    "resource_contains",            # resource → resource
+    "resource_exposed_via",         # resource → Endpoint/Service
+    "resource_depends_on",          # resource → resource
+    "network_policy_allows",        # NetworkPolicy → resource
+    "network_policy_denies",        # NetworkPolicy → resource
 ]
+
+EDGE_STATUS_VALUES = {"observed", "inferred", "hypothesized", "stale"}
+
+# Canonical relationship semantics.  New collectors must use an existing
+# semantic name instead of introducing a synonym with a different spelling.
+EDGE_SEMANTICS: Dict[str, Dict[str, str]] = {
+    "host_has_service": {"from": "Host", "to": "Service"},
+    "host_has_endpoint": {"from": "Host", "to": "Endpoint"},
+    "node_hosts_pod": {"from": "K8sNode", "to": "K8sPod"},
+    "pod_mounts_sa": {"from": "K8sPod", "to": "K8sSA"},
+    "sa_bound_to_role": {"from": "K8sSA", "to": "IAMRole"},
+    "role_has_policy": {"from": "IAMRole", "to": "IAMPolicy"},
+    "credential_for": {"from": "Credential", "to": "Host"},
+    "credential_for_role": {"from": "Credential", "to": "IAMRole"},
+    "service_targets_pod": {"from": "Service", "to": "K8sPod"},
+    "service_exposes_endpoint": {"from": "Service", "to": "Endpoint"},
+    "endpoint_backed_by_service": {"from": "Endpoint", "to": "Service"},
+    "host_reaches_host": {"from": "Host", "to": "Host"},
+    "service_calls_service": {"from": "Service", "to": "Service"},
+    "resource_contains": {"from": "Resource", "to": "Resource"},
+    "resource_exposed_via": {"from": "Resource", "to": "Endpoint"},
+    "resource_depends_on": {"from": "Resource", "to": "Resource"},
+    "network_policy_allows": {"from": "NetworkPolicy", "to": "Resource"},
+    "network_policy_denies": {"from": "NetworkPolicy", "to": "Resource"},
+}
 
 
 class DKG:
@@ -109,13 +152,19 @@ class DKG:
     Agents can subscribe to node type changes via asyncio.Event notifications.
     """
 
-    def __init__(self, storage_path: str | None = None):
+    CHANGE_JOURNAL_LIMIT = 512
+
+    def __init__(self, storage_path: str | None = None,
+                 scope: Dict[str, Any] | None = None):
         self.graph = nx.MultiDiGraph()
         self.storage_path = storage_path
         self._lock = threading.RLock()
         self._created_at = datetime.now().isoformat()
         self._revision = 0
         self._attack_path_cache: tuple[int, list] | None = None
+        self.scope: Dict[str, Any] = dict(scope or {})
+        self._change_journal: list[dict[str, Any]] = []
+        self._attack_path_states: Dict[str, Dict[str, Any]] = {}
 
     @property
     def revision(self) -> int:
@@ -123,8 +172,58 @@ class DKG:
         with self._lock:
             return self._revision
 
-    def _touch(self) -> None:
+    def _touch(self, change: Dict[str, Any] | None = None) -> None:
         self._revision += 1
+        if change is not None:
+            self._change_journal.append({"revision": self._revision, **change})
+            if len(self._change_journal) > self.CHANGE_JOURNAL_LIMIT:
+                del self._change_journal[:-self.CHANGE_JOURNAL_LIMIT]
+
+    def set_scope(self, *, engagement_id: str = "", target_scope: str = "",
+                  environment_scope: str = "") -> None:
+        """Set checkpoint scope metadata without changing graph revision."""
+        with self._lock:
+            self.scope = {
+                "engagement_id": str(engagement_id or ""),
+                "target_scope": str(target_scope or ""),
+                "environment_scope": str(environment_scope or ""),
+            }
+            self._persist()
+
+    def validate_scope(self, expected: Dict[str, Any] | None) -> bool:
+        """Return whether all supplied non-empty scope fields match."""
+        expected = expected or {}
+        with self._lock:
+            return all(
+                not value or self.scope.get(key, "") == value
+                for key, value in expected.items()
+            )
+
+    def upsert_attack_path(self, path_id: str, *, confidence: float,
+                           evidence: Any = None, status: str = "active",
+                           updated_revision: int | None = None,
+                           path: Any = None) -> Dict[str, Any]:
+        """Persist stable attack-path state without adding graph noise."""
+        if status not in {"active", "rejected", "stale"}:
+            raise ValueError(f"Unknown attack path status: {status}")
+        with self._lock:
+            state = dict(self._attack_path_states.get(str(path_id), {}))
+            state.update({
+                "path_id": str(path_id),
+                "confidence": max(0.0, min(1.0, float(confidence))),
+                "status": status,
+                "evidence": list(evidence or []) if isinstance(evidence, (list, tuple)) else evidence,
+                "updated_revision": self._revision if updated_revision is None else int(updated_revision),
+            })
+            if path is not None:
+                state["path"] = path
+            self._attack_path_states[str(path_id)] = state
+            self._persist()
+            return dict(state)
+
+    def attack_path_states(self) -> list[Dict[str, Any]]:
+        with self._lock:
+            return [dict(v) for v in self._attack_path_states.values()]
 
     # ── Node Operations ─────────────────────────────────────────────
 
@@ -172,7 +271,10 @@ class DKG:
             else:
                 props["_version"] = self.graph.nodes[node_id].get("_version", 0) + 1
             self.graph.add_node(node_id, **props)
-            self._touch()
+            self._touch({
+                "op": "node_upsert", "id": str(node_id),
+                "data": {"id": str(node_id), **dict(props)},
+            })
             self._persist()
 
         return node_id
@@ -282,25 +384,123 @@ class DKG:
                 self.graph.nodes[node_id].get("_version", 0) + 1
             )
             self.graph.nodes[node_id]["updated_at"] = datetime.now().isoformat()
-            self._touch()
+            self._touch({
+                "op": "node_update", "id": str(node_id),
+                "data": {"id": str(node_id), **dict(self.graph.nodes[node_id])},
+            })
             self._persist()
         return True
 
     # ── Edge Operations ─────────────────────────────────────────────
 
+    @staticmethod
+    def _as_unique_values(value: Any, limit: int = 12) -> list[str]:
+        if value in (None, ""):
+            return []
+        values = value if isinstance(value, (list, tuple, set)) else [value]
+        out: list[str] = []
+        for item in values:
+            text = str(item)
+            if text and text not in out:
+                out.append(text)
+            if len(out) >= limit:
+                break
+        return out
+
+    def upsert_edge(
+        self,
+        from_id: str,
+        to_id: str,
+        edge_type: str,
+        *,
+        properties: Dict[str, Any] | None = None,
+        confidence: float | None = None,
+        source: str = "",
+        evidence: str = "",
+        status: str = "observed",
+    ) -> bool:
+        """Insert or merge one canonical typed edge.
+
+        Returns True when the graph changed.  Historical parallel edges with
+        the same ``(from, to, type)`` key are folded into the surviving edge.
+        """
+        if edge_type not in EDGE_TYPES:
+            raise ValueError(f"Unknown edge type: {edge_type}. Valid: {EDGE_TYPES}")
+        if status not in EDGE_STATUS_VALUES:
+            raise ValueError(f"Unknown edge status: {status}")
+        with self._lock:
+            now = datetime.now().isoformat()
+            incoming = dict(properties or {})
+            incoming.pop("type", None)
+            source = source or str(incoming.pop("source", "") or "")
+            evidence = evidence or str(incoming.pop("evidence", "") or "")
+            incoming.setdefault("status", status)
+            if confidence is not None:
+                incoming["confidence"] = float(confidence)
+            existing_keys = [
+                key for key, data in self.graph.get_edge_data(from_id, to_id, default={}).items()
+                if data.get("type") == edge_type
+            ]
+            merged: Dict[str, Any] = {}
+            for key in existing_keys:
+                merged.update(dict(self.graph.edges[from_id, to_id, key]))
+            merged.update(incoming)
+            merged["type"] = edge_type
+            merged.setdefault("created_at", now)
+            merged.setdefault("first_seen", merged.get("created_at", now))
+            merged["last_seen"] = now
+            prior_status = str(merged.get("status", "") or "")
+            incoming_status = str(incoming.get("status", status) or status)
+            if incoming_status == "observed" and prior_status in {"inferred", "hypothesized"}:
+                incoming_status = prior_status
+            merged["status"] = incoming_status
+            if source:
+                prior = merged.get("provenance", {})
+                prior_sources = self._as_unique_values(
+                    prior.get("sources", prior.get("source", ""))
+                ) if isinstance(prior, dict) else []
+                if source not in prior_sources:
+                    prior_sources.append(str(source))
+                merged["provenance"] = {
+                    "sources": prior_sources[:12],
+                    "last_timestamp": now,
+                }
+            elif "provenance" not in merged:
+                merged["provenance"] = {"sources": [], "last_timestamp": now}
+            if evidence:
+                prior_ev = merged.get("evidence", [])
+                evs = self._as_unique_values(prior_ev)
+                if evidence not in evs:
+                    evs.append(str(evidence))
+                merged["evidence"] = evs[:12]
+
+            # Compare semantic data while ignoring observation time fields.
+            comparable = {k: v for k, v in merged.items()
+                          if k not in {"last_seen", "created_at", "first_seen"}}
+            old_comparable: Dict[str, Any] = {}
+            if existing_keys:
+                old = dict(self.graph.edges[from_id, to_id, existing_keys[0]])
+                old_comparable = {k: v for k, v in old.items()
+                                  if k not in {"last_seen", "created_at", "first_seen"}}
+            changed = (not existing_keys) or comparable != old_comparable or len(existing_keys) > 1
+            if existing_keys:
+                for key in existing_keys:
+                    self.graph.remove_edge(from_id, to_id, key)
+            self.graph.add_edge(from_id, to_id, **merged)
+            if changed:
+                self._touch({
+                    "op": "edge_upsert",
+                    "key": [str(from_id), str(to_id), str(edge_type)],
+                    "data": {"from": str(from_id), "to": str(to_id), **dict(merged)},
+                })
+            self._persist()
+            return changed
+
     def add_edge(
         self, from_id: str, to_id: str, edge_type: str, **properties
     ) -> None:
-        """Add a typed edge between two nodes."""
-        if edge_type not in EDGE_TYPES:
-            raise ValueError(f"Unknown edge type: {edge_type}. Valid: {EDGE_TYPES}")
-        with self._lock:
-            props = properties or {}
-            props["type"] = edge_type
-            props.setdefault("created_at", datetime.now().isoformat())
-            self.graph.add_edge(from_id, to_id, **props)
-            self._touch()
-            self._persist()
+        """Backward-compatible wrapper around :meth:`upsert_edge`."""
+        self.upsert_edge(from_id, to_id, edge_type, properties=properties)
 
     def query_edges(
         self,
@@ -311,6 +511,7 @@ class DKG:
         """Query edges with optional type filters."""
         results = []
         with self._lock:
+            seen: set[tuple[str, str, str]] = set()
             for u, v, data in self.graph.edges(data=True):
                 if edge_type and data.get("type") != edge_type:
                     continue
@@ -318,6 +519,10 @@ class DKG:
                     continue
                 if to_type and self.graph.nodes[v].get("type") != to_type:
                     continue
+                key = (str(u), str(v), str(data.get("type", "")))
+                if key in seen:
+                    continue
+                seen.add(key)
                 results.append({"from": u, "to": v, **data})
         return results
 
@@ -403,6 +608,89 @@ class DKG:
                 "edges": edges,
             }
 
+    def topology_context(
+        self,
+        *,
+        view: str = "cloud",
+        anchors: list[str] | None = None,
+        relation_types: list[str] | None = None,
+        max_hops: int = 2,
+        max_nodes: int = 48,
+        max_edges: int = 96,
+        since_revision: int | None = None,
+    ) -> Dict[str, Any]:
+        """Return bounded LLM context without truncating the raw DKG."""
+        with self._lock:
+            snapshot = self.topology_snapshot(
+                anchor_ids=anchors,
+                max_hops=max_hops,
+                max_nodes=max_nodes,
+                max_edges=max_edges,
+            )
+            if relation_types:
+                allowed = {str(x) for x in relation_types}
+                snapshot["edges"] = [
+                    e for e in snapshot["edges"] if e.get("type") in allowed
+                ]
+
+            type_counts: Dict[str, int] = {}
+            for _nid, data in self.graph.nodes(data=True):
+                ntype = str(data.get("type", "unknown"))
+                type_counts[ntype] = type_counts.get(ntype, 0) + 1
+            total_nodes = self.graph.number_of_nodes()
+            total_edges = len({
+                (str(u), str(v), str(data.get("type", "")))
+                for u, v, data in self.graph.edges(data=True)
+            })
+
+            journal = list(self._change_journal)
+            history_complete = True
+            changes: list[dict] = []
+            if since_revision is not None:
+                since = int(since_revision)
+                if journal and since < journal[0].get("revision", 0) - 1:
+                    history_complete = False
+                changes = [
+                    dict(item) for item in journal
+                    if int(item.get("revision", 0)) > since
+                ]
+
+            included_nodes = len(snapshot.get("nodes", []))
+            included_edges = len(snapshot.get("edges", []))
+            coverage = {
+                "total_nodes": total_nodes,
+                "total_edges": total_edges,
+                "included_nodes": included_nodes,
+                "included_edges": included_edges,
+                "omitted_nodes": max(0, total_nodes - included_nodes),
+                "omitted_edges": max(0, total_edges - included_edges),
+                "view": view,
+                "complete": (
+                    included_nodes >= total_nodes
+                    and included_edges >= total_edges
+                    and history_complete
+                ),
+            }
+            return {
+                "revision": self._revision,
+                "view": view,
+                "scope": dict(self.scope),
+                "environment": dict(self.scope),
+                "summary": {
+                    "node_counts": type_counts,
+                    "total_nodes": total_nodes,
+                    "total_edges": total_edges,
+                },
+                "local": snapshot,
+                "changes": changes,
+                "coverage": coverage,
+                "history_complete": history_complete,
+                "omitted_count": {
+                    "nodes": coverage["omitted_nodes"],
+                    "edges": coverage["omitted_edges"],
+                },
+            }
+
     def attack_path_summary(self, max_paths: int = 12) -> list:
         """Return a bounded attack-path summary, gated and cached by revision.
 
@@ -433,6 +721,19 @@ class DKG:
             try:
                 report = compute_attack_paths(self)
                 paths = list(report.paths[: max(0, int(max_paths))])
+                for path in paths:
+                    path_id = str(getattr(path, "path_id", "") or "")
+                    if not path_id:
+                        continue
+                    prior = self._attack_path_states.get(path_id, {})
+                    self._attack_path_states[path_id] = {
+                        **prior,
+                        "path_id": path_id,
+                        "confidence": float(prior.get("confidence", getattr(path, "confidence", 0.0))),
+                        "status": prior.get("status", "active"),
+                        "updated_revision": self._revision,
+                    }
+                self._persist()
             except Exception:
                 # Keep the previous silent-fallback behavior; do not cache
                 # failures so a later call can retry.
@@ -530,6 +831,9 @@ class DKG:
                 ],
                 "created_at": self._created_at,
                 "revision": self._revision,
+                "scope": dict(self.scope),
+                "change_journal": list(self._change_journal),
+                "attack_path_states": list(self._attack_path_states.values()),
             }
 
     @classmethod
@@ -537,14 +841,47 @@ class DKG:
         """Deserialize from dict."""
         dkg = cls()
         for node in data.get("nodes", []):
-            nid = node.pop("id")
-            dkg.graph.add_node(nid, **node)
+            node_copy = dict(node)
+            nid = node_copy.pop("id")
+            dkg.graph.add_node(nid, **node_copy)
+        # Fold legacy parallel edges without changing the persisted revision.
         for edge in data.get("edges", []):
-            u = edge.pop("from")
-            v = edge.pop("to")
-            dkg.graph.add_edge(u, v, **edge)
+            edge_copy = dict(edge)
+            u = edge_copy.pop("from")
+            v = edge_copy.pop("to")
+            etype = edge_copy.get("type", "")
+            if not etype:
+                continue
+            existing = [
+                key for key, current in dkg.graph.get_edge_data(u, v, default={}).items()
+                if current.get("type") == etype
+            ]
+            if not existing:
+                dkg.graph.add_edge(u, v, **edge_copy)
+                continue
+            current = dict(dkg.graph.edges[u, v, existing[0]])
+            for key in ("source", "evidence"):
+                vals = DKG._as_unique_values(current.get(key)) + DKG._as_unique_values(edge_copy.get(key))
+                if vals:
+                    edge_copy[key] = vals[:12]
+            if "confidence" in edge_copy:
+                edge_copy["confidence"] = max(
+                    float(current.get("confidence", 0.0) or 0.0),
+                    float(edge_copy.get("confidence", 0.0) or 0.0),
+                )
+            current.update(edge_copy)
+            for key in existing:
+                dkg.graph.remove_edge(u, v, key)
+            dkg.graph.add_edge(u, v, **current)
         dkg._created_at = data.get("created_at", datetime.now().isoformat())
         dkg._revision = int(data.get("revision", 0) or 0)
+        dkg.scope = dict(data.get("scope", {}) or {})
+        dkg._change_journal = list(data.get("change_journal", []) or [])[-dkg.CHANGE_JOURNAL_LIMIT:]
+        dkg._attack_path_states = {
+            str(item.get("path_id")): dict(item)
+            for item in data.get("attack_path_states", [])
+            if item.get("path_id")
+        }
         dkg._attack_path_cache = None
         return dkg
 
@@ -568,4 +905,6 @@ class DKG:
             self.graph.clear()
             self._created_at = datetime.now().isoformat()
             self._attack_path_cache = None
-            self._touch()
+            self._attack_path_states.clear()
+            self._change_journal.clear()
+            self._touch({"op": "reset"})

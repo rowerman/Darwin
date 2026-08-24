@@ -108,11 +108,9 @@ class ReconCoordinator(CoordinatorContext):
         self.target_host = host
 
         self._task_log_event("info", "bootstrap_nmap", host=host, port_range=port_range)
-        # Launch K8S cluster discovery in parallel with nmap.
-        # Both are independent data sources — nmap sees port mappings,
-        # kubectl sees cluster topology. Runs unconditionally; fails
-        # silently in <2s if no cluster exists.
-        k8s_discovery_task = asyncio.create_task(self._k8s_cluster_discovery())
+        # Cloud/K8s discovery is deliberately deferred until the base scan
+        # produces a deterministic environment signal.
+        k8s_discovery_task = None
 
         # Always include the target URL's port in the scan range
         target_port = parsed.port or (443 if parsed.scheme == "https" else 80)
@@ -137,6 +135,28 @@ class ReconCoordinator(CoordinatorContext):
                                 for p in common_ports]
             log.warning("nmap failed for %s, probing %d common HTTP ports",
                        host, len(common_ports))
+
+        from darwin.environment import classify_environment
+        classification = classify_environment(discovered_ports, self.dkg)
+        self._scan_classification = classification
+        self.dkg.set_scope(
+            engagement_id=getattr(self, "engagement_id", ""),
+            target_scope=host,
+            environment_scope=classification.environment_scope,
+        )
+        self.dkg.add_node("Analysis", "environment-classification", {
+            "phase": "bootstrap",
+            "classification": classification.to_dict(),
+            "coverage": "complete",
+        }, source="scan-classifier")
+        self._task_log_event(
+            "info", "scan_classified", kind=classification.kind.value,
+            provider=classification.provider, signals=classification.signals,
+        )
+        if classification.cloud_enabled and classification.kind.value in {
+            "private_cloud", "hybrid"
+        }:
+            k8s_discovery_task = asyncio.create_task(self._k8s_cluster_discovery())
 
         # ── Port blacklist ────────────────────────────────────────────
         # Filter out infrastructure ports (IDE port forwarding, SSH tunnels,
@@ -181,15 +201,19 @@ class ReconCoordinator(CoordinatorContext):
                              _best_offset, _offsets[_best_offset])
 
         for p in discovered_ports:
-            self.dkg.add_node("Host", f"host-{host}", {
+            host_id = f"host-{host}"
+            service_id = f"svc-{host}-{p['port']}"
+            self.dkg.add_node("Host", host_id, {
                 "ip": host, "is_reachable": True, "is_internal": False,
             })
-            self.dkg.add_node("Service", f"svc-{host}-{p['port']}", {
+            self.dkg.add_node("Service", service_id, {
                 "port": p["port"], "protocol": "tcp",
                 "version": p.get("version", "") or p.get("service", ""),
                 "banner": p.get("service", ""),
                 "service_name": p.get("service", ""),  # nmap service name for CTEG filtering
             })
+            self.dkg.add_edge(host_id, service_id, "host_has_service",
+                              source="bootstrap-nmap", evidence=f"open tcp/{p['port']}")
 
         # AD detection: if banner scan identified AD-related services,
         # create a Domain node to enable multi-agent mode.
@@ -278,14 +302,18 @@ class ReconCoordinator(CoordinatorContext):
             port = p["port"]
             if port in _DB_PORT_PROTO:
                 proto = _DB_PORT_PROTO[port]
-                self.dkg.add_node("Endpoint", f"endpoint-{host}-{port}-{proto}", {
+                endpoint_id = f"endpoint-{host}-{port}-{proto}"
+                self.dkg.add_node("Endpoint", endpoint_id, {
                     "url": f"{proto}://{host}:{port}",
                     "method": proto, "params": proto,
                     "proto": proto,
                     "discovered_by": "bootstrap-nmap",
                 })
+                self.dkg.add_edge(f"host-{host}", endpoint_id, "host_has_endpoint",
+                                  source="bootstrap-nmap", evidence=f"{proto} endpoint")
             elif port in _K8S_PORTS:
-                self.dkg.add_node("Endpoint", f"endpoint-{host}-{port}-k8s", {
+                endpoint_id = f"endpoint-{host}-{port}-k8s"
+                self.dkg.add_node("Endpoint", endpoint_id, {
                     "url": f"https://{host}:{port}",
                     "method": "GET", "params": _K8S_PROTO,
                     "proto": _K8S_PROTO,
@@ -510,23 +538,29 @@ class ReconCoordinator(CoordinatorContext):
             if not stdout:
                 continue
             resp_len = len(stdout)
-            self.dkg.add_node("Endpoint", f"ep-{url}", {
+            root_endpoint_id = f"ep-{url}"
+            self.dkg.add_node("Endpoint", root_endpoint_id, {
                 "url": url, "method": "GET", "params": "",
                 "sample_status": http_status,
                 "sample_response": stdout[:5000],
                 "response_size": resp_len,
                 "discovered_by": "bootstrap",
             })
+            self.dkg.add_edge(f"host-{host}", root_endpoint_id, "host_has_endpoint",
+                              source="bootstrap", evidence=url)
             for form in forms:
                 action = form.get("action", "")
                 form_url = (action if action.startswith("http")
                             else f"{url.rstrip('/')}/{action.lstrip('/')}")
                 params = ",".join(i.get("name", "") for i in form.get("inputs", []))
-                self.dkg.add_node("Endpoint", f"ep-form-{form_url[:40]}", {
+                form_endpoint_id = f"ep-form-{form_url[:40]}"
+                self.dkg.add_node("Endpoint", form_endpoint_id, {
                     "url": form_url, "method": form.get("method", "POST"),
                     "params": params, "body_format": "form",
                     "discovered_by": "bootstrap",
                 })
+                self.dkg.add_edge(f"host-{host}", form_endpoint_id, "host_has_endpoint",
+                                  source="bootstrap", evidence="html form")
             # ── When root is near-empty, probe common paths for real content ──
             if resp_len < 500 and len(discovered_ports) <= 3:
                 _WEB_PATHS = ["/", "/index.html", "/home", "/login", "/admin",
@@ -540,13 +574,16 @@ class ReconCoordinator(CoordinatorContext):
                         if r.success:
                             out = getattr(r, "stdout", "")
                             if len(out) > 200:
-                                self.dkg.add_node("Endpoint", f"ep-path-{path.replace('/','-')[:30]}", {
+                                path_endpoint_id = f"ep-path-{path.replace('/','-')[:30]}"
+                                self.dkg.add_node("Endpoint", path_endpoint_id, {
                                     "url": f"{url.rstrip('/')}{path}", "method": "GET",
                                     "params": "",
                                     "sample_status": 200, "sample_response": out[:5000],
                                     "response_size": len(out),
                                     "discovered_by": "bootstrap-path-probe",
                                 })
+                                self.dkg.add_edge(f"host-{host}", path_endpoint_id, "host_has_endpoint",
+                                                  source="bootstrap-path-probe", evidence=path)
                     except Exception:
                         pass
                 path_tasks = [asyncio.create_task(_probe_web_path(p))
@@ -586,12 +623,15 @@ class ReconCoordinator(CoordinatorContext):
                         pts = fl.split()
                         if len(pts) >= 2 and pts[1].isdigit():
                             st = int(pts[1])
-                    self.dkg.add_node("Endpoint", f"ep-api-{ep_url[:50]}", {
+                    api_endpoint_id = f"ep-api-{ep_url[:50]}"
+                    self.dkg.add_node("Endpoint", api_endpoint_id, {
                         "url": ep_url, "method": "GET", "params": "",
                         "sample_status": st, "sample_response": out[:5000],
                         "response_size": len(out),
                         "discovered_by": "bootstrap-api-probe",
                     })
+                    self.dkg.add_edge(f"host-{host}", api_endpoint_id, "host_has_endpoint",
+                                      source="bootstrap-api-probe", evidence=ep_url)
             except Exception:
                 pass
 
@@ -601,16 +641,27 @@ class ReconCoordinator(CoordinatorContext):
             await asyncio.gather(*api_tasks, return_exceptions=True)
 
         # Wait for K8S cluster discovery (launched in parallel with nmap)
-        try:
-            await k8s_discovery_task
-        except Exception:
-            pass  # K8S discovery failure is non-fatal
+        if k8s_discovery_task is not None:
+            try:
+                await k8s_discovery_task
+            except Exception as exc:
+                self._task_log_event("warning", "discovery_failure", domain="k8s", error=str(exc))
+                self.dkg.update_node("environment-classification", {
+                    "coverage": "incomplete", "discovery_failure": "k8s",
+                })
+                self.dkg.add_edge(f"host-{host}", endpoint_id, "host_has_endpoint",
+                                  source="bootstrap-nmap", evidence=f"k8s tcp/{port}")
 
         # CTAGE: Cloud Topology & Attack Graph Engine — extend K8s discovery
         # with RBAC mapping, pod security analysis, and IAM enumeration.
         try:
             from darwin.cloud_topology import discover_cloud_topology
-            self._cloud_topology = await discover_cloud_topology(self.dkg)
+            if classification.cloud_enabled:
+                self._cloud_topology = await discover_cloud_topology(
+                    self.dkg, tool_port=self._call_tool
+                )
+            else:
+                self._cloud_topology = None
             log.info("CTAGE: cloud topology mapped — %d pods, %d RBAC bindings, %d IAM roles",
                      len(self._cloud_topology.pods) if self._cloud_topology else 0,
                      len(self._cloud_topology.rbac_bindings) if self._cloud_topology else 0,
@@ -622,6 +673,10 @@ class ReconCoordinator(CoordinatorContext):
                              profile.namespace, profile.pod_name,
                              profile.risk_score, profile.escape_vectors)
         except Exception as e:
+            self._task_log_event("warning", "discovery_failure", domain="cloud", error=str(e))
+            self.dkg.update_node("environment-classification", {
+                "coverage": "incomplete", "discovery_failure": "cloud",
+            })
             log.debug("CTAGE: cloud topology mapping skipped (%s)", e)
 
         self._discovered_ports = discovered_ports
@@ -675,16 +730,15 @@ class ReconCoordinator(CoordinatorContext):
         """
         import json as _json
 
+        async def _discovery(command: str):
+            """Run an allow-listed discovery command through the tool port."""
+            return await self._call_tool("cloud_discovery_command", {"command": command})
+
         # ── Step 1: Verify kubectl is available and a cluster is reachable ──
         try:
-            proc = await asyncio.create_subprocess_shell(
-                "kubectl cluster-info 2>&1",
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=8)
-            out = stdout.decode("utf-8", errors="replace")
-            if proc.returncode != 0 or "is running at" not in out:
+            result = await _discovery("kubectl cluster-info")
+            out = result.stdout or ""
+            if not result.success or "is running at" not in out:
                 return  # No K8S cluster available or kubectl not installed
             api_match = re.search(r"is running at (https?://\S+)", out)
             api_url = api_match.group(1) if api_match else ""
@@ -695,14 +749,9 @@ class ReconCoordinator(CoordinatorContext):
         # ── Step 2: Enumerate nodes (name, IP, labels, taints) ──
         nodes_data: dict = {}
         try:
-            proc = await asyncio.create_subprocess_shell(
-                "kubectl get nodes -o json 2>&1",
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=8)
-            out = stdout.decode("utf-8", errors="replace")
-            if proc.returncode == 0:
+            result = await _discovery("kubectl get nodes -o json")
+            out = result.stdout or ""
+            if result.success:
                 nodes_data = _json.loads(out) if out.strip().startswith("{") else {}
         except Exception:
             pass
@@ -737,14 +786,9 @@ class ReconCoordinator(CoordinatorContext):
         # ── Step 3: Enumerate pods (name, namespace, node, labels, status) ──
         pods_data: dict = {}
         try:
-            proc = await asyncio.create_subprocess_shell(
-                "kubectl get pods -A -o json 2>&1",
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=8)
-            out = stdout.decode("utf-8", errors="replace")
-            if proc.returncode == 0:
+            result = await _discovery("kubectl get pods -A -o json")
+            out = result.stdout or ""
+            if result.success:
                 pods_data = _json.loads(out) if out.strip().startswith("{") else {}
         except Exception:
             pass
@@ -767,14 +811,9 @@ class ReconCoordinator(CoordinatorContext):
         # ── Step 4: Enumerate services (name, namespace, clusterIP, ports) ──
         svcs_data: dict = {}
         try:
-            proc = await asyncio.create_subprocess_shell(
-                "kubectl get svc -A -o json 2>&1",
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=8)
-            out = stdout.decode("utf-8", errors="replace")
-            if proc.returncode == 0:
+            result = await _discovery("kubectl get svc -A -o json")
+            out = result.stdout or ""
+            if result.success:
                 svcs_data = _json.loads(out) if out.strip().startswith("{") else {}
         except Exception:
             pass
@@ -797,14 +836,9 @@ class ReconCoordinator(CoordinatorContext):
         # ── Step 5: Enumerate namespaces ──
         ns_list: list[str] = []
         try:
-            proc = await asyncio.create_subprocess_shell(
-                "kubectl get namespaces -o json 2>&1",
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=8)
-            out = stdout.decode("utf-8", errors="replace")
-            if proc.returncode == 0 and out.strip().startswith("{"):
+            result = await _discovery("kubectl get namespaces -o json")
+            out = result.stdout or ""
+            if result.success and out.strip().startswith("{"):
                 ns_data = _json.loads(out)
                 ns_list = [i.get("metadata", {}).get("name", "")
                            for i in ns_data.get("items", [])]
@@ -814,14 +848,9 @@ class ReconCoordinator(CoordinatorContext):
         # ── Step 6: Check current permissions ──
         permissions: list[str] = []
         try:
-            proc = await asyncio.create_subprocess_shell(
-                "kubectl auth can-i --list -A 2>&1 | head -60",
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=8)
-            out = stdout.decode("utf-8", errors="replace")
-            if proc.returncode == 0:
+            result = await _discovery("kubectl auth can-i --list -A")
+            out = result.stdout or ""
+            if result.success:
                 for line in out.split("\n"):
                     line = line.strip()
                     if line and not line.startswith("Resources") and "yes" in line.lower():

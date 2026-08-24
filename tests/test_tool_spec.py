@@ -26,9 +26,9 @@ def _all_specs():
 
 def test_every_registered_tool_has_a_valid_spec():
     specs = _all_specs()
-    # 130 attack/recon tools + 2 registry meta tools (tool_registry_list,
-    # tool_registry_get) registered on the attack gateway.
-    assert len(specs) == 132
+    # Existing attack/recon tools + registry meta tools + the read-only
+    # conditional cloud discovery tool.
+    assert len(specs) == 133
     assert check_all_specs(specs) == []
 
 

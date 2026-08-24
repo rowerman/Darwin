@@ -320,6 +320,36 @@ class ExecutionCoordinator(CoordinatorContext):
                     })
             except Exception:
                 pass
+
+    def _apply_attack_path_feedback(self, task: Task, *, success: bool,
+                                    failure_type: str | None = None) -> None:
+        """Persist bounded confidence/status feedback for a referenced path."""
+        action = task.action or {}
+        path_id = str(action.get("path_id", "") or "")
+        if not path_id:
+            match = re.search(r"(?:path[_ -]?id|attack path)[:= ]+([\w.-]+)",
+                              task.instruction or "", re.I)
+            path_id = match.group(1) if match else ""
+        if not path_id:
+            return
+        prior = next((p for p in self.dkg.attack_path_states()
+                      if p.get("path_id") == path_id), {})
+        confidence = float(prior.get("confidence", 0.5) or 0.5)
+        status = str(prior.get("status", "active"))
+        if success:
+            confidence = min(1.0, confidence + 0.05)
+        elif failure_type in {"hypothesis_rejected", "strategy_failed"}:
+            confidence = max(0.0, confidence - 0.2)
+            if confidence <= 0.2:
+                status = "rejected"
+        elif failure_type == "defense_blocked":
+            confidence = max(0.0, confidence - 0.1)
+            if confidence <= 0.2:
+                status = "stale"
+        self.dkg.upsert_attack_path(
+            path_id, confidence=confidence, status=status,
+            evidence=[failure_type] if failure_type else ["success"] if success else [],
+        )
         if matched:
             log.debug(
                 "O2.1 belief feedback: endpoint=%s delta=%+.2f status=%s",
@@ -1081,6 +1111,7 @@ class ExecutionCoordinator(CoordinatorContext):
                     task, success=True,
                     flag_found=bool(execution.flag_result),
                 )
+                self._apply_attack_path_feedback(task, success=True)
         except Exception:
             pass
         task_result_text = self._summarize_task_result(
@@ -1215,6 +1246,13 @@ class ExecutionCoordinator(CoordinatorContext):
                         else None
                     ),
                     delta=float(_eval2.confidence_delta or 0.0),
+                )
+                self._apply_attack_path_feedback(
+                    task, success=False,
+                    failure_type=(
+                        _eval2.failure_type.value
+                        if _eval2.failure_type is not None else None
+                    ),
                 )
             except Exception:
                 pass

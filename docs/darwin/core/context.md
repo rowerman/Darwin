@@ -10,7 +10,7 @@ Runtime 循环与 LLM prompt 之间的上下文边界。
 
 ## 关键入口
 
-- `ContextManager`：构建、裁剪和刷新阶段上下文。
+- `ContextManager`：构建、裁剪和刷新阶段上下文；云/K8s 环境由 DKG `topology_context()` 提供有界摘要、局部图和 coverage。
 
 ## 相关模块
 
@@ -23,4 +23,3 @@ Runtime 循环与 LLM prompt 之间的上下文边界。
 ## 维护提示
 
 上下文管理只能压缩或裁剪，不应丢失跨阶段 DKG 事实和关键执行结果。
-

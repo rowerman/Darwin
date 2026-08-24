@@ -1,8 +1,8 @@
 {
   "schema_version": "1.0.0",
-  "generated_at": "2026-08-19T13:56:36+00:00",
+  "generated_at": "2026-08-24T10:01:32+00:00",
   "source": "darwin.tools.manifest",
-  "tool_count": 132,
+  "tool_count": 133,
   "tools": [
     {
       "name": "aws_cli",
@@ -422,6 +422,34 @@
       "capability": "",
       "parameters": {},
       "required": [],
+      "executor": "python",
+      "command_template": "",
+      "shell_args": [],
+      "split_params": [],
+      "dependencies": [],
+      "flags": {},
+      "output_contract": {},
+      "aliases": {},
+      "deprecated": false,
+      "auto": true
+    },
+    {
+      "name": "cloud_discovery_command",
+      "version": "1.0.0",
+      "description": "Run one allow-listed read-only Kubernetes discovery command through the recon gateway.",
+      "domains": [
+        "k8s"
+      ],
+      "capability": "",
+      "parameters": {
+        "command": {
+          "type": "string",
+          "description": "One of the fixed read-only discovery commands."
+        }
+      },
+      "required": [
+        "command"
+      ],
       "executor": "python",
       "command_template": "",
       "shell_args": [],

@@ -1,125 +1,479 @@
-# DKG 拓扑上下文增强计划
+# DARWIN 条件化云/K8s 拓扑建模执行计划
 
-## 1. 目标
+## Summary
 
-将 DKG 中已有的节点和边关系提升为正式的 `PipelineState.topology`，通过统一 Cognition Snapshot 向初始计划、任务执行和每轮 replan 提供当前场景拓扑。
+将 DKG 从“节点和部分云关系的存储器”扩展为条件化的云/K8s 拓扑建模管线：
 
-首期覆盖通用网络/Web 关系以及现有云/Kubernetes 拓扑，同时保持 Planner、Runtime 和旧调用方接口兼容。
+```text
+基础 scan
+  -> 环境分类
+  -> 仅在检测到 public cloud / private cloud(K8s) 时执行云资源采集
+  -> 关系归一化与分析
+  -> research / analyze / plan / exploit / replan 复用拓扑
+```
 
-## 2. 当前问题
+普通 Web/DB 场景保持现有流程，不启动云/K8s 深度采集和关系分析。
 
-- DKG 已保存节点、边和 provenance，但原有 `PipelineState` 主要只包含节点事实。
-- 原有 Cognition Snapshot 展示服务、端点、漏洞和计划状态，但没有展示节点之间的关系。
-- 云攻击路径主要在 analyze 阶段注入，不能保证每轮 replan 都使用最新拓扑。
-- Runtime 原先复用传入的固定 state，任务执行后可能无法及时看到新发现的会话、凭证、服务或关系。
+本计划重点解决：
 
-## 3. 设计方案
+- 原始 DKG 中重复边和重复写入；
+- Host、Service、Endpoint、Pod、IAM 之间关系缺失；
+- 云/K8s 资源发现与普通目标扫描未分流；
+- 原始图与 LLM 上下文视图边界不清导致的认知偏差；
+- 云关系只在 analyze 阶段体现，未统一贯穿 research 和后续阶段。
 
-### 3.1 DKG 拓扑快照
+## Key Changes
 
-- 为 DKG 增加单调递增的 `revision`。
-- 增加 `topology_snapshot()`：
-  - 支持按锚点节点提取局部子图。
-  - 默认最多两跳、48 个节点、96 条边。
-  - 对节点和边进行确定性排序。
-  - 返回 `revision`、`anchors`、`nodes`、`edges`。
-- 增加 `topology_diff(before, after)`：
-  - 返回新增、删除和更新的节点。
-  - 返回新增和删除的边。
-  - 返回前后 revision。
-- revision 随节点新增/更新、边新增和 DKG reset 变化，并纳入 DKG JSON 持久化。
+### 1. 增加环境分类与条件化执行
 
-### 3.2 类型化世界状态
+新增只读、规则驱动的环境检测，不使用 LLM 判断是否进入云模式。
 
-在 `darwin/data_model.py` 增加：
+建议增加：
 
-- `TopologyNode`
-- `TopologyEdge`
-- `AttackPathSummary`
-- `TopologySnapshot`
+```python
+class EnvironmentKind(str, Enum):
+    UNKNOWN = "unknown"
+    WEB_DB = "web_db"
+    PRIVATE_CLOUD = "private_cloud"
+    PUBLIC_CLOUD = "public_cloud"
+    HYBRID = "hybrid"
 
-`PipelineState` 增加 `topology` 字段，并在 `normalize_dkg_state()` 中读取：
 
-- Host、Service、Endpoint、Session、Credential 等通用关系。
-- Cloud/Kubernetes 节点和边。
-- `cloud_attack_path.compute_attack_paths()` 生成的攻击路径摘要。
+@dataclass
+class ScanClassification:
+    kind: EnvironmentKind
+    provider: str = ""
+    signals: list[str] = field(default_factory=list)
+    confidence: float = 0.0
+    cloud_enabled: bool = False
+```
 
-旧状态没有 topology 时使用空快照，保持 checkpoint 兼容。
+检测信号包括：
 
-### 3.3 统一 LLM 上下文
+- 目标扫描发现的 K8s API、6443/10250 等 K8s 特征；
+- AWS IMDS、AWS API、云厂商服务指纹；
+- Azure/GCP metadata endpoint；
+- S3、EKS、AKS、GKE、云 IAM 等明确服务特征；
+- 已发现的云凭证或云专用工具结果。
 
-在 `darwin/core/belief.py` 增加拓扑渲染区块，并由现有 `_belief_context()` 统一调用。输出包括：
+`kubectl cluster-info`、云 metadata 等只读命令只能作为基础扫描之后的轻量确认探针，不能在基础扫描之前无条件执行完整资源采集。benchmark 会把对外暴露端口约束在固定范围（例如 `10000-11000`），因此目标扫描不会误把宿主机上无关的本地 K8s 服务当成目标环境。
 
-- 当前 revision 和 anchors。
-- 局部节点及关键属性。
-- 有向关系，例如 `host -[host_has_service]-> service`。
-- 节点/边 confidence（存在时）及攻击路径摘要。
-- 攻击路径的前置条件、步骤和推荐工具。
-- benchmark 场景允许的完整 credential 值。
+执行策略：
 
-拓扑输出保持有界，并支持 compact 模式以控制 token 使用。
+- `WEB_DB`：保持现有 bootstrap、deep recon、research、analyze、plan、exploit 流程，不执行完整云采集。
+- `PRIVATE_CLOUD`：执行 K8s 资源采集和 K8s 关系分析。
+- `PUBLIC_CLOUD`：执行对应 provider 的云资产采集和 IAM/网络关系分析。
+- `HYBRID`：同时执行 K8s 和公有云采集。
+- `UNKNOWN`：只执行基础扫描，不主动扩大范围。
 
-### 3.4 Planner、执行器和 Replanner
+环境分类结果写入 DKG 的运行作用域元数据，供后续阶段判断是否注入云上下文。
 
-- 初始计划生成 prompt 注入拓扑上下文。
-- 每次 plan-review/replan 注入任务前后的拓扑 diff。
-- 任务执行 prompt 通过统一 Cognition Snapshot 获得当前局部拓扑。
-- 执行任务前记录 topology baseline，任务完成后比较 DKG revision 和拓扑变化。
+### 2. 将 bootstrap 拆成“基础扫描”和“条件化云发现”
 
-### 3.5 Runtime 状态刷新
+调整现有 bootstrap 流程：
 
-在 `darwin/core/runtime.py` 增加可选 `state_provider`：
+```text
+基础 nmap / HTTP / 服务指纹
+  -> ScanClassifier
+  -> 轻量 K8s/cloud 确认探针（仅在出现相关扫描信号时）
+  -> CloudDiscoveryCoordinator（仅 cloud_enabled=True）
+  -> RelationAnalyzer
+  -> deep recon / research / analyze
+```
 
-- 未提供时保持原有行为。
-- 提供时，Runtime 在初始 plan、任务评估和 replan 前刷新 state。
-- Orchestrator 注入 `self._get_state`，使 replan 使用最新 DKG 拓扑。
+现有 K8s discovery 不再作为所有场景的无条件深度流程。基础扫描完成后，只有出现目标环境相关信号时才运行一次短时、只读的 K8s/cloud 可用性探针；确认成功后才执行完整的：
 
-## 4. 代码变动面
+- nodes；
+- pods；
+- namespaces；
+- services；
+- service accounts；
+- RBAC；
+- network policies；
+- workload；
 
-- `darwin/dkg.py`：revision、局部拓扑快照、拓扑 diff、持久化。
-- `darwin/data_model.py`：拓扑数据类型和 PipelineState 归一化。
-- `darwin/core/belief.py`：拓扑和攻击路径渲染。
-- `darwin/core/runtime.py`：可选 state provider 和状态刷新。
-- `darwin/orchestration/planning.py`：初始 plan 与 plan-review 上下文。
-- `darwin/orchestration/execution.py`：Runtime provider 和任务前拓扑基线。
-- `docs/darwin/*.md`：模块职责、刷新机制和敏感上下文说明。
-- `tests/test_topology_context.py`：拓扑快照、diff、渲染和 Runtime 刷新测试。
+只在判定为 private cloud 或 hybrid 后执行。
 
-## 5. 测试与验收标准
+云发现失败必须是非致命错误：
 
-- DKG 局部子图提取、边类型、revision 和 diff 正确。
-- 通用及云/Kubernetes 关系能进入 `PipelineState.topology`。
-- Cognition Snapshot 能渲染节点、边、攻击路径和完整凭证。
-- 任务新增关系后，下一轮 replan prompt 包含拓扑 diff。
-- Runtime 通过 state provider 使用刷新后的 state。
-- 旧 checkpoint 缺少 topology 时仍可加载。
-- 运行：
-  - `conda run -n deeplearn python -m pytest -q`
-  - `conda run -n deeplearn python -m pytest -m integration -v`
-  - `conda run -n deeplearn python -m pytest -m acceptance -v`
-  - `conda run -n deeplearn python -m darwin.tools.manifest --out tools_manifest.json --check`
-  - `conda run -n deeplearn python -m tools.audit_coverage`
-  - `git diff --check`
+- 记录 discovery failure；
+- 保留已有基础扫描结果；
+- 将 coverage 标记为 incomplete；
+- 继续进入普通 research/analyze/plan 流程。
 
-## 6. 可能副作用与处理
+### 3. 解决原始 DKG 的重复边问题
 
-- **Prompt token 增长**：通过局部子图、节点/边上限和 compact 模式控制。
-- **状态滞后**：通过 Runtime state provider 和 DKG revision 刷新。
-- **推断关系误导规划**：保留 confidence/provenance，限制路径摘要数量。
-- **非可信属性污染 prompt**：拓扑属性作为数据区块渲染，不改变系统指令。
-- **完整凭证暴露**：benchmark 环境明确允许；仍需将拓扑上下文视为敏感数据。
-- **旧 checkpoint 兼容**：缺少 topology 时使用默认空快照。
-- **攻击路径重复**：使用稳定 path ID 和数量上限控制重复任务。
+保留 `MultiDiGraph` 兼容性，但将关系写入改为幂等 upsert。
 
-## 7. 实施结果
+推荐接口：
 
-- 全量测试：530 passed。
-- Integration 测试：8 passed。
-- Acceptance 测试：4 passed。
-- 工具 manifest：132 个工具，状态同步。
-- Coverage audit：89/89 通过。
-- `git diff --check`：通过。
+```python
+def upsert_edge(
+    self,
+    from_id: str,
+    to_id: str,
+    edge_type: str,
+    *,
+    properties: dict | None = None,
+    confidence: float | None = None,
+    source: str = "",
+    evidence: str = "",
+) -> bool:
+    ...
+```
 
-## 8. 已知限制
+关系唯一键：
 
-`MemoryManager` 未增加独立 topology 序列化字段；当前 topology 由 DKG 持久化内容在 `normalize_dkg_state()` 时重新生成。这保持了旧 checkpoint 兼容，也避免重复保存动态图快照。
+```text
+(from_id, to_id, edge_type)
+```
+
+写入规则：
+
+- 相同唯一键的边只保留一条；
+- 重复写入不新增 MultiDiGraph 平行边；
+- `first_seen` 保留首次时间；
+- `last_seen` 更新为最近观测时间；
+- provenance source 合并去重；
+- evidence 合并去重并限制数量；
+- confidence 按明确规则合并，默认保留较高可信度；
+- 只有语义发生变化时才递增 DKG revision。
+
+兼容处理：
+
+- `load()` 时折叠历史 checkpoint 中的重复边；
+- `topology_snapshot()` 不再依赖展示层去重作为主要修复手段；
+- 保持 `query_edges()`、旧 checkpoint 和现有调用方兼容；
+- 为旧边补齐缺省 provenance 和时间字段。
+
+### 4. 补齐云/K8s 资源关系
+
+保留现有关系类型，并增加最低必要的关系类型：
+
+```text
+host_has_service
+host_has_endpoint
+service_targets_pod
+service_exposes_endpoint
+endpoint_backed_by_service
+pod_runs_on_node
+pod_uses_service_account
+service_account_bound_to_role
+role_has_policy
+policy_grants_resource
+credential_for_host
+credential_for_role
+session_on_host
+host_reaches_host
+service_calls_service
+resource_contains
+resource_exposed_via
+resource_depends_on
+network_policy_allows
+network_policy_denies
+```
+
+关系写入要求：
+
+- Host/Service/Endpoint 在基础扫描阶段立即建立；
+- K8s Service selector 解析为 Service → Pod；
+- Pod 与 Node、Namespace、ServiceAccount 建立关系；
+- Ingress/LB 与后端 Service 建立关系；
+- IAM Role 与 Policy、Resource 建立关系；
+- Session、Credential 与 Host/Role 建立关系；
+- 关系必须带 `source`、`evidence`、`confidence`；
+- 观察到的关系和推断关系使用不同的关系置信度和状态。
+
+关系状态建议使用简短枚举：
+
+```text
+observed
+inferred
+hypothesized
+stale
+```
+
+Prompt 中只展示非 `observed` 关系的状态标签，不展示冗长 provenance，避免无效 token 增长。
+
+### 5. 增加 Cloud/K8s Relation Analyzer
+
+新增确定性关系分析器，不让 LLM 直接创造基础关系事实。
+
+接口建议：
+
+```python
+@dataclass
+class TopologyAnalysisResult:
+    before_revision: int
+    after_revision: int
+    added_relations: int
+    updated_relations: int
+    attack_paths: list
+    coverage: dict
+    warnings: list[str]
+
+
+class RelationAnalyzer:
+    async def analyze(
+        self,
+        dkg: DKG,
+        environment: ScanClassification,
+    ) -> TopologyAnalysisResult:
+        ...
+```
+
+分析来源：
+
+- K8s selector、labels、Ingress、EndpointSlice；
+- RBAC Role/ClusterRole verbs 和 resources；
+- IAM trust policy 和 permission policy；
+- Security Group、NSG、NetworkPolicy；
+- DNS、URL、环境变量、配置文件；
+- 已有 Session、Credential、Service、Endpoint；
+- 必要时执行受限网络可达性探测。
+
+分析输出：
+
+- 服务调用关系；
+- Host 间网络可达性；
+- 资源从属关系；
+- 当前 foothold 的可达资源；
+- 权限提升和横向移动路径；
+- coverage 和未知区域。
+
+规则优先级：
+
+1. 直接观测；
+2. 配置或控制面明确推断；
+3. 仅作为候选的弱推断。
+
+只有前两类关系可以自动生成高优先级任务；弱推断只能作为低置信度候选交给 Planner。
+
+### 6. 扩展公有云与私有云采集边界
+
+第一版明确支持：
+
+- AWS public cloud；
+- Kubernetes private cloud；
+- AWS + Kubernetes hybrid。
+
+AWS 第一版覆盖：
+
+```text
+Account
+VPC
+Subnet
+RouteTable
+SecurityGroup
+ENI
+EC2
+EKS
+LoadBalancer
+RDS
+S3
+IAMRole
+IAMPolicy
+```
+
+K8s 第一版覆盖：
+
+```text
+Cluster
+Node
+Namespace
+Pod
+Deployment
+StatefulSet
+DaemonSet
+Service
+EndpointSlice
+Ingress
+NetworkPolicy
+ServiceAccount
+Role
+ClusterRole
+RoleBinding
+ClusterRoleBinding
+Secret
+ConfigMap
+```
+
+Azure/GCP 先保留 provider-neutral 接口和分类信号，不在本次实现中扩展完整资源采集器，避免把第一版范围扩大到不可验证。
+
+### 7. 设计分层拓扑上下文，避免误解为“原始图被截断”
+
+原始 DKG 不截断，保留完整图。`max_nodes`/`max_edges` 只约束发送给 LLM 的视图，不代表资源采集失败或原始关系被删除。
+
+只有发送给 LLM 的视图需要有界。新增 topology context 查询接口：
+
+```python
+def topology_context(
+    self,
+    *,
+    view: str = "cloud",
+    anchors: list[str] | None = None,
+    relation_types: list[str] | None = None,
+    max_hops: int = 2,
+    max_nodes: int = 48,
+    max_edges: int = 96,
+    since_revision: int | None = None,
+) -> dict:
+    ...
+```
+
+上下文采用三层结构，默认策略为“全局摘要 + 当前局部图 + 增量变化”：
+
+1. **全局摘要**
+   展示环境类型、账号/集群/Namespace 摘要、Host 身份列表、各类资源数量和 coverage；不展开所有资源属性。
+
+2. **当前局部图**
+   以当前 Session、目标 Host、活动任务和当前攻击路径为 anchors，只展开相关节点及其有限跳数关系。
+
+3. **增量变化**
+   只展示 `since_revision` 之后新增或变化的关系。
+
+上下文选择规则：
+
+- 当前 foothold 和活动攻击路径优先；
+- 与当前任务目标相关的资源优先；
+- `observed` 关系优先于 `inferred`；
+- 不相关的资源只保留计数摘要；
+- 超出上限时输出 `omitted_count` 和覆盖提示，而不是静默丢失。
+
+新增字段：
+
+```python
+@dataclass
+class TopologyCoverage:
+    total_nodes: int
+    total_edges: int
+    included_nodes: int
+    included_edges: int
+    omitted_nodes: int
+    omitted_edges: int
+    view: str
+    complete: bool
+```
+
+这样可以区分：
+
+- 原始图是否完整；
+- 当前 LLM 视图是否完整；
+- 哪些内容因为上下文预算未展示。
+
+超出上下文预算时必须显式输出 `omitted_count` 和覆盖提示；不得静默地让 Planner 误以为未展示资源不存在。
+
+### 8. 统一各阶段的拓扑复用
+
+复用策略：
+
+- scan：建立资源和关系；
+- research：只注入紧凑的云环境摘要、相关服务依赖和当前可达路径；
+- analyze：注入完整的当前环境摘要、关键局部图和攻击路径；
+- plan：注入当前 foothold 周围的局部图、候选路径和 coverage；
+- exploit：任务执行前注入任务目标相关子图；
+- replan：注入任务前后 topology diff、路径置信度变化和新增关系。
+
+普通 Web/DB 场景不增加 topology 区块，或只保留现有轻量状态上下文。
+
+Replan 行为：
+
+- 单次失败不立即删除整条攻击路径；
+- 由 Evaluator 根据结果降低路径或漏洞 confidence；
+- 允许有限替代尝试；
+- 连续失败或明确反证后将路径标记为 rejected/stale；
+- 新关系出现时重新计算受影响路径，而不是重算所有无关路径。
+
+### 9. 作用域与 DKG 生命周期
+
+单个 benchmark 默认使用独立 DKG，不把跨目标污染作为主流程。
+
+仍增加轻量运行作用域字段，用于 checkpoint 恢复和显式复用外部 DKG 时的基本校验：
+
+```text
+engagement_id
+target_scope
+environment_scope
+```
+
+作用：
+
+- checkpoint 恢复时校验目标作用域；
+- 显式复用外部 DKG 时避免不同 benchmark 资源混入；
+- 不改变单 benchmark 的默认行为；
+- 单 benchmark 默认仍使用独立 DKG，不引入复杂的跨任务图分片。
+
+## Test Plan
+
+### 单元测试
+
+新增或扩展以下测试：
+
+- `upsert_edge()` 重复写入只保留一条边；
+- 重复写入相同属性不增加 revision；
+- provenance/evidence 合并正确；
+- 历史重复边 checkpoint 能被折叠；
+- Host/Service/Endpoint 基础边自动建立；
+- K8s selector 正确映射 Service → Pod；
+- RBAC/IAM policy 关系正确；
+- observed/inferred/hypothesized 状态正确；
+- environment classifier 对 Web/DB、K8s、AWS、hybrid 场景分类正确；
+- topology context 返回全局摘要、局部图和 coverage；
+- `since_revision` 只返回增量关系；
+- context 超限时报告 omitted counts；
+- attack path 在失败后降低 confidence，而不是立即删除；
+- cloud-only analyzer 在 Web/DB 场景不会执行。
+
+### Integration 测试
+
+使用本地 fixture 和 CLI stubs，禁止真实云 API、真实 IMDS、真实 kubectl 集群：
+
+1. Web/DB 场景：
+   - 不调用完整 CloudTopologyMapper；
+   - 不产生 K8s/IAM 节点；
+   - 现有路径行为保持不变。
+
+2. K8s private cloud 场景：
+   - 生成 Cluster、Node、Namespace、Pod、Service、SA、RBAC；
+   - 验证 Service selector 和 Pod 归属关系；
+   - 验证当前 Session 到 Pod/Role 的攻击路径。
+
+3. AWS public cloud 场景：
+   - mock IAM、VPC、Subnet、SecurityGroup、EC2、S3；
+   - 验证 Role → Policy → Resource；
+   - 验证网络可达性和跨账号路径。
+
+4. Hybrid 场景：
+   - 验证 K8s 与云 IAM 关系合并；
+   - 验证同一资源不会被重复建模；
+   - 验证关系 upsert 幂等。
+
+5. Runtime 场景：
+   - task 执行新增关系；
+   - replan 收到 topology diff；
+   - 失败任务触发有限替代策略；
+   - 不相关路径不会被错误重建。
+
+### 验收命令
+
+```bash
+conda run -n deeplearn python -m pytest -q
+conda run --no-capture-output -n deeplearn python -m pytest -m integration -v
+conda run -n deeplearn python -m pytest -m acceptance -v
+conda run -n deeplearn python -m darwin.tools.manifest --out tools_manifest.json --check
+conda run -n deeplearn python -m tools.audit_coverage
+git diff --check
+```
+
+同时更新对应 `docs/darwin/**` 模块文档和拓扑上下文契约说明。
+
+## Assumptions
+
+- 第一版正式支持 AWS public cloud 和 Kubernetes private cloud；Azure/GCP 只保留扩展接口。
+- 只有 scan 产生明确云/K8s 信号后，才执行深度资源采集和关系分析。
+- 普通 Web/DB 流程、工具契约和现有 Planner/Runtime 接口保持兼容。
+- 原始 DKG 保留完整图；有界限制只适用于 LLM 上下文视图。
+- 单次 task 失败允许有限试错；路径通过 confidence 和 evidence 逐步淘汰。
+- 关系上下文只展示与当前任务相关的内容，并对不确定关系使用简短状态标签。
+- 作用域保护只用于 checkpoint 和显式外部 DKG 复用，不改变单 benchmark 默认行为。
+- benchmark 的固定对外端口范围是环境分类的前置假设；轻量探针只在基础扫描出现云/K8s 信号后执行。

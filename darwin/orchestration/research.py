@@ -124,7 +124,20 @@ class ResearchCoordinator(CoordinatorContext):
 
         # CTAGE: cloud topology context for analyze phase
         cloud_topology_context = ""
-        if hasattr(self, "_cloud_topology") and self._cloud_topology:
+        classification = getattr(self, "_scan_classification", None)
+        if classification is not None and getattr(classification, "cloud_enabled", False):
+            try:
+                topology_context = self.dkg.topology_context(
+                    view="cloud", max_hops=1, max_nodes=24, max_edges=48,
+                )
+                cloud_topology_context = (
+                    "\n## Cloud/K8s Topology Context\n"
+                    + json.dumps(topology_context, default=str, ensure_ascii=False)[:9000]
+                    + "\n"
+                )
+            except Exception:
+                cloud_topology_context = ""
+        elif hasattr(self, "_cloud_topology") and self._cloud_topology:
             ct = self._cloud_topology
             if ct.clusters or ct.high_risk_pods:
                 lines = ["\n## Cloud/K8s Topology (CTAGE)"]

@@ -139,6 +139,12 @@ class LifecycleCoordinator(CoordinatorContext):
             model=getattr(self.llm, 'model', ''),
             provider=getattr(self.llm, 'provider', ''),
         )
+        self.engagement_id = getattr(self, "engagement_id", "") or f"engagement-{ts}"
+        self.dkg.set_scope(
+            engagement_id=self.engagement_id,
+            target_scope=target_url,
+            environment_scope=getattr(self.dkg, "scope", {}).get("environment_scope", ""),
+        )
 
         self._check_tool_dependencies()
         if self._missing_tools:
@@ -746,7 +752,7 @@ class LifecycleCoordinator(CoordinatorContext):
                 rationale = self.memory.plan.active_entries()
             except Exception:
                 pass
-            return render_belief_snapshot(
+            rendered = render_belief_snapshot(
                 state=self._get_state(),
                 vulnerabilities=self.vulnerabilities,
                 plan=self.exploitation_plan,
@@ -754,6 +760,25 @@ class LifecycleCoordinator(CoordinatorContext):
                 rationale_entries=rationale,
                 compact=compact,
             )
+            classification = getattr(self, "_scan_classification", None)
+            if classification is not None and getattr(classification, "cloud_enabled", False):
+                context = self.dkg.topology_context(
+                    view="cloud", max_nodes=24 if compact else 48,
+                    max_edges=48 if compact else 96,
+                )
+                coverage = context.get("coverage", {})
+                rendered += (
+                    "\n## Cloud Topology Context\n"
+                    f"Environment: {classification.kind.value}; "
+                    f"provider={classification.provider or 'unknown'}\n"
+                    f"Coverage: nodes={coverage.get('included_nodes', 0)}/"
+                    f"{coverage.get('total_nodes', 0)}, edges="
+                    f"{coverage.get('included_edges', 0)}/"
+                    f"{coverage.get('total_edges', 0)}, "
+                    f"complete={coverage.get('complete', False)}\n"
+                    f"Omitted: {context.get('omitted_count', {})}\n"
+                )
+            return rendered
         except Exception:
             return ""
 

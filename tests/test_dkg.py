@@ -139,6 +139,27 @@ class TestDKGEdgeOperations:
         neighbors = dkg.get_neighbors("nonexistent")
         assert neighbors == []
 
+    def test_upsert_edge_merges_observations_without_parallel_edges(self):
+        dkg = DKG()
+        dkg.add_node("Host", "h1")
+        dkg.add_node("Service", "s1")
+        dkg.upsert_edge("h1", "s1", "host_has_service",
+                         source="nmap", evidence="tcp/80", confidence=0.5)
+        first_revision = dkg.revision
+        changed = dkg.upsert_edge("h1", "s1", "host_has_service",
+                                   source="curl", evidence="HTTP 200", confidence=0.9)
+        assert changed is True
+        assert len(dkg.query_edges()) == 1
+        edge = dkg.query_edges()[0]
+        assert set(edge["provenance"]["sources"]) == {"nmap", "curl"}
+        assert set(edge["evidence"]) == {"tcp/80", "HTTP 200"}
+        assert edge["confidence"] == 0.9
+        stable_revision = dkg.revision
+        assert dkg.upsert_edge("h1", "s1", "host_has_service",
+                               source="curl", evidence="HTTP 200", confidence=0.9) is False
+        assert dkg.revision == stable_revision
+        assert stable_revision > first_revision
+
 
 class TestDKGPersistence:
     """Serialization round-trip."""

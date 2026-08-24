@@ -16,7 +16,6 @@ Reference: BloodHound graph-based attack path analysis adapted for K8s/cloud.
 
 from __future__ import annotations
 
-import asyncio
 import json as _json
 import logging
 import re
@@ -124,8 +123,18 @@ class CloudTopology:
 class CloudTopologyMapper:
     """Discovers K8S cluster topology + cloud IAM and writes to DKG."""
 
-    def __init__(self, dkg: DKG):
+    def __init__(self, dkg: DKG, tool_port=None):
         self.dkg = dkg
+        self.tool_port = tool_port
+
+    async def _run_discovery(self, command: str, *, timeout: float = 8.0):
+        """Run a discovery command through the injected tool port."""
+        if self.tool_port is not None:
+            result = await self.tool_port("cloud_discovery_command", {"command": command})
+            return bool(getattr(result, "success", False)), getattr(result, "stdout", "") or ""
+        # Direct subprocess execution is intentionally disabled.  Discovery
+        # must be invoked from the orchestrator with the gateway port.
+        return False, ""
 
     async def discover(self) -> CloudTopology:
         """Run full cloud topology discovery and populate DKG.
@@ -162,14 +171,8 @@ class CloudTopologyMapper:
     async def _discover_clusters(self, topology: CloudTopology) -> None:
         """Discover K8s cluster(s) via kubectl."""
         try:
-            proc = await asyncio.create_subprocess_shell(
-                "kubectl cluster-info 2>&1",
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=8)
-            out = stdout.decode("utf-8", errors="replace")
-            if proc.returncode != 0 or "is running at" not in out:
+            ok, out = await self._run_discovery("kubectl cluster-info")
+            if not ok or "is running at" not in out:
                 return
 
             api_match = re.search(r"is running at (https?://\S+)", out)
@@ -178,28 +181,17 @@ class CloudTopologyMapper:
             # Get cluster name from current context
             cluster_name = "default"
             try:
-                proc2 = await asyncio.create_subprocess_shell(
-                    "kubectl config current-context 2>&1",
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE,
-                )
-                stdout2, _ = await asyncio.wait_for(proc2.communicate(), timeout=5)
-                if proc2.returncode == 0:
-                    cluster_name = stdout2.decode("utf-8", errors="replace").strip()
+                ok2, stdout2 = await self._run_discovery("kubectl config current-context", timeout=5)
+                if ok2:
+                    cluster_name = stdout2.strip()
             except Exception:
                 pass
 
             # Get server version
             version = ""
             try:
-                proc3 = await asyncio.create_subprocess_shell(
-                    "kubectl version --short 2>&1",
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE,
-                )
-                stdout3, _ = await asyncio.wait_for(proc3.communicate(), timeout=5)
-                if proc3.returncode == 0:
-                    out3 = stdout3.decode("utf-8", errors="replace")
+                ok3, out3 = await self._run_discovery("kubectl version --short", timeout=5)
+                if ok3:
                     vm = re.search(r"Server Version: v?(\S+)", out3)
                     if vm:
                         version = vm.group(1)
@@ -218,14 +210,8 @@ class CloudTopologyMapper:
     async def _discover_nodes(self, topology: CloudTopology) -> None:
         """Enumerate K8s nodes."""
         try:
-            proc = await asyncio.create_subprocess_shell(
-                "kubectl get nodes -o json 2>&1",
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=8)
-            out = stdout.decode("utf-8", errors="replace")
-            if proc.returncode != 0 or not out.strip().startswith("{"):
+            ok, out = await self._run_discovery("kubectl get nodes -o json")
+            if not ok or not out.strip().startswith("{"):
                 return
 
             data = _json.loads(out)
@@ -264,14 +250,8 @@ class CloudTopologyMapper:
     async def _discover_namespaces(self, topology: CloudTopology) -> None:
         """Enumerate K8s namespaces."""
         try:
-            proc = await asyncio.create_subprocess_shell(
-                "kubectl get namespaces -o json 2>&1",
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=8)
-            out = stdout.decode("utf-8", errors="replace")
-            if proc.returncode == 0 and out.strip().startswith("{"):
+            ok, out = await self._run_discovery("kubectl get namespaces -o json")
+            if ok and out.strip().startswith("{"):
                 data = _json.loads(out)
                 topology.namespaces = [
                     i.get("metadata", {}).get("name", "")
@@ -283,14 +263,8 @@ class CloudTopologyMapper:
     async def _discover_pods(self, topology: CloudTopology) -> None:
         """Enumerate K8s pods with full security context."""
         try:
-            proc = await asyncio.create_subprocess_shell(
-                "kubectl get pods -A -o json 2>&1",
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=10)
-            out = stdout.decode("utf-8", errors="replace")
-            if proc.returncode != 0 or not out.strip().startswith("{"):
+            ok, out = await self._run_discovery("kubectl get pods -A -o json", timeout=10)
+            if not ok or not out.strip().startswith("{"):
                 return
 
             data = _json.loads(out)
@@ -363,14 +337,8 @@ class CloudTopologyMapper:
     async def _discover_service_accounts(self, topology: CloudTopology) -> None:
         """Enumerate K8s service accounts."""
         try:
-            proc = await asyncio.create_subprocess_shell(
-                "kubectl get serviceaccounts -A -o json 2>&1",
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=8)
-            out = stdout.decode("utf-8", errors="replace")
-            if proc.returncode != 0 or not out.strip().startswith("{"):
+            ok, out = await self._run_discovery("kubectl get serviceaccounts -A -o json")
+            if not ok or not out.strip().startswith("{"):
                 return
 
             data = _json.loads(out)
@@ -392,14 +360,8 @@ class CloudTopologyMapper:
         """Enumerate K8s RBAC bindings (Roles + RoleBindings + ClusterRoles + ClusterRoleBindings)."""
         # ClusterRoleBindings
         try:
-            proc = await asyncio.create_subprocess_shell(
-                "kubectl get clusterrolebindings -o json 2>&1",
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=8)
-            out = stdout.decode("utf-8", errors="replace")
-            if proc.returncode == 0 and out.strip().startswith("{"):
+            ok, out = await self._run_discovery("kubectl get clusterrolebindings -o json")
+            if ok and out.strip().startswith("{"):
                 data = _json.loads(out)
                 for item in data.get("items", []):
                     rb = item.get("roleRef", {})
@@ -416,14 +378,8 @@ class CloudTopologyMapper:
 
         # RoleBindings (per namespace)
         try:
-            proc = await asyncio.create_subprocess_shell(
-                "kubectl get rolebindings -A -o json 2>&1",
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=10)
-            out = stdout.decode("utf-8", errors="replace")
-            if proc.returncode == 0 and out.strip().startswith("{"):
+            ok, out = await self._run_discovery("kubectl get rolebindings -A -o json", timeout=10)
+            if ok and out.strip().startswith("{"):
                 data = _json.loads(out)
                 for item in data.get("items", []):
                     meta = item.get("metadata", {})
@@ -501,34 +457,26 @@ class CloudTopologyMapper:
         """Probe AWS IMDS for IAM role info. Returns dict or None."""
         # Try IMDSv2 token
         try:
-            proc = await asyncio.create_subprocess_shell(
-                "curl -s -m 3 -X PUT 'http://169.254.169.254/latest/api/token' "
-                "-H 'X-aws-ec2-metadata-token-ttl-seconds: 21600' 2>&1",
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
+            ok, token_out = await self._run_discovery(
+                "curl -s -m 3 -X PUT http://169.254.169.254/latest/api/token"
             )
-            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=5)
-            token = stdout.decode("utf-8", errors="replace").strip()
+            token = token_out.strip() if ok else ""
 
             if token and not token.startswith("<?") and len(token) > 10:
                 # IMDSv2 — get role name
-                proc2 = await asyncio.create_subprocess_shell(
+                ok2, role_out = await self._run_discovery(
                     f"curl -s -m 3 -H 'X-aws-ec2-metadata-token: {token}' "
-                    "'http://169.254.169.254/latest/meta-data/iam/security-credentials/' 2>&1",
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE,
+                    "http://169.254.169.254/latest/meta-data/iam/security-credentials/",
+                    timeout=5,
                 )
-                stdout2, _ = await asyncio.wait_for(proc2.communicate(), timeout=5)
-                role_name = stdout2.decode("utf-8", errors="replace").strip()
+                role_name = role_out.strip() if ok2 else ""
             else:
                 # IMDSv1 fallback
-                proc2 = await asyncio.create_subprocess_shell(
-                    "curl -s -m 3 'http://169.254.169.254/latest/meta-data/iam/security-credentials/' 2>&1",
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE,
+                ok2, role_out = await self._run_discovery(
+                    "curl -s -m 3 http://169.254.169.254/latest/meta-data/iam/security-credentials/",
+                    timeout=5,
                 )
-                stdout2, _ = await asyncio.wait_for(proc2.communicate(), timeout=5)
-                role_name = stdout2.decode("utf-8", errors="replace").strip()
+                role_name = role_out.strip() if ok2 else ""
 
             if role_name and not role_name.startswith("<?") and len(role_name) < 256:
                 # Get credentials
@@ -542,13 +490,7 @@ class CloudTopologyMapper:
                 else:
                     creds_cmd = f"curl -s -m 3 '{creds_url}' 2>&1"
 
-                proc3 = await asyncio.create_subprocess_shell(
-                    creds_cmd,
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE,
-                )
-                stdout3, _ = await asyncio.wait_for(proc3.communicate(), timeout=5)
-                creds_out = stdout3.decode("utf-8", errors="replace")
+                _ok3, creds_out = await self._run_discovery(creds_cmd, timeout=5)
 
                 if creds_out.strip().startswith("{"):
                     try:
@@ -571,22 +513,15 @@ class CloudTopologyMapper:
         """Enumerate IAM roles via AWS CLI (requires working credentials)."""
         try:
             # List roles
-            proc = await asyncio.create_subprocess_shell(
-                "aws iam list-roles --max-items 50 --output json 2>&1",
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
+            ok, out = await self._run_discovery(
+                "aws iam list-roles --max-items 50 --output json", timeout=10
             )
-            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=10)
-            out = stdout.decode("utf-8", errors="replace")
-            if proc.returncode != 0 or not out.strip().startswith("["):
+            if not ok or not out.strip().startswith("["):
                 # Try with --query
-                proc2 = await asyncio.create_subprocess_shell(
-                    "aws iam list-roles --max-items 50 --query 'Roles[*].[RoleName,Arn,AssumeRolePolicyDocument]' --output json 2>&1",
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE,
+                _ok2, out = await self._run_discovery(
+                    "aws iam list-roles --max-items 50 --query 'Roles[*].[RoleName,Arn,AssumeRolePolicyDocument]' --output json",
+                    timeout=10,
                 )
-                stdout2, _ = await asyncio.wait_for(proc2.communicate(), timeout=10)
-                out = stdout2.decode("utf-8", errors="replace")
 
             if out.strip().startswith("[") or out.strip().startswith("{"):
                 data = _json.loads(out)
@@ -695,6 +630,7 @@ class CloudTopologyMapper:
                     "host_network": pod.get("host_network", False),
                     "host_pid": pod.get("host_pid", False),
                     "service_account": pod.get("service_account", "default"),
+                    "labels": pod.get("labels", {}),
                 })
 
                 # Pod → Namespace
@@ -724,6 +660,31 @@ class CloudTopologyMapper:
                 said = f"k8s-sa-{pod['namespace']}-{pod.get('service_account', 'default')}"
                 if pid in self.dkg.graph and said in self.dkg.graph:
                     self.dkg.add_edge(pid, said, "pod_mounts_sa")
+
+            # ── Service selector → Pod edges ──
+            pod_rows = [
+                (f"k8s-pod-{pod.get('namespace','')}-{pod.get('name','')}", pod)
+                for pod in topology.pods
+            ]
+            for service in self.dkg.query_nodes("Service"):
+                selector = service.get("k8s_selector", {})
+                if isinstance(selector, str):
+                    try:
+                        selector = _json.loads(selector)
+                    except Exception:
+                        selector = {}
+                if not isinstance(selector, dict) or not selector:
+                    continue
+                for pid, pod in pod_rows:
+                    labels = pod.get("labels", {}) or {}
+                    if pod.get("namespace") != service.get("k8s_namespace"):
+                        continue
+                    if all(labels.get(str(k)) == v for k, v in selector.items()):
+                        self.dkg.add_edge(
+                            service["id"], pid, "service_targets_pod",
+                            source="k8s_selector", evidence=_json.dumps(selector),
+                            confidence=0.95, status="inferred",
+                        )
 
             # ── RBAC Bindings ──
             for binding in topology.rbac_bindings:
@@ -800,10 +761,10 @@ class CloudTopologyMapper:
 
 # ── Convenience function ────────────────────────────────────────────────
 
-async def discover_cloud_topology(dkg: DKG) -> CloudTopology:
+async def discover_cloud_topology(dkg: DKG, tool_port=None) -> CloudTopology:
     """Discover cloud/K8s topology and populate DKG.
 
     Safe to call even when no K8s cluster exists — fails silently in <2s.
     """
-    mapper = CloudTopologyMapper(dkg)
+    mapper = CloudTopologyMapper(dkg, tool_port=tool_port)
     return await mapper.discover()

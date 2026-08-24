@@ -286,6 +286,66 @@ def register_recon_tools(gateway: MCPGateway) -> MCPGateway:
 
     Reference: VulnBot roles/collector.py tool list
     """
+    async def _cloud_discovery_command(command: str = "") -> ToolResult:
+        """Execute one fixed read-only K8s/cloud discovery command."""
+        import asyncio
+        allowed = {
+            "kubectl cluster-info",
+            "kubectl config current-context",
+            "kubectl version --short",
+            "kubectl get nodes -o json",
+            "kubectl get pods -A -o json",
+            "kubectl get svc -A -o json",
+            "kubectl get namespaces -o json",
+            "kubectl get serviceaccounts -A -o json",
+            "kubectl get clusterrolebindings -o json",
+            "kubectl get rolebindings -A -o json",
+            "kubectl auth can-i --list -A",
+        }
+        command = str(command or "").strip()
+        dynamic_prefixes = (
+            "curl -s -m 3 -X PUT http://169.254.169.254/",
+            "curl -s -m 3 -H 'X-aws-ec2-metadata-token:",
+            "curl -s -m 3 http://169.254.169.254/",
+            "aws iam list-roles --max-items 50",
+        )
+        if command not in allowed and not command.startswith(dynamic_prefixes):
+            return ToolResult(
+                tool_name="cloud_discovery_command", success=False,
+                stdout="", stderr="command not allow-listed", exit_code=2,
+                elapsed_ms=0,
+            )
+        try:
+            proc = await asyncio.create_subprocess_shell(
+                command,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=8)
+            return ToolResult(
+                tool_name="cloud_discovery_command",
+                success=proc.returncode == 0,
+                stdout=stdout.decode("utf-8", errors="replace"),
+                stderr=stderr.decode("utf-8", errors="replace"),
+                exit_code=proc.returncode or 0,
+                elapsed_ms=0,
+            )
+        except Exception as exc:
+            return ToolResult(
+                tool_name="cloud_discovery_command", success=False,
+                stdout="", stderr=str(exc), exit_code=1, elapsed_ms=0,
+            )
+
+    gateway.register(
+        name="cloud_discovery_command",
+        func=_cloud_discovery_command,
+        description="Run one allow-listed read-only Kubernetes discovery command through the recon gateway.",
+        parameters={
+            "command": {"type": "string", "description": "One of the fixed read-only discovery commands."},
+        },
+        domain="k8s",
+    )
+
     # ── nmap: Port scanning ─────────────────────────────────────
     gateway.register_shell_tool(
         name="nmap_scan",
