@@ -67,6 +67,20 @@ from darwin.utils.phase_logger import PhaseLogger
 from darwin.utils.thought_logger import ThoughtLogger
 
 
+def _attack_path_dependency(action: dict, instruction: str = "") -> dict | None:
+    """Return a structured path dependency when a task names path_id."""
+    action = action or {}
+    path_id = str(action.get("path_id", "") or "")
+    if not path_id:
+        params = action.get("params", {}) or {}
+        if isinstance(params, dict):
+            path_id = str(params.get("path_id", "") or "")
+    if not path_id:
+        match = re.search(r"(?:path[_ -]?id|attack path)[:= ]+([\w.-]+)", instruction or "", re.I)
+        path_id = match.group(1) if match else ""
+    return {"type": "requires_attack_path", "path_id": path_id} if path_id else None
+
+
 # -- System Prompts (imported from darwin.prompts) --------------------------
 from darwin.prompts.orchestrator import (
     SYSTEM_PROMPT_ORCHESTRATOR_UNIFIED,
@@ -1405,6 +1419,10 @@ Output ONLY valid JSON array (3-20 tasks depending on complexity. More tasks != 
                     )
                     for t in _plan_model
                 ]
+            for task in tasks:
+                path_dependency = _attack_path_dependency(task.action, task.instruction)
+                if path_dependency and path_dependency not in task.dependencies:
+                    task.dependencies.append(path_dependency)
             # Validate tool names against actual registry
             all_valid_tools = (self.attack_gateway.get_tool_names()
                                + self.recon_gateway.get_tool_names())
@@ -1533,17 +1551,22 @@ Output ONLY valid JSON array (3-20 tasks depending on complexity. More tasks != 
                 status = TaskStatus(status_str)
             except ValueError:
                 status = TaskStatus.CREATED
+        action = {
+            "tool": str(d.get("tool", "") or ""),
+            "target": str(d.get("endpoint", "") or ""),
+            "params": params,
+        }
+        dependencies = deps_from_task_ids(deps)
+        path_dependency = _attack_path_dependency(action, str(d.get("instruction", "") or ""))
+        if path_dependency:
+            dependencies.append(path_dependency)
         return Task(
             id=str(d.get("id", "")),
             type=d.get("type", "task"),
             goal=d.get("goal", "") or d.get("instruction", "") or "",
             instruction=str(d.get("instruction", "") or ""),
-            action={
-                "tool": str(d.get("tool", "") or ""),
-                "target": str(d.get("endpoint", "") or ""),
-                "params": params,
-            },
-            dependencies=deps_from_task_ids(deps),
+            action=action,
+            dependencies=dependencies,
             priority=float(d.get("priority", 0.5)),
             status=status,
             source=str(d.get("source", "") or ""),

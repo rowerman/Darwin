@@ -2,7 +2,7 @@
 
 ## 模块定位
 
-把云环境、Kubernetes 拓扑、RBAC、Pod 安全和 IAM 信任关系映射到 DKG；K8s 资源采集完成后由确定性关系分析器补齐控制器、服务和策略关系。
+把云环境、Kubernetes 拓扑、AWS 资源、RBAC、Pod 安全和 IAM 信任关系映射到 DKG；资源采集完成后由确定性关系分析器补齐控制器、服务、策略和网络关系。
 
 ## 所在链路
 
@@ -14,6 +14,7 @@
 - `discover_cloud_topology()`：异步发现并写入拓扑。
 - `CloudTopology`、`K8sRBACBinding`、`PodSecurityProfile`：拓扑结果模型。
 - `CloudTopology` 还承载 Service、Deployment/StatefulSet/DaemonSet、EndpointSlice、Ingress、NetworkPolicy、RBAC 资源及 Secret/ConfigMap 元数据。
+- `cloud_discovery_aws` 只允许通过 gateway 执行读取型 STS/EC2/EKS/ELB/RDS/S3/IAM action；AWS 资源使用 ARN 或规范化复合 ID。
 
 ## 输入/输出概览
 

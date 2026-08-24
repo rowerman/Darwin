@@ -85,8 +85,10 @@ class ParityScheduler:
         inst = (task.instruction or "").lower()
         return any(kw in inst for kw in _EXPLOIT_KEYWORDS)
 
-    def next_ready(self, graph: TaskGraph, budget=None) -> Task | None:
+    def next_ready(self, graph: TaskGraph, budget=None, world: dict | None = None) -> Task | None:
         """Return the next ready Task, mirroring the legacy selector."""
+        if world and "attack_paths" in world:
+            graph.refresh_states(world)
         ready_exploit: list[Task] = []
         ready_probe: list[Task] = []
         ready_low: list[Task] = []

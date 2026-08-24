@@ -346,6 +346,91 @@ def register_recon_tools(gateway: MCPGateway) -> MCPGateway:
                 stdout="", stderr=str(exc), exit_code=1, elapsed_ms=0,
             )
 
+    async def _cloud_discovery_aws(
+        service: str = "",
+        action: str = "",
+        resource: str = "",
+        region: str = "",
+        endpoint_url: str = "",
+    ) -> ToolResult:
+        """Run one read-only AWS discovery action without a shell."""
+        import asyncio
+        import shlex
+        import time
+        from urllib.parse import urlparse
+
+        read_only = {
+            "sts": {"get-caller-identity"},
+            "ec2": {
+                "describe-vpcs", "describe-subnets", "describe-route-tables",
+                "describe-security-groups", "describe-network-interfaces",
+                "describe-instances",
+            },
+            "eks": {"list-clusters", "describe-cluster"},
+            "elbv2": {"describe-load-balancers"},
+            "rds": {"describe-db-instances"},
+            "s3api": {
+                "list-buckets", "get-bucket-location", "get-bucket-policy-status",
+            },
+            "iam": {
+                "list-roles", "get-role", "list-policies", "get-policy",
+                "get-policy-version", "list-role-policies", "get-role-policy",
+                "list-attached-role-policies",
+            },
+        }
+        service = str(service or "").strip().lower()
+        action = str(action or "").strip().lower()
+        resource = str(resource or "").strip()
+        region = str(region or "").strip()
+        endpoint_url = str(endpoint_url or "").strip()
+        if action not in read_only.get(service, set()):
+            return ToolResult(
+                tool_name="cloud_discovery_aws", success=False, stdout="",
+                stderr="AWS discovery action is not read-only or not allow-listed",
+                exit_code=2, elapsed_ms=0,
+            )
+        if endpoint_url:
+            parsed = urlparse(endpoint_url)
+            if parsed.scheme not in {"http", "https"} or parsed.hostname not in {"localhost", "127.0.0.1"}:
+                return ToolResult(
+                    tool_name="cloud_discovery_aws", success=False, stdout="",
+                    stderr="endpoint_url must target localhost or 127.0.0.1",
+                    exit_code=2, elapsed_ms=0,
+                )
+        try:
+            argv = ["aws", service, action]
+            if resource:
+                argv.extend(shlex.split(resource))
+            if region:
+                argv.extend(["--region", region])
+            if endpoint_url:
+                argv.extend(["--endpoint-url", endpoint_url])
+            argv.extend(["--output", "json"])
+            started = time.perf_counter()
+            proc = await asyncio.create_subprocess_exec(
+                *argv, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=15)
+            out = stdout.decode("utf-8", errors="replace")
+            err = stderr.decode("utf-8", errors="replace")
+            parsed_output = {}
+            if out.strip().startswith(("{", "[")):
+                try:
+                    parsed_output = json.loads(out)
+                except Exception:
+                    parsed_output = {}
+            return ToolResult(
+                tool_name="cloud_discovery_aws", success=proc.returncode == 0,
+                stdout=out, stderr=err, exit_code=proc.returncode or 0,
+                elapsed_ms=(time.perf_counter() - started) * 1000,
+                parsed_output=parsed_output if isinstance(parsed_output, dict) else {"items": parsed_output},
+            )
+        except Exception as exc:
+            return ToolResult(
+                tool_name="cloud_discovery_aws", success=False, stdout="",
+                stderr=str(exc), exit_code=1, elapsed_ms=0,
+            )
+
     gateway.register(
         name="cloud_discovery_command",
         func=_cloud_discovery_command,
@@ -507,6 +592,20 @@ def register_recon_tools(gateway: MCPGateway) -> MCPGateway:
             "cert": {"type": "string", "description": "Path to TLS client certificate file (for mutual TLS)"},
             "key": {"type": "string", "description": "Path to TLS client key file (for mutual TLS)"},
         },
+    )
+
+    gateway.register(
+        name="cloud_discovery_aws",
+        func=_cloud_discovery_aws,
+        description="Run one strictly read-only AWS discovery action through argv; rejects mutating actions and non-local custom endpoints.",
+        parameters={
+            "service": {"type": "string", "description": "AWS service (sts, ec2, eks, elbv2, rds, s3api, iam)."},
+            "action": {"type": "string", "description": "Allow-listed read-only action for the service."},
+            "resource": {"type": "string", "description": "Optional resource identifiers/flags, parsed as argv tokens.", "default": ""},
+            "region": {"type": "string", "description": "Optional AWS region.", "default": ""},
+            "endpoint_url": {"type": "string", "description": "Optional localhost AWS simulator endpoint.", "default": ""},
+        },
+        domain="cloud",
     )
 
     # ── whatweb: Technology fingerprinting ──────────────────────

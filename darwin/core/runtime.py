@@ -103,6 +103,21 @@ class Runtime:
                 pass
         return fallback
 
+    @staticmethod
+    def _scheduler_world(state: WorldState) -> dict:
+        topology = getattr(state, "topology", None)
+        paths = getattr(topology, "attack_paths", []) if topology is not None else []
+        return {
+            "attack_paths": [
+                {
+                    "path_id": str(getattr(path, "path_id", "")),
+                    "status": str(getattr(path, "status", "active")),
+                }
+                for path in paths
+                if getattr(path, "path_id", "")
+            ]
+        }
+
     async def run(
         self,
         state: WorldState,
@@ -124,7 +139,12 @@ class Runtime:
             if graph is None:
                 graph = await self.planner.plan(current_state, objective, self.memory)
 
-            task = self.scheduler.next_ready(graph, budget)
+            scheduler_world = self._scheduler_world(current_state)
+            try:
+                task = self.scheduler.next_ready(graph, budget, scheduler_world)
+            except TypeError:
+                # Preserve compatibility with injected legacy schedulers.
+                task = self.scheduler.next_ready(graph, budget)
             if task is None:
                 if stall_tried:
                     outcome.stopped_reason = "plan_exhausted"

@@ -19,6 +19,7 @@ class TopologyAnalysisResult:
     updated_relations: int = 0
     affected_path_ids: list[str] = field(default_factory=list)
     coverage: dict[str, Any] = field(default_factory=dict)
+    priority_hints: dict[str, float] = field(default_factory=dict)
     warnings: list[str] = field(default_factory=list)
 
 
@@ -94,6 +95,76 @@ class RelationAnalyzer:
             else:
                 result.added_relations += 1
             changed_ids.update((from_id, to_id))
+            result.priority_hints[f"{from_id}->{to_id}:{edge_type}"] = (
+                0.9 if status == "observed" else 0.6
+            )
+
+    def _analyze_iam(self, dkg: DKG, result: TopologyAnalysisResult, changed_ids: set[str]) -> None:
+        roles = self._nodes(dkg, "IAMRole")
+        policies = self._nodes(dkg, "IAMPolicy")
+        role_by_arn = {str(r.get("arn", "")): self._node_id(r) for r in roles if r.get("arn")}
+        role_by_name = {str(r.get("name", r.get("RoleName", ""))): self._node_id(r) for r in roles}
+        policy_by_arn = {
+            str(p.get("arn", p.get("Arn", p.get("PolicyArn", "")))): self._node_id(p)
+            for p in policies if p.get("arn", p.get("Arn", p.get("PolicyArn", "")))
+        }
+        for role in roles:
+            role_id = self._node_id(role)
+            attached = self._json(role.get("AttachedPolicies", role.get("attached_policies", [])), [])
+            for item in attached if isinstance(attached, list) else []:
+                arn = str(item.get("PolicyArn", item.get("arn", ""))) if isinstance(item, dict) else str(item)
+                policy_id = policy_by_arn.get(arn)
+                if policy_id:
+                    self._edge(dkg, result, changed_ids, "relation_analyzer:iam_attachment", arn, 1.0, "observed", role_id, policy_id, "role_has_policy")
+            trust = self._json(role.get("trust_policy", role.get("AssumeRolePolicyDocument", {})), {})
+            for statement in trust.get("Statement", []) if isinstance(trust, dict) else []:
+                principal = statement.get("Principal", {}) if isinstance(statement, dict) else {}
+                principals = principal.get("AWS", []) if isinstance(principal, dict) else []
+                if isinstance(principals, str):
+                    principals = [principals]
+                for arn in principals if isinstance(principals, list) else []:
+                    source_id = role_by_arn.get(str(arn)) or role_by_name.get(str(arn).split("/")[-1])
+                    if source_id:
+                        self._edge(dkg, result, changed_ids, "relation_analyzer:iam_trust", str(arn), 1.0, "observed", source_id, role_id, "role_can_assume")
+
+        resource_by_arn = {
+            str(node.get("arn", node.get("Arn", ""))): self._node_id(node)
+            for node_type in ("S3", "EC2", "RDS", "EKS", "LoadBalancer", "VPC")
+            for node in self._nodes(dkg, node_type)
+            if node.get("arn", node.get("Arn", ""))
+        }
+        for policy in policies:
+            policy_id = self._node_id(policy)
+            document = self._json(policy.get("policy_detail", policy.get("document", policy.get("PolicyDocument", {}))), {})
+            for statement in document.get("Statement", []) if isinstance(document, dict) else []:
+                resources = statement.get("Resource", []) if isinstance(statement, dict) else []
+                if isinstance(resources, str):
+                    resources = [resources]
+                for arn in resources if isinstance(resources, list) else []:
+                    target = resource_by_arn.get(str(arn))
+                    if target:
+                        self._edge(dkg, result, changed_ids, "relation_analyzer:iam_permission", str(arn), 1.0, "observed", policy_id, target, "policy_grants_resource")
+
+    def _analyze_network(self, dkg: DKG, result: TopologyAnalysisResult, changed_ids: set[str]) -> None:
+        groups = self._nodes(dkg, "SecurityGroup")
+        resources = [node for node_type in ("ENI", "EC2") for node in self._nodes(dkg, node_type)]
+        group_ids = {str(group.get("GroupId", group.get("group_id", ""))): self._node_id(group) for group in groups}
+        for group in groups:
+            source_id = self._node_id(group)
+            for permission in group.get("IpPermissions", group.get("ingress", [])) or []:
+                for pair in permission.get("UserIdGroupPairs", []) if isinstance(permission, dict) else []:
+                    target_id = group_ids.get(str(pair.get("GroupId", "")))
+                    if target_id:
+                        self._edge(dkg, result, changed_ids, "relation_analyzer:security_group", str(pair.get("GroupId")), 0.8, "inferred", source_id, target_id, "resource_reaches_resource")
+        for resource in resources:
+            subnet = str(resource.get("SubnetId", "") or "")
+            if not subnet:
+                continue
+            for other in resources:
+                if self._node_id(other) == self._node_id(resource):
+                    continue
+                if subnet == str(other.get("SubnetId", "") or ""):
+                    self._edge(dkg, result, changed_ids, "relation_analyzer:subnet_reachability", subnet, 0.55, "hypothesized", self._node_id(resource), self._node_id(other), "resource_reaches_resource")
 
     def analyze(self, dkg: DKG, environment: Any | None = None) -> TopologyAnalysisResult:
         """Build K8s relationships from facts already present in ``dkg``."""
@@ -214,6 +285,14 @@ class RelationAnalyzer:
                         self._node_id(policy), self._node_id(pod), edge_type,
                     )
 
+        self._analyze_iam(dkg, result, changed_ids)
+        self._analyze_network(dkg, result, changed_ids)
+
+        if changed_ids:
+            try:
+                dkg.attack_path_summary(affected_node_ids=changed_ids)
+            except Exception as exc:
+                result.warnings.append(f"attack path refresh failed: {exc}")
         result.after_revision = dkg.revision
         result.affected_path_ids = self._changed_paths(dkg, changed_ids)
         result.coverage = {

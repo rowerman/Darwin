@@ -13,6 +13,7 @@ v2 控制面的唯一执行循环：消费计划、调度 Task、执行、评估
 - `Runtime`：循环和阶段协作。
 - `RuntimeOutcome`：循环结果。
 - `state_provider`：可选的工作状态刷新回调；提供时在评估和重规划前重新读取 DKG。
+- Scheduler 接收当前 world snapshot 中的 active attack paths，用于满足 `requires_attack_path`；旧的二参数 Scheduler 仍兼容。
 
 ## 相关模块
 

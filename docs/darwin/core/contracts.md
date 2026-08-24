@@ -10,7 +10,7 @@
 
 ## 关键入口
 
-- `TaskStatus`、`TaskOutcome`、`ReplanRecommendation`：状态和结果语义。
+- `TaskStatus`、`TaskOutcome`、`ReplanRecommendation`：状态和结果语义；`DependencyType.REQUIRES_ATTACK_PATH` 表示任务依赖 active `path_id`。
 - `Budget`、`Objective`：运行约束。
 - `Task`、`Planner`、`Scheduler`、`Executor`、`Evaluator`：组件协议。
 
@@ -25,4 +25,3 @@
 ## 维护提示
 
 这里是公共契约；状态值或协议签名变更需要同步所有实现和持久化路径。
-

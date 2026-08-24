@@ -163,7 +163,7 @@ class Planner(Protocol):
 class Scheduler(Protocol):
     """Picks the next ready Task from the graph."""
 
-    def next_ready(self, graph: TaskGraph, budget: Budget) -> Task | None: ...
+    def next_ready(self, graph: TaskGraph, budget: Budget, world: dict | None = None) -> Task | None: ...
 
 
 class Executor(Protocol):

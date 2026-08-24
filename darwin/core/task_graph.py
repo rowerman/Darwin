@@ -32,6 +32,7 @@ class DependencyType(str, Enum):
     REQUIRES_CREDENTIAL = "requires_credential"
     REQUIRES_ACCESS = "requires_access"
     REQUIRES_CAPABILITY = "requires_capability"
+    REQUIRES_ATTACK_PATH = "requires_attack_path"
 
 
 def dependency_task_ids(task: Task) -> list[str]:
@@ -143,6 +144,21 @@ class TaskGraph:
         if kind == DependencyType.REQUIRES_CAPABILITY:
             key = dep.get("capability")
             return bool(key and key in (world.get("capabilities") or set()))
+        if kind == DependencyType.REQUIRES_ATTACK_PATH:
+            key = str(dep.get("path_id", "") or "")
+            paths = world.get("attack_paths") or set()
+            if isinstance(paths, dict):
+                paths = {
+                    path_id for path_id, state in paths.items()
+                    if not isinstance(state, dict) or state.get("status", "active") == "active"
+                }
+            elif isinstance(paths, (list, tuple, set)):
+                paths = {
+                    str(item.get("path_id")) if isinstance(item, dict) else str(item)
+                    for item in paths
+                    if not isinstance(item, dict) or item.get("status", "active") == "active"
+                }
+            return bool(key and key in paths)
         return False
 
     def refresh_states(self, world: dict | None = None) -> None:

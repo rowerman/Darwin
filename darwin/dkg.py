@@ -113,6 +113,13 @@ EDGE_TYPES = [
     "binding_targets_role",          # RoleBinding/ClusterRoleBinding → Role/ClusterRole
     "ingress_routes_service",        # Ingress → Service
     "endpoint_slice_backed_by_service",  # EndpointSlice → Service
+    "account_contains_resource",    # CloudAccount → AWS resource
+    "resource_in_subnet",            # ENI/EC2 → Subnet
+    "route_table_routes_to",         # RouteTable → Subnet/ENI
+    "security_group_attaches",       # SecurityGroup → ENI/EC2
+    "policy_grants_resource",        # IAMPolicy → AWS resource
+    "eks_links_k8s_cluster",          # EKS → K8sCluster
+    "resource_reaches_resource",      # network resource → resource
     "service_exposes_endpoint",    # Service → Endpoint
     "endpoint_backed_by_service",  # Endpoint → Service
     "host_reaches_host",            # Host → Host
@@ -143,6 +150,13 @@ EDGE_SEMANTICS: Dict[str, Dict[str, str]] = {
     "binding_targets_role": {"from": "Binding", "to": "Role"},
     "ingress_routes_service": {"from": "Ingress", "to": "Service"},
     "endpoint_slice_backed_by_service": {"from": "EndpointSlice", "to": "Service"},
+    "account_contains_resource": {"from": "CloudAccount", "to": "Resource"},
+    "resource_in_subnet": {"from": "Resource", "to": "Subnet"},
+    "route_table_routes_to": {"from": "RouteTable", "to": "Resource"},
+    "security_group_attaches": {"from": "SecurityGroup", "to": "Resource"},
+    "policy_grants_resource": {"from": "IAMPolicy", "to": "Resource"},
+    "eks_links_k8s_cluster": {"from": "EKS", "to": "K8sCluster"},
+    "resource_reaches_resource": {"from": "Resource", "to": "Resource"},
     "service_exposes_endpoint": {"from": "Service", "to": "Endpoint"},
     "endpoint_backed_by_service": {"from": "Endpoint", "to": "Service"},
     "host_reaches_host": {"from": "Host", "to": "Host"},
@@ -701,7 +715,13 @@ class DKG:
                 },
             }
 
-    def attack_path_summary(self, max_paths: int = 12) -> list:
+    def attack_path_summary(
+        self,
+        max_paths: int = 12,
+        *,
+        affected_node_ids: set[str] | None = None,
+        affected_edge_keys: set[tuple[str, str, str]] | None = None,
+    ) -> list:
         """Return a bounded attack-path summary, gated and cached by revision.
 
         Only computes cloud/K8s attack paths when the graph actually contains
@@ -710,9 +730,15 @@ class DKG:
         not re-run the BFS analyses.
         """
         with self._lock:
+            affected_node_ids = {str(x) for x in (affected_node_ids or set())}
+            affected_edge_keys = {
+                (str(a), str(b), str(c)) for a, b, c in (affected_edge_keys or set())
+            }
+            partial = bool(affected_node_ids or affected_edge_keys)
             if (
                 self._attack_path_cache is not None
                 and self._attack_path_cache[0] == self._revision
+                and not partial
             ):
                 return list(self._attack_path_cache[1])
 
@@ -727,20 +753,58 @@ class DKG:
             # Lazy import avoids a circular dependency: cloud_attack_path
             # imports DKG at module level.
             from darwin.cloud_attack_path import compute_attack_paths
+            from darwin.cloud_attack_path import index_attack_path
 
             try:
-                report = compute_attack_paths(self)
-                paths = list(report.paths[: max(0, int(max_paths))])
+                old_paths = list(self._attack_path_cache[1]) if self._attack_path_cache else []
+                categories = None
+                if partial and old_paths:
+                    categories = set()
+                    for node_id in affected_node_ids:
+                        node_type = str(self.graph.nodes[node_id].get("type", "")) if node_id in self.graph else ""
+                        categories.update({
+                            "privilege_escalation", "cross_account"
+                        } if node_type in {"IAMRole", "IAMPolicy", "CloudAccount", "EKS"} else set())
+                        categories.update({
+                            "container_escape", "lateral_move"
+                        } if node_type in {"K8sPod", "K8sSA", "NetworkPolicy", "SecurityGroup", "ENI", "EC2"} else set())
+                    for src, dst, edge_type in affected_edge_keys:
+                        if edge_type in {"role_can_assume", "role_has_policy", "policy_grants_resource"}:
+                            categories.update({"privilege_escalation", "cross_account"})
+                        else:
+                            categories.add("lateral_move")
+                    if not categories:
+                        return old_paths[: max(0, int(max_paths))]
+                report = (
+                    compute_attack_paths(self, categories=categories)
+                    if categories is not None
+                    else compute_attack_paths(self)
+                )
+                if categories is not None:
+                    paths = [p for p in old_paths if p.category not in categories] + list(report.paths)
+                else:
+                    paths = list(report.paths)
+                paths = paths[: max(0, int(max_paths))]
                 for path in paths:
                     path_id = str(getattr(path, "path_id", "") or "")
                     if not path_id:
                         continue
+                    node_ids, edge_keys = index_attack_path(self, path)
+                    path.node_ids = node_ids
+                    path.edge_keys = edge_keys
                     prior = self._attack_path_states.get(path_id, {})
                     self._attack_path_states[path_id] = {
                         **prior,
                         "path_id": path_id,
                         "confidence": float(prior.get("confidence", getattr(path, "confidence", 0.0))),
                         "status": prior.get("status", "active"),
+                        "node_ids": node_ids,
+                        "edge_keys": edge_keys,
+                        "path": {
+                            "category": getattr(path, "category", ""),
+                            "description": getattr(path, "description", ""),
+                            "steps": list(getattr(path, "steps", []) or []),
+                        },
                         "updated_revision": self._revision,
                     }
                 self._persist()

@@ -11,7 +11,7 @@
 ## 关键入口
 
 - `TaskGraph`：添加、查询、更新和依赖遍历。
-- `DependencyType`、`dependency_task_ids()`：依赖语义和兼容读取。
+- `DependencyType`、`dependency_task_ids()`：依赖语义和兼容读取；`requires_attack_path` 依赖当前 DKG 中处于 active 的 `path_id`。
 
 ## 相关模块
 
@@ -23,5 +23,4 @@
 
 ## 维护提示
 
-图更新必须保持无循环依赖和状态转换一致。
-
+图更新必须保持无循环依赖和状态转换一致。带攻击路径依赖的任务在路径变为 stale/rejected 时保持 blocked，等待局部 replan。

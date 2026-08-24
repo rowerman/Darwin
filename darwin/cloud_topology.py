@@ -124,6 +124,10 @@ class CloudTopology:
     service_accounts: list[dict] = field(default_factory=list)
     iam_roles: list[dict] = field(default_factory=list)
     cross_account_trusts: list[dict] = field(default_factory=list)
+    aws_resources: dict[str, list[dict]] = field(default_factory=dict)
+    aws_iam_policies: list[dict] = field(default_factory=list)
+    aws_coverage: dict[str, Any] = field(default_factory=dict)
+    aws_warnings: list[str] = field(default_factory=list)
     high_risk_pods: list[PodSecurityProfile] = field(default_factory=list)
 
 
@@ -132,9 +136,10 @@ class CloudTopology:
 class CloudTopologyMapper:
     """Discovers K8S cluster topology + cloud IAM and writes to DKG."""
 
-    def __init__(self, dkg: DKG, tool_port=None):
+    def __init__(self, dkg: DKG, tool_port=None, environment=None):
         self.dkg = dkg
         self.tool_port = tool_port
+        self.environment = environment
 
     async def _run_discovery(self, command: str, *, timeout: float = 8.0):
         """Run a discovery command through the injected tool port."""
@@ -144,6 +149,27 @@ class CloudTopologyMapper:
         # Direct subprocess execution is intentionally disabled.  Discovery
         # must be invoked from the orchestrator with the gateway port.
         return False, ""
+
+    async def _run_aws_discovery(self, service: str, action: str, *, resource: str = "",
+                                 region: str = "", endpoint_url: str = "", timeout: float = 15.0):
+        if self.tool_port is None:
+            return False, {}, "AWS discovery requires the injected gateway port"
+        try:
+            result = await self.tool_port("cloud_discovery_aws", {
+                "service": service, "action": action, "resource": resource,
+                "region": region, "endpoint_url": endpoint_url,
+            })
+            parsed = getattr(result, "parsed_output", {}) or {}
+            if not isinstance(parsed, dict):
+                parsed = {"items": parsed}
+            if not parsed and getattr(result, "stdout", ""):
+                try:
+                    parsed = _json.loads(result.stdout)
+                except Exception:
+                    parsed = {}
+            return bool(getattr(result, "success", False)), parsed, getattr(result, "stderr", "") or ""
+        except Exception as exc:
+            return False, {}, str(exc)
 
     async def discover(self) -> CloudTopology:
         """Run full cloud topology discovery and populate DKG.
@@ -177,7 +203,14 @@ class CloudTopologyMapper:
         # Phase 3: Cloud IAM (only if IMDS/cloud metadata reachable)
         await self._discover_iam(topology)
 
-        # Phase 4: Write to DKG
+        # Phase 4: Public-cloud resources are explicitly gated by the
+        # classifier; ordinary Web/DB runs never issue AWS API calls.
+        provider = str(getattr(self.environment, "provider", "") or "").lower()
+        cloud_enabled = bool(getattr(self.environment, "cloud_enabled", False))
+        if cloud_enabled and (provider in {"", "aws", "aws+"} or "aws" in provider):
+            await self._discover_aws_resources(topology)
+
+        # Phase 5: Write to DKG
         self._write_to_dkg(topology)
 
         return topology
@@ -733,6 +766,114 @@ class CloudTopologyMapper:
             pass
         return trusts
 
+    @staticmethod
+    def _aws_items(payload: dict, *keys: str) -> list[dict]:
+        for key in keys:
+            value = payload.get(key)
+            if isinstance(value, list):
+                return [row for row in value if isinstance(row, dict)]
+        for value in payload.values():
+            if isinstance(value, list) and all(isinstance(row, dict) for row in value):
+                return list(value)
+        return []
+
+    @staticmethod
+    def _aws_id(resource_type: str, row: dict, account_id: str = "", region: str = "") -> str:
+        arn = str(row.get("Arn", row.get("arn", "")) or "").strip()
+        if arn:
+            return f"aws:{arn}"
+        candidates = (
+            row.get("VpcId"), row.get("SubnetId"), row.get("RouteTableId"),
+            row.get("GroupId"), row.get("NetworkInterfaceId"), row.get("InstanceId"),
+            row.get("ClusterArn"), row.get("ClusterName"), row.get("LoadBalancerArn"),
+            row.get("DBInstanceArn"), row.get("DBInstanceIdentifier"),
+            row.get("Name"), row.get("BucketName"), row.get("PolicyName"),
+            row.get("RoleName"), row.get("PolicyArn"),
+        )
+        identifier = next((str(value) for value in candidates if value), "unknown")
+        return f"aws:{account_id}:{region}:{resource_type}:{identifier}"
+
+    async def _discover_aws_resources(self, topology: CloudTopology) -> None:
+        """Collect bounded AWS metadata through the dedicated read-only port."""
+        specs = (
+            ("ec2", "describe-vpcs", "VPCs", "VPC"),
+            ("ec2", "describe-subnets", "Subnets", "Subnet"),
+            ("ec2", "describe-route-tables", "RouteTables", "RouteTable"),
+            ("ec2", "describe-security-groups", "SecurityGroups", "SecurityGroup"),
+            ("ec2", "describe-network-interfaces", "NetworkInterfaces", "ENI"),
+            ("ec2", "describe-instances", "Reservations", "EC2"),
+            ("elbv2", "describe-load-balancers", "LoadBalancers", "LoadBalancer"),
+            ("rds", "describe-db-instances", "DBInstances", "RDS"),
+            ("s3api", "list-buckets", "Buckets", "S3"),
+            ("iam", "list-roles", "Roles", "IAMRole"),
+            ("iam", "list-policies", "Policies", "IAMPolicy"),
+        )
+        account_id = ""
+        ok, identity, err = await self._run_aws_discovery("sts", "get-caller-identity")
+        if ok:
+            account_id = str(identity.get("Account", "") or "")
+            topology.aws_resources.setdefault("CloudAccount", []).append({
+                "account_id": account_id, "arn": identity.get("Arn", ""),
+                "user_id": identity.get("UserId", ""), "provider": "aws",
+            })
+        elif err:
+            topology.aws_warnings.append(f"sts:get-caller-identity: {err}")
+
+        for service, action, key, node_type in specs:
+            ok, payload, err = await self._run_aws_discovery(service, action)
+            if not ok:
+                topology.aws_warnings.append(f"{service}:{action}: {err or 'discovery failed'}")
+                continue
+            rows = self._aws_items(payload, key)
+            # describe-instances nests instances under Reservations.
+            if node_type == "EC2":
+                rows = [instance for reservation in rows
+                        for instance in reservation.get("Instances", [])
+                        if isinstance(instance, dict)]
+            bucket = topology.aws_resources.setdefault(node_type, [])
+            for row in rows[:200]:
+                row = dict(row)
+                row["provider"] = "aws"
+                row["account_id"] = account_id
+                row["resource_id"] = self._aws_id(node_type, row, account_id)
+                bucket.append(row)
+                if node_type == "IAMRole":
+                    trust = row.get("AssumeRolePolicyDocument") or row.get("assume_role_policy")
+                    if trust:
+                        row["trust_policy"] = trust
+                        for trust_row in self._extract_cross_account_trusts(trust):
+                            trust_row["source_role"] = row.get("RoleName", row.get("role_name", ""))
+                            topology.cross_account_trusts.append(trust_row)
+                if node_type == "IAMPolicy":
+                    policy_arn = row.get("Arn", row.get("PolicyArn", ""))
+                    if policy_arn:
+                        ok_policy, detail, _ = await self._run_aws_discovery(
+                            "iam", "get-policy", resource=f"--policy-arn {policy_arn}"
+                        )
+                        if ok_policy:
+                            row["policy_detail"] = detail.get("Policy", detail)
+
+        eks_ok, eks_payload, eks_err = await self._run_aws_discovery("eks", "list-clusters")
+        if eks_ok:
+            names = eks_payload.get("clusters", []) if isinstance(eks_payload, dict) else []
+            for name in names[:50]:
+                ok_cluster, detail, _ = await self._run_aws_discovery(
+                    "eks", "describe-cluster", resource=f"--name {name}"
+                )
+                cluster = detail.get("cluster", {}) if ok_cluster else {"name": name}
+                cluster["provider"] = "aws"
+                cluster["account_id"] = account_id
+                cluster["resource_id"] = self._aws_id("EKS", cluster, account_id)
+                topology.aws_resources.setdefault("EKS", []).append(cluster)
+        elif eks_err:
+            topology.aws_warnings.append(f"eks:list-clusters: {eks_err}")
+
+        topology.aws_coverage = {
+            "resource_counts": {key: len(rows) for key, rows in topology.aws_resources.items()},
+            "warnings": list(topology.aws_warnings),
+            "complete": not bool(topology.aws_warnings),
+        }
+
     # ── Phase 4: Write to DKG ──────────────────────────────────────────
 
     def _write_to_dkg(self, topology: CloudTopology) -> None:
@@ -936,6 +1077,74 @@ class CloudTopologyMapper:
             cid = f"k8s-configmap-{item.get('namespace', '')}-{item.get('name', '')}"
             self.dkg.add_node("ConfigMap", cid, item, source="cloud_discovery:k8s_configmap_metadata")
 
+        # ── AWS resources ──
+        account_rows = topology.aws_resources.get("CloudAccount", [])
+        account_id = str((account_rows[0] if account_rows else {}).get("account_id", "") or "")
+        account_node_id = f"cloud-acct-{account_id}" if account_id else ""
+        if account_id:
+            self.dkg.add_node("CloudAccount", account_node_id, {
+                "account_id": account_id, "provider": "aws",
+                "arn": (account_rows[0] if account_rows else {}).get("arn", ""),
+            }, source="cloud_discovery_aws:sts")
+
+        aws_ids: dict[str, dict[str, str]] = {}
+        for node_type, rows in topology.aws_resources.items():
+            if node_type == "CloudAccount":
+                continue
+            for row in rows:
+                rid = str(row.get("resource_id", "") or "")
+                if not rid:
+                    continue
+                node_id = rid
+                props = {
+                    key: value for key, value in row.items()
+                    if key not in {"resource_id", "SecretAccessKey", "AccessKeyId", "Token"}
+                }
+                props.setdefault("resource_id", rid)
+                self.dkg.add_node(node_type, node_id, props, source="cloud_discovery_aws")
+                key_fields = {
+                    "VPC": "VpcId", "Subnet": "SubnetId", "RouteTable": "RouteTableId",
+                    "SecurityGroup": "GroupId", "ENI": "NetworkInterfaceId", "EC2": "InstanceId",
+                    "EKS": "ClusterName", "LoadBalancer": "LoadBalancerArn", "RDS": "DBInstanceIdentifier",
+                    "S3": "BucketName", "IAMRole": "RoleName", "IAMPolicy": "PolicyArn",
+                }
+                lookup_key = str(row.get(key_fields.get(node_type, ""), "") or row.get("Name", "") or rid)
+                aws_ids.setdefault(node_type, {})[lookup_key] = {
+                    "id": node_id, "arn": str(row.get("Arn", row.get("arn", "")) or "")
+                }
+                if account_node_id:
+                    self.dkg.add_edge(
+                        account_node_id, node_id, "account_contains_resource",
+                        source="cloud_discovery_aws", evidence=node_type,
+                        confidence=1.0, status="observed",
+                    )
+
+        # Stable AWS relationship joins by IDs returned by the APIs.
+        for row in topology.aws_resources.get("Subnet", []):
+            subnet_id = aws_ids.get("Subnet", {}).get(str(row.get("SubnetId", "")), {}).get("id", "")
+            vpc_id = aws_ids.get("VPC", {}).get(str(row.get("VpcId", "")), {}).get("id", "")
+            if subnet_id and vpc_id:
+                self.dkg.add_edge(vpc_id, subnet_id, "resource_contains", source="cloud_discovery_aws", evidence="VpcId", confidence=1.0)
+        for node_type in ("ENI", "EC2"):
+            for row in topology.aws_resources.get(node_type, []):
+                resource_id = aws_ids.get(node_type, {}).get(str(
+                    row.get("NetworkInterfaceId") or row.get("InstanceId") or ""
+                ), {}).get("id", "")
+                subnet_id = aws_ids.get("Subnet", {}).get(str(row.get("SubnetId", "")), {}).get("id", "")
+                if resource_id and subnet_id:
+                    self.dkg.add_edge(resource_id, subnet_id, "resource_in_subnet", source="cloud_discovery_aws", evidence="SubnetId", confidence=1.0)
+                for group in row.get("Groups", []) if isinstance(row.get("Groups"), list) else []:
+                    group_id = aws_ids.get("SecurityGroup", {}).get(str(group.get("GroupId", "")), {}).get("id", "")
+                    if group_id and resource_id:
+                        self.dkg.add_edge(group_id, resource_id, "security_group_attaches", source="cloud_discovery_aws", evidence="Groups", confidence=0.9, status="inferred")
+
+        for row in topology.aws_resources.get("EKS", []):
+            cluster_name = str(row.get("name", row.get("ClusterName", "")) or "")
+            eks_id = aws_ids.get("EKS", {}).get(cluster_name, {}).get("id", "")
+            k8s_id = f"k8s-cluster-{cluster_name}"
+            if eks_id and k8s_id in self.dkg.graph:
+                self.dkg.add_edge(eks_id, k8s_id, "eks_links_k8s_cluster", source="aws_k8s_crosswalk", evidence=cluster_name, confidence=0.95, status="inferred")
+
         # ── Cloud IAM ──
         for role in topology.iam_roles:
             rid = f"iam-role-{role.get('role_name', 'unknown')}"
@@ -992,10 +1201,10 @@ class CloudTopologyMapper:
 
 # ── Convenience function ────────────────────────────────────────────────
 
-async def discover_cloud_topology(dkg: DKG, tool_port=None) -> CloudTopology:
+async def discover_cloud_topology(dkg: DKG, tool_port=None, environment=None) -> CloudTopology:
     """Discover cloud/K8s topology and populate DKG.
 
     Safe to call even when no K8s cluster exists — fails silently in <2s.
     """
-    mapper = CloudTopologyMapper(dkg, tool_port=tool_port)
+    mapper = CloudTopologyMapper(dkg, tool_port=tool_port, environment=environment)
     return await mapper.discover()

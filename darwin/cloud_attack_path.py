@@ -45,6 +45,8 @@ class AttackPath:
     recommended_tools: list[str] = field(default_factory=list)
     prerequisites: list[str] = field(default_factory=list)
     confidence: float = 1.0  # 0.0–1.0, reduced for indirect paths
+    node_ids: list[str] = field(default_factory=list)
+    edge_keys: list[tuple[str, str, str]] = field(default_factory=list)
 
     def to_prompt_context(self) -> str:
         """Format as LLM-friendly prompt injection."""
@@ -98,6 +100,28 @@ class AttackPathReport:
                 lines.append("")
 
         return "\n".join(lines)
+
+
+def index_attack_path(dkg: DKG, path: AttackPath) -> tuple[list[str], list[tuple[str, str, str]]]:
+    """Derive stable graph indexes from path steps and known node names."""
+    node_ids: set[str] = set()
+    searchable = " ".join([
+        path.description,
+        *path.prerequisites,
+        *[str(step.get("target", "")) for step in path.steps],
+    ])
+    for node_id, data in dkg.graph.nodes(data=True):
+        name = str(data.get("name", "") or "")
+        if str(node_id) in searchable or (name and name in searchable):
+            node_ids.add(str(node_id))
+    edge_keys: set[tuple[str, str, str]] = set()
+    for src in sorted(node_ids):
+        if src not in dkg.graph:
+            continue
+        for _src, dst, key, data in dkg.graph.out_edges(src, keys=True, data=True):
+            if str(dst) in node_ids:
+                edge_keys.add((str(src), str(dst), str(data.get("type", ""))))
+    return sorted(node_ids), sorted(edge_keys)
 
 
 # ── Graph Queries ────────────────────────────────────────────────────────
@@ -405,44 +429,52 @@ def _get_incoming_edges(dkg: DKG, node_id: str) -> list[tuple[str, str]]:
 
 # ── Main API ─────────────────────────────────────────────────────────────
 
-def compute_attack_paths(dkg: DKG) -> AttackPathReport:
+def compute_attack_paths(dkg: DKG, categories: set[str] | None = None) -> AttackPathReport:
     """Compute all attack paths from the current DKG cloud topology.
 
     Returns a ranked AttackPathReport suitable for LLM prompt injection.
     """
     all_paths: list[AttackPath] = []
 
+    categories = set(categories or {
+        "privilege_escalation", "container_escape", "lateral_move", "cross_account",
+    })
+
     # 1. Privilege escalation
-    try:
-        priv_paths = find_privilege_escalation_paths(dkg)
-        all_paths.extend(priv_paths)
-        log.info("CTAGE Reasoner: found %d privilege escalation paths", len(priv_paths))
-    except Exception as e:
-        log.debug("CTAGE Reasoner: privilege escalation analysis failed: %s", e)
+    if "privilege_escalation" in categories:
+        try:
+            priv_paths = find_privilege_escalation_paths(dkg)
+            all_paths.extend(priv_paths)
+            log.info("CTAGE Reasoner: found %d privilege escalation paths", len(priv_paths))
+        except Exception as e:
+            log.debug("CTAGE Reasoner: privilege escalation analysis failed: %s", e)
 
     # 2. Container escape
-    try:
-        escape_paths = find_container_escape_paths(dkg)
-        all_paths.extend(escape_paths)
-        log.info("CTAGE Reasoner: found %d container escape paths", len(escape_paths))
-    except Exception as e:
-        log.debug("CTAGE Reasoner: container escape analysis failed: %s", e)
+    if "container_escape" in categories:
+        try:
+            escape_paths = find_container_escape_paths(dkg)
+            all_paths.extend(escape_paths)
+            log.info("CTAGE Reasoner: found %d container escape paths", len(escape_paths))
+        except Exception as e:
+            log.debug("CTAGE Reasoner: container escape analysis failed: %s", e)
 
     # 3. Lateral movement
-    try:
-        lateral_paths = find_lateral_movement_paths(dkg)
-        all_paths.extend(lateral_paths)
-        log.info("CTAGE Reasoner: found %d lateral movement paths", len(lateral_paths))
-    except Exception as e:
-        log.debug("CTAGE Reasoner: lateral movement analysis failed: %s", e)
+    if "lateral_move" in categories:
+        try:
+            lateral_paths = find_lateral_movement_paths(dkg)
+            all_paths.extend(lateral_paths)
+            log.info("CTAGE Reasoner: found %d lateral movement paths", len(lateral_paths))
+        except Exception as e:
+            log.debug("CTAGE Reasoner: lateral movement analysis failed: %s", e)
 
     # 4. Cross-account
-    try:
-        cross_paths = find_cross_account_paths(dkg)
-        all_paths.extend(cross_paths)
-        log.info("CTAGE Reasoner: found %d cross-account paths", len(cross_paths))
-    except Exception as e:
-        log.debug("CTAGE Reasoner: cross-account analysis failed: %s", e)
+    if "cross_account" in categories:
+        try:
+            cross_paths = find_cross_account_paths(dkg)
+            all_paths.extend(cross_paths)
+            log.info("CTAGE Reasoner: found %d cross-account paths", len(cross_paths))
+        except Exception as e:
+            log.debug("CTAGE Reasoner: cross-account analysis failed: %s", e)
 
     # Sort: easy first, high confidence first, then by category priority
     category_priority = {

@@ -1,8 +1,8 @@
 {
   "schema_version": "1.0.0",
-  "generated_at": "2026-08-24T10:36:12+00:00",
+  "generated_at": "2026-08-24T11:05:37+00:00",
   "source": "darwin.tools.manifest",
-  "tool_count": 133,
+  "tool_count": 134,
   "tools": [
     {
       "name": "aws_cli",
@@ -422,6 +422,54 @@
       "capability": "",
       "parameters": {},
       "required": [],
+      "executor": "python",
+      "command_template": "",
+      "shell_args": [],
+      "split_params": [],
+      "dependencies": [],
+      "flags": {},
+      "output_contract": {},
+      "aliases": {},
+      "deprecated": false,
+      "auto": true
+    },
+    {
+      "name": "cloud_discovery_aws",
+      "version": "1.0.0",
+      "description": "Run one strictly read-only AWS discovery action through argv; rejects mutating actions and non-local custom endpoints.",
+      "domains": [
+        "cloud"
+      ],
+      "capability": "",
+      "parameters": {
+        "service": {
+          "type": "string",
+          "description": "AWS service (sts, ec2, eks, elbv2, rds, s3api, iam)."
+        },
+        "action": {
+          "type": "string",
+          "description": "Allow-listed read-only action for the service."
+        },
+        "resource": {
+          "type": "string",
+          "description": "Optional resource identifiers/flags, parsed as argv tokens.",
+          "default": ""
+        },
+        "region": {
+          "type": "string",
+          "description": "Optional AWS region.",
+          "default": ""
+        },
+        "endpoint_url": {
+          "type": "string",
+          "description": "Optional localhost AWS simulator endpoint.",
+          "default": ""
+        }
+      },
+      "required": [
+        "service",
+        "action"
+      ],
       "executor": "python",
       "command_template": "",
       "shell_args": [],

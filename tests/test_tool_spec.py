@@ -28,7 +28,7 @@ def test_every_registered_tool_has_a_valid_spec():
     specs = _all_specs()
     # Existing attack/recon tools + registry meta tools + the read-only
     # conditional cloud discovery tool.
-    assert len(specs) == 133
+    assert len(specs) == 134
     assert check_all_specs(specs) == []
 
 

@@ -659,7 +659,7 @@ class ReconCoordinator(CoordinatorContext):
             from darwin.topology_analysis import RelationAnalyzer
             if classification.cloud_enabled:
                 self._cloud_topology = await discover_cloud_topology(
-                    self.dkg, tool_port=self._call_tool
+                    self.dkg, tool_port=self._call_tool, environment=classification
                 )
                 self._topology_analysis = RelationAnalyzer().analyze(
                     self.dkg, environment=classification
