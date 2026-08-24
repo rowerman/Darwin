@@ -350,6 +350,7 @@ class CloudTopologyMapper:
                         vol_info["type"] = "secret"
                     elif "configMap" in vol:
                         vol_info["type"] = "configMap"
+                        vol_info["config_map_name"] = vol["configMap"].get("name", "")
                     elif "projected" in vol:
                         vol_info["type"] = "projected"
                         # Check for SA token projection
@@ -504,9 +505,19 @@ class CloudTopologyMapper:
             })
         for item in await self._json_items("kubectl get configmaps -A -o json"):
             meta = item.get("metadata", {})
+            raw_data = item.get("data", {}) if isinstance(item.get("data"), dict) else {}
+            _SENSITIVE_KEY_HINTS = ("password", "secret", "token", "key", "credential", "apikey", "api_key")
+            safe_data = {}
+            for key, value in raw_data.items():
+                lowered = str(key).lower()
+                if any(hint in lowered for hint in _SENSITIVE_KEY_HINTS):
+                    continue
+                text = str(value)
+                safe_data[key] = text[:200]
             topology.configmaps.append({
                 "name": meta.get("name", ""), "namespace": meta.get("namespace", ""),
                 "data_keys": sorted(item.get("data", {}).keys()),
+                "data": safe_data,
             })
 
     async def _discover_rbac(self, topology: CloudTopology) -> None:
@@ -851,7 +862,34 @@ class CloudTopologyMapper:
                             "iam", "get-policy", resource=f"--policy-arn {policy_arn}"
                         )
                         if ok_policy:
-                            row["policy_detail"] = detail.get("Policy", detail)
+                            policy = detail.get("Policy", detail)
+                            row["policy_detail"] = policy
+                            version_id = policy.get("DefaultVersionId", "")
+                            if version_id:
+                                ok_version, version_detail, version_err = await self._run_aws_discovery(
+                                    "iam", "get-policy-version",
+                                    resource=f"--policy-arn {policy_arn} --version-id {version_id}",
+                                )
+                                if ok_version:
+                                    document = version_detail.get("PolicyVersion", {}).get("Document", {})
+                                    if document:
+                                        row["policy_document"] = document
+                                else:
+                                    topology.aws_warnings.append(
+                                        f"iam:get-policy-version:{policy_arn}: {version_err or 'discovery failed'}"
+                                    )
+                if node_type == "S3":
+                    bucket_name = row.get("Name", row.get("BucketName", ""))
+                    if bucket_name:
+                        ok_loc, loc, loc_err = await self._run_aws_discovery(
+                            "s3api", "get-bucket-location", resource=f"--bucket {bucket_name}"
+                        )
+                        if ok_loc:
+                            row["region"] = loc.get("LocationConstraint") or "us-east-1"
+                        else:
+                            topology.aws_warnings.append(
+                                f"s3api:get-bucket-location:{bucket_name}: {loc_err or 'discovery failed'}"
+                            )
 
         eks_ok, eks_payload, eks_err = await self._run_aws_discovery("eks", "list-clusters")
         if eks_ok:
@@ -1112,6 +1150,10 @@ class CloudTopologyMapper:
                 aws_ids.setdefault(node_type, {})[lookup_key] = {
                     "id": node_id, "arn": str(row.get("Arn", row.get("arn", "")) or "")
                 }
+                if node_type == "EKS":
+                    name = str(row.get("name", "") or "")
+                    if name:
+                        aws_ids["EKS"].setdefault(name, {"id": node_id, "arn": str(row.get("Arn", row.get("arn", "")) or "")})
                 if account_node_id:
                     self.dkg.add_edge(
                         account_node_id, node_id, "account_contains_resource",
@@ -1137,6 +1179,17 @@ class CloudTopologyMapper:
                     group_id = aws_ids.get("SecurityGroup", {}).get(str(group.get("GroupId", "")), {}).get("id", "")
                     if group_id and resource_id:
                         self.dkg.add_edge(group_id, resource_id, "security_group_attaches", source="cloud_discovery_aws", evidence="Groups", confidence=0.9, status="inferred")
+
+        for row in topology.aws_resources.get("RouteTable", []):
+            route_table_id = aws_ids.get("RouteTable", {}).get(str(row.get("RouteTableId", "")), {}).get("id", "")
+            for assoc in row.get("Associations", []) if isinstance(row.get("Associations"), list) else []:
+                subnet_id = aws_ids.get("Subnet", {}).get(str(assoc.get("SubnetId", "")), {}).get("id", "")
+                if route_table_id and subnet_id:
+                    self.dkg.add_edge(
+                        route_table_id, subnet_id, "route_table_routes_to",
+                        source="cloud_discovery_aws", evidence="Associations",
+                        confidence=1.0, status="observed",
+                    )
 
         for row in topology.aws_resources.get("EKS", []):
             cluster_name = str(row.get("name", row.get("ClusterName", "")) or "")

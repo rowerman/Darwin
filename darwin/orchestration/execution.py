@@ -217,6 +217,44 @@ class _RuntimeEvaluatorAdapter:
 
 
 class ExecutionCoordinator(CoordinatorContext):
+    def _task_anchor_ids(self, task: Task) -> list[str]:
+        """Resolve task target to DKG node ids usable as topology anchors."""
+        action = task.action or {}
+        params = action.get("params", {}) or {}
+        if isinstance(params, str):
+            try:
+                params = json.loads(params)
+            except (TypeError, ValueError):
+                params = {}
+        target = str(
+            action.get("target", "")
+            or params.get("url", "")
+            or params.get("target_url", "")
+            or ""
+        ).strip()
+        if not target:
+            return []
+        from urllib.parse import urlparse
+
+        try:
+            host = urlparse(target if "://" in target else f"http://{target}").hostname
+        except Exception:
+            host = None
+        anchors: list[str] = []
+        if host:
+            host_id = f"host-{host}"
+            if self.dkg.get_node(host_id):
+                anchors.append(host_id)
+        for row in self.dkg.query_nodes():
+            node_id = str(row.get("id", ""))
+            url = str(row.get("url", "") or "")
+            ip = str(row.get("ip", "") or "")
+            if node_id in anchors:
+                continue
+            if (ip and ip in target) or (url and (url in target or target in url)):
+                anchors.append(node_id)
+        return list(dict.fromkeys(anchors))[:5]
+
     def _find_vuln_dkg_id(self, v) -> str | None:
         """Locate the DKG Vulnerability node backing a hypothesis (O2.1).
 
@@ -682,6 +720,20 @@ class ExecutionCoordinator(CoordinatorContext):
             # keeps the execution-phase LLM aligned with the latest state
             # even after conversation history was compressed.
             _belief_ctx = self._belief_context()
+            _topology_subgraph = ""
+            try:
+                _anchors = self._task_anchor_ids(task)
+                if _anchors:
+                    _snapshot = self.dkg.topology_snapshot(
+                        anchor_ids=_anchors, max_hops=1, max_nodes=16, max_edges=24,
+                    )
+                    if _snapshot.get("nodes") or _snapshot.get("edges"):
+                        _topology_subgraph = (
+                            "\n## Task Topology\n"
+                            + json.dumps(_snapshot, default=str)[:3000]
+                        )
+            except Exception:
+                _topology_subgraph = ""
             task_prompt = (
                 f"Execute plan task {iteration}/{max_iter}:\n"
                 f"  Instruction: {task_instruction}\n"
@@ -689,6 +741,7 @@ class ExecutionCoordinator(CoordinatorContext):
                 f"  Params: {json.dumps(task_params)}\n"
                 + (f"\n{_recent_ctx}\n" if _recent_ctx else "") +
                 (f"\n{_belief_ctx}\n" if _belief_ctx else "") +
+                (f"{_topology_subgraph}\n" if _topology_subgraph else "") +
                 f"\n{freedom_note}"
             )
             content, task_tool_calls = self.llm.generate(

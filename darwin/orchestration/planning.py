@@ -96,6 +96,101 @@ from darwin.prompts.research import SYSTEM_PROMPT_RESEARCH
 from darwin.orchestration.context import CoordinatorContext
 
 class PlanCoordinator(CoordinatorContext):
+    def _migrate_blocked_path_tasks(self) -> int:
+        """Move tasks blocked on stale/rejected attack paths to NEEDS_REPLAN.
+
+        Returns the number of migrated tasks.  Tasks whose path is still
+        active remain untouched; tasks whose path is permanently rejected
+        stay blocked (the planner will drop them on the next review).
+        """
+        try:
+            invalid = {
+                str(state.get("path_id", ""))
+                for state in self.dkg.attack_path_states()
+                if state.get("status") in {"stale", "rejected"}
+            }
+        except Exception:
+            return 0
+        if not invalid:
+            return 0
+        plan = getattr(self, "exploitation_plan", None)
+        if plan is None:
+            return 0
+        migrated = 0
+        for candidate in list(plan.tasks):
+            if candidate.status is not TaskStatus.BLOCKED:
+                continue
+            blocked_paths = {
+                str(dep.get("path_id", ""))
+                for dep in (candidate.dependencies or [])
+                if isinstance(dep, dict)
+                and dep.get("type") == "requires_attack_path"
+            }
+            if blocked_paths & invalid:
+                candidate.status = TaskStatus.NEEDS_REPLAN
+                migrated += 1
+                self._task_log_event(
+                    "info", "replan_requested", task_id=candidate.id,
+                    action="attack_path",
+                    path_id=sorted(blocked_paths & invalid)[0],
+                )
+        return migrated
+
+    def _apply_priority_hints(self, tasks: list[Task]) -> None:
+        """Raise task priority when the task target matches an observed
+        relation hint from the topology analysis; weak hints never raise."""
+        hints = getattr(getattr(self, "_topology_analysis", None), "priority_hints", None)
+        if not hints:
+            return
+        try:
+            dkg = self.dkg
+            for task in tasks:
+                action = task.action or {}
+                params = action.get("params", {}) or {}
+                if isinstance(params, str):
+                    try:
+                        params = json.loads(params)
+                    except (TypeError, ValueError):
+                        params = {}
+                target = str(
+                    action.get("target", "")
+                    or params.get("url", "")
+                    or params.get("target_url", "")
+                    or ""
+                ).strip()
+                if not target:
+                    continue
+                best = float(getattr(task, "priority", 0.5) or 0.5)
+                for key, hint_value in hints.items():
+                    if "->" not in key or ":" not in key.rsplit("->", 1)[-1]:
+                        continue
+                    try:
+                        from_id, rest = key.split("->", 1)
+                        to_id = rest.rsplit(":", 1)[0]
+                    except (ValueError, TypeError):
+                        continue
+                    try:
+                        hint_value = float(hint_value)
+                    except (TypeError, ValueError):
+                        continue
+                    if hint_value <= 0.6:
+                        continue
+                    for node_id in (from_id, to_id):
+                        node = dkg.get_node(node_id) if node_id else None
+                        if not node:
+                            continue
+                        candidates = (
+                            str(node.get("url", "")),
+                            str(node.get("name", "")),
+                            str(node.get("ip", "")),
+                        )
+                        if any(c and (c in target or target in c) for c in candidates):
+                            best = max(best, min(0.95, hint_value))
+                            break
+                task.priority = min(0.95, best)
+        except Exception as exc:
+            log.debug("Plan: priority hint application skipped (%s)", exc)
+
     def _sanitize_plan_tools(self, tasks: list[Task]) -> None:
         """Replace blacklisted tools in-place across ALL plan tasks.
 
@@ -1485,6 +1580,7 @@ Output ONLY valid JSON array (3-20 tasks depending on complexity. More tasks != 
 
         # Sanitize: replace blacklisted tools (e.g. hydra_ssh_brute → ssh_exec)
         self._sanitize_plan_tools(plan.tasks)
+        self._apply_priority_hints(plan.tasks)
 
         # ── Plan generation summary ─────────────────────────────────
         done = sum(1 for t in plan.tasks if t.status is TaskStatus.SUCCESS)
@@ -2469,6 +2565,13 @@ Output ONLY valid JSON:
         """
         if not getattr(self, 'exploitation_plan', None):
             return
+
+        # Local attack-path replan: paths that became stale/rejected release
+        # the tasks blocked on them into the replanning queue.
+        try:
+            self._migrate_blocked_path_tasks()
+        except Exception:
+            pass
 
         # Mark task status with retry enforcement
         _task_tool = str((task.action or {}).get("tool", "") or "")

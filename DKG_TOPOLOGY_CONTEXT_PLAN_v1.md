@@ -108,10 +108,14 @@ AWS/Hybrid 拓扑闭环与局部 Replan
 - `TaskGraph.REQUIRES_ATTACK_PATH` 依赖；Scheduler 接收 world snapshot；Runtime 兼容二参数 Scheduler；Planner 自动附加 path 依赖。
 - 新增单元测试 `tests/test_aws_hybrid.py`（6 个）与 integration 测试 `tests/integration/test_cloud_topology_gating.py`（3 个，覆盖 Web/DB 不触发云采集、AWS 分类资源映射与关系、无端口不执行子进程）。
 - `tools_manifest.json` 已同步（134 个工具）；相关 docs 已更新。
+- 关系补全：`service_exposes_endpoint`/`endpoint_backed_by_service`、ConfigMap 驱动的 `service_calls_service`、`host_reaches_host`、`resource_exposed_via`、`resource_depends_on`、`role_grants_permission`、RouteTable 网络关系已实现并登记。
+- IAMPolicy 版本文档解析已接入；`policy_document` 优先于 `policy_detail`。
+- `priority_hints` 已接入 Planner（仅提升、弱推断不提升）；局部 replan 将 stale/rejected 路径的 blocked 任务迁移为 `needs_replan`；exploit 任务注入目标相关拓扑子图。
+- 新增 Hybrid integration（K8s + AWS 同时采集、EKS crosswalk 去重）。
 
 ### 后续待完成任务
 
 1. **AWS 采集深化**：补 policy version 文档解析、RouteTable 细粒度目标、LoadBalancer/RDS 后端关系，以及 AWS simulator 分页和部分权限失败 fixture。
-2. **局部 replan 接入**：把 `attack_path_summary(affected_node_ids=...)` 结果接入实际 Planner 分支替换与 `needs_replan` 状态迁移；补充路径索引缺失时升级为路径族/全局重算的运行时指标。
-3. **RelationAnalyzer 深化**：补充服务调用/资源依赖关系，并把 `priority_hints` 接入 Planner 任务优先级。
-4. **提交当前改动**：本轮 20+ 文件改动仍未提交；提交前确认全量回归、manifest、coverage 和 `git diff --check` 全部通过。
+2. **局部 replan 深化**：补充路径索引缺失时升级为路径族/全局重算的运行时指标，并将 `needs_replan` 任务的实际分支替换纳入 replan 测试。
+3. **RelationAnalyzer 深化**：补充 DNS/URL/环境变量来源的服务调用推断与 AWS simulator 分页/部分权限失败 fixture。
+4. **提交当前改动**：本轮文件改动仍未提交；提交前确认全量回归、manifest、coverage 和 `git diff --check` 全部通过。

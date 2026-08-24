@@ -688,3 +688,68 @@ AWS/Hybrid 拓扑闭环与局部 Replan
 - 采集默认只保存资源元数据、策略结构和 key 名称，不保存完整 Secret/credential 值。
 - 资源关系必须先登记到 DKG canonical registry；不允许通过同义 edge type 绕过注册。
 - 局部重算优先保证路径状态正确；若某类 finder 无法安全裁剪，必须显式升级为该路径族重算，而不是静默复用旧结果。
+-
+
+--------------------------------------------------------------------------------
+
+拓扑最初目标剩余闭环：关系补全 + Planner 接入 + Hybrid 验收
+
+## Summary
+
+对照最初完整计划，当前已落地：环境分类、条件化采集、幂等 upsert、K8s/AWS 资源采集、RelationAnalyzer 的 selector/owner/Ingress/EndpointSlice/RBAC 绑定/IAM trust-permission/部分网络关系、路径索引与局部重算、分层拓扑上下文、research/plan/replan 注入；上一轮改动已提交（`6cc0735`），全量 600 测试通过。
+
+剩余缺口集中在：若干 canonical 关系只有注册没有生成逻辑、`priority_hints` 无消费者、局部 replan 未接入 `needs_replan` 状态迁移、IAMPolicy 只取元数据未解析版本文档、Hybrid 场景缺端到端 integration。
+
+## Key Changes
+
+### P1 — 补全 RelationAnalyzer 关系生成
+
+- `service_exposes_endpoint` / `endpoint_backed_by_service`：K8s Service 的 cluster_ip+ports 与 DKG 已有 Endpoint 按 host:port 匹配；未命中时创建带 `source=relation_analyzer` 的 Endpoint 节点再建边（observed，0.95）。
+- `service_calls_service`：仅基于显式证据——`CloudTopologyMapper` 采集 ConfigMap 非敏感 `data`（单值截断 200 字符、排除 secret 类 key），analyzer 解析 `http://<svc>` 或 `<svc>:<port>` 引用生成（inferred，0.6–0.8）；无引用则不生成并记入 coverage。
+- `host_reaches_host`：将 EC2/ENI 的 `PrivateIpAddress` 与 Host 节点 IP 匹配，结合同子网/SG 对端推断（inferred，0.7）。
+- `resource_exposed_via`：LoadBalancer DNSName/port、RDS Endpoint address/port、S3 桶 region endpoint 匹配或创建 Endpoint 节点（observed，0.9）。
+- `resource_depends_on`：RDS/LoadBalancer 的 SubnetId、SecurityGroupId 引用（inferred，0.75）。
+- RBAC 权限：解析 Role/ClusterRole `rules[].verbs/resources/apiGroups`，新增并登记 `role_grants_permission`（Role/ClusterRole → K8sNamespace，property 记录 verbs/resources），ClusterRole 指向全部已采集 Namespace；不新增 resource-kind 节点。
+- RouteTable：mapper 补 `route_table_routes_to`（RouteTable → Subnet，observed），analyzer 解析 routes 目标网段与 Subnet CIDR 匹配补 `resource_reaches_resource`（inferred，0.6）。
+- 所有新边先登记进 `darwin/dkg.py` 的 `EDGE_TYPES`/`EDGE_SEMANTICS`，全部走 `upsert_edge()`。
+
+### P2 — IAMPolicy 版本文档解析
+
+- `cloud_discovery_aws` 的 IAM 分支在 `get-policy` 后按 `DefaultVersionId` 调用已 allowlist 的 `get-policy-version`，把 `PolicyDocument` 写入 `policy_document`；失败只追加 warning，不阻断采集。
+- `RelationAnalyzer._analyze_iam` 优先读 `policy_document`，兼容现有 `policy_detail` 字段。
+
+### P3 — Planner 接入与局部 replan 状态迁移
+
+- `priority_hints` 接入：plan 生成后按 task action/instruction 目标与 hint key 的 from/to 节点匹配，`Task.priority = max(priority, hint_value)`（上限 0.95）；不匹配则不修改，弱推断 hint（0.6）不提升 exploit 优先级。
+- 局部 replan：`_review_and_update_plan` 中扫描 `attack_path_states()` 的 `stale/rejected`，将带 `requires_attack_path` 依赖的 blocked 任务迁移为 `needs_replan`（扩展 TaskGraph 允许的 transition）；replan 后路径仍不可用则保持 `blocked`；同时向 metrics 记录 `replan_action_counts["attack_path"]`。
+- exploit 子图注入：任务执行前除现有 compact belief 外，按 task 目标 host/service 作为 anchors 调 `topology_snapshot()` 注入相关子图，缺失 anchor 时保持现状。
+
+### P4 — Hybrid integration 与文档
+
+- 新增 integration：hybrid 分类（nmap 同时给出 K8s 端口 6443 与 aws banner）下，`cloud_discovery_command` 返回 kubectl cluster-info/pods JSON、`cloud_discovery_aws` 返回 VPC/Subnet/EKS fixture，断言 K8sCluster 与 EKS 各 1 个、`eks_links_k8s_cluster` 仅 1 条、同一 EKS 不重复建模、新关系进入 DKG。
+- 同步 `docs/darwin/topology_analysis.md`、`docs/darwin/cloud_topology.md`，并更新 `DKG_TOPOLOGY_CONTEXT_PLAN_v1.md` 的完成与待办清单。
+
+## Test Plan
+
+- 单元测试：
+  - 新关系各来源生成与幂等（Service→Endpoint、ConfigMap 服务引用、host_reaches_host、resource_exposed_via、resource_depends_on、role_grants_permission、RouteTable→Subnet）；
+  - IAMPolicy 版本解析及失败降级；
+  - priority_hints 提升任务优先级、弱推断不提升；
+  - blocked → needs_replan 迁移与路径仍失效时保持 blocked；
+  - exploit 子图 anchors 注入。
+- Integration：
+  - Hybrid 端到端（上述 P4）；
+  - 既有 Web/DB 不触发云采集与 AWS 分类门控保持通过。
+- 验收命令：
+  - `python -m pytest -q`、`python -m pytest -m integration -v`、`python -m pytest -m acceptance -v`
+  - `python -m darwin.tools.manifest --out tools_manifest.json --check`
+  - `python -m tools.audit_coverage`
+  - `git diff --check`
+
+## Assumptions
+
+- 服务调用关系 v1 仅依据 ConfigMap 显式引用，不引入应用探针、网络抓包或 LLM 推断。
+- RBAC 权限以 `role_grants_permission → Namespace` 聚合呈现，不建立 resource-kind 节点。
+- `priority_hints` 只提升不降低任务优先级。
+- 所有新增关系必须先登记 canonical registry，禁止同义双写。
+- Azure/GCP 仍不扩展；本轮完成后是否提交由用户决定（上一轮改动已由 `6cc0735` 提交）。

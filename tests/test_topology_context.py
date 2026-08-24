@@ -7,10 +7,12 @@ from types import SimpleNamespace
 import pytest
 
 from darwin.core.belief import render_belief_snapshot
+from darwin.core.contracts import TaskStatus
 from darwin.core.task import Task
 from darwin.data_model import ExploitationPlan, normalize_dkg_state
 from darwin.dkg import DKG
 from darwin.tools.mcp_gateway import ToolResult
+from darwin.topology_analysis import TopologyAnalysisResult
 
 
 def test_dkg_topology_snapshot_and_diff_are_bounded_and_stable():
@@ -176,6 +178,77 @@ async def test_attack_path_feedback_updates_state_without_unbound_logging(
     assert state["path_id"] == "path-k8s"
     assert state["confidence"] == pytest.approx(0.3)
     assert state["status"] == "active"
+
+
+@pytest.mark.asyncio
+async def test_priority_hints_raise_matching_tasks_but_not_weak_hints(
+    make_orchestrator, fake_llm, fake_gateway
+):
+    orch = make_orchestrator(fake_llm(content="[]"), fake_gateway({}), fake_gateway({}))
+    orch._topology_analysis = TopologyAnalysisResult(
+        before_revision=0, after_revision=0,
+        priority_hints={
+            "svc-web->ep-web:service_exposes_endpoint": 0.9,
+            "svc-weak->ep-weak:service_exposes_endpoint": 0.6,
+        },
+    )
+    orch.dkg.add_node("Endpoint", "ep-web", {"url": "http://web:80"})
+    orch.dkg.add_node("Endpoint", "ep-weak", {"url": "http://weak:80"})
+    tasks = [
+        Task(id="t-web", type="task", goal="g", action={"tool": "curl_get", "params": {"url": "http://web:80"}}, priority=0.5),
+        Task(id="t-weak", type="task", goal="g", action={"tool": "curl_get", "params": {"url": "http://weak:80"}}, priority=0.5),
+        Task(id="t-other", type="task", goal="g", action={"tool": "curl_get", "params": {"url": "http://other:80"}}, priority=0.5),
+    ]
+
+    orch.planning._apply_priority_hints(tasks)
+
+    assert tasks[0].priority == pytest.approx(0.9)
+    assert tasks[1].priority == pytest.approx(0.5)
+    assert tasks[2].priority == pytest.approx(0.5)
+
+
+@pytest.mark.asyncio
+async def test_blocked_attack_path_task_migrates_to_needs_replan(
+    make_orchestrator, fake_llm, fake_gateway
+):
+    orch = make_orchestrator(fake_llm(content="[]"), fake_gateway({}), fake_gateway({}))
+    orch.dkg.upsert_attack_path("p-stale", confidence=0.1, status="stale")
+    orch.dkg.upsert_attack_path("p-active", confidence=0.9, status="active")
+    blocked = Task(
+        id="t-blocked", type="task", goal="follow path", status=TaskStatus.BLOCKED,
+        dependencies=[{"type": "requires_attack_path", "path_id": "p-stale"}],
+    )
+    active = Task(
+        id="t-active", type="task", goal="follow path", status=TaskStatus.BLOCKED,
+        dependencies=[{"type": "requires_attack_path", "path_id": "p-active"}],
+    )
+    orch.exploitation_plan = ExploitationPlan(
+        plan_id="p1", phase="exploit", goal="g", tasks=[blocked, active],
+    )
+
+    migrated = orch.planning._migrate_blocked_path_tasks()
+
+    assert migrated == 1
+    assert blocked.status is TaskStatus.NEEDS_REPLAN
+    assert active.status is TaskStatus.BLOCKED
+
+
+@pytest.mark.asyncio
+async def test_task_anchor_ids_resolve_host_and_endpoint_targets(
+    make_orchestrator, fake_llm, fake_gateway
+):
+    orch = make_orchestrator(fake_llm(content="[]"), fake_gateway({}), fake_gateway({}))
+    orch.dkg.add_node("Host", "host-127.0.0.1", {"ip": "127.0.0.1"})
+    orch.dkg.add_node("Endpoint", "ep-root", {"url": "http://127.0.0.1:8080/"})
+    task = Task(
+        id="t-anchor", type="task", goal="g",
+        action={"tool": "curl_get", "params": {"url": "http://127.0.0.1:8080/flag"}},
+    )
+
+    anchors = orch.execution._task_anchor_ids(task)
+
+    assert "host-127.0.0.1" in anchors
+    assert "ep-root" in anchors
 
 
 def test_topology_render_survives_non_numeric_confidence():

@@ -111,6 +111,7 @@ EDGE_TYPES = [
     "workload_owns_pod",            # Deployment/StatefulSet/DaemonSet → K8sPod
     "binding_subject",              # RoleBinding/ClusterRoleBinding → K8sSA
     "binding_targets_role",          # RoleBinding/ClusterRoleBinding → Role/ClusterRole
+    "role_grants_permission",        # Role/ClusterRole → K8sNamespace
     "ingress_routes_service",        # Ingress → Service
     "endpoint_slice_backed_by_service",  # EndpointSlice → Service
     "account_contains_resource",    # CloudAccount → AWS resource
@@ -148,6 +149,7 @@ EDGE_SEMANTICS: Dict[str, Dict[str, str]] = {
     "workload_owns_pod": {"from": "Workload", "to": "K8sPod"},
     "binding_subject": {"from": "Binding", "to": "K8sSA"},
     "binding_targets_role": {"from": "Binding", "to": "Role"},
+    "role_grants_permission": {"from": "Role", "to": "K8sNamespace"},
     "ingress_routes_service": {"from": "Ingress", "to": "Service"},
     "endpoint_slice_backed_by_service": {"from": "EndpointSlice", "to": "Service"},
     "account_contains_resource": {"from": "CloudAccount", "to": "Resource"},
