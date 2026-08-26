@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0.0",
-  "generated_at": "2026-08-24T11:05:37+00:00",
+  "generated_at": "2026-08-26T14:06:33+00:00",
   "source": "darwin.tools.manifest",
   "tool_count": 134,
   "tools": [
@@ -945,37 +945,42 @@
         },
         "headers": {
           "type": "string",
-          "description": "Optional comma-separated headers"
+          "description": "Optional comma-separated headers",
+          "default": ""
         },
         "cookie": {
           "type": "string",
-          "description": "Session cookie string from try_login"
+          "description": "Session cookie string from try_login",
+          "default": ""
         },
         "insecure": {
           "type": "boolean",
-          "description": "Skip TLS verification (set true for self-signed certs)"
+          "description": "Skip TLS verification (set true for self-signed certs)",
+          "default": false
         },
         "follow_redirects": {
           "type": "boolean",
-          "description": "Follow HTTP redirects"
+          "description": "Follow HTTP redirects",
+          "default": true
         },
         "cert": {
           "type": "string",
-          "description": "Path to TLS client certificate file (for mutual TLS)"
+          "description": "Path to TLS client certificate file (for mutual TLS)",
+          "default": ""
         },
         "key": {
           "type": "string",
-          "description": "Path to TLS client key file (for mutual TLS)"
+          "description": "Path to TLS client key file (for mutual TLS)",
+          "default": ""
+        },
+        "timeout": {
+          "type": "integer",
+          "description": "Maximum request time in seconds",
+          "default": 30
         }
       },
       "required": [
-        "url",
-        "headers",
-        "cookie",
-        "insecure",
-        "follow_redirects",
-        "cert",
-        "key"
+        "url"
       ],
       "executor": "python",
       "command_template": "",
@@ -3352,9 +3357,16 @@
       "required": [
         "target_url"
       ],
-      "executor": "shell",
-      "command_template": "nikto -h {target_url} -Tuning 12345 -nointeractive 2>&1 | head -200",
-      "shell_args": [],
+      "executor": "shell_argv",
+      "command_template": "",
+      "shell_args": [
+        "nikto",
+        "-h",
+        "{target_url}",
+        "-Tuning",
+        "12345",
+        "-nointeractive"
+      ],
       "split_params": [],
       "dependencies": [],
       "flags": {},

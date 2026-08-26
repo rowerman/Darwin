@@ -16,3 +16,5 @@ Orchestrator 上下文读写状态并调用工具端口。
 ## 相关模块
 
 `dkg.py`、`dpm.py`、`dave.py`、`ports.py`。
+
+深侦察的预检通过带 timeout 的 `curl_get` 完成；非 HTML 或错误状态端点不会进入 gobuster/nikto 重扫描。

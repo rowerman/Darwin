@@ -19,3 +19,5 @@
 
 `core/runtime.py`、`core/executor.py`、`core/evaluator.py`、`dave.py`、
 `ports.py`。
+
+已迁移的 curl/SSRF 任务在参数完整时按计划 direct 执行；Runtime Adapter 保留底层 stderr、退出码和规范化结果供 Evaluator 使用。

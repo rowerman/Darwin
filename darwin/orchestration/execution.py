@@ -89,6 +89,10 @@ class TaskExecution:
     result_text: str
     flag_result: "TaskResult | None" = None
     skip: bool = False
+    stderr: str = ""
+    exit_code: int = 0
+    elapsed_ms: float = 0.0
+    normalized: dict = field(default_factory=dict)
 
 
 class _RuntimeFlagFound(Exception):
@@ -178,15 +182,19 @@ class _RuntimeExecutorAdapter:
             adherence=True,
             success=execution.success,
             stdout=execution.result_text[:4000],
-            stderr="",
-            exit_code=0 if execution.success else 1,
-            elapsed_ms=0.0,
+            stderr=getattr(execution, "stderr", "") or "",
+            exit_code=getattr(execution, "exit_code", 0 if execution.success else 1),
+            elapsed_ms=getattr(execution, "elapsed_ms", 0.0),
+            normalized=getattr(execution, "normalized", {}) or {},
         )
         if execution.flag_result is not None:
             # The Runtime loop terminates on a verified flag before its
-            # own memory step, so record the plan rationale here (the tool
-            # execution was already recorded inside the task execution).
+            # own memory step, so record the plan rationale and aggregate
+            # execution result here.
             orch.memory.record_task(task)
+            # Runtime will not reach its normal memory step on the terminal
+            # flag exception; persist exactly one aggregate execution record.
+            orch.memory.record_execution(core_res)
             orch._runtime_flag_result = execution.flag_result
             # Mirror the legacy loop, which returns immediately on a
             # verified flag instead of continuing to plan review.
@@ -685,6 +693,10 @@ class ExecutionCoordinator(CoordinatorContext):
         # Tasks without concrete params (e.g. exploratory curl_get) still
         # go through the LLM for creative decision-making.
         _direct_tools = {
+            # Concrete curl/SSRF tasks carry authoritative plan parameters;
+            # execute them directly through ToolExecutor instead of asking
+            # the LLM to recreate the call.
+            "curl_get", "ssrf_probe",
             "shell_exec", "redis_cmd", "mysql_query", "psql_query",
             "mssql_query", "oracle_query", "ssh_exec", "ssh_key_exec",
             "impacket_psexec", "impacket_wmiexec", "impacket_pth",
@@ -697,7 +709,16 @@ class ExecutionCoordinator(CoordinatorContext):
             "php_filter_chain", "jwt_forge", "searchsploit_copy",
             "impacket_ntlmrelayx",
         }
-        if task_tool and task_params and task_tool in _direct_tools:
+        if task_tool == "ssrf_probe" and isinstance(task_params, dict):
+            # Legacy plans used url/param; canonicalize only this migrated tool.
+            if not task_params.get("ssrf_url") and task_params.get("url"):
+                task_params["ssrf_url"] = task_params.pop("url")
+            if not task_params.get("url_param") and task_params.get("param"):
+                task_params["url_param"] = task_params.pop("param")
+        _known_gateway_tools = set(self.attack_gateway.get_tool_names()) | set(
+            self.recon_gateway.get_tool_names()
+        )
+        if task_tool and task_params and task_tool in _direct_tools and task_tool in _known_gateway_tools:
             # Execute directly — plan params are authoritative
             task_tool_calls = [{
                 "name": task_tool, "arguments": task_params,
@@ -800,6 +821,7 @@ class ExecutionCoordinator(CoordinatorContext):
         _all_task_stdouts: list[str] = []  # accumulate all tool outputs (truncated)
         _raw_task_stdouts: list[str] = []  # full stdout for credential extraction
         _auto_test_negative = False  # track "no evidence" / "no flag"
+        _last_result = None
 
         for tc in task_tool_calls:
             tc_name = tc.get("name", "")
@@ -871,7 +893,7 @@ class ExecutionCoordinator(CoordinatorContext):
 
             # P10/P11: execution history — feeds replan context and
             # the compression view (preserve/compress/discard).
-            self.memory.record_execution(result)
+            _last_result = result
 
             # ── Adaptive format retry ──────────────────────────
             # When send_payload/http_post gets HTTP 400 with one body
@@ -1249,6 +1271,7 @@ class ExecutionCoordinator(CoordinatorContext):
             self.step_count += 1
 
             retry_result = await self.executor.execute(task)
+            _last_result = retry_result
             retry_stdout = retry_result.stdout or ""
             retry_stderr = retry_result.stderr or ""
 
@@ -1368,6 +1391,15 @@ class ExecutionCoordinator(CoordinatorContext):
 
         execution.success = task_success
         execution.result_text = task_result_text
+        if _last_result is not None:
+            execution.stderr = getattr(_last_result, "stderr", "") or ""
+            execution.exit_code = getattr(_last_result, "exit_code", 0) or 0
+            execution.elapsed_ms = getattr(_last_result, "elapsed_ms", 0.0) or 0.0
+            execution.normalized = dict(
+                getattr(_last_result, "normalized", None)
+                or getattr(_last_result, "parsed_output", None)
+                or {}
+            )
         return execution
 
     async def _run_with_runtime(
@@ -2109,6 +2141,20 @@ class ExecutionCoordinator(CoordinatorContext):
                         args = {"url": u}
                 elif tool_name == "send_payload":
                     args = {"url": endpoint, "payload": "1", "param": param or "id"}
+                elif tool_name == "ssrf_probe":
+                    # Feed discovered HTTP ports into the SSRF probe so
+                    # non-standard benchmark services are not missed.
+                    _ports = sorted({
+                        int(s.get("port")) for s in self.dkg.query_nodes("Service")
+                        if s.get("port") and str(s.get("service_name", "")).lower() in {
+                            "http", "https", "http-proxy", "werkzeug", "unknown"
+                        }
+                    })
+                    args = {
+                        "ssrf_url": endpoint,
+                        "url_param": param or "url",
+                        "ports": ",".join(str(p) for p in _ports) if _ports else "80,443,8080,5000,3000,8000",
+                    }
                 elif tool_name == "aws_cli":
                     # aws_cli uses service+action+resource, not url+param.
                     # Use the vuln's tool_args directly; fall back to s3 ls.
@@ -2331,4 +2377,3 @@ class ExecutionCoordinator(CoordinatorContext):
 
         print(f"[systematic] Done: tested {tested_count} tool+endpoint combinations, no flag found")
         return None
-

@@ -526,57 +526,79 @@ def register_recon_tools(gateway: MCPGateway) -> MCPGateway:
     )
 
     # ── nikto: Web server scanner ───────────────────────────────
-    gateway.register_shell_tool(
+    gateway.register_shell_argv_tool(
         name="nikto_scan",
-        command_template="nikto -h {target_url} -Tuning 12345 -nointeractive 2>&1 | head -200",
+        shell_args=["nikto", "-h", "{target_url}", "-Tuning", "12345", "-nointeractive"],
         description="Scan web server for known vulnerabilities, misconfigurations, and info leaks using nikto",
         parameters={
             "target_url": {"type": "string", "description": "Target URL with optional port (e.g. http://host:8080)"},
         },
         parser=_parse_nikto_output,
         timeout=30,
+        retries=0,
     )
 
     # ── curl: HTTP probing ──────────────────────────────────────
     async def curl_get(url: str, headers: str = "", cookie: str = "",
                       follow_redirects: bool = True,
                       insecure: bool = False,
-                      cert: str = "", key: str = "") -> ToolResult:
+                      cert: str = "", key: str = "",
+                      timeout: int = 30) -> ToolResult:
         """Make HTTP GET request with curl. Supports file:// URLs, TLS client certs."""
         import asyncio
-        cmd = f"curl -s -i {'-L' if follow_redirects else ''}"
+        import time
+        try:
+            timeout = max(1, min(int(timeout), 300))
+        except (TypeError, ValueError):
+            timeout = 30
+        argv = ["curl", "-s", "-i", "--max-time", str(timeout)]
+        if follow_redirects:
+            argv.append("-L")
         if insecure:
-            cmd += " -k"  # skip TLS verification for self-signed certs
+            argv.append("-k")  # skip TLS verification for self-signed certs
         if cert:
-            cmd += f" --cert '{cert}'"
+            argv.extend(["--cert", cert])
         if key:
-            cmd += f" --key '{key}'"
+            argv.extend(["--key", key])
         if cookie:
             _ck = cookie.strip().rstrip(";")
-            cmd += f" -H 'Cookie: {_ck}'"
+            argv.extend(["-H", f"Cookie: {_ck}"])
         if headers:
             # Accept both string ("Key: val, Key2: val2") and dict ({"Key": "val"})
             if isinstance(headers, dict):
                 for k, v in headers.items():
-                    cmd += f" -H '{k}: {v}'"
+                    argv.extend(["-H", f"{k}: {v}"])
             else:
                 for h in str(headers).split(","):
-                    cmd += f" -H '{h.strip()}'"
-        cmd += f" '{url}'"
-
-        proc = await asyncio.create_subprocess_shell(
-            cmd,
+                    if h.strip():
+                        argv.extend(["-H", h.strip()])
+        argv.append(url)
+        started = time.perf_counter()
+        proc = await asyncio.create_subprocess_exec(
+            *argv,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
-        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=30)
+        try:
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout + 2)
+        except asyncio.TimeoutError:
+            try:
+                proc.kill()
+                await proc.communicate()
+            except (ProcessLookupError, OSError):
+                pass
+            return ToolResult(
+                tool_name="curl_get", success=False, stdout="",
+                stderr=f"curl timeout after {timeout}s", exit_code=-1,
+                elapsed_ms=(time.perf_counter() - started) * 1000,
+            )
         return ToolResult(
             tool_name="curl_get",
             success=proc.returncode == 0,
             stdout=stdout.decode("utf-8", errors="replace"),
             stderr=stderr.decode("utf-8", errors="replace"),
             exit_code=proc.returncode or 0,
-            elapsed_ms=0,
+            elapsed_ms=(time.perf_counter() - started) * 1000,
         )
 
     gateway.register(
@@ -585,12 +607,13 @@ def register_recon_tools(gateway: MCPGateway) -> MCPGateway:
         description="Make HTTP GET request. Use insecure=true for self-signed TLS. Supports file:// URLs and client certs (cert/key).",
         parameters={
             "url": {"type": "string", "description": "Target URL (also file:// for local files)"},
-            "headers": {"type": "string", "description": "Optional comma-separated headers"},
-            "cookie": {"type": "string", "description": "Session cookie string from try_login"},
-            "insecure": {"type": "boolean", "description": "Skip TLS verification (set true for self-signed certs)"},
-            "follow_redirects": {"type": "boolean", "description": "Follow HTTP redirects"},
-            "cert": {"type": "string", "description": "Path to TLS client certificate file (for mutual TLS)"},
-            "key": {"type": "string", "description": "Path to TLS client key file (for mutual TLS)"},
+            "headers": {"type": "string", "description": "Optional comma-separated headers", "default": ""},
+            "cookie": {"type": "string", "description": "Session cookie string from try_login", "default": ""},
+            "insecure": {"type": "boolean", "description": "Skip TLS verification (set true for self-signed certs)", "default": False},
+            "follow_redirects": {"type": "boolean", "description": "Follow HTTP redirects", "default": True},
+            "cert": {"type": "string", "description": "Path to TLS client certificate file (for mutual TLS)", "default": ""},
+            "key": {"type": "string", "description": "Path to TLS client key file (for mutual TLS)", "default": ""},
+            "timeout": {"type": "integer", "description": "Maximum request time in seconds", "default": 30},
         },
     )
 

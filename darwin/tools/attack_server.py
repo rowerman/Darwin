@@ -696,8 +696,8 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
         # Build probe URLs: if the SSRF endpoint takes a full URL, inject internal targets
         probes: list[str] = []
         for h in hosts[:8]:  # Limit to avoid excessive requests
-            for pt in port_list[:5]:
-                for p in path_list[:4]:
+            for pt in port_list[:20]:
+                for p in path_list[:8]:
                     inner = f"http://{h}:{pt}{p}"
                     if "?" in ssrf_url:
                         sep = "&" if "?" in ssrf_url else "?"
@@ -709,8 +709,6 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
                         else:
                             probe_url = f"{ssrf_url}?{url_param}={urllib.parse.quote(inner)}"
                     probes.append(probe_url)
-                    break  # One path per host:port combo
-                break  # One port per host initially (iterate if needed)
 
         # Limit total probes
         probes = probes[:30]
@@ -767,11 +765,19 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
                 tool_name="ssrf_probe", success=True,
                 stdout=summary, stderr="",
                 exit_code=0, elapsed_ms=elapsed,
+                parsed_output={
+                    "probes_sent": len(probes),
+                    "responses": len(results),
+                    "flags": [r.get("flag") for r in found_flags if r.get("flag")],
+                    "reachable_services": [r.get("probe") for r in results],
+                    "credentials_detected": [r.get("credentials_detected") for r in results if r.get("credentials_detected")],
+                },
             )
         return ToolResult(
             tool_name="ssrf_probe", success=False,
             stdout="", stderr="No internal services discovered through SSRF vector",
             exit_code=1, elapsed_ms=elapsed,
+            parsed_output={"probes_sent": len(probes), "responses": 0, "flags": []},
         )
 
     gateway.register(

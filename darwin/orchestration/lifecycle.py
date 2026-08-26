@@ -642,13 +642,12 @@ class LifecycleCoordinator(CoordinatorContext):
             log.info("Max loops (%d) reached", max_loops)
             return True
         if getattr(self, '_solo_exhausted', False):
-            # Solo exhausted — track no-progress stalls before terminating.
+            # A Runtime plan-exhausted result with no new progress is terminal
+            # for Solo mode.  Continuing outer iterations only replays the
+            # same blocked graph and wastes the remaining loop budget.
             if not getattr(self, '_chain_mode', False):
-                _stalled = getattr(self, '_solo_exhausted_stall', 0) + 1
-                self._solo_exhausted_stall = _stalled
-                if _stalled >= 3:
-                    log.info("Solo mode exhausted, no progress after %d loops — terminating", _stalled)
-                    return True
+                log.info("Solo mode exhausted — terminating after plan exhaustion")
+                return True
         else:
             self._solo_exhausted_stall = 0
         # No-progress: consecutive outer loops with zero new discoveries
@@ -1015,4 +1014,3 @@ class LifecycleCoordinator(CoordinatorContext):
             except json.JSONDecodeError:
                 pass
         return {}
-

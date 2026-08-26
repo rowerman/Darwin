@@ -14,3 +14,5 @@
 ## 相关模块
 
 `rag.py`、`cteg.py`、`core/schemas.py`、`ports.py`。
+
+`_augment_from_dkg()` 仅基于成功响应和真实输入参数生成假设；URL 获取型参数优先映射到 `ssrf_probe`。

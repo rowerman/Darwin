@@ -2033,6 +2033,23 @@ Output ONLY valid JSON array (3-20 tasks depending on complexity. More tasks != 
         plan = getattr(self, 'exploitation_plan', None)
         if not plan or not plan.tasks:
             return "(no plan)"
+        # Keep the human/LLM-facing summary aligned with the same dependency
+        # semantics used by ParityScheduler.  Without this refresh, semantic
+        # attack-path dependencies remain displayed as READY even though the
+        # scheduler correctly sees them as BLOCKED.
+        try:
+            _graph = TaskGraph(list(plan.tasks))
+            _state = self._get_state()
+            _paths = getattr(getattr(_state, "topology", None), "attack_paths", [])
+            _graph.refresh_states({
+                "attack_paths": [
+                    {"path_id": str(getattr(p, "path_id", "")),
+                     "status": str(getattr(p, "status", "active"))}
+                    for p in _paths if getattr(p, "path_id", "")
+                ]
+            })
+        except Exception:
+            pass
         done = sum(1 for t in plan.tasks if t.status is TaskStatus.SUCCESS)
         failed = sum(
             1 for t in plan.tasks
@@ -2042,16 +2059,20 @@ Output ONLY valid JSON array (3-20 tasks depending on complexity. More tasks != 
             1 for t in plan.tasks
             if t.status in (TaskStatus.READY, TaskStatus.CREATED)
         )
+        blocked = sum(1 for t in plan.tasks if t.status is TaskStatus.BLOCKED)
         exhausted = sum(
             1 for t in plan.tasks
             if t.status is TaskStatus.ABANDONED or t.id in self._exhausted_task_ids
         )
-        lines = [f"## Exploitation Plan ({done}/{len(plan.tasks)} done, {failed} failed, {exhausted} exhausted, {pending} pending)"]
+        lines = [f"## Exploitation Plan ({done}/{len(plan.tasks)} done, {failed} failed, {exhausted} exhausted, {pending} pending, {blocked} blocked)"]
         for t in self._topological_sort(plan.tasks):
             status = t.status.value.upper()
             deps = dependency_task_ids(t)
             dep_str = f" (waits for: {', '.join(deps)})" if deps else ""
-            lines.append(f"  {t.id}: [{status}] {t.instruction[:100]}{dep_str}")
+            reason = ""
+            if t.status is TaskStatus.BLOCKED:
+                reason = " (blocked: dependency/precondition unmet)"
+            lines.append(f"  {t.id}: [{status}] {t.instruction[:100]}{dep_str}{reason}")
         return "\n".join(lines)
 
     def _build_cycle_summary(self) -> "CycleTransitionSummary":
@@ -3157,4 +3178,3 @@ Output ONLY valid JSON:
 
 
     # ── Flag Search ──────────────────────────────────────────────────
-

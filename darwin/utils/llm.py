@@ -45,6 +45,7 @@ class LLMSession:
     ):
         self.model = f"{provider}/{model}" if provider != "openai" else model
         self.provider = provider
+        self.api_key = api_key
         self.temperature = temperature
         self.max_tokens = max_tokens
         self.max_context_tokens = max_context_tokens
@@ -146,6 +147,12 @@ class LLMSession:
             max_tokens=self.max_tokens,
             timeout=timeout,
         )
+        # Pass the configured credential directly.  This is required when a
+        # provider uses an OpenAI-compatible base URL: the model name is then
+        # normalized to ``openai/<model>``, while the configured provider can
+        # still be DeepSeek (or another compatible backend).
+        if self.api_key:
+            kwargs["api_key"] = self.api_key
 
         if tools:
             kwargs["tools"] = tools

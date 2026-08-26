@@ -8,3 +8,4 @@
 
 所有外部工具执行必须经过本目录并由 `core/executor.py` 调用。
 
+当前 `curl_get`、`ssrf_probe`、`nikto_scan` 使用显式参数/argv 契约；其他工具继续按各自已注册的 legacy 契约调用。

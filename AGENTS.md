@@ -84,6 +84,7 @@ Orchestrator.run()（委托 LifecycleCoordinator，各阶段由 orchestration/ �
 - 修改核心循环：对应 `tests/test_core_*.py` 或 `tests/test_runtime_path.py`，并跑 `pytest tests/ -m acceptance -v`。
 - 修改编排阶段逻辑（`darwin/orchestration/*.py`）：先读 `docs/darwin/orchestration/README.md` 与对应 Coordinator 文档；Coordinator 内 `self.<attr>`/`self.<method>` 经共享上下文转发、工具调用必须走 `self._call_tool()` 端口；改后跑全量 `pytest tests/ -v`。
 - 任何改动完成前：全量 `pytest tests/ -v` 必须通过。
+- 当用户附上执行失败的报错信息要求分析错误并修复时，要注意寻找错误产生的根本原因，拒绝“打补丁”式修改，防止错误堆积
 
 ### 模块文档与源码同步
 

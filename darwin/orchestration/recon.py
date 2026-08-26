@@ -1066,7 +1066,7 @@ class ReconCoordinator(CoordinatorContext):
                 # timeout gobuster (90s+retry=225s per endpoint).
                 try:
                     _pre = await self._call_tool("curl_get", {
-                        "url": url, "method": "GET", "timeout": "5",
+                        "url": url, "timeout": 5,
                     })
                     _pre_stdout = getattr(_pre, "stdout", "") or ""
                     if not _pre.success or not _pre_stdout.strip():

@@ -463,13 +463,16 @@ class ResearchCoordinator(CoordinatorContext):
         # Fallback: keyword-based classification (if LLM unavailable)
         for v in self.dkg.query_nodes("Vulnerability"):
             detail = v.get("detail", "")
-            vtype = "XSS"
+            vtype = ""
             for kw, vt in [("sql", "SQLI"), ("injection", "SQLI"), ("xss", "XSS"),
                            ("cross-site", "XSS"), ("command injection", "CMDI"), ("rce", "CMDI"),
                            ("directory listing", "LFI"), ("path traversal", "LFI"),
                            ("idor", "IDOR"), ("broken auth", "AUTH"), ("csrf", "CSRF")]:
                 if kw in detail.lower():
                     vtype = vt; break
+            if not vtype:
+                # Do not turn an arbitrary nikto informational line into XSS.
+                continue
             endpoint = v.get("endpoint", "")
             if not any(vv.endpoint == endpoint and vv.vuln_type == vtype for vv in self.vulnerabilities):
                 self.vulnerabilities.append(VulnerabilityHypothesis(
@@ -491,7 +494,38 @@ class ResearchCoordinator(CoordinatorContext):
             method = ep.get("method", "GET")
             if not url:
                 continue
+            status = int(ep.get("sample_status", 0) or 0)
+            if status >= 400:
+                # Path probes returning 404/403/5xx are observations, not
+                # exploitable application endpoints.
+                continue
             if params:
+                param_names = [p.strip() for p in str(params).split(",") if p.strip()]
+                url_param = next(
+                    (p for p in param_names
+                     if p.lower() in {"url", "uri", "target", "redirect", "next"}),
+                    None,
+                )
+                if url_param:
+                    if not any(v.endpoint == url and v.vuln_type == "SSRF"
+                               and v.param == url_param for v in self.vulnerabilities):
+                        self.vulnerabilities.append(VulnerabilityHypothesis(
+                            vuln_type="SSRF", endpoint=url, param=url_param,
+                            confidence=0.55,
+                            evidence=f"{method} URL-fetch parameter: {url_param}",
+                            suggested_tool="ssrf_probe",
+                            tool_args={"ssrf_url": url, "url_param": url_param},
+                        ))
+                        self.dkg.add_node("Vulnerability", f"vuln-{len(self.vulnerabilities)}", {
+                            "vuln_type": "SSRF", "endpoint": url,
+                            "parameter": url_param, "severity": "high",
+                            "source": "url_parameter_heuristic",
+                            "suggested_tool": "ssrf_probe",
+                            "tool_args": {"ssrf_url": url, "url_param": url_param},
+                        })
+                    # URL-fetch parameters are handled by the SSRF probe;
+                    # do not flood the plan with generic injection guesses.
+                    continue
                 if any(v.endpoint == url and v.param == params for v in self.vulnerabilities):
                     continue
                 for vt in ("SQLI", "XSS", "CMDI"):
@@ -568,6 +602,10 @@ class ResearchCoordinator(CoordinatorContext):
                 params = ep.get("params", "")
                 method = ep.get("method", "GET")
                 resp_len = ep.get("response_size", 0)
+                if method == "GET" and not params:
+                    # No input parameter or dynamic-response evidence: keep
+                    # the endpoint as a fact, but do not invent an exploit.
+                    continue
                 # Pick the single most likely vuln type based on response characteristics
                 if params:
                     vt, param = "SQLI", params.split(",")[0] if params else "id"
@@ -1522,4 +1560,3 @@ class ResearchCoordinator(CoordinatorContext):
     # Inspired by VulnBot's Plan-Execute-Replan architecture.
     # Plans are LLM-generated, dynamically updated after each task,
     # and persisted in DKG for cross-phase/cross-agent visibility.
-
