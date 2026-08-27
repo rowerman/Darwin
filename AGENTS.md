@@ -85,6 +85,8 @@ Orchestrator.run()（委托 LifecycleCoordinator，各阶段由 orchestration/ �
 - 修改编排阶段逻辑（`darwin/orchestration/*.py`）：先读 `docs/darwin/orchestration/README.md` 与对应 Coordinator 文档；Coordinator 内 `self.<attr>`/`self.<method>` 经共享上下文转发、工具调用必须走 `self._call_tool()` 端口；改后跑全量 `pytest tests/ -v`。
 - 任何改动完成前：全量 `pytest tests/ -v` 必须通过。
 - 当用户附上执行失败的报错信息要求分析错误并修复时，要注意寻找错误产生的根本原因，拒绝“打补丁”式修改，防止错误堆积
+- 每次修改代码之前，都要把此次修改的计划写到plans目录下面的{type}_YYYYMMDD_x.md下面，然后把此md文件作为实现进度文档。其中type分为feat、fix、refactor三类，分别对应新增功能、修复错误以及重构；YYYYMMDD为日期，x为这是该日的第几次对应修改
+- 每次修改代码仓库之后，都要在CHANGES目录下面新建一个md文件，命名为YYYYMMDD-x.md，其中YYYYMMDD为日期，x为这是该日的第几次修改
 
 ### 模块文档与源码同步
 
@@ -105,16 +107,6 @@ Orchestrator.run()（委托 LifecycleCoordinator，各阶段由 orchestration/ �
 要求 Python ≥ 3.10。RAG 依赖（`sentence-transformers`、`faiss-cpu`）**不在** `pyproject.toml` 中，需要时手动安装；其余依赖由 `pyproject.toml` 声明。
 
 优先考虑激活conda环境
-
-### 外部 CLI 工具
-
-recon/attack 工具包装外部命令，启动时 Orchestrator 会校验并警告缺失：
-
-- 必需：`nmap`、`dirb`、`whatweb`、`curl`、`sqlmap`、`ffuf`、`sshpass`
-- 可选/按场景：`wpscan`、`netexec`、`impacket-*`、`ldapsearch`、`kubectl`、`capsh`、`msfconsole`（`msfinstall` 脚本在仓库根）
-
-
-辅助：`WPSCAN_API_TOKEN`、`BRAVE_API_KEY`、`GITHUB_PERSONAL_ACCESS_TOKEN`。
  
 ### 运行命令
 

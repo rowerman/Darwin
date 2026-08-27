@@ -933,6 +933,8 @@ def register_recon_tools(gateway: MCPGateway) -> MCPGateway:
         },
     )
 
+    from darwin.tools.contracts import apply_explicit_contracts
+    apply_explicit_contracts(gateway)
     return gateway
 
 

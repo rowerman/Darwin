@@ -24,5 +24,4 @@ bootstrap recon 和后续服务研究阶段的工具注册层。
 
 ## 维护提示
 
-新增工具要补 `ToolSpec`、manifest 和相关 parser 测试。
-
+新增工具要补注册参数、`darwin/tools/contracts.py` 中的域/capability 分类、manifest 和相关 parser 测试。

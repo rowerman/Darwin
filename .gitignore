@@ -26,4 +26,5 @@ log/
 experiments_results/
 
 .claude/
-**/
+CHANGES/
+plans/

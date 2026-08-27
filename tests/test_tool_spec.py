@@ -32,6 +32,17 @@ def test_every_registered_tool_has_a_valid_spec():
     assert check_all_specs(specs) == []
 
 
+def test_builtin_tools_use_explicit_semantic_contracts():
+    specs = _all_specs()
+    ordinary = [s for s in specs.values() if not s.name.startswith("tool_registry_")]
+    assert all(s.auto is False for s in specs.values())
+    assert all(s.domains for s in ordinary)
+    assert all(s.capability for s in specs.values())
+    assert specs["curl_get"].capability == "fetch_url"
+    assert specs["kubectl_exec"].domains == ["k8s"]
+    assert specs["sqlmap_test"].domains == ["web"]
+
+
 def test_manifest_roundtrip_is_in_sync(tmp_path):
     specs = _all_specs()
     manifest = build_manifest(specs, source="test")

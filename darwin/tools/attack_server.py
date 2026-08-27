@@ -5040,6 +5040,10 @@ spec:
         },
     )
 
+    # Convert legacy registration metadata into explicit v2 contracts once
+    # all tools (including registry meta-tools) are present.
+    from darwin.tools.contracts import apply_explicit_contracts
+    apply_explicit_contracts(gateway)
     return gateway
 
 
@@ -5093,18 +5097,9 @@ def _apply_domain_filter(gateway: MCPGateway, enabled_domains: set[str] | None) 
     import logging
     _log = logging.getLogger(__name__)
 
-    for domain, tool_set in _DOMAIN_TOOL_MAP.items():
-        if domain not in enabled_domains:
-            removed = []
-            for tool_name in tool_set:
-                if tool_name in gateway._registry:
-                    del gateway._registry[tool_name]
-                    removed.append(tool_name)
-            if removed:
-                _log.info("Domain '%s' disabled: removed %d tools: %s",
-                          domain, len(removed), ", ".join(sorted(removed)))
-
-    # Data-driven pass: ToolSpec/entry domains.
+    # ToolSpec domains are the primary source of truth.  The legacy map is
+    # intentionally no longer applied: it can only remove tools and cannot
+    # express multi-domain contracts.
     specs = gateway.get_tool_specs()
     removed_spec = []
     for tool_name, entry in list(gateway._registry.items()):
