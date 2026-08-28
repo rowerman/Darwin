@@ -106,7 +106,7 @@ Orchestrator.run()（委托 LifecycleCoordinator，各阶段由 orchestration/ �
 
 要求 Python ≥ 3.10。RAG 依赖（`sentence-transformers`、`faiss-cpu`）**不在** `pyproject.toml` 中，需要时手动安装；其余依赖由 `pyproject.toml` 声明。
 
-优先考虑激活conda环境
+windows环境下优先考虑deeplearn这个conda环境，Linux下优先考虑项目根目录下的venv环境
  
 ### 运行命令
 

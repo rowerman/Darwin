@@ -509,6 +509,14 @@ class DKG:
                 old = dict(self.graph.edges[from_id, to_id, existing_keys[0]])
                 old_comparable = {k: v for k, v in old.items()
                                   if k not in {"last_seen", "created_at", "first_seen"}}
+            # Provenance timestamps record observation time, not a semantic
+            # edge change.  Exclude them so identical observations are idempotent.
+            for comparable_data in (comparable, old_comparable):
+                provenance = comparable_data.get("provenance")
+                if isinstance(provenance, dict):
+                    provenance = dict(provenance)
+                    provenance.pop("last_timestamp", None)
+                    comparable_data["provenance"] = provenance
             changed = (not existing_keys) or comparable != old_comparable or len(existing_keys) > 1
             if existing_keys:
                 for key in existing_keys:

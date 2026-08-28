@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import re
 import subprocess
 import time
@@ -346,12 +347,25 @@ class MCPGateway:
                 for k, v in _defaults.items():
                     kwargs.setdefault(k, v)
                 argv: List[str] = []
+                raw_cmdline: str | None = None
                 for element in shell_args:
                     match = re.fullmatch(r"\{(\w+)\}", element)
                     if match and match.group(1) in split_params:
-                        argv.extend(shlex_split_value(kwargs.get(match.group(1))))
+                        value = kwargs.get(match.group(1))
+                        # Keep the original command for POSIX emulation of
+                        # the Windows ``cmd /c {cmdline}`` convention.
+                        if (
+                            len(shell_args) == 3
+                            and shell_args[0].lower() == "cmd"
+                            and shell_args[1].lower() == "/c"
+                            and element == shell_args[2]
+                        ):
+                            raw_cmdline = str(value or "")
+                        argv.extend(shlex_split_value(value))
                     else:
                         argv.append(element.format(**kwargs))
+                if raw_cmdline is not None and os.name != "nt":
+                    argv = ["/bin/sh", "-c", raw_cmdline]
             except (ValueError, KeyError) as e:
                 _err_msg = (
                     f"argv format error: {e} | argv={shell_args[:4]} | kwargs={kwargs}"
@@ -369,7 +383,6 @@ class MCPGateway:
                 current_timeout = timeout * (1.5 ** attempt)
                 proc = None
                 try:
-                    import os
                     no_prompt_env = {**os.environ, "PGPASSWORD": ""}
                     proc = await asyncio.create_subprocess_exec(
                         *argv,
