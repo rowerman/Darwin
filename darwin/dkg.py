@@ -137,6 +137,15 @@ EDGE_STATUS_VALUES = {"observed", "inferred", "hypothesized", "stale"}
 # Canonical relationship semantics.  New collectors must use an existing
 # semantic name instead of introducing a synonym with a different spelling.
 EDGE_SEMANTICS: Dict[str, Dict[str, str]] = {
+    "service_has_vuln": {"from": "Service", "to": "Vulnerability"},
+    "endpoint_has_vuln": {"from": "Endpoint", "to": "Vulnerability"},
+    "session_on_host": {"from": "Session", "to": "Host"},
+    "host_in_domain": {"from": "Host", "to": "Domain"},
+    "domain_trusts": {"from": "Domain", "to": "Domain"},
+    "vuln_exploited_by": {"from": "Vulnerability", "to": "Credential|Session"},
+    "plan_contains_task": {"from": "Plan", "to": "Task"},
+    "task_depends_on": {"from": "Task", "to": "Task"},
+    "plan_successor": {"from": "Plan", "to": "PlanSummary"},
     "host_has_service": {"from": "Host", "to": "Service"},
     "host_has_endpoint": {"from": "Host", "to": "Endpoint"},
     "node_hosts_pod": {"from": "Host", "to": "K8sPod"},
@@ -153,11 +162,14 @@ EDGE_SEMANTICS: Dict[str, Dict[str, str]] = {
     "role_grants_permission": {"from": "Role", "to": "K8sNamespace"},
     "ingress_routes_service": {"from": "Ingress", "to": "Service"},
     "endpoint_slice_backed_by_service": {"from": "EndpointSlice", "to": "Service"},
+    "account_contains_role": {"from": "CloudAccount", "to": "IAMRole"},
     "account_contains_resource": {"from": "CloudAccount", "to": "Resource"},
+    "account_trusts": {"from": "TrustRelationship", "to": "CloudAccount"},
     "resource_in_subnet": {"from": "Host", "to": "Subnet"},
     "route_table_routes_to": {"from": "RouteTable", "to": "Resource"},
     "security_group_attaches": {"from": "SecurityGroup", "to": "Host"},
     "policy_grants_resource": {"from": "IAMPolicy", "to": "Resource"},
+    "policy_grants_access": {"from": "IAMPolicy", "to": "CloudAccount|Resource"},
     "eks_links_k8s_cluster": {"from": "EKS", "to": "K8sCluster"},
     "resource_reaches_resource": {"from": "Resource", "to": "Resource"},
     "service_exposes_endpoint": {"from": "Service", "to": "Endpoint"},
@@ -170,6 +182,35 @@ EDGE_SEMANTICS: Dict[str, Dict[str, str]] = {
     "network_policy_allows": {"from": "NetworkPolicy", "to": "Resource"},
     "network_policy_denies": {"from": "NetworkPolicy", "to": "Resource"},
 }
+
+# Abstract endpoint names in EDGE_SEMANTICS are intentionally kept stable for
+# serialized consumers.  This table resolves them to concrete DKG node types
+# when validating a new edge.
+_EDGE_TYPE_GROUPS: Dict[str, frozenset[str]] = {
+    "Resource": frozenset({
+        "Host", "VPC", "Subnet", "RouteTable", "SecurityGroup", "ENI", "EC2",
+        "EKS", "LoadBalancer", "RDS", "S3", "K8sCluster", "K8sNamespace",
+        "K8sPod", "Service", "Endpoint", "Flag",
+    }),
+    "Workload": frozenset({"Deployment", "StatefulSet", "DaemonSet"}),
+    "Binding": frozenset({"RoleBinding", "ClusterRoleBinding"}),
+    "Role": frozenset({"Role", "ClusterRole"}),
+    "Credential|Session": frozenset({"Credential", "Session"}),
+    "CloudAccount|Resource": frozenset({
+        "CloudAccount", "Host", "VPC", "Subnet", "RouteTable", "SecurityGroup",
+        "ENI", "EC2", "EKS", "LoadBalancer", "RDS", "S3",
+    }),
+    # Task is a runtime object, not a DKG node type.  It remains unresolved so
+    # legacy plan edges are accepted when one endpoint has no DKG type.
+    "Task": frozenset(),
+}
+
+
+def _semantic_types(label: str) -> frozenset[str]:
+    """Resolve a semantic endpoint label to concrete node types."""
+    if label in _EDGE_TYPE_GROUPS:
+        return _EDGE_TYPE_GROUPS[label]
+    return frozenset({label})
 
 
 class DKG:
@@ -371,6 +412,16 @@ class DKG:
                 return dict(self.graph.nodes[node_id])
         return None
 
+    @staticmethod
+    def _redact_sensitive(data: Dict[str, Any]) -> Dict[str, Any]:
+        """Hide credential material from summaries and prompt-facing views."""
+        result = dict(data)
+        for key in ("password", "secret", "secret_key", "secret_access_key",
+                    "session_token", "token", "private_key"):
+            if key in result and result[key] not in (None, ""):
+                result[key] = "<redacted>"
+        return result
+
     def query_nodes(
         self,
         node_type: str | None = None,
@@ -456,6 +507,14 @@ class DKG:
         if status not in EDGE_STATUS_VALUES:
             raise ValueError(f"Unknown edge status: {status}")
         with self._lock:
+            if from_id in self.graph and to_id in self.graph:
+                message = self.edge_semantic_violation(
+                    edge_type,
+                    str(self.graph.nodes[from_id].get("type", "")),
+                    str(self.graph.nodes[to_id].get("type", "")),
+                )
+                if message:
+                    raise ValueError(message)
             now = datetime.now().isoformat()
             incoming = dict(properties or {})
             incoming.pop("type", None)
@@ -576,6 +635,42 @@ class DKG:
                 results.append({"id": target, "edge_type": data.get("type"), **target_data})
         return results
 
+    @classmethod
+    def edge_semantic_violation(
+        cls, edge_type: str, from_type: str | None, to_type: str | None
+    ) -> str | None:
+        """Return a diagnostic when typed endpoints violate edge semantics."""
+        semantic = EDGE_SEMANTICS.get(edge_type)
+        if not semantic or not from_type or not to_type:
+            return None
+        allowed_from = _semantic_types(semantic["from"])
+        allowed_to = _semantic_types(semantic["to"])
+        if not allowed_from or not allowed_to:
+            return None
+        if from_type not in allowed_from or to_type not in allowed_to:
+            return (
+                f"edge '{edge_type}' requires {semantic['from']} -> {semantic['to']}, "
+                f"got {from_type} -> {to_type}"
+            )
+        return None
+
+    def semantic_violations(self) -> List[Dict[str, str]]:
+        """Audit persisted edges without changing the graph."""
+        violations: List[Dict[str, str]] = []
+        with self._lock:
+            for source, target, data in self.graph.edges(data=True):
+                message = self.edge_semantic_violation(
+                    str(data.get("type", "")),
+                    str(self.graph.nodes[source].get("type", "")),
+                    str(self.graph.nodes[target].get("type", "")),
+                )
+                if message:
+                    violations.append({
+                        "from": str(source), "to": str(target),
+                        "type": str(data.get("type", "")), "message": message,
+                    })
+        return violations
+
     def topology_snapshot(
         self,
         anchor_ids: list[str] | None = None,
@@ -613,7 +708,7 @@ class DKG:
 
             nodes = []
             for nid in sorted(selected):
-                nodes.append({"id": nid, **dict(self.graph.nodes[nid])})
+                nodes.append({"id": nid, **self._redact_sensitive(dict(self.graph.nodes[nid]))})
             # Canonical edge view: dedupe parallel edges with the same
             # (from, to, type), keeping the first (earliest) record in
             # deterministic order, then apply the max_edges bound.
@@ -633,7 +728,7 @@ class DKG:
                     if edge_key in seen_edges:
                         continue
                     seen_edges.add(edge_key)
-                    edges.append({"from": str(src), "to": str(dst), **dict(data)})
+                    edges.append({"from": str(src), "to": str(dst), **self._redact_sensitive(dict(data))})
                     if len(edges) >= max_edges:
                         break
             return {
@@ -717,7 +812,7 @@ class DKG:
                     "total_edges": total_edges,
                 },
                 "local": snapshot,
-                "changes": changes,
+                "changes": [self._redact_change(item) for item in changes],
                 "coverage": coverage,
                 "history_complete": history_complete,
                 "omitted_count": {
@@ -725,6 +820,15 @@ class DKG:
                     "edges": coverage["omitted_edges"],
                 },
             }
+
+    @classmethod
+    def _redact_change(cls, change: Dict[str, Any]) -> Dict[str, Any]:
+        """Redact node/edge payloads before exposing journal changes."""
+        result = dict(change)
+        payload = result.get("data")
+        if isinstance(payload, dict):
+            result["data"] = cls._redact_sensitive(payload)
+        return result
 
     def attack_path_summary(
         self,
@@ -887,7 +991,7 @@ class DKG:
             if nodes:
                 lines.append(f"{ntype}: {len(nodes)}")
                 for n in nodes[:8]:  # show up to 8 per type for LLM analysis
-                    key_props = {k: v for k, v in n.items()
+                    key_props = {k: v for k, v in self._redact_sensitive(n).items()
                                  if k not in ("id", "type", "created_at", "updated_at", "discovered_by")}
                     lines.append(f"  - id={n['id']}: {key_props}")
                 if len(nodes) > 8:

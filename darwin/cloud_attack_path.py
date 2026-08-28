@@ -415,6 +415,81 @@ def find_cross_account_paths(dkg: DKG) -> list[AttackPath]:
     return paths
 
 
+def find_cloud_data_plane_paths(dkg: DKG) -> list[AttackPath]:
+    """Find data-plane chains from SSRF through IMDS credentials to a flag."""
+    paths: list[AttackPath] = []
+    vulnerabilities = _get_nodes_by_type(dkg, "Vulnerability")
+    credentials = _get_nodes_by_type(dkg, "Credential")
+    roles = _get_nodes_by_type(dkg, "IAMRole")
+    resources = [
+        *(_get_nodes_by_type(dkg, "S3")),
+        *(_get_nodes_by_type(dkg, "RDS")),
+    ]
+    flags = _get_nodes_by_type(dkg, "Flag")
+    if not vulnerabilities or not credentials or not resources:
+        return paths
+
+    ssrf_vulns = [
+        vuln for vuln in vulnerabilities
+        if "ssrf" in str(vuln.get("vuln_type", "")).lower()
+        or "server-side request" in str(vuln.get("vuln_type", "")).lower()
+    ]
+    if not ssrf_vulns:
+        return paths
+
+    for vuln in ssrf_vulns:
+        vuln_id = str(vuln["id"])
+        endpoint_text = str(vuln.get("endpoint", ""))
+
+        for credential in credentials:
+            cid = str(credential["id"])
+            role_ids = {
+                target for target, edge_type in _get_outgoing_edges(dkg, cid)
+                if edge_type == "credential_for_role"
+            }
+            if roles and not role_ids:
+                continue
+            policy_ids = {
+                policy_id
+                for role_id in role_ids
+                for policy_id, edge_type in _get_outgoing_edges(dkg, role_id)
+                if edge_type == "role_has_policy"
+            }
+            for resource in resources:
+                rid = str(resource["id"])
+                resource_edges = {
+                    source for source, edge_type in _get_incoming_edges(dkg, rid)
+                    if edge_type == "policy_grants_resource"
+                }
+                if not policy_ids.intersection(resource_edges):
+                    continue
+                flag_ids = {
+                    target for target, edge_type in _get_outgoing_edges(dkg, rid)
+                    if edge_type == "resource_contains"
+                }
+                flag_ids &= {str(flag["id"]) for flag in flags}
+                target_name = str(resource.get("BucketName", resource.get("name", rid)))
+                path_id = f"data-plane-{vuln_id}-{cid}-{rid}"
+                steps = [
+                    {"action": "exploit_ssrf", "tool": "ssrf_probe", "target": endpoint_text or vuln_id},
+                    {"action": "read_imds_credentials", "tool": "ssrf_probe", "target": "169.254.169.254/latest/meta-data/iam/security-credentials/"},
+                    {"action": "use_cloud_credential", "tool": "aws_cli", "target": target_name},
+                ]
+                if flag_ids:
+                    steps.append({"action": "retrieve_flag", "tool": "aws_cli", "target": ",".join(sorted(flag_ids))})
+                paths.append(AttackPath(
+                    path_id=path_id,
+                    category="cloud_data_plane",
+                    description=f"SSRF → IMDS credentials → cloud resource {target_name}",
+                    steps=steps,
+                    difficulty="easy",
+                    recommended_tools=["ssrf_probe", "curl_get", "aws_cli"],
+                    prerequisites=["Unauthenticated or exploitable SSRF endpoint", f"IAM role credential: {credential.get('username', cid)}"],
+                    confidence=0.95 if flag_ids else 0.8,
+                ))
+    return paths
+
+
 # ── Helper ───────────────────────────────────────────────────────────────
 
 def _get_incoming_edges(dkg: DKG, node_id: str) -> list[tuple[str, str]]:
@@ -438,6 +513,7 @@ def compute_attack_paths(dkg: DKG, categories: set[str] | None = None) -> Attack
 
     categories = set(categories or {
         "privilege_escalation", "container_escape", "lateral_move", "cross_account",
+        "cloud_data_plane",
     })
 
     # 1. Privilege escalation
@@ -476,12 +552,21 @@ def compute_attack_paths(dkg: DKG, categories: set[str] | None = None) -> Attack
         except Exception as e:
             log.debug("CTAGE Reasoner: cross-account analysis failed: %s", e)
 
+    if "cloud_data_plane" in categories:
+        try:
+            data_paths = find_cloud_data_plane_paths(dkg)
+            all_paths.extend(data_paths)
+            log.info("CTAGE Reasoner: found %d cloud data-plane paths", len(data_paths))
+        except Exception as e:
+            log.debug("CTAGE Reasoner: cloud data-plane analysis failed: %s", e)
+
     # Sort: easy first, high confidence first, then by category priority
     category_priority = {
         "container_escape": 0,
         "lateral_move": 1,
         "privilege_escalation": 2,
         "cross_account": 3,
+        "cloud_data_plane": 1,
     }
     all_paths.sort(key=lambda p: (
         {"easy": 0, "medium": 1, "hard": 2, "unknown": 3}.get(p.difficulty, 3),
@@ -501,6 +586,7 @@ def compute_attack_paths(dkg: DKG, categories: set[str] | None = None) -> Attack
             "container_escape": "container escape",
             "lateral_move": "lateral movement",
             "cross_account": "cross-account",
+            "cloud_data_plane": "cloud data-plane",
         }
         summary_parts.append("Attack surface analysis complete. ")
         summary_parts.append(", ".join(

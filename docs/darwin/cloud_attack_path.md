@@ -13,10 +13,11 @@
 - `compute_attack_paths()`：汇总各类路径。
 - `find_privilege_escalation_paths()`、`find_container_escape_paths()`：专项路径搜索。
 - `find_lateral_movement_paths()`、`find_cross_account_paths()`：横向和跨账号推理。
+- `find_cloud_data_plane_paths()`：识别 SSRF→IMDS→Credential→CloudResource→Flag 数据面链路。
 
 ## 输入/输出概览
 
-输入是 `DKG` 图；输出是 `AttackPathReport` 及 `AttackPath` 列表。
+输入是 `DKG` 图；输出是 `AttackPathReport` 及 `AttackPath` 列表。数据面路径类别为 `cloud_data_plane`。
 
 ## 相关模块
 
@@ -29,4 +30,3 @@
 ## 维护提示
 
 新增节点类型或边语义时，要同时检查 `dkg.py` 和这里的路径规则。
-

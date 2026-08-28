@@ -113,7 +113,7 @@ class TestDKGEdgeOperations:
         dkg = DKG()
         dkg.add_node("Host", "h1")
         dkg.add_node("Service", "s1")
-        dkg.add_node("Endpoint", "e1")
+        dkg.add_node("Vulnerability", "e1")
         dkg.add_edge("h1", "s1", "host_has_service")
         dkg.add_edge("s1", "e1", "service_has_vuln")
 
@@ -174,8 +174,8 @@ class TestDKGPersistence:
     def test_to_dict_with_data(self):
         dkg = DKG()
         dkg.add_node("Host", "h1", {"ip": "10.0.0.1"})
-        dkg.add_node("Flag", "f1", {"value": "flag{test}"})
-        dkg.add_edge("h1", "f1", "host_has_service")
+        dkg.add_node("Service", "s1", {"port": 80})
+        dkg.add_edge("h1", "s1", "host_has_service")
 
         data = dkg.to_dict()
         assert len(data["nodes"]) == 2
@@ -185,7 +185,9 @@ class TestDKGPersistence:
         dkg = DKG()
         dkg.add_node("Host", "h1", {"ip": "10.0.0.1", "is_internal": True})
         dkg.add_node("Host", "h2", {"ip": "10.0.0.2"})
-        dkg.add_edge("h1", "h2", "domain_trusts", type="bidirectional")
+        dkg.add_node("Domain", "d1", {"name": "internal"})
+        dkg.add_node("Domain", "d2", {"name": "trusted"})
+        dkg.add_edge("d1", "d2", "domain_trusts", type="bidirectional")
 
         data = dkg.to_dict()
         restored = DKG.from_dict(data)
@@ -344,8 +346,29 @@ class TestDKGAllEdgeTypes:
     def test_create_each_edge_type(self, etype):
         dkg = DKG()
         dkg.add_node("Host", "source")
-        dkg.add_node("Host", "target")
+        # The target is intentionally left untyped: this test only verifies
+        # registration of every edge name. Typed compatibility is covered by
+        # the dedicated semantic validation tests below.
         dkg.add_edge("source", "target", etype)
         edges = dkg.query_edges()
         assert len(edges) == 1
         assert edges[0]["type"] == etype
+
+    def test_typed_edge_rejects_wrong_endpoints(self):
+        dkg = DKG()
+        dkg.add_node("Host", "h1")
+        dkg.add_node("Flag", "flag-1")
+        with pytest.raises(ValueError, match="host_has_service.*Host -> Service"):
+            dkg.add_edge("h1", "flag-1", "host_has_service")
+
+    def test_semantic_violations_audit_legacy_edges(self):
+        dkg = DKG.from_dict({
+            "nodes": [
+                {"id": "h1", "type": "Host"},
+                {"id": "flag-1", "type": "Flag"},
+            ],
+            "edges": [{"from": "h1", "to": "flag-1", "type": "host_has_service"}],
+        })
+        violations = dkg.semantic_violations()
+        assert len(violations) == 1
+        assert violations[0]["type"] == "host_has_service"

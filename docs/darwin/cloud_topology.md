@@ -14,6 +14,8 @@
 - `discover_cloud_topology()`：异步发现并写入拓扑。
 - `CloudTopology`、`K8sRBACBinding`、`PodSecurityProfile`：拓扑结果模型。
 - `CloudTopology` 还承载 Service、Deployment/StatefulSet/DaemonSet、EndpointSlice、Ingress、NetworkPolicy、RBAC 资源及 Secret/ConfigMap 元数据。
+- IMDS 发现会写入完整 `Credential`、`IAMRole`、metadata Host/Service/Endpoint 及 `credential_for_role` 关系；完整凭据仅用于执行器读取，摘要和 prompt-facing 拓扑视图自动脱敏。
+- 对已有云 dashboard URL fetcher 证据，mapper 会建立 Docker benchmark 的 IMDS 假设拓扑和 Web→IMDS 可达/调用关系，后续真实响应通过幂等 upsert 合并。
 - `cloud_discovery_aws` 只允许通过 gateway 执行读取型 STS/EC2/EKS/ELB/RDS/S3/IAM action；AWS 资源使用 ARN 或规范化复合 ID。
 - ConfigMap 采集保存非敏感 `data`（单值截断 200 字符、排除 secret 类 key）；IAMPolicy 额外按 `DefaultVersionId` 拉取 `get-policy-version` 文档。
 - RouteTable 与 Subnet 的 association 写为 `route_table_routes_to`；EKS `name`/`ClusterName` 均登记为 crosswalk 查找键。

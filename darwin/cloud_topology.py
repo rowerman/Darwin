@@ -692,6 +692,10 @@ class CloudTopologyMapper:
                             "role_name": role_name,
                             "account_id": creds.get("AccountId", ""),
                             "access_key_id": creds.get("AccessKeyId", ""),
+                            "secret_access_key": creds.get("SecretAccessKey", ""),
+                            "session_token": creds.get("Token", ""),
+                            "expiration": creds.get("Expiration", ""),
+                            "instance_id": creds.get("InstanceId", ""),
                             "provider": "aws",
                             "source": "imds",
                             "imds_version": 2 if (token and len(token) > 10) else 1,
@@ -1283,6 +1287,66 @@ class CloudTopologyMapper:
                 "account_id": role.get("account_id", ""),
                 "source": role.get("source", ""),
             })
+            account_id = str(role.get("account_id", "") or "")
+            if account_id:
+                account_id_node = f"cloud-acct-{account_id}"
+                self.dkg.add_node("CloudAccount", account_id_node, {
+                    "account_id": account_id,
+                    "provider": role.get("provider", "aws"),
+                }, source="cloud_discovery:imds")
+                self.dkg.add_edge(
+                    account_id_node, rid, "account_contains_role",
+                    source="cloud_discovery:imds", evidence="IMDS role identity",
+                    confidence=1.0,
+                )
+
+            if role.get("source") != "imds":
+                continue
+            imds_host_id = "host-imds-169.254.169.254"
+            imds_service_id = "service-imds-http"
+            role_name = str(role.get("role_name", "unknown") or "unknown")
+            imds_endpoint_id = f"endpoint-imds-credential-{role_name}"
+            credential_id = f"credential-imds-{role_name}"
+            credential_url = (
+                "http://169.254.169.254/latest/meta-data/iam/"
+                f"security-credentials/{role_name}"
+            )
+            self.dkg.add_node("Host", imds_host_id, {
+                "name": "AWS Instance Metadata Service",
+                "ip": "169.254.169.254",
+                "provider": "aws",
+                "metadata_service": True,
+            }, source="cloud_discovery:imds")
+            self.dkg.add_node("Service", imds_service_id, {
+                "name": "AWS IMDS", "protocol": "http", "port": 80,
+            }, source="cloud_discovery:imds")
+            self.dkg.add_node("Endpoint", imds_endpoint_id, {
+                "url": credential_url,
+                "method": "GET",
+                "auth_required": bool(role.get("imds_version") == 2),
+                "imds_version": role.get("imds_version", 1),
+            }, source="cloud_discovery:imds", evidence="IAM role credential endpoint")
+            self.dkg.add_node("Credential", credential_id, {
+                "username": role_name,
+                "type": "aws_temporary_credentials",
+                "access_key_id": role.get("access_key_id", ""),
+                "secret_access_key": role.get("secret_access_key", ""),
+                "session_token": role.get("session_token", ""),
+                "expiration": role.get("expiration", ""),
+                "instance_id": role.get("instance_id", ""),
+                "source_host": imds_host_id,
+                "provider": "aws",
+            }, source="cloud_discovery:imds", evidence=f"IMDSv{role.get('imds_version', 1)} credential response")
+            self.dkg.add_edge(imds_host_id, imds_service_id, "host_has_service",
+                              source="cloud_discovery:imds", evidence="metadata HTTP service", confidence=1.0)
+            self.dkg.add_edge(imds_host_id, imds_endpoint_id, "host_has_endpoint",
+                              source="cloud_discovery:imds", evidence="credential endpoint", confidence=1.0)
+            self.dkg.add_edge(credential_id, imds_host_id, "credential_for",
+                              source="cloud_discovery:imds", evidence="credential source", confidence=1.0)
+            self.dkg.add_edge(credential_id, rid, "credential_for_role",
+                              source="cloud_discovery:imds", evidence="IMDS role identity", confidence=1.0)
+
+        self._write_docker_cloud_evidence()
 
         # ── Cross-account trusts ──
         for trust in topology.cross_account_trusts:
@@ -1325,6 +1389,67 @@ class CloudTopologyMapper:
             len(topology.clusters), len(topology.nodes), len(topology.pods),
             len(topology.service_accounts), len(topology.rbac_bindings), len(topology.iam_roles),
         )
+
+    def _write_docker_cloud_evidence(self) -> None:
+        """Link URL-fetching web endpoints to metadata services when observed."""
+        imds_host_id = "host-imds-169.254.169.254"
+        imds_service_id = "service-imds-http"
+        imds_endpoint_id = "endpoint-imds-metadata"
+        endpoints = self.dkg.query_nodes("Endpoint")
+        cloud_signal = any(
+            "cloud" in str(endpoint.get("sample_response", "") or "").lower()
+            or "dashboard" in str(endpoint.get("sample_response", "") or "").lower()
+            for endpoint in endpoints
+        )
+        fetch_endpoints = []
+        for endpoint in endpoints:
+            params = str(endpoint.get("params", "") or "").lower()
+            if "url" in params and cloud_signal:
+                fetch_endpoints.append(endpoint)
+        if not fetch_endpoints:
+            return
+
+        self.dkg.add_node("Host", imds_host_id, {
+            "name": "AWS Instance Metadata Service",
+            "ip": "169.254.169.254",
+            "provider": "aws",
+            "metadata_service": True,
+        }, source="cloud_evidence:ssrf")
+        self.dkg.add_node("Service", imds_service_id, {
+            "name": "AWS IMDS", "protocol": "http", "port": 80,
+        }, source="cloud_evidence:ssrf")
+        self.dkg.add_node("Endpoint", imds_endpoint_id, {
+            "url": "http://169.254.169.254/latest/meta-data/",
+            "method": "GET", "auth_required": False,
+        }, source="cloud_evidence:ssrf", evidence="cloud dashboard URL fetcher")
+        self.dkg.add_edge(imds_host_id, imds_service_id, "host_has_service",
+                          source="cloud_evidence:ssrf", evidence="IMDS HTTP service", confidence=0.7, status="hypothesized")
+        self.dkg.add_edge(imds_host_id, imds_endpoint_id, "host_has_endpoint",
+                          source="cloud_evidence:ssrf", evidence="metadata root", confidence=0.7, status="hypothesized")
+
+        for endpoint in fetch_endpoints:
+            endpoint_id = str(endpoint.get("id", ""))
+            for host_id, edge_type in self._incoming_edges(endpoint_id):
+                if edge_type != "host_has_endpoint":
+                    continue
+                self.dkg.add_edge(host_id, imds_host_id, "host_reaches_host",
+                                  source="cloud_evidence:ssrf", evidence="URL fetcher can target link-local metadata", confidence=0.7, status="hypothesized")
+                for service_id, service_edge in self._outgoing_edges(host_id):
+                    if service_edge == "host_has_service" and self.dkg.get_node(service_id):
+                        self.dkg.add_edge(service_id, imds_service_id, "service_calls_service",
+                                          source="cloud_evidence:ssrf", evidence="server-side URL fetch", confidence=0.7, status="hypothesized")
+
+    def _incoming_edges(self, node_id: str) -> list[tuple[str, str]]:
+        return [
+            (source, self.dkg.graph.edges[source, node_id, key].get("type", ""))
+            for source, _target, key in self.dkg.graph.in_edges(node_id, keys=True)
+        ]
+
+    def _outgoing_edges(self, node_id: str) -> list[tuple[str, str]]:
+        return [
+            (target, self.dkg.graph.edges[node_id, target, key].get("type", ""))
+            for _source, target, key in self.dkg.graph.out_edges(node_id, keys=True)
+        ]
 
 
 # ── Convenience function ────────────────────────────────────────────────
