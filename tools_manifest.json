@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0.0",
-  "generated_at": "2026-08-27T12:37:41+00:00",
+  "generated_at": "2026-08-28T13:29:23+00:00",
   "source": "darwin.tools.manifest",
   "tool_count": 134,
   "tools": [
@@ -6404,6 +6404,11 @@
           "type": "string",
           "description": "HTTP method: GET or POST. Use POST for services like IMDS that require it (default: GET)",
           "default": "GET"
+        },
+        "max_probes": {
+          "type": "integer",
+          "description": "Maximum SSRF requests (1-200, default 30); coverage is distributed across hosts, ports and paths.",
+          "default": 30
         }
       },
       "required": [

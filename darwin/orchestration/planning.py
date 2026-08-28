@@ -836,6 +836,17 @@ class PlanCoordinator(CoordinatorContext):
             content, tool_calls = self.llm.generate(
                 prompt=prompt, system_prompt=system_prompt, stage=stage,
             )
+            if not content or self._extract_json(content) == {}:
+                try:
+                    retry_content, retry_calls = self.llm.generate(
+                        prompt=(f"{prompt}\n\nReturn ONLY valid JSON now; "
+                                "do not call tools or add explanations."),
+                        system_prompt=system_prompt, stage=stage,
+                    )
+                    if retry_content:
+                        content, tool_calls = retry_content, retry_calls
+                except Exception as _exc:
+                    log.warning("Structured %s retry failed: %s", stage or "LLM", _exc)
             return content, tool_calls, False
 
         registry_used = False
@@ -854,7 +865,7 @@ class PlanCoordinator(CoordinatorContext):
                 stage=stage,
             )
             if not tool_calls:
-                return content, tool_calls, registry_used
+                break
             registry_used = True
             for tc in tool_calls:
                 tc_name = tc.get("name", "")
@@ -875,6 +886,25 @@ class PlanCoordinator(CoordinatorContext):
                     self.llm.add_tool_result(
                         tc_id, f"Tool '{tc_name}' failed: {_exc} — skipping"
                     )
+        # Registry calls must converge to a structured payload.  A model can
+        # spend the final round issuing another lookup and leave ``content``
+        # empty; give it one tool-free, JSON-only completion opportunity.
+        _parsed_completion = self._extract_json(content) if content else {}
+        if not content or _parsed_completion == {}:
+            retry_prompt = (
+                f"{prompt}\n\nReturn the final answer now as ONLY valid JSON. "
+                "Do not call tools, add markdown, or include explanations."
+            )
+            try:
+                retry_content, retry_calls = self.llm.generate(
+                    prompt=retry_prompt,
+                    system_prompt=system_prompt,
+                    stage=stage,
+                )
+                if retry_content:
+                    content, tool_calls = retry_content, retry_calls
+            except Exception as _exc:
+                log.warning("Structured %s retry failed: %s", stage or "LLM", _exc)
         return content, tool_calls, registry_used
 
     async def _generate_exploitation_plan(self, target_url: str, cteg_hints: dict | None = None) -> ExploitationPlan:

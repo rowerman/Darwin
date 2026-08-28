@@ -25,3 +25,6 @@ Planner 发现工具、Executor 执行工具的攻击域注册层。
 ## 维护提示
 
 工具注册不得直接暴露未声明参数、危险 shell 拼接或错误域标签。注册完成后由 `darwin.tools.contracts.apply_explicit_contracts` 绑定显式 `ToolSpec`；新增工具还必须补充域、capability、依赖和输出契约分类。
+
+`ssrf_probe` 使用显式 `max_probes` 安全预算（默认 30、上限 200），在预算内
+先分层覆盖 host/port/path，再填充剩余组合，并在结果中返回预算使用信息。

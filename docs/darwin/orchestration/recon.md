@@ -17,4 +17,5 @@ Orchestrator 上下文读写状态并调用工具端口。
 
 `dkg.py`、`dpm.py`、`dave.py`、`ports.py`。
 
-深侦察的预检通过带 timeout 的 `curl_get` 完成；非 HTML 或错误状态端点不会进入 gobuster/nikto 重扫描。
+深侦察的预检通过带 timeout 的 `curl_get` 完成；路径探测将工具解析出的真实
+HTTP 状态码写入 DKG，非 HTML 或错误状态端点不会进入 gobuster/nikto 重扫描。

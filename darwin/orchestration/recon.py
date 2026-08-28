@@ -574,11 +574,19 @@ class ReconCoordinator(CoordinatorContext):
                         if r.success:
                             out = getattr(r, "stdout", "")
                             if len(out) > 200:
+                                parsed = getattr(r, "parsed_output", {}) or {}
+                                status = parsed.get("status")
+                                if not isinstance(status, int):
+                                    status = 0
+                                    first_line = out.splitlines()[0] if out else ""
+                                    match = re.match(r"HTTP(?:/\d(?:\.\d)?)?\s+(\d{3})", first_line)
+                                    if match:
+                                        status = int(match.group(1))
                                 path_endpoint_id = f"ep-path-{path.replace('/','-')[:30]}"
                                 self.dkg.add_node("Endpoint", path_endpoint_id, {
                                     "url": f"{url.rstrip('/')}{path}", "method": "GET",
                                     "params": "",
-                                    "sample_status": 200, "sample_response": out[:5000],
+                                    "sample_status": status, "sample_response": out[:5000],
                                     "response_size": len(out),
                                     "discovered_by": "bootstrap-path-probe",
                                 })

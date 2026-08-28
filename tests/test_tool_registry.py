@@ -199,3 +199,24 @@ async def test_registry_lookup_loop_degrades_without_registry_tools(
     assert not tool_calls
     generates = [c for c in llm.calls if c[0] == "generate"]
     assert len(generates) == 1
+
+
+@pytest.mark.asyncio
+async def test_registry_lookup_forces_json_completion_after_tool_rounds(
+    make_orchestrator,
+):
+    llm = _RoundFakeLLM([
+        ("", [{"name": "tool_registry_get", "arguments": {"name": "shell_exec"}, "id": "r1"}]),
+        ("", [{"name": "tool_registry_get", "arguments": {"name": "shell_exec"}, "id": "r2"}]),
+        ("", [{"name": "tool_registry_get", "arguments": {"name": "shell_exec"}, "id": "r3"}]),
+        ('[{"id":"t1","instruction":"x","tool":"shell_exec"}]', None),
+    ])
+    gw = _RegistryGateway()
+    orch = make_orchestrator(llm, gw, gw)
+
+    content, calls, used = await orch._generate_with_registry_lookup("plan", stage="plan")
+
+    assert content.startswith("[")
+    assert calls is None
+    assert used is True
+    assert len([c for c in llm.calls if c[0] == "generate"]) == 4

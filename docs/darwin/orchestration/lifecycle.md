@@ -14,6 +14,8 @@
   状态快照与上下文构建。
 - `_task_log_event()` / `metrics_report()` / `provenance_summary()`：
   日志、指标与溯源。
+- `_apply_final_defense_state()`：在所有返回路径将最终 DPM 快照投影到
+  `TaskResult`；`run()` 同时释放普通 HTTP 与防御探测客户端。
 - `_extract_json()` / `_extract_json_array()`：JSON 宽容解析。
 
 ## 相关模块

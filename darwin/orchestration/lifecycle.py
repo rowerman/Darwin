@@ -548,7 +548,13 @@ class LifecycleCoordinator(CoordinatorContext):
                 phase_at_end=self.phase, error=str(e),
             )
         finally:
-            await self.client.close()
+            # Both clients own independent aiohttp sessions.  Always close
+            # them before tearing down the optional MCP pool.
+            for _http_client in (self.client, self.probe_client):
+                try:
+                    await _http_client.close()
+                except Exception as _exc:
+                    log.warning("HTTP client cleanup failed: %s", _exc)
             if self.mcp_pool.is_connected:
                 await self.mcp_pool.disconnect_all()
 
@@ -561,6 +567,7 @@ class LifecycleCoordinator(CoordinatorContext):
                 phase_at_end=self.phase,
                 error="No result produced",
             )
+        self._apply_final_defense_state(result)
         self._task_log_event("info" if result.success else "error", "task_end",
             success=result.success,
             flag=result.flag,
@@ -619,6 +626,25 @@ class LifecycleCoordinator(CoordinatorContext):
                 log.info("CTEG: extracted %d new patterns from task", new_patterns)
 
         return result
+
+    def _apply_final_defense_state(self, result: TaskResult) -> None:
+        """Project the final DPM state onto every returned task result."""
+        ds = self.defense_state
+        category = getattr(getattr(ds, "defense_category", None), "value", "")
+        waf_type = str(getattr(ds, "waf_type", "") or "")
+        detected = bool(
+            (waf_type and waf_type.lower() not in {"unknown", "none"})
+            or (category and category.lower() not in {"none", "unknown"})
+            or getattr(ds, "cloak_detected", False)
+            or getattr(ds, "honeypot_count", 0) > 0
+        )
+        result.defense_detected = detected
+        result.waf_type = "" if waf_type.lower() in {"unknown", "none"} else waf_type
+        result.defense_complexity = float(getattr(ds, "defense_complexity", 0.0) or 0.0)
+        result.waf_bypassed = bool(
+            result.waf_bypassed
+            or getattr(ds, "bypass_successes", 0) > 0
+        )
     def _should_terminate(self, result: TaskResult | None, max_loops: int) -> bool:
         """Check if the main loop should stop."""
         if result and result.success:

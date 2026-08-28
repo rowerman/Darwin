@@ -1168,6 +1168,7 @@ class ExecutionCoordinator(CoordinatorContext):
                 "command_injection_test": "CMDI", "ffuf_fuzz": "FUZZ",
                 "send_payload": "INJECTION", "hydra_http_brute": "AUTH",
                 "hydra_ssh_brute": "AUTH",
+                "ssrf_probe": "ssrf",
             }
             self._exploit_chain.append({
                 "tool": tc_name,

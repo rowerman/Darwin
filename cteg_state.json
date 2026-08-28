@@ -252,9 +252,23 @@
       "last_successful_use": "2026-08-26T09:26:35",
       "half_life_days": 30,
       "created_at": "2026-08-26T09:26:35.157463"
+    },
+    {
+      "id": "ep-ssrf_probe-task-178",
+      "type": "ExploitPattern",
+      "mechanism": "ssrf_probe",
+      "abstract_description": "ssrf_probe exploitation; via ssrf_probe; (GET)",
+      "vulnerability_type": "ssrf_probe",
+      "required_context": "",
+      "total_attempts": 1,
+      "total_successes": 1,
+      "success_rate": 1.0,
+      "last_successful_use": "2026-08-28T04:00:48",
+      "half_life_days": 30,
+      "created_at": "2026-08-28T04:02:54.760382"
     }
   ],
   "edges": [],
-  "task_count": 33,
-  "created_at": "2026-08-26T09:17:20.541576"
+  "task_count": 34,
+  "created_at": "2026-08-28T04:00:47.986111"
 }
