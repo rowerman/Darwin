@@ -53,3 +53,27 @@ async def test_ssrf_probe_iterates_ports_and_paths(monkeypatch):
     assert any("%3A10670" in c for c in calls)
     assert any("%3A10671" in c for c in calls)
     assert any("flag" in c for c in calls)
+
+
+@pytest.mark.asyncio
+async def test_object_store_listing_is_not_success(monkeypatch):
+    attack = create_attack_gateway()
+    outputs = [b'{"objects":["flag.txt"]}\n200\n', b"flag{object-read}\n200\n"]
+
+    class _Proc:
+        returncode = 0
+
+        async def communicate(self):
+            return outputs.pop(0), b""
+
+    async def fake_shell(command, **kwargs):
+        return _Proc()
+
+    monkeypatch.setattr(asyncio, "create_subprocess_shell", fake_shell)
+    result = await attack.call(
+        "object_store_get",
+        {"endpoint_url": "http://target", "object_name": "flag.txt"},
+    )
+
+    assert result.success is True
+    assert result.parsed_output["flags"] == ["flag{object-read}"]

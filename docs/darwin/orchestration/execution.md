@@ -21,3 +21,6 @@
 `ports.py`。
 
 已迁移的 curl/SSRF 任务在参数完整时按计划 direct 执行；Runtime Adapter 保留底层 stderr、退出码和规范化结果供 Evaluator 使用。
+
+systematic exploit pre-pass 仅在本轮内部去重；无明确成功时不会阻断 Runtime
+计划任务，后续可用不同参数或策略再次尝试。

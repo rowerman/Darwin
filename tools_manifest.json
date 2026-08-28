@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0.0",
-  "generated_at": "2026-08-28T13:29:23+00:00",
+  "generated_at": "2026-08-28T14:10:40+00:00",
   "source": "darwin.tools.manifest",
   "tool_count": 134,
   "tools": [
@@ -6409,6 +6409,21 @@
           "type": "integer",
           "description": "Maximum SSRF requests (1-200, default 30); coverage is distributed across hosts, ports and paths.",
           "default": 30
+        },
+        "probe_timeout": {
+          "type": "number",
+          "description": "Per-probe timeout in seconds (default 5).",
+          "default": 5.0
+        },
+        "max_duration": {
+          "type": "number",
+          "description": "Total probe deadline in seconds (default 120).",
+          "default": 120.0
+        },
+        "concurrency": {
+          "type": "integer",
+          "description": "Maximum concurrent probes (1-16, default 4).",
+          "default": 4
         }
       },
       "required": [
