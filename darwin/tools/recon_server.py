@@ -689,6 +689,90 @@ def register_recon_tools(gateway: MCPGateway) -> MCPGateway:
         },
     )
 
+    # ── Generic HTTP method probe (OPTIONS/POST/HEAD etc.) ──────
+    async def _http_method_probe(
+        url: str, method: str = "OPTIONS", data: str = "",
+        content_type: str = "application/json", headers: str = "",
+        cookie: str = "", insecure: bool = False,
+    ) -> ToolResult:
+        """Send an arbitrary HTTP method (OPTIONS/POST/HEAD/PUT...) and return
+        status line, response headers and body. Used for API route discovery:
+        OPTIONS reveals Allow methods; POST+JSON probes validate JSON routes."""
+        import urllib.request as _ur
+        import ssl
+        try:
+            ctx = ssl.create_default_context()
+            if insecure:
+                ctx.check_hostname = False
+                ctx.verify_mode = ssl.CERT_NONE
+            method = str(method or "OPTIONS").strip().upper()
+            hdrs = {"Content-Type": content_type or "application/json"}
+            if cookie:
+                hdrs["Cookie"] = cookie.strip().rstrip(";")
+            if headers:
+                for h in str(headers).split("|"):
+                    if ":" in h:
+                        k, v = h.split(":", 1)
+                        hdrs[k.strip()] = v.strip()
+            body = data.encode() if isinstance(data, str) else data
+            req = _ur.Request(url, data=body or None, headers=hdrs, method=method)
+            resp = None
+            try:
+                resp = _ur.urlopen(req, timeout=15, context=ctx)
+                rbody = resp.read().decode(errors="replace")
+                rhdrs = dict(resp.headers)
+                rstatus = resp.status
+            except _ur.HTTPError as e:
+                # 4xx/5xx probe responses (e.g. 405 + Allow) are still valid
+                # route evidence — keep status/headers instead of failing.
+                rbody = (e.read() or b"").decode(errors="replace")
+                rhdrs = dict(e.headers)
+                rstatus = e.code
+            finally:
+                try:
+                    resp.close()
+                except Exception:
+                    pass
+            if rstatus:
+                return ToolResult(
+                    tool_name="http_method_probe",
+                    success=True,
+                    stdout=f"HTTP {rstatus}\n" + "\n".join(
+                        f"{k}: {v}" for k, v in rhdrs.items()) + f"\n\n{rbody[:8000]}",
+                    stderr="", exit_code=0, elapsed_ms=0,
+                    parsed_output={
+                        "status": rstatus,
+                        "headers": rhdrs,
+                        "allow": str(rhdrs.get("Allow", "")),
+                        "content_type": str(rhdrs.get("content-type", "")),
+                        "body": rbody[:8000],
+                    },
+                )
+        except Exception as e:
+            return ToolResult(
+                tool_name="http_method_probe", success=False,
+                stdout="", stderr=str(e), exit_code=1, elapsed_ms=0,
+            )
+
+    gateway.register(
+        name="http_method_probe", func=_http_method_probe,
+        description=(
+            "Send a generic HTTP request with an arbitrary method (OPTIONS, POST, "
+            "HEAD, PUT...). OPTIONS returns the Allow header for route discovery; "
+            "POST sends an optional body (JSON by default). Returns status, headers "
+            "and body."
+        ),
+        parameters={
+            "url": {"type": "string", "description": "Target URL"},
+            "method": {"type": "string", "description": "HTTP method: OPTIONS, POST, HEAD, PUT...", "default": "OPTIONS"},
+            "data": {"type": "string", "description": "Request body (JSON string for POST)", "default": ""},
+            "content_type": {"type": "string", "description": "Content-Type header", "default": "application/json"},
+            "headers": {"type": "string", "description": "Optional extra headers, pipe-separated (Key: val|Key2: val2)", "default": ""},
+            "cookie": {"type": "string", "description": "Session cookie string", "default": ""},
+            "insecure": {"type": "boolean", "description": "Skip TLS verification for self-signed certs", "default": False},
+        },
+    )
+
     # ── Form extraction tool ────────────────────────────────────
     async def _form_extract(url: str, insecure: bool = False) -> ToolResult:
         import urllib.request as _ur, re as _re, json as _json, ssl

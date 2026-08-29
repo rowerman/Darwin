@@ -16,6 +16,259 @@ from typing import Any, Dict, List, Optional
 
 log = logging.getLogger(__name__)
 
+# ── Adaptive route extraction (pure helpers, unit-testable) ────────────
+# Evidence-driven discovery limits: never probe more than this many fresh
+# candidates per origin and only recurse one extra layer (candidate responses).
+_MAX_ROUTE_CANDIDATES = 30
+_MAX_ROUTE_DEPTH = 2
+
+_JS_ROUTE_RE = re.compile(
+    r"(?:fetch|axios\.(?:get|post|put|delete|patch)|\$\.ajax)\s*"
+    r"\(\s*['\"]([^'\"]+)['\"]",
+    re.I,
+)
+_XHR_OPEN_RE = re.compile(
+    r"\.open\s*\(\s*['\"][A-Za-z]+['\"]\s*,\s*['\"]([^'\"]+)['\"]", re.I
+)
+_JS_URL_FIELD_RE = re.compile(r"['\"]url['\"]\s*:\s*['\"]([^'\"]+)['\"]")
+_API_STRING_RE = re.compile(r"['\"](/api/[^'\"\s]{2,80})['\"]")
+_HTML_HREF_RE = re.compile(r'<a\s+[^>]*href=["\']([^"\']+)["\']', re.I)
+_ROUTE_DOC_RE = re.compile(
+    r"^\s*(GET|POST|PUT|DELETE|PATCH|OPTIONS|HEAD)\s+(/\S+)", re.M | re.I
+)
+_ROUTE_DESC_RE = re.compile(
+    r"(?:endpoint|route|path|url)\s*[:：]\s*(/[\w\-./{}]+)", re.I
+)
+_OPENAPI_DOC_PATHS = (
+    "/openapi.json", "/swagger.json", "/api-docs", "/v2/api-docs",
+    "/v3/api-docs", "/api/swagger.json", "/swagger-ui.html",
+    "/openapi.yaml", "/openapi.yml",
+)
+_INVOKE_PATH_RE = re.compile(
+    r"(invoke|execute|exec|run|function|call|cmd|command|code|eval|shell|process)",
+    re.I,
+)
+
+
+def _same_origin_candidate(href: str, base_url: str) -> str | None:
+    """Resolve ``href`` to an absolute URL on the same origin, else None."""
+    from urllib.parse import urljoin, urlparse
+
+    if not href or not isinstance(href, str):
+        return None
+    href = href.strip()
+    if not href or href.startswith(
+        ("#", "javascript:", "mailto:", "tel:", "data:", "file:", "//")
+    ):
+        return None
+    abs_url = urljoin(base_url, href)
+    base = urlparse(base_url)
+    cand = urlparse(abs_url)
+    if cand.scheme not in ("http", "https") or cand.netloc != base.netloc:
+        return None
+    return abs_url
+
+
+def _dedupe_candidates(candidates: list[tuple[str, str]]) -> list[tuple[str, str]]:
+    """Dedupe (url, source) pairs by URL, first source wins."""
+    seen: set[str] = set()
+    out: list[tuple[str, str]] = []
+    for url, source in candidates:
+        if url not in seen:
+            seen.add(url)
+            out.append((url, source))
+    return out
+
+
+def extract_route_candidates(
+    content: str, parsed: dict | None, base_url: str
+) -> list[tuple[str, str]]:
+    """Same-origin candidate URLs found in an HTTP response.
+
+    Sources: HTML links/scripts, response_parse api_paths/endpoints, JS
+    fetch/XHR/axios calls, plain-text route docs and OpenAPI/Swagger doc paths
+    (only when the response itself mentions swagger/openapi).
+    """
+    candidates: list[tuple[str, str]] = []
+    seen: set[str] = set()
+
+    def _add(url: str, source: str) -> None:
+        resolved = _same_origin_candidate(url, base_url)
+        if resolved and resolved not in seen:
+            seen.add(resolved)
+            candidates.append((resolved, source))
+
+    for link in (parsed or {}).get("links", []) or []:
+        _add(link, "html-link")
+    if content:
+        for m in _HTML_HREF_RE.finditer(content):
+            _add(m.group(1), "html-href")
+    for script in (parsed or {}).get("scripts", []) or []:
+        _add(script, "html-script")
+    for path in ((parsed or {}).get("api_paths", []) or []) + (
+        (parsed or {}).get("endpoints", []) or []
+    ):
+        _add(path, "parsed-path")
+    if content:
+        for m in _JS_ROUTE_RE.finditer(content):
+            _add(m.group(1), "js-fetch")
+        for m in _XHR_OPEN_RE.finditer(content):
+            _add(m.group(1), "js-xhr-open")
+        for m in _JS_URL_FIELD_RE.finditer(content):
+            _add(m.group(1), "js-url-field")
+        for m in _API_STRING_RE.finditer(content):
+            _add(m.group(1), "js-api-string")
+        for m in _ROUTE_DOC_RE.finditer(content):
+            _add(m.group(2), "route-doc")
+        for m in _ROUTE_DESC_RE.finditer(content):
+            _add(m.group(1), "route-desc")
+        lowered = content[:8000].lower()
+        if "swagger" in lowered or "openapi" in lowered:
+            for doc_path in _OPENAPI_DOC_PATHS:
+                _add(doc_path, "openapi-doc")
+    return _dedupe_candidates(candidates)
+
+
+def extract_json_route_fields(
+    content: str, base_url: str
+) -> list[tuple[str, str]]:
+    """Path-looking values from JSON route/link/url fields."""
+    if not content or not content.strip().startswith(("{", "[")):
+        return []
+    try:
+        import json as _json
+
+        obj = _json.loads(content)
+    except Exception:
+        return []
+    found: list[tuple[str, str]] = []
+    visited = 0
+    _PATH_KEYS = ("url", "path", "route", "routes", "paths", "href",
+                  "link", "endpoint", "uri", "target")
+
+    def _walk(val: Any, key: str = "", force_path: bool = False) -> None:
+        nonlocal visited
+        if visited > 200:
+            return
+        visited += 1
+        if isinstance(val, str):
+            if (
+                val.startswith("/")
+                and not val.startswith("//")
+                and len(val) < 120
+                and (force_path or key.lower() in _PATH_KEYS)
+            ):
+                found.append((val, f"json-{key.lower()}"))
+            return
+        if isinstance(val, dict):
+            for k, v in val.items():
+                _walk(v, k, force_path=(
+                    force_path
+                    or k.lower() in ("links", "_links", "related",
+                                     "relationships", "hrefs")
+                ))
+        elif isinstance(val, list):
+            for item in val[:20]:
+                _walk(item, key, force_path=force_path)
+
+    _walk(obj)
+    return _dedupe_candidates(found)
+
+
+def extract_openapi_routes(openapi_content: str) -> list[dict]:
+    """Parse an OpenAPI/Swagger JSON document into route descriptors.
+
+    Returns ``[{"path", "methods", "params", "body_format"}]`` where params are
+    declared parameter names / requestBody schema properties — never invented.
+    """
+    if not openapi_content or not openapi_content.strip().startswith("{"):
+        return []
+    try:
+        import json as _json
+
+        spec = _json.loads(openapi_content)
+    except Exception:
+        return []
+    if not isinstance(spec, dict):
+        return []
+    paths = spec.get("paths", {}) or {}
+    if not isinstance(paths, dict):
+        return []
+    routes: list[dict] = []
+    for path, item in paths.items():
+        if not isinstance(item, dict):
+            continue
+        methods = [
+            m.upper() for m in item.keys()
+            if m.lower() in ("get", "post", "put", "delete", "patch",
+                             "options", "head")
+        ]
+        if not methods:
+            continue
+        params: list[str] = []
+        body_format = ""
+        for method in methods:
+            op = item.get(method.lower(), {}) or {}
+            if not isinstance(op, dict):
+                continue
+            for p in op.get("parameters", []) or []:
+                if isinstance(p, dict) and p.get("name"):
+                    params.append(str(p["name"]))
+            rb = op.get("requestBody", {}) or {}
+            if isinstance(rb, dict):
+                content = rb.get("content", {}) or {}
+                for ct, media in content.items():
+                    if "json" not in str(ct).lower():
+                        continue
+                    body_format = "json"
+                    schema = (media or {}).get("schema", {}) or {}
+                    props = schema.get("properties", {}) if isinstance(schema, dict) else {}
+                    if isinstance(props, dict):
+                        for pname in props:
+                            if str(pname) not in params:
+                                params.append(str(pname))
+                    break
+        routes.append({
+            "path": path,
+            "methods": sorted(set(methods)),
+            "params": list(dict.fromkeys(params)),
+            "body_format": body_format,
+        })
+    return routes
+
+
+def looks_like_invoke_route(path: str, methods: list[str], params: list[str]) -> bool:
+    """Heuristic: a code-execution style API route (path or parameter signal).
+
+    This is a candidate signal only — it never declares a vulnerability.
+    """
+    if _INVOKE_PATH_RE.search(path):
+        return True
+    if any(
+        kw in p.lower() for kw in ("code", "command", "cmd", "function",
+                                   "script", "expression", "payload")
+        for p in params
+    ):
+        return True
+    return False
+
+
+def _parse_status_and_content_type(stdout: str) -> tuple[int, str]:
+    """Extract final HTTP status and Content-Type from curl -i output."""
+    status = 0
+    content_type = ""
+    for line in stdout.split("\n")[:40]:
+        if line.startswith("HTTP/"):
+            parts = line.split()
+            if len(parts) >= 2 and parts[1].isdigit():
+                status = int(parts[1])
+        elif ":" in line:
+            k, v = line.split(":", 1)
+            if k.strip().lower() == "content-type":
+                content_type = v.strip()
+    if status == 0:
+        status = 200 if stdout else 0
+    return status, content_type
 from darwin.cteg import CTEG, TaskRecord, build_scenario_profile
 from darwin.core.context import ContextManager
 from darwin.core.contracts import (
@@ -467,7 +720,7 @@ class ReconCoordinator(CoordinatorContext):
             http_ports.append(p)
 
         async def _probe_one_port(port: int) -> tuple:
-            """Probe a single HTTP port, return (url, stdout, http_status, technologies, forms, api_paths)."""
+            """Probe a single HTTP port, return (url, stdout, http_status, technologies, forms, parsed)."""
             scheme = "https" if port in {443, 8443} else "http"
             url = f"{scheme}://{host}:{port}"
             is_tls = scheme == "https"
@@ -491,7 +744,7 @@ class ReconCoordinator(CoordinatorContext):
                         http_status = int(parts[1])
                 # Parse response
                 forms = []
-                api_paths = []
+                parsed: dict = {}
                 parse_sample = stdout[:50000]
                 if resp_len > 100000:
                     parse_sample += stdout[-10000:]
@@ -503,15 +756,6 @@ class ReconCoordinator(CoordinatorContext):
                         forms = parsed.get("forms", [])
                 except Exception:
                     pass
-                # Extract API paths from large JS bundles
-                if resp_len > 100000:
-                    import re as _re
-                    for pattern in [r'["\x27](/api/[^"\x27]{2,60})["\x27]',
-                                   r'fetch\(["\x27](/[^"\x27]{2,60})["\x27]\)']:
-                        for m in _re.finditer(pattern, stdout[:200000]):
-                            path = m.group(1)
-                            if not path.endswith(('.js', '.css', '.png', '.ico')):
-                                api_paths.append(path)
                 # whatweb
                 technologies = []
                 try:
@@ -521,20 +765,18 @@ class ReconCoordinator(CoordinatorContext):
                         technologies = getattr(ww, "parsed_output", {}).get("technologies", [])
                 except Exception:
                     pass
-                return (url, stdout, http_status, technologies, forms, api_paths)
+                return (url, stdout, http_status, technologies, forms, parsed)
             except Exception:
-                return (url, "", 0, [], [], [])
+                return (url, "", 0, [], [], {})
 
         # Run all port probes in parallel
         probe_tasks = [asyncio.create_task(_probe_one_port(p["port"])) for p in http_ports]
         probe_results = await asyncio.gather(*probe_tasks, return_exceptions=True)
 
-        # Collect API paths to probe in a second pass
-        api_endpoints_to_probe: list[str] = []
         for result in probe_results:
             if isinstance(result, Exception):
                 continue
-            url, stdout, http_status, technologies, forms, api_paths = result
+            url, stdout, http_status, technologies, forms, parsed = result
             if not stdout:
                 continue
             resp_len = len(stdout)
@@ -544,59 +786,37 @@ class ReconCoordinator(CoordinatorContext):
                 "sample_status": http_status,
                 "sample_response": stdout[:5000],
                 "response_size": resp_len,
+                "sample_content_type": _parse_status_and_content_type(stdout)[1],
                 "discovered_by": "bootstrap",
             })
             self.dkg.add_edge(f"host-{host}", root_endpoint_id, "host_has_endpoint",
                               source="bootstrap", evidence=url)
-            for form in forms:
-                action = form.get("action", "")
-                form_url = (action if action.startswith("http")
-                            else f"{url.rstrip('/')}/{action.lstrip('/')}")
-                params = ",".join(i.get("name", "") for i in form.get("inputs", []))
-                form_endpoint_id = f"ep-form-{form_url[:40]}"
-                self.dkg.add_node("Endpoint", form_endpoint_id, {
-                    "url": form_url, "method": form.get("method", "POST"),
-                    "params": params, "body_format": "form",
-                    "discovered_by": "bootstrap",
-                })
-                self.dkg.add_edge(f"host-{host}", form_endpoint_id, "host_has_endpoint",
-                                  source="bootstrap", evidence="html form")
-            # ── When root is near-empty, probe common paths for real content ──
-            if resp_len < 500 and len(discovered_ports) <= 3:
-                _WEB_PATHS = ["/", "/index.html", "/home", "/login", "/admin",
-                              "/api", "/app", "/status", "/health", "/metrics",
-                              "/fetch", "/upload", "/dashboard", "/console",
-                              "/files", "/objects", "/buckets"]
-                async def _probe_web_path(path: str):
-                    try:
-                        r = await self._call_tool("curl_get",
-                            {"url": f"{url.rstrip('/')}{path}", "follow_redirects": True})
-                        if r.success:
-                            out = getattr(r, "stdout", "")
-                            if len(out) > 200:
-                                parsed = getattr(r, "parsed_output", {}) or {}
-                                status = parsed.get("status")
-                                if not isinstance(status, int):
-                                    status = 0
-                                    first_line = out.splitlines()[0] if out else ""
-                                    match = re.match(r"HTTP(?:/\d(?:\.\d)?)?\s+(\d{3})", first_line)
-                                    if match:
-                                        status = int(match.group(1))
-                                path_endpoint_id = f"ep-path-{path.replace('/','-')[:30]}"
-                                self.dkg.add_node("Endpoint", path_endpoint_id, {
-                                    "url": f"{url.rstrip('/')}{path}", "method": "GET",
-                                    "params": "",
-                                    "sample_status": status, "sample_response": out[:5000],
-                                    "response_size": len(out),
-                                    "discovered_by": "bootstrap-path-probe",
-                                })
-                                self.dkg.add_edge(f"host-{host}", path_endpoint_id, "host_has_endpoint",
-                                                  source="bootstrap-path-probe", evidence=path)
-                    except Exception:
-                        pass
-                path_tasks = [asyncio.create_task(_probe_web_path(p))
-                              for p in _WEB_PATHS]
-                await asyncio.gather(*path_tasks, return_exceptions=True)
+            if isinstance(forms, list):
+                for form in forms:
+                    if not isinstance(form, dict):
+                        continue
+                    action = form.get("action", "")
+                    form_url = (action if action.startswith("http")
+                                else f"{url.rstrip('/')}/{action.lstrip('/')}")
+                    params = ",".join(
+                        i.get("name", "") for i in form.get("inputs", [])
+                        if isinstance(i, dict)
+                    )
+                    form_endpoint_id = f"ep-form-{form_url[:40]}"
+                    self.dkg.add_node("Endpoint", form_endpoint_id, {
+                        "url": form_url, "method": form.get("method", "POST"),
+                        "params": params, "body_format": "form",
+                        "discovered_by": "bootstrap",
+                    })
+                    self.dkg.add_edge(f"host-{host}", form_endpoint_id,
+                                      "host_has_endpoint",
+                                      source="bootstrap", evidence="html form")
+            # Evidence-driven discovery replaces the fixed path list: extract
+            # same-origin candidates from this response and probe them.
+            await self._adaptive_web_probe(host, url, stdout, parsed)
+            head = stdout.strip()[:2000].lower()
+            if stdout.strip().startswith(("{", "[")) or "openapi" in head or "swagger" in head:
+                await self._api_route_discovery(host, url, stdout)
 
             if technologies:
                 log.info("bootstrap whatweb: %s → %s", url, technologies)
@@ -611,43 +831,6 @@ class ReconCoordinator(CoordinatorContext):
                     self.dkg.update_node(_svc_id, {
                         "fingerprint": technologies,
                     })
-            for path in api_paths[:20]:
-                api_endpoints_to_probe.append(f"{url.rstrip('/')}{path}")
-
-        # Second pass: probe discovered API paths (also parallel)
-        probed_apis: set[str] = set()
-        async def _probe_api_path(ep_url: str):
-            if ep_url in probed_apis:
-                return
-            probed_apis.add(ep_url)
-            try:
-                r = await self._call_tool("curl_get",
-                    {"url": ep_url, "follow_redirects": True})
-                if r.success:
-                    out = getattr(r, "stdout", "")
-                    st = 200
-                    fl = out.split("\n")[0] if out else ""
-                    if fl.startswith("HTTP/"):
-                        pts = fl.split()
-                        if len(pts) >= 2 and pts[1].isdigit():
-                            st = int(pts[1])
-                    api_endpoint_id = f"ep-api-{ep_url[:50]}"
-                    self.dkg.add_node("Endpoint", api_endpoint_id, {
-                        "url": ep_url, "method": "GET", "params": "",
-                        "sample_status": st, "sample_response": out[:5000],
-                        "response_size": len(out),
-                        "discovered_by": "bootstrap-api-probe",
-                    })
-                    self.dkg.add_edge(f"host-{host}", api_endpoint_id, "host_has_endpoint",
-                                      source="bootstrap-api-probe", evidence=ep_url)
-            except Exception:
-                pass
-
-        if api_endpoints_to_probe:
-            api_tasks = [asyncio.create_task(_probe_api_path(u))
-                         for u in api_endpoints_to_probe[:30]]
-            await asyncio.gather(*api_tasks, return_exceptions=True)
-
         # Wait for K8S cluster discovery (launched in parallel with nmap)
         if k8s_discovery_task is not None:
             try:
@@ -980,6 +1163,178 @@ class ReconCoordinator(CoordinatorContext):
         print(f"\n[K8S DISCOVERY] {total_nodes} node(s), {total_pods} pod(s), "
               f"{total_svcs} service(s), {len(ns_list)} namespace(s)")
 
+    # ── Adaptive GET discovery (bootstrap layer 2) ────────────────
+
+    async def _adaptive_web_probe(
+        self, host: str, base_url: str, stdout: str, parsed: dict | None,
+        depth: int = 1,
+    ) -> None:
+        """Bounded, evidence-driven GET probing of same-origin candidates.
+
+        Replaces the fixed path list: candidates come from HTML links/scripts,
+        JS fetch/XHR calls, response_parse api_paths, plain-text route docs and
+        OpenAPI/Swagger doc URLs. Each probe is deduped against known endpoints
+        and recorded with a ``discovered_by`` tag. JSON / OpenAPI responses are
+        handed to :meth:`_api_route_discovery` for method-level probing. The
+        ``depth`` guard (default 1, cap ``_MAX_ROUTE_DEPTH``) prevents runaway
+        link-crawling.
+        """
+        if depth >= _MAX_ROUTE_DEPTH:
+            return
+        candidates = extract_route_candidates(stdout, parsed, base_url)
+        if not candidates:
+            return
+        known_urls = {ep.get("url") for ep in self.dkg.query_nodes("Endpoint")}
+        fresh = [
+            (url, source) for url, source in candidates
+            if url not in known_urls
+        ][:_MAX_ROUTE_CANDIDATES]
+        if not fresh:
+            return
+        log.info(
+            "_adaptive_web_probe: probing %d/%d candidate URL(s) from %s",
+            len(fresh), len(candidates), base_url,
+        )
+
+        async def _probe(url: str, source: str) -> tuple[str, str] | None:
+            try:
+                r = await self._call_tool(
+                    "curl_get", {"url": url, "follow_redirects": True}
+                )
+                if not r.success:
+                    return None
+                out = getattr(r, "stdout", "") or ""
+                status, content_type = _parse_status_and_content_type(out)
+                ep_id = f"ep-adaptive-{url[:50]}"
+                self.dkg.add_node("Endpoint", ep_id, {
+                    "url": url, "method": "GET", "params": "",
+                    "sample_status": status,
+                    "sample_response": out[:5000],
+                    "response_size": len(out),
+                    "sample_content_type": content_type,
+                    "discovered_by": "adaptive-web-probe",
+                    "route_source": source,
+                })
+                self.dkg.add_edge(f"host-{host}", ep_id, "host_has_endpoint",
+                                  source="adaptive-web-probe", evidence=url)
+                return url, out
+            except Exception:
+                return None
+
+        results = await asyncio.gather(
+            *[asyncio.create_task(_probe(url, source)) for url, source in fresh],
+            return_exceptions=True,
+        )
+        for res in results:
+            if not isinstance(res, tuple):
+                continue
+            url, out = res
+            head = out.strip()[:2000].lower()
+            if out.strip().startswith(("{", "[")) or "openapi" in head or "swagger" in head:
+                await self._api_route_discovery(host, url, out)
+
+    async def _api_route_discovery(
+        self, host: str, base_url: str, stdout: str
+    ) -> None:
+        """POST/JSON API route discovery for JSON, OpenAPI and plain-text docs.
+
+        Candidate paths are OPTIONS-probed (safe method); Allow / status /
+        Content-Type are recorded. Paths that support POST are persisted with
+        ``method=POST``, ``body_format=json`` and parameters only when an
+        OpenAPI schema or documented route declares them — parameters are never
+        fabricated. ``/invoke``-style routes are flagged as candidate signals,
+        never as vulnerabilities.
+        """
+        openapi_routes = extract_openapi_routes(stdout)
+        candidates: list[dict] = []
+        seen_paths: set[str] = set()
+        if openapi_routes:
+            for route in openapi_routes:
+                p = route["path"]
+                if p in seen_paths:
+                    continue
+                seen_paths.add(p)
+                route = dict(route)
+                route["source"] = "openapi"
+                candidates.append(route)
+        else:
+            for path, source in extract_json_route_fields(stdout, base_url):
+                if path in seen_paths:
+                    continue
+                seen_paths.add(path)
+                candidates.append({
+                    "path": path, "methods": [], "params": [],
+                    "body_format": "json", "source": source,
+                })
+            for m in _ROUTE_DOC_RE.finditer(stdout):
+                method, path = m.group(1).upper(), m.group(2)
+                if path in seen_paths:
+                    continue
+                seen_paths.add(path)
+                candidates.append({
+                    "path": path, "methods": [method], "params": [],
+                    "body_format": "json", "source": "route-doc",
+                })
+        candidates = candidates[:_MAX_ROUTE_CANDIDATES]
+        if not candidates:
+            return
+        log.info(
+            "_api_route_discovery: %d candidate route(s) from %s",
+            len(candidates), base_url,
+        )
+        for route in candidates:
+            path = route["path"]
+            url = _same_origin_candidate(path, base_url)
+            if not url:
+                url = f"{base_url.rstrip('/')}/{path.lstrip('/')}"
+            methods = set(route.get("methods") or [])
+            opt_status = 0
+            opt_content_type = ""
+            verified = False
+            try:
+                opt = await self._call_tool(
+                    "http_method_probe", {"url": url, "method": "OPTIONS"}
+                )
+                if opt.success:
+                    verified = True
+                    opt_parsed = getattr(opt, "parsed_output", {}) or {}
+                    opt_status = int(opt_parsed.get("status", 0) or 0)
+                    opt_content_type = str(opt_parsed.get("content_type", "") or "")
+                    allow = str(opt_parsed.get("allow", "") or "")
+                    if allow:
+                        methods |= {
+                            m.strip().upper() for m in allow.split(",") if m.strip()
+                        }
+            except Exception:
+                pass
+            method_list = sorted(methods & {"GET", "POST", "PUT", "DELETE",
+                                            "PATCH", "HEAD", "OPTIONS"})
+            if not method_list and route.get("methods"):
+                method_list = sorted(route["methods"])
+            if not method_list:
+                method_list = ["GET"]
+            params = route.get("params") or []
+            body_format = route.get("body_format") or (
+                "json" if "POST" in method_list else ""
+            )
+            invoke_signal = looks_like_invoke_route(path, method_list, params)
+            for method in method_list:
+                ep_id = f"ep-api-{method}-{url[:46]}"
+                self.dkg.add_node("Endpoint", ep_id, {
+                    "url": url, "method": method,
+                    "params": ",".join(params),
+                    "body_format": body_format if method == "POST" else "",
+                    "sample_status": opt_status,
+                    "sample_content_type": opt_content_type,
+                    "discovered_by": "adaptive-api-probe",
+                    "route_source": route.get("source", "json-field"),
+                    "allow_methods": ",".join(method_list),
+                    "invoke_signal": invoke_signal,
+                    "verified": verified,
+                })
+                self.dkg.add_edge(f"host-{host}", ep_id, "host_has_endpoint",
+                                  source="adaptive-api-probe", evidence=url)
+
     # ── Deep Recon (after bootstrap, before service research) ───────
 
     async def _deep_recon(self) -> None:
@@ -1037,8 +1392,13 @@ class ReconCoordinator(CoordinatorContext):
                                     {"content": out[:50000]})
                                 if rp.success:
                                     parsed = getattr(rp, "parsed_output", {})
-                                    for form in parsed.get("forms", []):
-                                        _add_form_endpoint(form, url)
+                                    if isinstance(parsed.get("forms"), list):
+                                        for form in parsed.get("forms", []):
+                                            _add_form_endpoint(form, url)
+                            if out.strip().startswith(("{", "[")):
+                                await self._api_route_discovery(
+                                    getattr(self, "target_host", "") or "", api_url, out
+                                )
                     except Exception:
                         pass
                 scanned = True
@@ -1094,8 +1454,23 @@ class ReconCoordinator(CoordinatorContext):
                         or "</" in _body
                     )
                     if not _is_html and len(_body) < 500:
-                        log.info("_deep_recon: pre-flight non-HTML (plain text/API), "
-                                 "skipping gobuster/nikto for %s", url)
+                        # Plain-text API doc (e.g. "POST /invoke", endpoint
+                        # descriptions) — extract routes instead of brute-forcing.
+                        if _ROUTE_DOC_RE.search(_body) or _ROUTE_DESC_RE.search(_body):
+                            await self._api_route_discovery(
+                                getattr(self, "target_host", "") or "", url, _body
+                            )
+                        else:
+                            log.info("_deep_recon: pre-flight non-HTML (plain text/API), "
+                                     "skipping gobuster/nikto for %s", url)
+                        return
+                    if not _is_html:
+                        # Larger plain-text/API body — route discovery only.
+                        await self._api_route_discovery(
+                            getattr(self, "target_host", "") or "", url, _body
+                        )
+                        log.info("_deep_recon: non-HTML body, skipping gobuster/nikto "
+                                 "for %s (API route discovery done)", url)
                         return
                 except Exception:
                     # If pre-flight itself fails, skip heavy tools
@@ -1146,23 +1521,13 @@ class ReconCoordinator(CoordinatorContext):
                     pass
 
             elif "json" in sample.lower() or sample.strip().startswith("{"):
-                # JSON/API response — curl + response_parse to extract structure
+                # JSON/API response — structural parse + HTTP method validation.
+                # Heavy directory brute-forcers (gobuster/nikto/form_extract)
+                # are deliberately not run here.
                 try:
-                    rp = await self._call_tool("response_parse",
-                        {"content": sample[:50000]})
-                    if rp.success:
-                        parsed = getattr(rp, "parsed_output", {})
-                        for key in parsed.get("keys", [])[:10]:
-                            probe_url = f"{url.rstrip('/')}/{key}"
-                            r2 = await self._call_tool("curl_get",
-                                {"url": probe_url, "follow_redirects": True})
-                            if r2.success:
-                                out = getattr(r2, "stdout", "")
-                                self.dkg.add_node("Endpoint", f"ep-api-{key[:40]}", {
-                                    "url": probe_url, "method": "GET", "params": "",
-                                    "sample_status": 200, "sample_response": out[:5000],
-                                    "discovered_by": "deep-recon-json-probe",
-                                })
+                    await self._api_route_discovery(
+                        getattr(self, "target_host", "") or "", url, sample[:100000]
+                    )
                     scanned = True
                 except Exception:
                     pass

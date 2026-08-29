@@ -5,8 +5,10 @@ Reference: Cochise src/cochise/common.py:89 — LLMFunctionMapping pattern
 
 from __future__ import annotations
 
+import html
 import json
 import inspect
+import re
 from typing import Any, Callable, Dict, List, Optional
 
 import litellm
@@ -16,6 +18,8 @@ import litellm
 import logging
 logging.getLogger("LiteLLM").setLevel(logging.WARNING)
 logging.getLogger("litellm").setLevel(logging.WARNING)
+
+log = logging.getLogger(__name__)
 
 
 # P16: memory role prompt lives with the other role prompts; imported by
@@ -199,6 +203,11 @@ class LLMSession:
                      }}
                     for call in parsed_calls
                 ]
+                log.info(
+                    "LLMSession: parsed %d DSML tool call(s) (stage=%s, tools=%s)",
+                    len(parsed_calls), stage or "?",
+                    ", ".join(c["name"] for c in parsed_calls[:5]),
+                )
             self.conversation_history.append(assistant_msg)
 
         # P0/P1: chain-of-thought capture — the observer owns persistence and
@@ -223,16 +232,26 @@ class LLMSession:
         DSML is only accepted when the complete invoke/parameter structure is
         present. Malformed or ordinary text returns ``None`` and follows the
         existing plain-content path.
+
+        Supported syntax::
+
+            <invoke name="tool_name">
+                <parameter name="arg">value</parameter>
+            </invoke>
+
+        ``tool_name`` is accepted as an alias attribute for ``name``. Parameter
+        values are entity-unescaped (``&lt;``/``&gt;``/``&amp;``/``&quot;``) and
+        parsed as JSON when possible, mirroring OpenAI ``function.arguments``.
         """
-        if not content or "DSML" not in content or "invoke" not in content:
+        if not content or "<invoke" not in content:
             return None
         invoke_pattern = re.compile(
-            r"<｜｜DSML｜｜invoke\s+name=\"([^\"]+)\"\s*>(.*?)"
-            r"</｜｜DSML｜｜invoke>", re.DOTALL,
+            r'<invoke\s+(?:name|tool_name)="([^"]+)"\s*>(.*?)'
+            r'</invoke>', re.DOTALL,
         )
         parameter_pattern = re.compile(
-            r"<｜｜DSML｜｜parameter\s+name=\"([^\"]+)\"[^>]*>"
-            r"(.*?)</｜｜DSML｜｜parameter>", re.DOTALL,
+            r'<parameter\s+name="([^"]+)"[^>]*>(.*?)'
+            r'</parameter>', re.DOTALL,
         )
         calls: List[Dict[str, Any]] = []
         for index, match in enumerate(invoke_pattern.finditer(content), 1):
@@ -241,12 +260,17 @@ class LLMSession:
                 continue
             arguments: Dict[str, Any] = {}
             for param in parameter_pattern.finditer(match.group(2)):
-                value = param.group(2).strip()
+                arg_name = param.group(1).strip()
+                raw_value = param.group(2).strip()
+                value: Any = html.unescape(raw_value)
                 try:
-                    value = json.loads(value)
+                    value = json.loads(raw_value)
                 except (json.JSONDecodeError, TypeError):
-                    pass
-                arguments[param.group(1).strip()] = value
+                    try:
+                        value = json.loads(value)
+                    except (json.JSONDecodeError, TypeError):
+                        pass
+                arguments[arg_name] = value
             calls.append({"id": f"dsml-{index}", "name": name, "arguments": arguments})
         return calls or None
 

@@ -1395,14 +1395,21 @@ class ResearchCoordinator(CoordinatorContext):
 
             try:
                 if method == "POST":
-                    # Build a sample JSON body from known params
-                    if not param_names:
-                        param_names = ["test"]
-                    sample_body = _js.dumps(
-                        {p: f"sample_{p}" for p in param_names}
-                    ).encode()
+                    # Build a sample body from KNOWN params only — when no
+                    # schema exists, send a controlled generic JSON probe
+                    # instead of fabricating parameter names.
+                    if body_format == "form":
+                        sample_body = "&".join(
+                            f"{p}=sample_{p}" for p in param_names
+                        ).encode()
+                        ct = "application/x-www-form-urlencoded"
+                    else:
+                        sample_body = _js.dumps(
+                            {p: f"sample_{p}" for p in param_names}
+                        ).encode()
+                        ct = "application/json"
                     req = _ur.Request(url, data=sample_body, method="POST",
-                                     headers={"Content-Type": "application/json"})
+                                     headers={"Content-Type": ct})
                 else:
                     # GET: if endpoint has params, include a sample value
                     if param_names:

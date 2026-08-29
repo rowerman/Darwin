@@ -852,6 +852,7 @@ class PlanCoordinator(CoordinatorContext):
         registry_used = False
         content = ""
         tool_calls = None
+        call_format = "none"
         for _round in range(max_rounds):
             _round_prompt = (
                 prompt if _round == 0
@@ -867,6 +868,15 @@ class PlanCoordinator(CoordinatorContext):
             if not tool_calls:
                 break
             registry_used = True
+            call_format = (
+                "dsml" if any(str(tc.get("id", "")).startswith("dsml-")
+                              for tc in tool_calls)
+                else "openai"
+            )
+            log.info(
+                "Registry lookup %s: %d tool call(s) in %s format",
+                stage or "?", len(tool_calls), call_format,
+            )
             for tc in tool_calls:
                 tc_name = tc.get("name", "")
                 tc_args = tc.get("arguments", {})
@@ -890,6 +900,17 @@ class PlanCoordinator(CoordinatorContext):
         # spend the final round issuing another lookup and leave ``content``
         # empty; give it one tool-free, JSON-only completion opportunity.
         _parsed_completion = self._extract_json(content) if content else {}
+        if isinstance(_parsed_completion, dict):
+            final_json_ok = bool(_parsed_completion)
+        else:
+            final_json_ok = (
+                isinstance(_parsed_completion, list)
+                and len(_parsed_completion) > 0
+            )
+        log.info(
+            "Registry lookup %s final JSON valid=%s (format=%s, content_len=%d)",
+            stage or "?", final_json_ok, call_format, len(content or ""),
+        )
         if not content or _parsed_completion == {}:
             retry_prompt = (
                 f"{prompt}\n\nReturn the final answer now as ONLY valid JSON. "
@@ -1606,6 +1627,27 @@ Output ONLY valid JSON array (3-20 tasks depending on complexity. More tasks != 
                     )
                 )
 
+        # Fallback 2: no hypotheses at all. If DKG still holds API/POST/JSON
+        # endpoints, generate bounded route-verification recon tasks so the
+        # plan is not empty. These tasks only confirm endpoints and capture
+        # response structure — exploit tasks are added later by replan only
+        # once verification surfaces an input, abnormal response or secrets.
+        if not plan.tasks and not self.vulnerabilities:
+            api_endpoints = self._collect_api_verification_endpoints()
+            if api_endpoints:
+                log.info(
+                    "Plan fallback: analyze produced no vulnerability hypotheses; "
+                    "generating route-verification tasks for %d API endpoint(s)",
+                    len(api_endpoints),
+                )
+                plan.tasks = self._build_api_verification_tasks(api_endpoints)
+            else:
+                log.warning(
+                    "Plan empty: no vulnerability hypotheses and no API/POST/JSON "
+                    "endpoints in DKG to verify — nothing actionable to plan. "
+                    "Generated 0 tasks."
+                )
+
         plan.updated_at = time.strftime("%Y-%m-%dT%H:%M:%S")
 
         # Sanitize: replace blacklisted tools (e.g. hydra_ssh_brute → ssh_exec)
@@ -1630,6 +1672,115 @@ Output ONLY valid JSON array (3-20 tasks depending on complexity. More tasks != 
         # Task-level plan state is persisted alongside the DKG snapshots.
         self._persist_plan("plan")
         return plan
+
+    def _collect_api_verification_endpoints(self, max_items: int = 8) -> list[dict]:
+        """DKG Endpoints worth verifying when analysis found no hypotheses.
+
+        Includes POST/non-GET endpoints, JSON/form body endpoints and endpoints
+        whose OPTIONS Allow header advertised POST. Deduplicated by
+        (url, method, params) and bounded to ``max_items``.
+        """
+        endpoints: list[dict] = []
+        seen: set[tuple[str, str, tuple[str, ...]]] = set()
+        for ep in self.dkg.query_nodes("Endpoint"):
+            url = (ep.get("url") or "").strip()
+            if not url.startswith(("http://", "https://")):
+                continue
+            method = str(ep.get("method", "GET") or "GET").upper()
+            body_format = str(ep.get("body_format", "") or "").lower()
+            content_type = str(ep.get("sample_content_type", "") or "").lower()
+            allow = str(ep.get("allow_methods", "") or "").upper()
+            is_api = (
+                method not in ("GET", "")
+                or body_format in ("json", "form")
+                or "json" in content_type
+                or "POST" in allow
+            )
+            if not is_api:
+                continue
+            params = tuple(
+                p for p in str(ep.get("params", "") or "").split(",") if p
+            )
+            key = (url, method, params)
+            if key in seen:
+                continue
+            seen.add(key)
+            endpoints.append({
+                "url": url, "method": method,
+                "params": list(params), "body_format": body_format,
+            })
+            if len(endpoints) >= max_items:
+                break
+        return endpoints
+
+    def _build_api_verification_tasks(
+        self, endpoints: list[dict], max_tasks: int = 6
+    ) -> list[Task]:
+        """Bounded route-verification recon tasks (never vulnerability claims).
+
+        POST/JSON endpoints get a controlled generic JSON probe (``{}`` when no
+        parameter schema exists — parameters are never invented). Other API
+        endpoints get method probing plus response structure capture. Tasks are
+        deduplicated by URL/method/parameter combination.
+        """
+        tasks: list[Task] = []
+        seen_combos: set[tuple[str, str, str]] = set()
+        for ep in endpoints:
+            url = ep["url"]
+            method = ep["method"]
+            params = ep.get("params") or []
+            combo = (url, method, ",".join(params))
+            if combo in seen_combos:
+                continue
+            seen_combos.add(combo)
+            if len(tasks) >= max_tasks:
+                break
+            task_id = f"task-api-verify-{len(tasks) + 1}"
+            if method == "POST" and ep.get("body_format") == "json":
+                body = json.dumps({p: f"sample_{p}" for p in params}) if params else "{}"
+                tasks.append(Task(
+                    id=task_id,
+                    type="task",
+                    goal=f"Verify POST JSON endpoint {url}",
+                    instruction=(
+                        f"Confirm the POST JSON endpoint {url} and capture its response "
+                        "structure. Send a controlled generic JSON probe "
+                        f"(body: {body}). Record status, Content-Type, response body and "
+                        "any declared input parameters. Do NOT claim a vulnerability — "
+                        "this is route verification, not exploitation."
+                    ),
+                    action={
+                        "tool": "http_method_probe", "target": url,
+                        "params": {
+                            "url": url, "method": "POST", "data": body,
+                            "content_type": "application/json",
+                        },
+                    },
+                    status=TaskStatus.READY,
+                    vuln_type="RouteVerification",
+                    source="api-route-verification",
+                ))
+            else:
+                tasks.append(Task(
+                    id=task_id,
+                    type="task",
+                    goal=f"Verify API endpoint {url}",
+                    instruction=(
+                        f"Confirm the API endpoint {url} (method {method}) and parse its "
+                        "response structure. Use http_method_probe (OPTIONS) or curl_get, "
+                        "then response_parse on the body. Record status, Allow methods, "
+                        "Content-Type and interesting fields. Do NOT claim a vulnerability — "
+                        "this is route verification, not exploitation."
+                    ),
+                    action={
+                        "tool": "http_method_probe", "target": url,
+                        "params": {"url": url, "method": method},
+                    },
+                    status=TaskStatus.READY,
+                    vuln_type="RouteVerification",
+                    source="api-route-verification",
+                ))
+        return tasks
 
     def _guess_tool(self, vuln_type: str) -> str:
         """Map vuln type to a default tool when no suggested_tool is available."""

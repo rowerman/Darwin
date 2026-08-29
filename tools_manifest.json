@@ -1,8 +1,8 @@
 {
   "schema_version": "1.0.0",
-  "generated_at": "2026-08-28T14:10:40+00:00",
+  "generated_at": "2026-08-29T07:43:01+00:00",
   "source": "darwin.tools.manifest",
-  "tool_count": 134,
+  "tool_count": 135,
   "tools": [
     {
       "name": "aws_cli",
@@ -2184,6 +2184,82 @@
         "success_field": "success"
       },
       "aliases": {},
+      "deprecated": false,
+      "auto": false
+    },
+    {
+      "name": "http_method_probe",
+      "version": "1.0.0",
+      "description": "Send a generic HTTP request with an arbitrary method (OPTIONS, POST, HEAD, PUT...). OPTIONS returns the Allow header for route discovery; POST sends an optional body (JSON by default). Returns status, headers and body.",
+      "domains": [
+        "web"
+      ],
+      "capability": "web_exploit_send",
+      "parameters": {
+        "url": {
+          "type": "string",
+          "description": "Target URL"
+        },
+        "method": {
+          "type": "string",
+          "description": "HTTP method: OPTIONS, POST, HEAD, PUT...",
+          "default": "OPTIONS"
+        },
+        "data": {
+          "type": "string",
+          "description": "Request body (JSON string for POST)",
+          "default": ""
+        },
+        "content_type": {
+          "type": "string",
+          "description": "Content-Type header",
+          "default": "application/json"
+        },
+        "headers": {
+          "type": "string",
+          "description": "Optional extra headers, pipe-separated (Key: val|Key2: val2)",
+          "default": ""
+        },
+        "cookie": {
+          "type": "string",
+          "description": "Session cookie string",
+          "default": ""
+        },
+        "insecure": {
+          "type": "boolean",
+          "description": "Skip TLS verification for self-signed certs",
+          "default": false
+        }
+      },
+      "required": [
+        "url"
+      ],
+      "executor": "python",
+      "command_template": "",
+      "shell_args": [],
+      "split_params": [],
+      "dependencies": [],
+      "flags": {
+        "destructive": false,
+        "interactive": false,
+        "requires_network": true,
+        "idempotent": true
+      },
+      "output_contract": {
+        "type": "tool_result",
+        "success_field": "success"
+      },
+      "aliases": {
+        "body": [
+          "data"
+        ],
+        "post_data": [
+          "data"
+        ],
+        "json_body": [
+          "data"
+        ]
+      },
       "deprecated": false,
       "auto": false
     },

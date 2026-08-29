@@ -12,6 +12,8 @@ bootstrap recon 和后续服务研究阶段的工具注册层。
 
 - `register_recon_tools()`、`create_recon_gateway()`：注册入口。
 - `parse_response()`：统一 HTTP 内容解析。
+- `http_method_probe`：通用 HTTP 方法探测（OPTIONS/POST/HEAD 等），返回状态、
+  响应头与 body；用于自适应侦察的 API 路由发现与 POST/JSON 验证。
 - 各 `_parse_*` 函数：外部 CLI 输出适配。
 
 ## 相关模块
