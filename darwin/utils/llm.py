@@ -185,6 +185,20 @@ class LLMSession:
                 for tc in tool_calls_raw
             ]
         else:
+            # Some OpenAI-compatible DeepSeek endpoints serialize tool calls
+            # as DSML markup in message.content instead of message.tool_calls.
+            # Normalize that representation so registry loops can still append
+            # tool results and request a final structured response.
+            parsed_calls = self._parse_dsml_tool_calls(content)
+            if parsed_calls:
+                assistant_msg["tool_calls"] = [
+                    {"id": call["id"], "type": "function",
+                     "function": {
+                         "name": call["name"],
+                         "arguments": json.dumps(call["arguments"], ensure_ascii=False),
+                     }}
+                    for call in parsed_calls
+                ]
             self.conversation_history.append(assistant_msg)
 
         # P0/P1: chain-of-thought capture — the observer owns persistence and
@@ -201,6 +215,40 @@ class LLMSession:
             )
 
         return content, parsed_calls
+
+    @staticmethod
+    def _parse_dsml_tool_calls(content: str) -> List[Dict[str, Any]] | None:
+        """Parse DeepSeek DSML ``invoke`` markup into normalized calls.
+
+        DSML is only accepted when the complete invoke/parameter structure is
+        present. Malformed or ordinary text returns ``None`` and follows the
+        existing plain-content path.
+        """
+        if not content or "DSML" not in content or "invoke" not in content:
+            return None
+        invoke_pattern = re.compile(
+            r"<｜｜DSML｜｜invoke\s+name=\"([^\"]+)\"\s*>(.*?)"
+            r"</｜｜DSML｜｜invoke>", re.DOTALL,
+        )
+        parameter_pattern = re.compile(
+            r"<｜｜DSML｜｜parameter\s+name=\"([^\"]+)\"[^>]*>"
+            r"(.*?)</｜｜DSML｜｜parameter>", re.DOTALL,
+        )
+        calls: List[Dict[str, Any]] = []
+        for index, match in enumerate(invoke_pattern.finditer(content), 1):
+            name = match.group(1).strip()
+            if not name:
+                continue
+            arguments: Dict[str, Any] = {}
+            for param in parameter_pattern.finditer(match.group(2)):
+                value = param.group(2).strip()
+                try:
+                    value = json.loads(value)
+                except (json.JSONDecodeError, TypeError):
+                    pass
+                arguments[param.group(1).strip()] = value
+            calls.append({"id": f"dsml-{index}", "name": name, "arguments": arguments})
+        return calls or None
 
     def _build_messages(
         self, prompt: str, system_prompt: str | None
