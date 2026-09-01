@@ -406,9 +406,19 @@ class ReconCoordinator(CoordinatorContext):
             "info", "scan_classified", kind=classification.kind.value,
             provider=classification.provider, signals=classification.signals,
         )
-        if classification.cloud_enabled and classification.kind.value in {
-            "private_cloud", "hybrid"
-        }:
+        # KIND scenarios may expose no nmap ports, so run a short K8s
+        # preflight for empty scans as well as explicit K8s signals. Avoid
+        # invoking cloud tooling for ordinary HTTP/DB targets.
+        k8s_signal = (
+            not discovered_ports
+            or classification.kind.value in {"private_cloud", "hybrid"}
+            or any(
+                any(term in str(row).lower()
+                    for term in ("kubernetes", "k8s", "kubelet", "etcd"))
+                for row in discovered_ports
+            )
+        )
+        if k8s_signal:
             k8s_discovery_task = asyncio.create_task(self._k8s_cluster_discovery())
 
         # ── Port blacklist ────────────────────────────────────────────
@@ -835,6 +845,13 @@ class ReconCoordinator(CoordinatorContext):
         if k8s_discovery_task is not None:
             try:
                 await k8s_discovery_task
+                # K8s resources discovered after nmap can change the
+                # environment classification used by CTAGE.
+                classification = classify_environment(discovered_ports, self.dkg)
+                self._scan_classification = classification
+                self.dkg.update_node("environment-classification", {
+                    "classification": classification.to_dict(),
+                })
             except Exception as exc:
                 self._task_log_event("warning", "discovery_failure", domain="k8s", error=str(exc))
                 self.dkg.update_node("environment-classification", {

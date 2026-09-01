@@ -129,6 +129,7 @@ class Runtime:
         graph: TaskGraph | None = None
         started = time.monotonic()
         stall_tried = False
+        max_replans = 3
         current_state = self._current_state(state)
 
         for iteration in range(1, budget.max_loops + 1):
@@ -146,6 +147,9 @@ class Runtime:
                 # Preserve compatibility with injected legacy schedulers.
                 task = self.scheduler.next_ready(graph, budget)
             if task is None:
+                if outcome.replan_count >= max_replans:
+                    outcome.stopped_reason = "plan_exhausted"
+                    break
                 if stall_tried:
                     outcome.stopped_reason = "plan_exhausted"
                     break
@@ -176,6 +180,9 @@ class Runtime:
             outcome.executed_tasks.append(task.id)
 
             if evaluation.replan is not ReplanRecommendation.NONE:
+                if outcome.replan_count >= max_replans:
+                    outcome.stopped_reason = "plan_exhausted"
+                    break
                 current_state = self._current_state(current_state)
                 graph = await self.planner.replan(
                     current_state, graph, evaluation, self.memory

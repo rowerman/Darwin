@@ -813,7 +813,7 @@ class PlanCoordinator(CoordinatorContext):
         prompt: str,
         system_prompt: str | None = None,
         stage: str | None = None,
-        max_rounds: int = 3,
+        max_rounds: int = 2,
     ) -> tuple[str, list | None, bool]:
         """Run an LLM generation round where the model may query the tool
         registry (tool_registry_list / tool_registry_get) before producing
@@ -824,6 +824,8 @@ class PlanCoordinator(CoordinatorContext):
         degrades to a single plain generation call.
         """
         registry_tools: list[dict] = []
+        def _llm_timeout(default: float = 180.0) -> float:
+            return max(1.0, min(default, float(self._remaining_budget())))
         try:
             for _td in self.attack_gateway.get_tool_definitions():
                 _name = _td.get("function", {}).get("name", "")
@@ -835,6 +837,7 @@ class PlanCoordinator(CoordinatorContext):
         if not registry_tools:
             content, tool_calls = self.llm.generate(
                 prompt=prompt, system_prompt=system_prompt, stage=stage,
+                timeout=_llm_timeout(),
             )
             if not content or self._extract_json(content) == {}:
                 try:
@@ -842,6 +845,7 @@ class PlanCoordinator(CoordinatorContext):
                         prompt=(f"{prompt}\n\nReturn ONLY valid JSON now; "
                                 "do not call tools or add explanations."),
                         system_prompt=system_prompt, stage=stage,
+                        timeout=_llm_timeout(),
                     )
                     if retry_content:
                         content, tool_calls = retry_content, retry_calls
@@ -864,6 +868,7 @@ class PlanCoordinator(CoordinatorContext):
                 system_prompt=system_prompt,
                 tools=registry_tools,
                 stage=stage,
+                timeout=_llm_timeout(),
             )
             if not tool_calls:
                 break
@@ -921,6 +926,7 @@ class PlanCoordinator(CoordinatorContext):
                     prompt=retry_prompt,
                     system_prompt=system_prompt,
                     stage=stage,
+                    timeout=_llm_timeout(),
                 )
                 if retry_content:
                     content, tool_calls = retry_content, retry_calls
@@ -2601,10 +2607,11 @@ Output ONLY valid JSON:
         _candidates_str = ", ".join(
             f"{u}:{p}" for u, p in _cred_patterns[:15]
         )
+        instruction = getattr(task, "instruction", "")
         prompt = (
             f"A penetration testing task discovered working credentials. "
             f"Extract ALL valid username:password pairs from the output.\n\n"
-            f"Task instruction: {task.get('instruction', '')[:200]}\n"
+            f"Task instruction: {instruction[:200]}\n"
             f"Service: {_svc_name}\n"
             f"Regex candidates: {_candidates_str}\n\n"
             f"Task output:\n{_output_snippet}\n\n"

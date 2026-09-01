@@ -82,6 +82,49 @@ from darwin.prompts.research import SYSTEM_PROMPT_RESEARCH
 from darwin.orchestration.context import CoordinatorContext
 
 class LifecycleCoordinator(CoordinatorContext):
+    _PHASE_RATIOS = {
+        "recon": 0.20,
+        "service_research": 0.10,
+        "analyze": 0.10,
+        "vulnerability_research": 0.10,
+        "exploit": 0.45,
+        "finalize": 0.05,
+    }
+
+    def _remaining_budget(self) -> float:
+        deadline = getattr(self._orch, "_run_deadline", 0.0)
+        if not deadline:
+            return float(self.time_budget)
+        return max(0.0, deadline - time.monotonic())
+
+    async def _run_phase_with_budget(self, name: str, awaitable):
+        """Run one phase under its allocation, carrying unused time forward."""
+        base = self.time_budget * self._PHASE_RATIOS[name]
+        used = getattr(self._orch, "_phase_used", {}).get(name, 0.0)
+        carry = getattr(self._orch, "_phase_carryover", 0.0)
+        allowance = min(self._remaining_budget(), max(0.0, base - used) + carry)
+        self._orch._phase_carryover = 0.0
+        if allowance <= 0:
+            close = getattr(awaitable, "close", None)
+            if close:
+                close()
+            self._task_log_event("warning", "phase_timeout", phase=name,
+                                 allocated_s=0.0)
+            return False
+        started = time.monotonic()
+        try:
+            await asyncio.wait_for(awaitable, timeout=allowance)
+        except asyncio.TimeoutError:
+            self._task_log_event("warning", "phase_timeout", phase=name,
+                                 allocated_s=allowance)
+            return False
+        finally:
+            elapsed = time.monotonic() - started
+            self._orch._phase_used[name] = used + min(elapsed, allowance)
+            unused = max(0.0, allowance - elapsed)
+            self._orch._phase_carryover = unused
+        return True
+
     async def run(
         self, task_description: str, target_url: str,
         username: str | None = None, password: str | None = None,
@@ -95,6 +138,11 @@ class LifecycleCoordinator(CoordinatorContext):
                         When None, full 65535-port scan.
         """
         self.start_time = time.time()
+        self._run_started_monotonic = time.monotonic()
+        self._run_deadline = self._run_started_monotonic + self.time_budget
+        self.llm._deadline = self._run_deadline
+        self._phase_carryover = 0.0
+        self._phase_used = {name: 0.0 for name in self._PHASE_RATIOS}
         self._solo_cycle_context_injected = False
         self.target_url = target_url
         self._provided_username = username
@@ -179,7 +227,9 @@ class LifecycleCoordinator(CoordinatorContext):
 
         try:
             # ── Phase 1: Bootstrap scan (nmap + HTTP probe) ──
-            await self._bootstrap_scan(target_url, port_range=port_range)
+            await self._run_phase_with_budget(
+                "recon", self._bootstrap_scan(target_url, port_range=port_range)
+            )
             self._task_log_event("info", "bootstrap_done",
                 dkg_summary=self.dkg.summary(), step=self.step_count)
             self.dkg.save(self._checkpoint_path("bootstrap"))
@@ -433,7 +483,9 @@ class LifecycleCoordinator(CoordinatorContext):
                         self._reanalyze_count += 1
 
                 if not self._svc_research_done:
-                    await self._service_research()
+                    await self._run_phase_with_budget(
+                        "service_research", self._service_research()
+                    )
                     self._svc_research_done = True
 
                     # ── Phase log: service research ──
@@ -448,7 +500,7 @@ class LifecycleCoordinator(CoordinatorContext):
 
                 # Phase 2: Analyze recon data + service research → vuln hypotheses
                 if not self._analyze_done:
-                    await self._analyze_phase()
+                    await self._run_phase_with_budget("analyze", self._analyze_phase())
                     self._analyze_done = True
                     # Snapshot current discovery count so we can detect
                     # significant new services/endpoints for re-analysis
@@ -474,7 +526,9 @@ class LifecycleCoordinator(CoordinatorContext):
                 # Phase 3: Research each vulnerability with tools
                 if self.vulnerabilities and not self._research_done:
                     log.info("[PHASE] _research_phase START")
-                    await self._research_phase()
+                    await self._run_phase_with_budget(
+                        "vulnerability_research", self._research_phase()
+                    )
                     self._research_done = True
                     log.info("[PHASE] _research_phase DONE")
 
@@ -490,7 +544,17 @@ class LifecycleCoordinator(CoordinatorContext):
                                       "vulns_researched": _researched})
 
                 # Phase 4: Runtime-driven loop (plan → execute → evaluate → replan)
-                result = await self._run_with_runtime(target_url, cteg_hints)
+                phase_ok = await self._run_phase_with_budget(
+                    "exploit", self._run_with_runtime(target_url, cteg_hints)
+                )
+                if not phase_ok:
+                    result = TaskResult(
+                        success=False, steps=self.step_count,
+                        tokens_used=self.llm.token_count,
+                        time_elapsed=time.time() - self.start_time,
+                        phase_at_end=self.phase, error="exploit phase budget exceeded",
+                    )
+                    self._solo_exhausted = True
 
                 # Allow up to 3 solo iterations before marking exhausted
                 self._solo_iterations += 1
@@ -521,9 +585,22 @@ class LifecycleCoordinator(CoordinatorContext):
 
             # ── Last resort: generic flag search ──────────────────
             if result is None or not result.success:
-                flag_result = await self._check_response_for_flag(target_url)
-                if flag_result:
-                    result = flag_result
+                finalize_base = self.time_budget * self._PHASE_RATIOS["finalize"]
+                allowance = min(
+                    self._remaining_budget(), finalize_base
+                    + getattr(self._orch, "_phase_carryover", 0.0)
+                )
+                self._orch._phase_carryover = 0.0
+                if allowance > 0:
+                    try:
+                        flag_result = await asyncio.wait_for(
+                            self._check_response_for_flag(target_url), timeout=allowance
+                        )
+                        if flag_result:
+                            result = flag_result
+                    except asyncio.TimeoutError:
+                        self._task_log_event("warning", "phase_timeout",
+                                             phase="finalize", allocated_s=allowance)
 
         except asyncio.TimeoutError:
             elapsed = time.time() - self.start_time
@@ -966,7 +1043,7 @@ class LifecycleCoordinator(CoordinatorContext):
                 log.info("Optional tool not found: %s — some features unavailable", tool)
 
     def _time_exceeded(self) -> bool:
-        return (time.time() - self.start_time) > self.time_budget
+        return self._remaining_budget() <= 0
 
     def _tokens_exceeded(self) -> bool:
         """Check if token budget is exceeded. Attempts compression first.

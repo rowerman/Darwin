@@ -262,6 +262,13 @@ class Orchestrator:
     async def _bootstrap_scan(self, target_url: str, port_range: str | None=None) -> None:
         return await self.recon._bootstrap_scan(target_url, port_range)
 
+    def _remaining_budget(self) -> float:
+        """Return seconds remaining in the single run deadline."""
+        deadline = getattr(self, "_run_deadline", 0.0)
+        if not deadline:
+            return float(self.time_budget)
+        return max(0.0, deadline - time.monotonic())
+
     async def _k8s_cluster_discovery(self) -> None:
         return await self.recon._k8s_cluster_discovery()
 

@@ -10,6 +10,7 @@ directly.
 from __future__ import annotations
 
 from darwin.tools.mcp_gateway import ToolResult
+import asyncio
 
 
 class CoordinatorContext:
@@ -35,4 +36,17 @@ class CoordinatorContext:
             setattr(object.__getattribute__(self, "_orch"), name, value)
 
     async def _call_tool(self, name: str, params: dict) -> ToolResult:
-        return await self._orch._tool_port.call(name, params)
+        # A tool call must never outlive the active run/phase deadline.
+        remaining = self._orch._remaining_budget()
+        if remaining <= 0:
+            return ToolResult(tool_name=name, success=False, stdout="",
+                              stderr="time budget exceeded", exit_code=-1,
+                              elapsed_ms=0)
+        try:
+            return await asyncio.wait_for(
+                self._orch._tool_port.call(name, params), timeout=remaining
+            )
+        except asyncio.TimeoutError:
+            return ToolResult(tool_name=name, success=False, stdout="",
+                              stderr=f"tool timeout after {remaining:.1f}s",
+                              exit_code=-1, elapsed_ms=remaining * 1000)

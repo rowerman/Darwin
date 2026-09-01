@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import html
 import json
+import time
 import inspect
 import re
 from typing import Any, Callable, Dict, List, Optional
@@ -136,6 +137,9 @@ class LLMSession:
             (content, tool_calls) — tool_calls is None if no tools were called.
             tool_calls is a list of dicts with 'name' and 'arguments' keys.
         """
+        deadline = getattr(self, "_deadline", 0.0)
+        if deadline:
+            timeout = min(timeout, max(1.0, deadline - time.monotonic()))
         messages = self._build_messages(prompt, system_prompt)
         self.conversation_history = messages.copy()
 

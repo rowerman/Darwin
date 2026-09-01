@@ -1512,13 +1512,13 @@ class ExecutionCoordinator(CoordinatorContext):
                 Objective(
                     task_description=target_url,
                     budgets=Budget(
-                        time_budget_seconds=self.time_budget,
+                        time_budget_seconds=max(1, int(self._remaining_budget())),
                         token_budget=self.token_budget,
                         max_loops=25,
                     ),
                 ),
                 Budget(
-                    time_budget_seconds=self.time_budget,
+                    time_budget_seconds=max(1, int(self._remaining_budget())),
                     token_budget=self.token_budget,
                     max_loops=25,
                 ),

@@ -484,11 +484,8 @@ class ResearchCoordinator(CoordinatorContext):
                     "parameter": "", "severity": "low",
                     "source": "nikto_keyword", "detail": detail,
                 })
-        # Every endpoint → at least one injection hypothesis
-        # Any endpoint could be vulnerable to multiple injection types.
-        # The exploit phase will quickly rule out false positives.
-        common_params = ["q", "id", "search", "query", "user", "input", "name", "file", "page"]
-        endpoints_with_params = False
+        # Evidence-based endpoint heuristics only. Never manufacture generic
+        # SQLi/XSS/CMDi hypotheses from the mere existence of a parameter.
         for ep in self.dkg.query_nodes("Endpoint"):
             url, params = ep.get("url", ""), ep.get("params", "")
             method = ep.get("method", "GET")
@@ -526,48 +523,7 @@ class ResearchCoordinator(CoordinatorContext):
                     # URL-fetch parameters are handled by the SSRF probe;
                     # do not flood the plan with generic injection guesses.
                     continue
-                if any(v.endpoint == url and v.param == params for v in self.vulnerabilities):
-                    continue
-                for vt in ("SQLI", "XSS", "CMDI"):
-                    self.vulnerabilities.append(VulnerabilityHypothesis(
-                        vuln_type=vt, endpoint=url, param=params,
-                        confidence=0.30, evidence=f"{method} parameter: {params}",
-                    ))
-                    self.dkg.add_node("Vulnerability", f"vuln-{len(self.vulnerabilities)}", {
-                        "vuln_type": vt, "endpoint": url, "parameter": params,
-                        "severity": "medium", "source": "param_heuristic",
-                    })
-            elif method == "POST":
-                # POST endpoint — collect params from ALL endpoint nodes (HTML extraction
-                # stores params on the page URL, not the endpoint URL)
-                all_ep = self.dkg.query_nodes("Endpoint")
-                post_params = [e.get("params", "") for e in all_ep
-                              if e.get("params", "") and e.get("params", "") not in ("", "*")]
-                best_param = post_params[0] if post_params else "job_type"
-                # Combine with common guesses for robustness
-                all_params = list(dict.fromkeys(
-                    [best_param] + post_params + ["job_type", "type", "name", "id", "query"]))
-                for p in all_params[:3]:
-                    if not any(v.endpoint == url and getattr(v, 'param', '') == p
-                              for v in self.vulnerabilities):
-                        for vt in ("SQLI", "XSS", "CMDI"):
-                            tool = "sqlmap_test" if vt == "SQLI" else (
-                                "xss_reflection_test" if vt == "XSS" else "command_injection_test")
-                            self.vulnerabilities.append(VulnerabilityHypothesis(
-                                vuln_type=vt, endpoint=url, param=p,
-                                confidence=0.30,
-                                evidence=f"POST endpoint — injection test (param={p})",
-                                suggested_tool=tool,
-                                tool_args={"url": url, "param": p, "method": "POST", "body_format": "json"},
-                            ))
-                            self.dkg.add_node("Vulnerability", f"vuln-{len(self.vulnerabilities)}", {
-                                "vuln_type": vt, "endpoint": url, "parameter": p,
-                                "severity": "medium", "source": "post_endpoint_heuristic",
-                                "suggested_tool": tool,
-                                "tool_args": {"url": url, "param": p,
-                                              "method": "POST", "body_format": "json"},
-                            })
-        # Endpoints with numeric path segments → IDOR + SQLI
+        # Numeric path segments provide concrete IDOR evidence.
         for ep in self.dkg.query_nodes("Endpoint"):
             url = ep.get("url", "")
             if not url or not url.startswith("http") or any(v.endpoint == url for v in self.vulnerabilities):
@@ -577,56 +533,9 @@ class ResearchCoordinator(CoordinatorContext):
                     vuln_type="IDOR", endpoint=url, param="id",
                     confidence=0.3, evidence="Numeric ID in URL path",
                 ))
-                self.vulnerabilities.append(VulnerabilityHypothesis(
-                    vuln_type="SQLI", endpoint=url, param="id",
-                    confidence=0.25, evidence="Numeric ID in URL path",
-                ))
                 self.dkg.add_node("Vulnerability", f"vuln-{len(self.vulnerabilities)-1}", {
                     "vuln_type": "IDOR", "endpoint": url, "parameter": "id",
                     "severity": "medium", "source": "path_heuristic",
-                })
-                self.dkg.add_node("Vulnerability", f"vuln-{len(self.vulnerabilities)}", {
-                    "vuln_type": "SQLI", "endpoint": url, "parameter": "id",
-                    "severity": "medium", "source": "path_heuristic",
-                })
-
-        # Safety net: if too few vulns from LLM, supplement with heuristic hypotheses
-        if len(self.vulnerabilities) < 5:
-            for ep in self.dkg.query_nodes("Endpoint"):
-                url = ep.get("url", "")
-                if not url or not url.startswith("http"):
-                    continue
-                if any(v.endpoint == url for v in self.vulnerabilities):
-                    continue  # already has a hypothesis
-                resp = ep.get("sample_response", "")
-                params = ep.get("params", "")
-                method = ep.get("method", "GET")
-                resp_len = ep.get("response_size", 0)
-                if method == "GET" and not params:
-                    # No input parameter or dynamic-response evidence: keep
-                    # the endpoint as a fact, but do not invent an exploit.
-                    continue
-                # Pick the single most likely vuln type based on response characteristics
-                if params:
-                    vt, param = "SQLI", params.split(",")[0] if params else "id"
-                elif method == "POST":
-                    vt, param = "CMDI", "cmd"
-                elif resp_len > 100000:
-                    vt, param = "XSS", "q"  # large SPA → XSS
-                elif "json" in resp.lower() or resp.strip().startswith("{"):
-                    vt, param = "IDOR", "id"  # API response → IDOR
-                else:
-                    vt, param = "XSS", "q"
-                self.vulnerabilities.append(VulnerabilityHypothesis(
-                    vuln_type=vt, endpoint=url, param=param,
-                    confidence=0.30,
-                    evidence=f"Heuristic — {method} endpoint, {resp_len}b response, params={params or 'none'}",
-                ))
-                tool = self._guess_tool(vt)
-                self.dkg.add_node("Vulnerability", f"vuln-{len(self.vulnerabilities)}", {
-                    "vuln_type": vt, "endpoint": url, "parameter": param,
-                    "severity": "low", "source": "generic_fallback",
-                    "suggested_tool": tool,
                 })
 
         # ── Non-HTTP service vulnerability detection ─────────────────
