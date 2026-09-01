@@ -857,6 +857,39 @@ class ExecutionCoordinator(CoordinatorContext):
                            "Only interact with the target service.",
                     stderr="", exit_code=1, elapsed_ms=0,
                 )
+            elif tc_name == "docker_registry" and tc_args.get("target_registry"):
+                from urllib.parse import urlparse
+                registry = str(tc_args.get("target_registry", ""))
+                parsed_registry = urlparse(
+                    registry if "://" in registry else f"http://{registry}"
+                )
+                registry_host = parsed_registry.hostname or ""
+                registry_port = parsed_registry.port or 5000
+                discovered = any(
+                    int(s.get("port", 0) or 0) == registry_port
+                    for s in self.dkg.query_nodes("Service")
+                ) or any(
+                    urlparse(str(e.get("url", ""))).hostname == registry_host
+                    and (urlparse(str(e.get("url", ""))).port or 80) == registry_port
+                    for e in self.dkg.query_nodes("Endpoint")
+                )
+                if not discovered:
+                    result = ToolResult(
+                        tool_name=tc_name, success=False, stdout="",
+                        stderr=(f"registry target {registry} is outside the discovered "
+                                "network scope"), exit_code=2, elapsed_ms=0,
+                    )
+                else:
+                    result = await self.executor.execute(
+                        Task(
+                            id=task.id or tc_id, type=task.type,
+                            goal=task_instruction, instruction=task_instruction,
+                            action={"tool": tc_name,
+                                    "target": str(tc_args.get("target_registry", "")),
+                                    "params": dict(tc_args)},
+                            status=TaskStatus.RUNNING,
+                        )
+                    )
             else:
                 # P5c: strict Task consumption — the Executor is the
                 # only execution path. Post-processing below consumes
@@ -1194,7 +1227,9 @@ class ExecutionCoordinator(CoordinatorContext):
                         tokens_used=self.llm.token_count,
                         time_elapsed=time.time() - self.start_time,
                     )
+                    self._verified_flag_result = execution.flag_result
                     return execution
+                log.warning("Flag candidate rejected by verifier: %s", reason)
 
         # ── LLM reviews and updates plan after every task (VulnBot-style) ──
         task_success = _any_success
@@ -1298,6 +1333,7 @@ class ExecutionCoordinator(CoordinatorContext):
                             tokens_used=self.llm.token_count,
                             time_elapsed=time.time() - self.start_time,
                         )
+                        self._verified_flag_result = execution.flag_result
                         return execution
             else:
                 task_result_text = (
@@ -1415,6 +1451,7 @@ class ExecutionCoordinator(CoordinatorContext):
         loop (ParityScheduler + stall review).
         """
         self._plan_review_exhausted = False
+        self._verified_flag_result = None
         if not self._solo_cycle_context_injected:
             self.llm.replace_system_prompt(SYSTEM_PROMPT_ORCHESTRATOR_UNIFIED)
             self._solo_cycle_context_injected = True
@@ -1531,6 +1568,8 @@ class ExecutionCoordinator(CoordinatorContext):
         )
         if self._runtime_flag_result is not None:
             return self._runtime_flag_result
+        if self._verified_flag_result is not None:
+            return self._verified_flag_result
         self._generate_phase_summary("exploit")
         return None
 
@@ -2032,11 +2071,13 @@ class ExecutionCoordinator(CoordinatorContext):
                 privesc_flag = await self._execute_privesc(endpoint)
                 if privesc_flag:
                     self.phase = OrchestratorPhase.DONE
-                    return TaskResult(
+                    result = TaskResult(
                         success=True, flag=privesc_flag, steps=self.step_count,
                         tokens_used=self.llm.token_count,
                         time_elapsed=time.time() - self.start_time,
                     )
+                    self._verified_flag_result = result
+                    return result
                 tested_count += 1
                 continue
 

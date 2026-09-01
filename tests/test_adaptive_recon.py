@@ -22,11 +22,24 @@ from darwin.orchestration.recon import (
     looks_like_invoke_route,
 )
 from darwin.tools.mcp_gateway import ToolResult
+from darwin.tools.recon_server import parse_response
 
 
 # ── Pure extraction helpers ───────────────────────────────────────────
 
 class TestCandidateExtraction:
+    def test_html_forms_are_route_candidates(self):
+        html = (
+            '<form method="post" action="/step1">'
+            '<textarea name="dockerfile">RUN id</textarea></form>'
+            '<form method=post action=/step3><button>Pull</button></form>'
+        )
+        parsed = parse_response(html, content_type="html")
+        assert len(parsed["form_details"]) == 2
+        candidates = extract_route_candidates(html, parsed, "http://target:8000/")
+        assert "http://target:8000/step1" in [u for u, _ in candidates]
+        assert "http://target:8000/step3" in [u for u, _ in candidates]
+
     def test_html_links_and_scripts_are_same_origin_only(self):
         html = (
             '<a href="/login">login</a>'

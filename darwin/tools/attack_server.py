@@ -379,7 +379,7 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
 
         if method.upper() == "GET":
             separator = "&" if "?" in url else "?"
-            full_url = f"{url}{separator}{param}={encoded_payload}"
+            full_url = f"{url}{separator}{urllib.parse.urlencode({param: encoded_payload})}"
             return await _python_request("GET", full_url, insecure=insecure)
         elif body_format == "json":
             import json as _js
@@ -406,8 +406,8 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
             if not param and ('=' in payload or '&' in payload):
                 return await _python_request("POST", url, encoded_payload,
                                             insecure=insecure)
-            return await _python_request("POST", url, f"{param}={encoded_payload}",
-                                        insecure=insecure)
+            body = urllib.parse.urlencode({param: encoded_payload})
+            return await _python_request("POST", url, body, insecure=insecure)
 
     gateway.register(
         name="send_payload",

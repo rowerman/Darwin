@@ -303,13 +303,13 @@
       "abstract_description": "fuzz exploitation; via ffuf_fuzz; (GET)",
       "vulnerability_type": "fuzz",
       "required_context": "",
-      "total_attempts": 4,
-      "total_successes": 4,
+      "total_attempts": 5,
+      "total_successes": 5,
       "success_rate": 1.0,
-      "last_successful_use": "2026-08-31T07:54:35.890583",
+      "last_successful_use": "2026-09-01T07:02:53.587839",
       "half_life_days": 30,
       "created_at": "2026-08-31T07:44:56.395850",
-      "reinforcement_count": 3
+      "reinforcement_count": 4
     },
     {
       "id": "ep-cmdi-task-cmd",
@@ -318,13 +318,13 @@
       "abstract_description": "cmdi exploitation; via command_injection_test; (GET)",
       "vulnerability_type": "cmdi",
       "required_context": "",
-      "total_attempts": 2,
-      "total_successes": 2,
+      "total_attempts": 4,
+      "total_successes": 4,
       "success_rate": 1.0,
-      "last_successful_use": "2026-08-31T08:42:11.405589",
+      "last_successful_use": "2026-09-01T07:02:12.140466",
       "half_life_days": 30,
       "created_at": "2026-08-31T07:45:22.849104",
-      "reinforcement_count": 1
+      "reinforcement_count": 3
     },
     {
       "id": "ep-sqli-task-sql",
@@ -587,13 +587,13 @@
       "abstract_description": "injection exploitation; via send_payload; (GET)",
       "vulnerability_type": "injection",
       "required_context": "",
-      "total_attempts": 3,
-      "total_successes": 3,
+      "total_attempts": 6,
+      "total_successes": 6,
       "success_rate": 1.0,
-      "last_successful_use": "2026-08-31T09:16:44.263777",
+      "last_successful_use": "2026-09-01T07:03:50.552948",
       "half_life_days": 30,
       "created_at": "2026-08-31T08:11:59.330302",
-      "reinforcement_count": 2
+      "reinforcement_count": 5
     },
     {
       "id": "ep-xss-task-2",
@@ -744,15 +744,44 @@
       "abstract_description": "shell_exec exploitation; via shell_exec; (GET)",
       "vulnerability_type": "shell_exec",
       "required_context": "",
-      "total_attempts": 4,
+      "total_attempts": 5,
       "total_successes": 0,
       "success_rate": 0.0,
       "last_successful_use": "",
       "half_life_days": 30,
       "created_at": "2026-08-31T09:08:04.284008"
+    },
+    {
+      "id": "ep-injection-task-sst",
+      "type": "ExploitPattern",
+      "mechanism": "send_payload",
+      "abstract_description": "injection exploitation; via send_payload; (GET)",
+      "vulnerability_type": "injection",
+      "required_context": "",
+      "total_attempts": 2,
+      "total_successes": 2,
+      "success_rate": 1.0,
+      "last_successful_use": "2026-09-01T07:02:38.408572",
+      "half_life_days": 30,
+      "created_at": "2026-09-01T07:02:13.705543",
+      "reinforcement_count": 1
+    },
+    {
+      "id": "ep-shell_exec-task-por",
+      "type": "ExploitPattern",
+      "mechanism": "shell_exec",
+      "abstract_description": "shell_exec exploitation; via shell_exec; (GET)",
+      "vulnerability_type": "shell_exec",
+      "required_context": "",
+      "total_attempts": 1,
+      "total_successes": 1,
+      "success_rate": 1.0,
+      "last_successful_use": "2026-09-01T07:03:30",
+      "half_life_days": 30,
+      "created_at": "2026-09-01T07:03:30.353701"
     }
   ],
   "edges": [],
-  "task_count": 92,
-  "created_at": "2026-08-31T09:13:34.684804"
+  "task_count": 102,
+  "created_at": "2026-09-01T06:59:04.022537"
 }

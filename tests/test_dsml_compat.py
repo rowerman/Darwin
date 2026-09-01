@@ -46,6 +46,20 @@ class TestDSMLParser:
         assert calls[0]["arguments"] == {"keyword": "curl"}
         assert calls[1]["arguments"] == {"name": "curl_get"}
 
+    def test_production_wrapped_dsml(self):
+        content = (
+            '<｜｜DSML｜｜tool_calls>'
+            '<｜｜DSML｜｜invoke name="tool_registry_list">'
+            '<｜｜DSML｜｜parameter name="keyword" string="true">curl'
+            '</｜｜DSML｜｜parameter>'
+            '</｜｜DSML｜｜invoke>'
+            '</｜｜DSML｜｜tool_calls>'
+        )
+        calls = LLMSession._parse_dsml_tool_calls(content)
+        assert calls is not None
+        assert calls[0]["name"] == "tool_registry_list"
+        assert calls[0]["arguments"] == {"keyword": "curl"}
+
     def test_escaped_parameter_value(self):
         content = (
             '<invoke name="send_payload">'
@@ -288,3 +302,25 @@ async def test_registry_lookup_dsml_query_converges_to_final_json(monkeypatch):
     assert ("tool_registry_get", {"name": "curl_get"}) in attack_gw.calls
     # final JSON was validated: the loop did NOT issue a second registry call
     assert len(attack_gw.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_registry_lookup_rejects_non_registry_tool(monkeypatch):
+    class _UnexpectedToolLLM(_RegistryDSMLLLM):
+        def generate(self, prompt, system_prompt=None, tools=None,
+                     temperature=None, timeout=180.0, stage=None):
+            self.calls.append(("generate", stage))
+            if self.step == 0:
+                self.step += 1
+                return "", [{"id": "bad-1", "name": "send_payload", "arguments": {}}]
+            self.step += 1
+            return "[]", None
+
+    llm = _UnexpectedToolLLM("", "[]")
+    orch, recon_gw, attack_gw = _make_orchestrator(llm, monkeypatch)
+    content, _, _ = await orch.planning._generate_with_registry_lookup(
+        prompt="Generate a plan", stage="plan",
+    )
+    assert content == "[]"
+    assert attack_gw.calls == []
+    assert any(item[0] == "add_tool_result" and item[1] == "bad-1" for item in llm.calls)

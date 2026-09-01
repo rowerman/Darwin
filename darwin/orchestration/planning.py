@@ -853,6 +853,10 @@ class PlanCoordinator(CoordinatorContext):
                     log.warning("Structured %s retry failed: %s", stage or "LLM", _exc)
             return content, tool_calls, False
 
+        registry_tool_names = {
+            str(td.get("function", {}).get("name", ""))
+            for td in registry_tools
+        }
         registry_used = False
         content = ""
         tool_calls = None
@@ -886,6 +890,17 @@ class PlanCoordinator(CoordinatorContext):
                 tc_name = tc.get("name", "")
                 tc_args = tc.get("arguments", {})
                 tc_id = tc.get("id", "")
+                if tc_name not in registry_tool_names:
+                    self.llm.add_tool_result(
+                        tc_id,
+                        f"Tool '{tc_name}' is not allowed during {stage or 'structured'} lookup; "
+                        "return only the requested structured JSON.",
+                    )
+                    log.warning(
+                        "Rejected non-registry tool '%s' during %s lookup",
+                        tc_name, stage or "structured",
+                    )
+                    continue
                 try:
                     if tc_name in self.attack_gateway.get_tool_names():
                         result = await self._call_tool(tc_name, tc_args)

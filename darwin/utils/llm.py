@@ -247,8 +247,11 @@ class LLMSession:
         values are entity-unescaped (``&lt;``/``&gt;``/``&amp;``/``&quot;``) and
         parsed as JSON when possible, mirroring OpenAI ``function.arguments``.
         """
-        if not content or "<invoke" not in content:
+        if not content or "invoke" not in content:
             return None
+        # DeepSeek deployments differ: some wrap every tag in the Unicode
+        # DSML marker while others emit the bare invoke/parameter tags.
+        normalized = content.replace("｜｜DSML｜｜", "")
         invoke_pattern = re.compile(
             r'<invoke\s+(?:name|tool_name)="([^"]+)"\s*>(.*?)'
             r'</invoke>', re.DOTALL,
@@ -258,7 +261,7 @@ class LLMSession:
             r'</parameter>', re.DOTALL,
         )
         calls: List[Dict[str, Any]] = []
-        for index, match in enumerate(invoke_pattern.finditer(content), 1):
+        for index, match in enumerate(invoke_pattern.finditer(normalized), 1):
             name = match.group(1).strip()
             if not name:
                 continue

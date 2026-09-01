@@ -109,6 +109,9 @@ def extract_route_candidates(
         (parsed or {}).get("endpoints", []) or []
     ):
         _add(path, "parsed-path")
+    for form in (parsed or {}).get("form_details", []) or []:
+        if isinstance(form, dict):
+            _add(form.get("action", ""), "html-form")
     if content:
         for m in _JS_ROUTE_RE.finditer(content):
             _add(m.group(1), "js-fetch")
@@ -1382,6 +1385,14 @@ class ReconCoordinator(CoordinatorContext):
             if resp_len > 1000000:
                 # SPA / large JS bundle — dirb/nikto useless.
                 # Probe API paths already extracted by bootstrap.
+                try:
+                    form_result = await self._call_tool("form_extract", {"url": url})
+                    if form_result.success:
+                        parsed_forms = getattr(form_result, "parsed_output", {}) or {}
+                        for form in parsed_forms.get("forms", []):
+                            _add_form_endpoint(form, url)
+                except Exception:
+                    pass
                 api_eps = [e for e in self.dkg.query_nodes("Endpoint")
                            if e.get("discovered_by", "").startswith("bootstrap-api-")
                            and e.get("url", "").startswith(url)]
@@ -1575,9 +1586,14 @@ class ReconCoordinator(CoordinatorContext):
             action = form.get("action", "")
             form_url = (action if action.startswith("http")
                         else f"{base_url.rstrip('/')}/{action.lstrip('/')}")
-            params = ",".join(i.get("name", "") for i in form.get("inputs", []))
-            if params:
-                self.dkg.add_node("Endpoint", f"ep-form-{form_url[:40]}", {
+            params = ",".join(
+                i.get("name", "") for i in form.get("inputs", [])
+                if i.get("name", "")
+            )
+            if form_url:
+                safe_id = re.sub(r"[^A-Za-z0-9_.-]+", "_", form_url)[:48]
+                form_index = form.get("form_index", 0)
+                self.dkg.add_node("Endpoint", f"ep-form-{safe_id}-{form_index}", {
                     "url": form_url, "method": form.get("method", "POST"),
                     "params": params, "body_format": "form",
                     "discovered_by": "deep-recon-form",

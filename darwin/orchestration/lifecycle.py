@@ -114,6 +114,16 @@ class LifecycleCoordinator(CoordinatorContext):
         started = time.monotonic()
         try:
             await asyncio.wait_for(awaitable, timeout=allowance)
+        except asyncio.CancelledError:
+            elapsed = time.time() - self.start_time
+            result = TaskResult(
+                success=False, steps=self.step_count,
+                tokens_used=self.llm.token_count,
+                time_elapsed=elapsed,
+                phase_at_end=self.phase,
+                error="Run cancelled",
+            )
+            self._task_log_event("warning", "run_cancelled", elapsed_s=elapsed)
         except asyncio.TimeoutError:
             self._task_log_event("warning", "phase_timeout", phase=name,
                                  allocated_s=allowance)

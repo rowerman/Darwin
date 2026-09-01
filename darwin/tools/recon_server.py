@@ -175,12 +175,54 @@ def _parse_html(data: str) -> Dict[str, Any]:
     result["links"] = links[:30]
     result["scripts"] = _SCRIPT_SRC_RE.findall(data)[:10]
     result["css"] = _LINK_HREF_RE.findall(data)[:10]
+    result["form_details"] = _extract_html_forms(data)
     api_paths = list(dict.fromkeys(_API_PATH_RE.findall(data)))[:20]
     result["api_paths"] = api_paths
     endpoints = list(dict.fromkeys(_ENDPOINT_RE.findall(data)))[:20]
     result["endpoints"] = [e for e in endpoints if e not in api_paths][:15]
     result["flags"] = _FLAG_RE.findall(data)
     return result
+
+
+def _extract_html_forms(data: str) -> list[dict]:
+    """Extract form actions and named controls without building a DOM tree."""
+    def attr(tag: str, name: str) -> str:
+        match = re.search(
+            rf"(?:^|\s){re.escape(name)}\s*=\s*(?:\"([^\"]*)\"|'([^']*)'|([^\s>]+))",
+            tag, re.I,
+        )
+        return next((value for value in match.groups() if value is not None), "") if match else ""
+
+    forms: list[dict] = []
+    for match in re.finditer(r"<form\b([^>]*)>(.*?)</form\s*>", data, re.I | re.S):
+        tag, body = match.group(1), match.group(2)
+        fields: list[dict] = []
+        for control in re.finditer(r"<input\b([^>]*)/?>", body, re.I):
+            attrs = control.group(1)
+            fields.append({
+                "name": attr(attrs, "name"),
+                "type": (attr(attrs, "type") or "text").lower(),
+                "value": attr(attrs, "value"),
+            })
+        for control in re.finditer(r"<textarea\b([^>]*)>(.*?)</textarea\s*>", body, re.I | re.S):
+            fields.append({
+                "name": attr(control.group(1), "name"),
+                "type": "textarea",
+                "value": control.group(2).strip(),
+            })
+        for control in re.finditer(r"<select\b([^>]*)>(.*?)</select\s*>", body, re.I | re.S):
+            fields.append({
+                "name": attr(control.group(1), "name"),
+                "type": "select",
+                "value": "",
+            })
+        forms.append({
+            "form_index": len(forms),
+            "action": attr(tag, "action"),
+            "method": (attr(tag, "method") or "POST").upper(),
+            "inputs": fields,
+        })
+    return forms
 
 
 def _parse_json(data: str) -> Dict[str, Any]:
@@ -790,23 +832,7 @@ def register_recon_tools(gateway: MCPGateway) -> MCPGateway:
                 html = resp.read().decode(errors="replace")
         except Exception as e:
             return ToolResult(tool_name="form_extract", success=False, stdout="", stderr=str(e), exit_code=1, elapsed_ms=0)
-        forms = []
-        for m in _re.finditer(r'<form[^>]*>(.*?)</form>', html, _re.I | _re.DOTALL):
-            tag = _re.search(r'<form[^>]*>', m.group(0), _re.I)
-            if not tag:
-                continue
-            action = _re.search(r"""action=["']([^"']*)["']""", tag.group(0), _re.I)
-            method = _re.search(r"""method=["'](\w+)["']""", tag.group(0), _re.I)
-            form = {"form_index": len(forms), "action": action.group(1) if action else "",
-                    "method": (method.group(1) or "post").upper() if method else "POST", "inputs": []}
-            for inp in _re.findall(r'<input[^>]*>', m.group(1), _re.I):
-                name = _re.search(r"""name=["'](\w+)["']""", inp, _re.I)
-                itype = _re.search(r"""type=["'](\w+)["']""", inp, _re.I)
-                value = _re.search(r"""value=["']([^"']*)["']""", inp, _re.I)
-                form["inputs"].append({"name": name.group(1) if name else "",
-                    "type": (itype.group(1) or "text").lower() if itype else "text",
-                    "value": value.group(1) if value else ""})
-            forms.append(form)
+        forms = _extract_html_forms(html)
         pw = 'type="password"' in html.lower()
         links = list(set(_re.findall(r"""href=["']([^"']+)["']""", html, _re.I)))[:30]
         result = {"url": url, "forms": forms, "password_field_present": pw, "links": links}
