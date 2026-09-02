@@ -21,3 +21,6 @@
 ## 相关模块
 
 `core/context.py`、`core/memory.py`、`core/metrics.py`、`data_model.py`。
+
+阶段预算包装器同时返回阶段状态与协程结果，确保 Runtime 生成的
+`TaskResult`（包括已验证 flag）不会在生命周期层丢失。

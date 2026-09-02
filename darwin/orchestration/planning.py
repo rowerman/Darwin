@@ -251,6 +251,16 @@ class PlanCoordinator(CoordinatorContext):
                         _resolved_port = int(_p)
                         break
 
+        # Reject cloud CLI tools for tasks whose evidence is an HTTP request.
+        # This is contract-driven (URL/method/data parameters and tool domain),
+        # so new HTTP tools participate without another port-specific branch.
+        _tool_specs = {}
+        try:
+            _tool_specs.update(self.attack_gateway.get_tool_specs())
+            _tool_specs.update(self.recon_gateway.get_tool_specs())
+        except Exception:
+            _tool_specs = {}
+
         # ── Protocol-aware tool validation ──
         # Build a set of VALID tools for each port discovered during bootstrap.
         # Any plan task targeting a known port with a protocol-incompatible tool
@@ -292,6 +302,38 @@ class PlanCoordinator(CoordinatorContext):
             if not isinstance(t, dict):
                 continue
             tool = str(t.get("tool", "")).strip()
+
+            _params_probe = t.get("params", {}) if isinstance(t.get("params"), dict) else {}
+            _evidence = " ".join([
+                str(t.get("instruction", "")),
+                str(_params_probe.get("url", "")),
+                str(_params_probe.get("target_url", "")),
+                str(_params_probe.get("command", "")),
+            ]).lower()
+            _spec = _tool_specs.get(tool)
+            _spec_domains = {str(d).lower() for d in getattr(_spec, "domains", [])} if _spec else set()
+            if tool and ("http://" in _evidence or "https://" in _evidence):
+                if "cloud" in _spec_domains and "url" not in getattr(_spec, "parameters", {}):
+                    _http_candidates = [
+                        name for name, spec in _tool_specs.items()
+                        if "url" in getattr(spec, "parameters", {})
+                        and ("method" in getattr(spec, "parameters", {})
+                             or "data" in getattr(spec, "parameters", {}))
+                    ]
+                    if len(_http_candidates) == 1:
+                        t["tool"] = _http_candidates[0]
+                        tool = _http_candidates[0]
+                        t["instruction"] = (
+                            t.get("instruction", "")
+                            + f" [auto-corrected by ToolSpec: {tool}]"
+                        )
+                    else:
+                        t["status"] = "skipped"
+                        t["instruction"] = (
+                            t.get("instruction", "")
+                            + " [rejected: no unique HTTP-compatible tool]"
+                        )
+                        continue
 
             # ── Post-generation tool inference ─────────────────────
             # When the plan LLM leaves tool empty, infer the correct
@@ -824,7 +866,7 @@ class PlanCoordinator(CoordinatorContext):
         degrades to a single plain generation call.
         """
         registry_tools: list[dict] = []
-        def _llm_timeout(default: float = 180.0) -> float:
+        def _llm_timeout(default: float = 60.0) -> float:
             return max(1.0, min(default, float(self._remaining_budget())))
         try:
             for _td in self.attack_gateway.get_tool_definitions():
@@ -931,18 +973,30 @@ class PlanCoordinator(CoordinatorContext):
             "Registry lookup %s final JSON valid=%s (format=%s, content_len=%d)",
             stage or "?", final_json_ok, call_format, len(content or ""),
         )
-        if not content or _parsed_completion == {}:
+        if not final_json_ok:
             retry_prompt = (
                 f"{prompt}\n\nReturn the final answer now as ONLY valid JSON. "
                 "Do not call tools, add markdown, or include explanations."
             )
             try:
+                # Registry tool-call history makes DeepSeek continue emitting
+                # DSML. Use a clean completion context while preserving the
+                # caller's history for subsequent exploit tasks.
+                _history = getattr(self.llm, "conversation_history", None)
+                if isinstance(_history, list):
+                    self.llm.conversation_history = []
                 retry_content, retry_calls = self.llm.generate(
                     prompt=retry_prompt,
                     system_prompt=system_prompt,
                     stage=stage,
                     timeout=_llm_timeout(),
                 )
+                if isinstance(_history, list):
+                    self.llm.conversation_history = _history
+                    if retry_content:
+                        self.llm.conversation_history.append(
+                            {"role": "assistant", "content": retry_content}
+                        )
                 if retry_content:
                     content, tool_calls = retry_content, retry_calls
             except Exception as _exc:
@@ -2788,6 +2842,11 @@ Output ONLY valid JSON:
         The LLM sees what was learned and can add/remove/reorder tasks.
         """
         if not getattr(self, 'exploitation_plan', None):
+            return
+        # Do not spend the last part of the exploit allowance on another
+        # full plan-review generation; preserve time for executable tasks.
+        if self._remaining_budget() < max(20.0, self.time_budget * 0.03):
+            log.info("Skipping plan review: %.1fs remain", self._remaining_budget())
             return
 
         # Local attack-path replan: paths that became stale/rejected release

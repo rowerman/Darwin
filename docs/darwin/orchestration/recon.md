@@ -29,6 +29,9 @@ Orchestrator 上下文读写状态并调用工具端口。
 
 `dkg.py`、`dpm.py`、`dave.py`、`ports.py`。
 
+HTTP 方法探测会根据 `key=value` 请求体自动选择表单编码；HTTP 响应中经
+DAVE 验证的 flag 会带来源和位置写入 DKG。
+
 深侦察的预检通过带 timeout 的 `curl_get` 完成；路径探测将工具解析出的真实
 HTTP 状态码写入 DKG，非 HTML 或错误状态端点不会进入 gobuster/nikto 重扫描。
 API 方法探测使用 recon 域的 `http_method_probe` 工具（OPTIONS/POST/JSON），

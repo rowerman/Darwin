@@ -734,7 +734,7 @@ def register_recon_tools(gateway: MCPGateway) -> MCPGateway:
     # ── Generic HTTP method probe (OPTIONS/POST/HEAD etc.) ──────
     async def _http_method_probe(
         url: str, method: str = "OPTIONS", data: str = "",
-        content_type: str = "application/json", headers: str = "",
+        content_type: str = "auto", headers: str = "",
         cookie: str = "", insecure: bool = False,
     ) -> ToolResult:
         """Send an arbitrary HTTP method (OPTIONS/POST/HEAD/PUT...) and return
@@ -748,7 +748,13 @@ def register_recon_tools(gateway: MCPGateway) -> MCPGateway:
                 ctx.check_hostname = False
                 ctx.verify_mode = ssl.CERT_NONE
             method = str(method or "OPTIONS").strip().upper()
-            hdrs = {"Content-Type": content_type or "application/json"}
+            if content_type in (None, "", "auto"):
+                content_type = (
+                    "application/x-www-form-urlencoded"
+                    if isinstance(data, str) and "=" in data
+                    else "application/json"
+                )
+            hdrs = {"Content-Type": content_type}
             if cookie:
                 hdrs["Cookie"] = cookie.strip().rstrip(";")
             if headers:
@@ -808,7 +814,7 @@ def register_recon_tools(gateway: MCPGateway) -> MCPGateway:
             "url": {"type": "string", "description": "Target URL"},
             "method": {"type": "string", "description": "HTTP method: OPTIONS, POST, HEAD, PUT...", "default": "OPTIONS"},
             "data": {"type": "string", "description": "Request body (JSON string for POST)", "default": ""},
-            "content_type": {"type": "string", "description": "Content-Type header", "default": "application/json"},
+            "content_type": {"type": "string", "description": "Content-Type header (auto detects form bodies containing key=value)", "default": "auto"},
             "headers": {"type": "string", "description": "Optional extra headers, pipe-separated (Key: val|Key2: val2)", "default": ""},
             "cookie": {"type": "string", "description": "Session cookie string", "default": ""},
             "insecure": {"type": "boolean", "description": "Skip TLS verification for self-signed certs", "default": False},

@@ -46,6 +46,11 @@ class EnvironmentClassifier:
         "iam", "eks", "lambda", "azure", "gcp", "google cloud",
         "cloud metadata",
     )
+    _CLOUD_NATIVE_TERMS = (
+        "kubernetes", "k8s", "pod", "node role", "cluster secret",
+        "inference", "ocid.", "block volume", "iam role", "service account",
+        "pickle", "model-as-code",
+    )
 
     @classmethod
     def classify(
@@ -130,6 +135,15 @@ class EnvironmentClassifier:
                         public = True
                         signals.append("dkg:cloud-credential")
                         providers.append("aws" if "aws" in text or "imds" in text else "")
+                # Endpoint/analysis bodies often carry the only cloud signal
+                # for local benchmark services whose banner is just Werkzeug.
+                for row in dkg.query_nodes("Endpoint") + dkg.query_nodes("Analysis"):
+                    evidence = " ".join(str(row.get(key, "") or "")
+                                         for key in ("sample_response", "content", "url", "type")).lower()
+                    matched = [term for term in cls._CLOUD_NATIVE_TERMS if term in evidence]
+                    if matched:
+                        public = True
+                        signals.append("dkg:cloud-evidence:" + matched[0])
             except Exception:
                 pass
 

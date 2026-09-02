@@ -98,7 +98,7 @@ class LifecycleCoordinator(CoordinatorContext):
         return max(0.0, deadline - time.monotonic())
 
     async def _run_phase_with_budget(self, name: str, awaitable):
-        """Run one phase under its allocation, carrying unused time forward."""
+        """Run one phase under its allocation and preserve its return value."""
         base = self.time_budget * self._PHASE_RATIOS[name]
         used = getattr(self._orch, "_phase_used", {}).get(name, 0.0)
         carry = getattr(self._orch, "_phase_carryover", 0.0)
@@ -110,10 +110,11 @@ class LifecycleCoordinator(CoordinatorContext):
                 close()
             self._task_log_event("warning", "phase_timeout", phase=name,
                                  allocated_s=0.0)
-            return False
+            return False, None
         started = time.monotonic()
+        value = None
         try:
-            await asyncio.wait_for(awaitable, timeout=allowance)
+            value = await asyncio.wait_for(awaitable, timeout=allowance)
         except asyncio.CancelledError:
             elapsed = time.time() - self.start_time
             result = TaskResult(
@@ -127,13 +128,13 @@ class LifecycleCoordinator(CoordinatorContext):
         except asyncio.TimeoutError:
             self._task_log_event("warning", "phase_timeout", phase=name,
                                  allocated_s=allowance)
-            return False
+            return False, None
         finally:
             elapsed = time.monotonic() - started
             self._orch._phase_used[name] = used + min(elapsed, allowance)
             unused = max(0.0, allowance - elapsed)
             self._orch._phase_carryover = unused
-        return True
+        return True, value
 
     async def run(
         self, task_description: str, target_url: str,
@@ -237,7 +238,7 @@ class LifecycleCoordinator(CoordinatorContext):
 
         try:
             # ── Phase 1: Bootstrap scan (nmap + HTTP probe) ──
-            await self._run_phase_with_budget(
+            _, _ = await self._run_phase_with_budget(
                 "recon", self._bootstrap_scan(target_url, port_range=port_range)
             )
             self._task_log_event("info", "bootstrap_done",
@@ -493,7 +494,7 @@ class LifecycleCoordinator(CoordinatorContext):
                         self._reanalyze_count += 1
 
                 if not self._svc_research_done:
-                    await self._run_phase_with_budget(
+                    _, _ = await self._run_phase_with_budget(
                         "service_research", self._service_research()
                     )
                     self._svc_research_done = True
@@ -510,7 +511,8 @@ class LifecycleCoordinator(CoordinatorContext):
 
                 # Phase 2: Analyze recon data + service research → vuln hypotheses
                 if not self._analyze_done:
-                    await self._run_phase_with_budget("analyze", self._analyze_phase())
+                    self.phase = OrchestratorPhase.ANALYZE
+                    _, _ = await self._run_phase_with_budget("analyze", self._analyze_phase())
                     self._analyze_done = True
                     # Snapshot current discovery count so we can detect
                     # significant new services/endpoints for re-analysis
@@ -536,7 +538,7 @@ class LifecycleCoordinator(CoordinatorContext):
                 # Phase 3: Research each vulnerability with tools
                 if self.vulnerabilities and not self._research_done:
                     log.info("[PHASE] _research_phase START")
-                    await self._run_phase_with_budget(
+                    _, _ = await self._run_phase_with_budget(
                         "vulnerability_research", self._research_phase()
                     )
                     self._research_done = True
@@ -554,9 +556,12 @@ class LifecycleCoordinator(CoordinatorContext):
                                       "vulns_researched": _researched})
 
                 # Phase 4: Runtime-driven loop (plan → execute → evaluate → replan)
-                phase_ok = await self._run_phase_with_budget(
+                self.phase = OrchestratorPhase.EXPLOIT
+                phase_ok, phase_result = await self._run_phase_with_budget(
                     "exploit", self._run_with_runtime(target_url, cteg_hints)
                 )
+                if phase_ok and isinstance(phase_result, TaskResult):
+                    result = phase_result
                 if not phase_ok:
                     result = TaskResult(
                         success=False, steps=self.step_count,

@@ -5,6 +5,7 @@ Owns port discovery, K8s cluster discovery, deep HTTP recon, defense detection a
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import os
@@ -338,6 +339,17 @@ from darwin.prompts.research import SYSTEM_PROMPT_RESEARCH
 from darwin.orchestration.context import CoordinatorContext
 
 class ReconCoordinator(CoordinatorContext):
+    def _persist_verified_flags(self, text: str, url: str, source: str) -> None:
+        for flag in self.flag_pattern.findall(text or ""):
+            valid, _ = DAVE.verify_basic(flag, text)
+            if not valid:
+                continue
+            flag_id = "flag-" + hashlib.sha1(flag.encode()).hexdigest()[:16]
+            self.dkg.add_node("Flag", flag_id, {
+                "value": flag, "location": url, "verified": True,
+                "source": source, "provenance": {"source": source, "url": url},
+            })
+
     async def _bootstrap_scan(self, target_url: str, port_range: str | None = None) -> None:
         """Minimal bootstrap: nmap port scan only. LLM drives all further recon.
 
@@ -802,6 +814,7 @@ class ReconCoordinator(CoordinatorContext):
                 "sample_content_type": _parse_status_and_content_type(stdout)[1],
                 "discovered_by": "bootstrap",
             })
+            self._persist_verified_flags(stdout, url, "bootstrap-http-response")
             self.dkg.add_edge(f"host-{host}", root_endpoint_id, "host_has_endpoint",
                               source="bootstrap", evidence=url)
             if isinstance(forms, list):

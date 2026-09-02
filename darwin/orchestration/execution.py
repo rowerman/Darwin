@@ -5,6 +5,7 @@ Owns per-task execution policies, defense probing, privilege escalation, the sys
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import os
@@ -225,6 +226,14 @@ class _RuntimeEvaluatorAdapter:
 
 
 class ExecutionCoordinator(CoordinatorContext):
+    def _persist_verified_flag(self, flag: str, location: str, source: str) -> None:
+        flag_id = "flag-" + hashlib.sha1(flag.encode()).hexdigest()[:16]
+        self.dkg.add_node("Flag", flag_id, {
+            "value": flag, "location": location, "verified": True,
+            "source": source,
+            "provenance": {"source": source, "location": location},
+        })
+
     def _task_anchor_ids(self, task: Task) -> list[str]:
         """Resolve task target to DKG node ids usable as topology anchors."""
         action = task.action or {}
@@ -1221,6 +1230,10 @@ class ExecutionCoordinator(CoordinatorContext):
                     tool_name=tc_name,
                 )
                 if is_valid:
+                    self._persist_verified_flag(
+                        flags[0], str(tc_args.get("url", tc_args.get("target_url", ""))),
+                        "exploit-tool",
+                    )
                     self.phase = OrchestratorPhase.DONE
                     execution.flag_result = TaskResult(
                         success=True, flag=flags[0], steps=self.step_count,
@@ -1326,6 +1339,10 @@ class ExecutionCoordinator(CoordinatorContext):
                         tool_name=_task_tool,
                     )
                     if is_valid:
+                        self._persist_verified_flag(
+                            flags[0], str(task_params.get("url", task_params.get("target_url", ""))),
+                            "exploit-retry",
+                        )
                         self.phase = OrchestratorPhase.DONE
                         execution.flag_result = TaskResult(
                             success=True, flag=flags[0],

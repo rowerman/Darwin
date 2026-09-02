@@ -779,9 +779,37 @@
       "last_successful_use": "2026-09-01T07:03:30",
       "half_life_days": 30,
       "created_at": "2026-09-01T07:03:30.353701"
+    },
+    {
+      "id": "ep-http_method_probe-task-178",
+      "type": "ExploitPattern",
+      "mechanism": "http_method_probe",
+      "abstract_description": "http_method_probe exploitation; via http_method_probe; on http://localhost:10630/run; (POST)",
+      "vulnerability_type": "http_method_probe",
+      "required_context": "",
+      "total_attempts": 4,
+      "total_successes": 0,
+      "success_rate": 0.0,
+      "last_successful_use": "",
+      "half_life_days": 30,
+      "created_at": "2026-09-02T06:23:33.581079"
+    },
+    {
+      "id": "ep-aws_cli-task-178",
+      "type": "ExploitPattern",
+      "mechanism": "aws_cli",
+      "abstract_description": "aws_cli exploitation; via aws_cli; (GET)",
+      "vulnerability_type": "aws_cli",
+      "required_context": "",
+      "total_attempts": 1,
+      "total_successes": 0,
+      "success_rate": 0.0,
+      "last_successful_use": "",
+      "half_life_days": 30,
+      "created_at": "2026-09-02T06:29:56.331727"
     }
   ],
   "edges": [],
-  "task_count": 102,
-  "created_at": "2026-09-01T06:59:04.022537"
+  "task_count": 104,
+  "created_at": "2026-09-02T06:24:02.113288"
 }

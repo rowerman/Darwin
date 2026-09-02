@@ -24,3 +24,6 @@
 
 `core/task.py`、`core/task_graph.py`、`core/schemas.py`、`cteg.py`、
 `ports.py`。
+
+注册表查询结束后使用无工具的结构化收敛请求；工具替换需依据已注册
+`ToolSpec` 的参数和域信息，无法唯一匹配时不猜测替换。

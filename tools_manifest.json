@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0.0",
-  "generated_at": "2026-08-29T07:43:01+00:00",
+  "generated_at": "2026-09-02T11:01:20+00:00",
   "source": "darwin.tools.manifest",
   "tool_count": 135,
   "tools": [
@@ -2212,8 +2212,8 @@
         },
         "content_type": {
           "type": "string",
-          "description": "Content-Type header",
-          "default": "application/json"
+          "description": "Content-Type header (auto detects form bodies containing key=value)",
+          "default": "auto"
         },
         "headers": {
           "type": "string",

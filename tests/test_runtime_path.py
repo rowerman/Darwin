@@ -6,6 +6,7 @@ memory/metrics recording, and the plan-exhausted stall review.
 """
 
 import pytest
+import time
 
 from darwin.data_model import ExploitationPlan
 from darwin.core.contracts import TaskStatus
@@ -123,6 +124,21 @@ async def test_runtime_path_llm_driven_flag_matches_legacy(
     assert result.success is True
     assert result.flag == FLAG
     assert recon_gw.calls == [("curl_get", {"url": "http://target:8000/"})]
+
+
+@pytest.mark.asyncio
+async def test_phase_budget_preserves_wrapped_result(make_orchestrator, fake_llm, fake_gateway):
+    orch = make_orchestrator(fake_llm(), fake_gateway({}), fake_gateway({}))
+    orch._run_deadline = time.monotonic() + 10
+    orch._phase_used = {name: 0.0 for name in orch.lifecycle._PHASE_RATIOS}
+    orch._phase_carryover = 0.0
+    ok, value = await orch.lifecycle._run_phase_with_budget("exploit", _return_value())
+    assert ok is True
+    assert value == "runtime-result"
+
+
+async def _return_value():
+    return "runtime-result"
 
 
 @pytest.mark.asyncio
