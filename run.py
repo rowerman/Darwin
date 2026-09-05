@@ -9,6 +9,7 @@ Usage:
     python run.py example.com --username test --password test
 """
 import asyncio
+import signal
 import sys
 import logging
 import argparse
@@ -80,6 +81,27 @@ async def main():
     )
     print("Starting penetration test ...\n")
 
+    def _on_sigterm():
+        print(
+            "[RUN] SIGTERM received — emitting partial result summary",
+            flush=True,
+        )
+        try:
+            print(
+                f"[RESULT] terminated=signal phase={orch.phase.value if orch.phase else '?'} "
+                f"elapsed={orch.time_elapsed:.0f}s",
+                flush=True,
+            )
+        except Exception:
+            pass
+
+    loop = asyncio.get_running_loop()
+    if hasattr(loop, "add_signal_handler"):
+        try:
+            loop.add_signal_handler(signal.SIGTERM, _on_sigterm)
+        except (NotImplementedError, RuntimeError):
+            pass
+
     result = await orch.run(
         task_description="Perform a comprehensive penetration test. Discover all open ports, enumerate services, identify vulnerabilities, exploit them, and capture proof flags.",
         target_url=target,
@@ -139,6 +161,12 @@ async def main():
     if result.error:
         print(f"Error:          {result.error}")
     print(f"{'='*50}")
+    print(
+        f"[RESULT] success={result.success} flag={result.flag or '(none)'} "
+        f"steps={result.steps} tokens={result.tokens_used} "
+        f"elapsed={result.time_elapsed:.1f}s",
+        flush=True,
+    )
 
 
 if __name__ == "__main__":

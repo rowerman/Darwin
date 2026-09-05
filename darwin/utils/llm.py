@@ -154,6 +154,7 @@ class LLMSession:
             temperature=temp,
             max_tokens=self.max_tokens,
             timeout=timeout,
+            max_retries=1,
         )
         # Pass the configured credential directly.  This is required when a
         # provider uses an OpenAI-compatible base URL: the model name is then
@@ -166,6 +167,10 @@ class LLMSession:
             kwargs["tools"] = tools
             kwargs["tool_choice"] = "auto"
 
+        log.info(
+            "LLM call stage=%s timeout=%.0fs tools=%d retries=1",
+            stage or "?", timeout, len(tools or []),
+        )
         response = litellm.completion(**kwargs)
         choice = response.choices[0]
 
@@ -228,6 +233,38 @@ class LLMSession:
             )
 
         return content, parsed_calls
+
+    async def generate_async(
+        self,
+        prompt: str,
+        system_prompt: str | None = None,
+        tools=None,
+        temperature: float | None = None,
+        timeout: float = 180.0,
+        stage: str | None = None,
+    ):
+        """Threaded variant of :meth:`generate` with a hard outer deadline.
+
+        The underlying completion call already carries a ``timeout``; the
+        ``asyncio.wait_for`` below guarantees the event loop regains control
+        even if a provider client ignores it (the stall seen in cloud-22
+        before the process was killed by the outer harness timeout).
+        """
+        import asyncio
+
+        timeout = max(1.0, float(timeout))
+        return await asyncio.wait_for(
+            asyncio.to_thread(
+                self.generate,
+                prompt,
+                system_prompt,
+                tools,
+                temperature,
+                timeout,
+                stage,
+            ),
+            timeout=timeout + 10.0,
+        )
 
     @staticmethod
     def _parse_dsml_tool_calls(content: str) -> List[Dict[str, Any]] | None:

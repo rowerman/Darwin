@@ -47,7 +47,7 @@ METHOD_OWNER = {
         "_format_vulnerability_summary_short",
     ],
     "planning": [
-        "_sanitize_plan_tools", "_generate_with_registry_lookup",
+        "_sanitize_plan_tools", "_generate_structured",
         "_generate_exploitation_plan", "_guess_tool", "_task_from_llm_dict",
         "_topological_sort", "_detect_cycle", "_break_cycle",
         "_select_next_plan_task", "_extract_recent_artifacts",

@@ -1,6 +1,6 @@
 """PlanCoordinator — exploitation plan generation and review.
 
-Owns plan sanitization, generation with registry lookup, cycle detection, plan review/fix and credential extraction. State and cross-coordinator calls are forwarded to the shared Orchestrator context.
+Owns plan sanitization, structured generation with schema repair, cycle detection, plan review/fix and credential extraction. State and cross-coordinator calls are forwarded to the shared Orchestrator context.
 """
 from __future__ import annotations
 
@@ -42,6 +42,7 @@ from darwin.core.schemas import (
     parse_research_findings,
     parse_service_research_findings,
 )
+from darwin.orchestration.structured import render_tool_contract_card
 from darwin.core.task import Task, deps_from_task_ids
 from darwin.core.task_graph import TaskGraph, dependency_task_ids
 from darwin.core.belief import (
@@ -87,6 +88,7 @@ from darwin.prompts.orchestrator import (
     SYSTEM_PROMPT_ANALYZE,
     SYSTEM_PROMPT_LOGIN,
     SYSTEM_PROMPT_BYPASS,
+    PLANNER_TASKS_SCHEMA_EXAMPLE,
 )
 from darwin.prompts.planner import SYSTEM_PROMPT_PLANNER
 from darwin.prompts.evaluator import SYSTEM_PROMPT_EVALUATOR
@@ -850,158 +852,77 @@ class PlanCoordinator(CoordinatorContext):
         # Sync appended hint tasks back to the caller's list.
         _caller_list[:] = _plan_tasks
 
-    async def _generate_with_registry_lookup(
+    async def _generate_structured(
         self,
+        stage: str,
         prompt: str,
+        validator: Any,
+        schema_example: str = "",
         system_prompt: str | None = None,
-        stage: str | None = None,
-        max_rounds: int = 2,
-    ) -> tuple[str, list | None, bool]:
-        """Run an LLM generation round where the model may query the tool
-        registry (tool_registry_list / tool_registry_get) before producing
-        its final response.
+        max_attempts: int = 2,
+    ) -> tuple[str, Any | None, str]:
+        """Single-shot structured generation with schema repair.
 
-        Returns ``(content, tool_calls, registry_used)``. When the gateways
-        do not expose the registry tools (tests, minimal deployments), this
-        degrades to a single plain generation call.
+        Unlike the old registry-lookup loop, no tools are exposed to the
+        model here: the caller embeds the needed tool contracts directly in
+        ``prompt``.  ``validator(content)`` must return ``(parsed, err)``.
+
+        Returns ``(content, parsed, err)`` — ``parsed`` is ``None`` when every
+        attempt failed validation; the concrete schema error is always echoed
+        to stdout so result files expose the failure instead of silently
+        degrading.
         """
-        registry_tools: list[dict] = []
         def _llm_timeout(default: float = 60.0) -> float:
             return max(1.0, min(default, float(self._remaining_budget())))
-        try:
-            for _td in self.attack_gateway.get_tool_definitions():
-                _name = _td.get("function", {}).get("name", "")
-                if _name in ("tool_registry_list", "tool_registry_get"):
-                    registry_tools.append(_td)
-        except Exception:
-            pass
 
-        if not registry_tools:
-            content, tool_calls = self.llm.generate(
-                prompt=prompt, system_prompt=system_prompt, stage=stage,
-                timeout=_llm_timeout(),
-            )
-            if not content or self._extract_json(content) == {}:
-                try:
-                    retry_content, retry_calls = self.llm.generate(
-                        prompt=(f"{prompt}\n\nReturn ONLY valid JSON now; "
-                                "do not call tools or add explanations."),
-                        system_prompt=system_prompt, stage=stage,
-                        timeout=_llm_timeout(),
-                    )
-                    if retry_content:
-                        content, tool_calls = retry_content, retry_calls
-                except Exception as _exc:
-                    log.warning("Structured %s retry failed: %s", stage or "LLM", _exc)
-            return content, tool_calls, False
-
-        registry_tool_names = {
-            str(td.get("function", {}).get("name", ""))
-            for td in registry_tools
-        }
-        registry_used = False
         content = ""
-        tool_calls = None
-        call_format = "none"
-        for _round in range(max_rounds):
-            _round_prompt = (
-                prompt if _round == 0
-                else "Continue. When you have the tool details you need, "
-                     "output your final JSON response."
-            )
-            content, tool_calls = self.llm.generate(
-                prompt=_round_prompt,
-                system_prompt=system_prompt,
-                tools=registry_tools,
-                stage=stage,
-                timeout=_llm_timeout(),
-            )
-            if not tool_calls:
-                break
-            registry_used = True
-            call_format = (
-                "dsml" if any(str(tc.get("id", "")).startswith("dsml-")
-                              for tc in tool_calls)
-                else "openai"
-            )
+        err = ""
+        for attempt in range(1, max_attempts + 1):
+            attempt_prompt = prompt
+            if attempt > 1:
+                attempt_prompt = (
+                    f"{prompt}\n\n[SCHEMA REPAIR ATTEMPT {attempt}/{max_attempts}]\n"
+                    "Your previous response was rejected because it does not match "
+                    "the required JSON schema.\n"
+                    + (f"Schema reference:\n{schema_example}\n" if schema_example else "")
+                    + f"Validation errors:\n{err[:1200]}\n"
+                    + "Return the corrected response as ONLY the required JSON. "
+                      "No markdown, no extra keys, no commentary."
+                )
+            timeout = _llm_timeout()
             log.info(
-                "Registry lookup %s: %d tool call(s) in %s format",
-                stage or "?", len(tool_calls), call_format,
-            )
-            for tc in tool_calls:
-                tc_name = tc.get("name", "")
-                tc_args = tc.get("arguments", {})
-                tc_id = tc.get("id", "")
-                if tc_name not in registry_tool_names:
-                    self.llm.add_tool_result(
-                        tc_id,
-                        f"Tool '{tc_name}' is not allowed during {stage or 'structured'} lookup; "
-                        "return only the requested structured JSON.",
-                    )
-                    log.warning(
-                        "Rejected non-registry tool '%s' during %s lookup",
-                        tc_name, stage or "structured",
-                    )
-                    continue
-                try:
-                    if tc_name in self.attack_gateway.get_tool_names():
-                        result = await self._call_tool(tc_name, tc_args)
-                    elif tc_name in self.recon_gateway.get_tool_names():
-                        result = await self._call_tool(tc_name, tc_args)
-                    else:
-                        continue
-                    tool_stdout = self._format_tool_feedback(
-                        tc_name, tc_args, result, ""
-                    )
-                    self.llm.add_tool_result(tc_id, tool_stdout[:3000])
-                except Exception as _exc:
-                    self.llm.add_tool_result(
-                        tc_id, f"Tool '{tc_name}' failed: {_exc} — skipping"
-                    )
-        # Registry calls must converge to a structured payload.  A model can
-        # spend the final round issuing another lookup and leave ``content``
-        # empty; give it one tool-free, JSON-only completion opportunity.
-        _parsed_completion = self._extract_json(content) if content else {}
-        if isinstance(_parsed_completion, dict):
-            final_json_ok = bool(_parsed_completion)
-        else:
-            final_json_ok = (
-                isinstance(_parsed_completion, list)
-                and len(_parsed_completion) > 0
-            )
-        log.info(
-            "Registry lookup %s final JSON valid=%s (format=%s, content_len=%d)",
-            stage or "?", final_json_ok, call_format, len(content or ""),
-        )
-        if not final_json_ok:
-            retry_prompt = (
-                f"{prompt}\n\nReturn the final answer now as ONLY valid JSON. "
-                "Do not call tools, add markdown, or include explanations."
+                "Structured generation stage=%s attempt=%d/%d timeout=%.0fs "
+                "(no registry tools exposed)",
+                stage, attempt, max_attempts, timeout,
             )
             try:
-                # Registry tool-call history makes DeepSeek continue emitting
-                # DSML. Use a clean completion context while preserving the
-                # caller's history for subsequent exploit tasks.
-                _history = getattr(self.llm, "conversation_history", None)
-                if isinstance(_history, list):
-                    self.llm.conversation_history = []
-                retry_content, retry_calls = self.llm.generate(
-                    prompt=retry_prompt,
+                content, _ = await self._llm_generate_async(
+                    prompt=attempt_prompt,
                     system_prompt=system_prompt,
                     stage=stage,
-                    timeout=_llm_timeout(),
+                    timeout=timeout,
                 )
-                if isinstance(_history, list):
-                    self.llm.conversation_history = _history
-                    if retry_content:
-                        self.llm.conversation_history.append(
-                            {"role": "assistant", "content": retry_content}
-                        )
-                if retry_content:
-                    content, tool_calls = retry_content, retry_calls
-            except Exception as _exc:
-                log.warning("Structured %s retry failed: %s", stage or "LLM", _exc)
-        return content, tool_calls, registry_used
+            except asyncio.TimeoutError:
+                err = "LLM call timed out"
+                log.warning("Structured %s attempt %d timed out", stage, attempt)
+                continue
+            except Exception as exc:  # noqa: BLE001 - surfaced to repair loop
+                err = f"LLM call failed: {exc}"
+                log.warning("Structured %s attempt %d failed: %s", stage, attempt, exc)
+                continue
+            if not content or not str(content).strip():
+                err = "empty response (no content)"
+                continue
+            parsed, err = validator(content)
+            if parsed is not None:
+                return content, parsed, ""
+            log.warning(
+                "Structured %s attempt %d rejected: %s", stage, attempt, err[:300],
+            )
+
+        print(f"[SCHEMA] {stage}: invalid after {max_attempts} attempt(s) — {err[:400]}",
+              flush=True)
+        return content, None, err
 
     async def _generate_exploitation_plan(self, target_url: str, cteg_hints: dict | None = None) -> ExploitationPlan:
         """Generate a structured plan from bootstrap state (nmap results only).
@@ -1425,8 +1346,15 @@ class PlanCoordinator(CoordinatorContext):
             log.info("[ARTIFACT-BRIDGE] %d recommendations: %s",
                      len(_artifact_lines), ", ".join(sorted(_artifact_seen)))
 
-        # Tool candidates derived from the current hypotheses — a compact
-        # fallback so planning never degrades if the LLM skips registry lookup.
+        _all_tool_defs: list[dict] = []
+        for _gw in (self.attack_gateway, self.recon_gateway):
+            try:
+                _all_tool_defs.extend(_gw.get_tool_definitions())
+            except Exception:
+                pass
+        _tool_card = render_tool_contract_card(_all_tool_defs)
+
+        # Tool candidates derived from the current hypotheses.
         _candidate_tools: list[str] = []
         for _v in self.vulnerabilities:
             if _v.suggested_tool and _v.suggested_tool not in _candidate_tools:
@@ -1435,12 +1363,15 @@ class PlanCoordinator(CoordinatorContext):
             if _gt and _gt not in _candidate_tools:
                 _candidate_tools.append(_gt)
         _candidate_tools_section = (
-            "\n## Tool Candidates (hints — verify details in the registry)\n"
-            "Candidate tools for the current hypotheses: "
-            + (", ".join(_candidate_tools) if _candidate_tools
-               else "(none — use tool_registry_list)")
-            + "\nUse tool_registry_get(name) to fetch the exact parameter "
-              "contract before writing each task. Do NOT guess parameter names.\n"
+            "\n## Tool Candidates (for the current hypotheses)\n"
+            "Candidate tools: "
+            + (", ".join(_candidate_tools) if _candidate_tools else "(none)")
+            + "\nUse EXACT names and parameters from the Tool Contract Card below.\n"
+        )
+        _self_describing = any(
+            ep.sample_response.startswith("{")
+            and '"endpoints"' in ep.sample_response
+            for ep in state.endpoints
         )
 
         # P4: gated CTEG hints finally reach the plan LLM. cteg_hints is
@@ -1471,6 +1402,7 @@ class PlanCoordinator(CoordinatorContext):
 - {len(state.endpoints)} endpoints discovered so far
 - {len(state.services)} services detected
 - Credentials: {len(state.credentials)} known
+- API self-describing: {'YES' if _self_describing else 'no'}
 {phase_summary}{_cteg_block}
 {_topology_context}
 ## Analyzed Vulnerabilities
@@ -1486,10 +1418,10 @@ You have received multiple intelligence sources above:
 
 Your job: COMBINE these sources when designing each task.
 **CRITICAL — Unfamiliar Services/Technologies:** If you are not 100% certain how to exploit a
-discovered service or technology, call `knowledge_search` tool FIRST with an empty category
-to search the knowledge base for concrete exploitation techniques before writing tasks for it.
-Do NOT assume — services like Oracle TNS, CouchDB, Elasticsearch, Redis, and MongoDB each
-have protocol-specific exploitation methods that differ from generic HTTP exploitation.
+discovered service or technology, mine the RAG/attack-pattern knowledge and vulnerability
+evidence above for concrete exploitation techniques before writing tasks for it. Do NOT
+assume — services like Oracle TNS, CouchDB, Elasticsearch, Redis, and MongoDB each have
+protocol-specific exploitation methods that differ from generic HTTP exploitation.
 **CRITICAL for WeakAuth/default credentials:** When RAG results contain specific credential
 combinations (username:password pairs), you MUST include EVERY listed combination in your
 batch credential test. Do NOT rely on your own memory of "common passwords" — the RAG
@@ -1500,14 +1432,11 @@ entries are the authoritative source for service-specific defaults.
 - Service versions are primary signals: an outdated service with known weaknesses should generate high-priority exploitation tasks targeting those specific weaknesses.
 - If the analyze phase produced attack_paths, translate each path into a chain of tasks with dependent_task_ids reflecting the path's step ordering. A 4-step path becomes 4 tasks where each depends on the previous one.
 - Tasks targeting DIFFERENT services or vulnerabilities with no shared prerequisites should have empty dependent_task_ids so they can execute in parallel.
+- If 'API self-describing: YES', the root response already documented every route — do NOT
+  add directory enumeration, route fuzzing, dirb, gobuster or ffuf tasks for those services.
 
-## Tool Discovery
-The full tool list is NOT embedded in this prompt — use the read-only
-registry tools to discover tools and their exact parameter contracts:
-- tool_registry_list(domain=..., capability=..., keyword=...) — find
-  candidate tools for the current scenario.
-- tool_registry_get(name) — fetch the FULL contract (exact parameter names,
-  required vs optional, aliases) for one tool.
+## Tool Contract Card (use these EXACT tool names and parameters)
+{_tool_card}
 {_candidate_tools_section}
 
 {chr(10).join(['## RAG-Endpoint Probe Results (verified — these ENDPOINTS EXIST on the target):'] + probed_rag_endpoints) if probed_rag_endpoints else ''}
@@ -1594,34 +1523,15 @@ task-1 and task-2 run first (parallel, independent). task-3 waits for both.
 Output ONLY valid JSON array (3-20 tasks depending on complexity. More tasks != better — prefer focused, high-impact exploitation tasks over exhaustive probing)."""
 
         self._maybe_compress()
+        content, _plan_model, _plan_err = await self._orch._generate_structured(
+            stage="plan",
+            prompt=prompt,
+            validator=parse_plan_tasks,
+            schema_example=PLANNER_TASKS_SCHEMA_EXAMPLE,
+            system_prompt=SYSTEM_PROMPT_ORCHESTRATOR_UNIFIED,
+        )
         try:
-            content, _, _ = await self._orch._generate_with_registry_lookup(
-                prompt=prompt,
-                system_prompt=SYSTEM_PROMPT_ORCHESTRATOR_UNIFIED,
-                stage="plan",
-            )
-        except Exception as e:
-            log.warning("Plan generation LLM call failed: %s — retrying with shorter prompt", e)
-            self._maybe_compress()
-            try:
-                # Retry with top-5 vulns only (shorter prompt)
-                short_prompt = prompt.split("## Analyzed Vulnerabilities")[0]
-                if self.vulnerabilities:
-                    short_vulns = self._format_vulnerability_summary_short(max_items=5)
-                    short_prompt += f"## Analyzed Vulnerabilities\n{short_vulns}\n"
-                short_prompt += prompt.split("## Available Tools")[1] if "## Available Tools" in prompt else ""
-                content, _ = self.llm.generate(prompt=short_prompt, system_prompt=SYSTEM_PROMPT_ORCHESTRATOR_UNIFIED, timeout=180.0, stage="plan")
-            except Exception as e2:
-                log.warning("Plan generation retry also failed: %s — using hardcoded fallback", e2)
-                content = ""
-
-        try:
-            _plan_model, _schema_err = parse_plan_tasks(content)
             if _plan_model is None:
-                self._task_log_event(
-                    "warning", "schema_violation",
-                    boundary="plan", error=str(_schema_err)[:400],
-                )
                 raw_tasks = [t for t in (self._extract_json_array(content) or []) if isinstance(t, dict)]
                 tasks = [self._task_from_llm_dict(t) for t in raw_tasks]
             else:
@@ -2539,7 +2449,7 @@ Output ONLY valid JSON:
 {{"fixable": true/false, "corrected_params": {{...}}, "partial_success": true/false, "credentials": {{...}}, "reason": "..."}}"""
 
         try:
-            content, _ = self.llm.generate(
+            content, _ = await self._llm_generate_async(
                 prompt=prompt, system_prompt=SYSTEM_PROMPT_EVALUATOR,
                 stage="fix_analysis",
             )
@@ -3158,6 +3068,14 @@ Output ONLY valid JSON:
         except Exception:
             pass
 
+        _review_tool_defs: list[dict] = []
+        for _gw in (self.attack_gateway, self.recon_gateway):
+            try:
+                _review_tool_defs.extend(_gw.get_tool_definitions())
+            except Exception:
+                pass
+        _review_tool_card = render_tool_contract_card(_review_tool_defs)
+
         prompt = (
             f"Just completed: {task.instruction}\n"
             f"Tool: {_task_tool}\n"
@@ -3200,22 +3118,21 @@ Output ONLY valid JSON:
             f"Each task object MUST contain ONLY these keys: id, dependent_task_ids, "
             f"instruction, tool, params, reason, priority. Do NOT include status or "
             f"dependencies — the system owns task status. "
-            f"Preserve done/failed tasks. Output ONLY valid JSON array."
+            f"Preserve done/failed tasks. Output ONLY valid JSON array.\n\n"
+            f"## Tool Contract Card (use EXACT names/params)\n"
+            f"{_review_tool_card}"
         )
 
         try:
             self._maybe_compress()
-            content, _, _ = await self._orch._generate_with_registry_lookup(
-                prompt=prompt,
-                system_prompt=SYSTEM_PROMPT_PLANNER,
+            content, _review_model, _review_err = await self._orch._generate_structured(
                 stage="plan_review",
+                prompt=prompt,
+                validator=parse_plan_tasks,
+                schema_example=PLANNER_TASKS_SCHEMA_EXAMPLE,
+                system_prompt=SYSTEM_PROMPT_PLANNER,
             )
-            _review_model, _schema_err = parse_plan_tasks(content)
             if _review_model is None:
-                self._task_log_event(
-                    "warning", "schema_violation",
-                    boundary="plan_review", error=str(_schema_err)[:400],
-                )
                 new_tasks = self._extract_json_array(content) or []
             else:
                 new_tasks = [t.model_dump() for t in _review_model]

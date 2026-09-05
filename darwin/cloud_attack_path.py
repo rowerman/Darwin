@@ -521,7 +521,7 @@ def compute_attack_paths(dkg: DKG, categories: set[str] | None = None) -> Attack
         try:
             priv_paths = find_privilege_escalation_paths(dkg)
             all_paths.extend(priv_paths)
-            log.info("CTAGE Reasoner: found %d privilege escalation paths", len(priv_paths))
+            log.debug("CTAGE Reasoner: found %d privilege escalation paths", len(priv_paths))
         except Exception as e:
             log.debug("CTAGE Reasoner: privilege escalation analysis failed: %s", e)
 
@@ -530,7 +530,7 @@ def compute_attack_paths(dkg: DKG, categories: set[str] | None = None) -> Attack
         try:
             escape_paths = find_container_escape_paths(dkg)
             all_paths.extend(escape_paths)
-            log.info("CTAGE Reasoner: found %d container escape paths", len(escape_paths))
+            log.debug("CTAGE Reasoner: found %d container escape paths", len(escape_paths))
         except Exception as e:
             log.debug("CTAGE Reasoner: container escape analysis failed: %s", e)
 
@@ -539,7 +539,7 @@ def compute_attack_paths(dkg: DKG, categories: set[str] | None = None) -> Attack
         try:
             lateral_paths = find_lateral_movement_paths(dkg)
             all_paths.extend(lateral_paths)
-            log.info("CTAGE Reasoner: found %d lateral movement paths", len(lateral_paths))
+            log.debug("CTAGE Reasoner: found %d lateral movement paths", len(lateral_paths))
         except Exception as e:
             log.debug("CTAGE Reasoner: lateral movement analysis failed: %s", e)
 
@@ -548,7 +548,7 @@ def compute_attack_paths(dkg: DKG, categories: set[str] | None = None) -> Attack
         try:
             cross_paths = find_cross_account_paths(dkg)
             all_paths.extend(cross_paths)
-            log.info("CTAGE Reasoner: found %d cross-account paths", len(cross_paths))
+            log.debug("CTAGE Reasoner: found %d cross-account paths", len(cross_paths))
         except Exception as e:
             log.debug("CTAGE Reasoner: cross-account analysis failed: %s", e)
 
@@ -556,7 +556,7 @@ def compute_attack_paths(dkg: DKG, categories: set[str] | None = None) -> Attack
         try:
             data_paths = find_cloud_data_plane_paths(dkg)
             all_paths.extend(data_paths)
-            log.info("CTAGE Reasoner: found %d cloud data-plane paths", len(data_paths))
+            log.debug("CTAGE Reasoner: found %d cloud data-plane paths", len(data_paths))
         except Exception as e:
             log.debug("CTAGE Reasoner: cloud data-plane analysis failed: %s", e)
 

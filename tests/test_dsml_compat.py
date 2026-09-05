@@ -272,8 +272,13 @@ class _RegistryGateway:
 
 
 @pytest.mark.asyncio
-async def test_registry_lookup_dsml_query_converges_to_final_json(monkeypatch):
-    """DSML registry query is executed, then a final JSON plan is requested."""
+async def test_structured_generation_repairs_dsml_content_without_registry(
+    monkeypatch,
+):
+    """DSML-style content is schema-invalid; repair converges without ever
+    executing registry/gateway tools (structured stages are tool-free)."""
+    from darwin.core.schemas import parse_plan_tasks
+
     dsml = (
         '<invoke name="tool_registry_get">'
         '<parameter name="name">curl_get</parameter>'
@@ -287,40 +292,48 @@ async def test_registry_lookup_dsml_query_converges_to_final_json(monkeypatch):
     llm = _RegistryDSMLLLM(dsml, final_plan)
     orch, recon_gw, attack_gw = _make_orchestrator(llm, monkeypatch)
 
-    content, tool_calls, registry_used = await orch.planning._generate_with_registry_lookup(
-        prompt="Generate a plan", stage="plan",
+    content, parsed, err = await orch.planning._generate_structured(
+        stage="plan",
+        prompt="Generate a plan",
+        validator=parse_plan_tasks,
+        system_prompt="sys",
     )
 
-    assert registry_used is True
-    assert tool_calls is None
+    assert parsed is not None
+    assert err == ""
     assert json.loads(content) == json.loads(final_plan)
-    # the DSML tool call id reached add_tool_result
-    assert any(
-        item[0] == "add_tool_result" and item[1] == "dsml-1"
-        for item in llm.calls
-    )
-    assert ("tool_registry_get", {"name": "curl_get"}) in attack_gw.calls
-    # final JSON was validated: the loop did NOT issue a second registry call
-    assert len(attack_gw.calls) == 1
+    # structured generation must never execute tools, even when the model
+    # emits DSML markup instead of plain JSON.
+    assert attack_gw.calls == []
+    assert recon_gw.calls == []
+    assert len([c for c in llm.calls if c[0] == "generate"]) == 2
 
 
 @pytest.mark.asyncio
-async def test_registry_lookup_rejects_non_registry_tool(monkeypatch):
+async def test_structured_generation_rejects_non_json_without_tools(
+    monkeypatch, capsys,
+):
+    from darwin.core.schemas import parse_plan_tasks
+
     class _UnexpectedToolLLM(_RegistryDSMLLLM):
         def generate(self, prompt, system_prompt=None, tools=None,
                      temperature=None, timeout=180.0, stage=None):
             self.calls.append(("generate", stage))
-            if self.step == 0:
-                self.step += 1
-                return "", [{"id": "bad-1", "name": "send_payload", "arguments": {}}]
             self.step += 1
-            return "[]", None
+            return (
+                '<invoke name="send_payload"><parameter name="url">x</parameter>'
+                "</invoke>",
+                [{"id": "bad-1", "name": "send_payload", "arguments": {}}],
+            )
 
     llm = _UnexpectedToolLLM("", "[]")
     orch, recon_gw, attack_gw = _make_orchestrator(llm, monkeypatch)
-    content, _, _ = await orch.planning._generate_with_registry_lookup(
-        prompt="Generate a plan", stage="plan",
+    content, parsed, err = await orch.planning._generate_structured(
+        stage="plan", prompt="Generate a plan", validator=parse_plan_tasks,
+        max_attempts=2,
     )
-    assert content == "[]"
+    assert parsed is None
+    assert err
     assert attack_gw.calls == []
-    assert any(item[0] == "add_tool_result" and item[1] == "bad-1" for item in llm.calls)
+    assert recon_gw.calls == []
+    assert "[SCHEMA] plan:" in capsys.readouterr().out

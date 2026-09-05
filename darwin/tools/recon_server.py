@@ -6,10 +6,36 @@ Reference: VulnBot roles/collector.py — tool list for recon agent
 from __future__ import annotations
 
 import json
+import logging
+import os
 import re
+from pathlib import Path
 from typing import Any, Dict, List
 
 from darwin.tools.mcp_gateway import MCPGateway, ToolResult
+
+
+_LOG = logging.getLogger(__name__)
+
+# DARWIN Cloud Benchmark 的 nmap 服务探针片段（benchmark 仓库为单一事实来源）。
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+_DEFAULT_CLOUD_PROBES = (
+    _REPO_ROOT.parent
+    / "benchmark"
+    / "cve_challenges"
+    / "scripts"
+    / "nmap-cloud-probes.txt"
+)
+
+# 系统 nmap-service-probes 只读候选位置（merge 的基础库）。
+_SYSTEM_PROBES_CANDIDATES = (
+    "/usr/share/nmap/nmap-service-probes",
+    "/usr/local/share/nmap/nmap-service-probes",
+    "/opt/homebrew/share/nmap/nmap-service-probes",
+)
+
+_CLOUD_PROBES_MARKER = "DARWIN Cloud Benchmark"
+_nmap_cloud_probes_ready = False
 
 
 def _parse_nmap_output(stdout: str) -> Dict[str, Any]:
@@ -323,6 +349,71 @@ def parse_response(data: str, content_type: str = "auto") -> Dict[str, Any]:
     return result
 
 
+def _system_probes_candidates() -> List[Path]:
+    """System nmap-service-probes locations, Windows install dirs included."""
+    paths: List[Path] = []
+    for env_name in ("ProgramFiles(x86)", "ProgramFiles"):
+        env_dir = os.environ.get(env_name)
+        if env_dir:
+            paths.append(Path(env_dir) / "Nmap" / "nmap-service-probes")
+    paths.extend(Path(p) for p in _SYSTEM_PROBES_CANDIDATES)
+    return paths
+
+
+def _find_system_service_probes() -> Path | None:
+    return next((p for p in _system_probes_candidates() if p.is_file()), None)
+
+
+def _cloud_probes_path() -> Path | None:
+    override = os.environ.get("DARWIN_NMAP_CLOUD_PROBES")
+    path = Path(override) if override else _DEFAULT_CLOUD_PROBES
+    return path if path.is_file() else None
+
+
+def _nmap_probe_datadir() -> Path:
+    """Target datadir for the merged probes: NMAP_DATADIR, else ~/.nmap."""
+    override = os.environ.get("NMAP_DATADIR")
+    return Path(override) if override else Path.home() / ".nmap"
+
+
+def _ensure_nmap_cloud_probes() -> None:
+    """Merge DARWIN Cloud Benchmark probes into nmap's user datadir.
+
+    nmap 自动加载用户 datadir（~/.nmap 或 --datadir/NMAPDIR 指向目录）下的
+    nmap-service-probes，因此 -sV 无需额外参数即可识别云模拟服务。
+    幂等且尽力而为：源缺失或目标不可写时保持现状，不阻断扫描。
+    """
+    global _nmap_cloud_probes_ready
+    if _nmap_cloud_probes_ready:
+        return
+    system = _find_system_service_probes()
+    custom = _cloud_probes_path()
+    if system is None or custom is None:
+        return
+    target = _nmap_probe_datadir() / "nmap-service-probes"
+    try:
+        if target.exists():
+            try:
+                text = target.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                text = ""
+            if _CLOUD_PROBES_MARKER not in text:
+                return  # 用户自管文件，不覆盖
+            if target.stat().st_mtime >= max(system.stat().st_mtime, custom.stat().st_mtime):
+                _nmap_cloud_probes_ready = True
+                return
+        target.parent.mkdir(parents=True, exist_ok=True)
+        tmp_target = target.with_name(target.name + ".tmp")
+        custom_bytes = custom.read_bytes()
+        tmp_target.write_bytes(system.read_bytes() + b"\n" + custom_bytes)
+        os.replace(tmp_target, target)
+        _nmap_cloud_probes_ready = True
+        _LOG.info("merged cloud probes (%d lines) into %s",
+                  custom_bytes.count(b"\n") + 1, target)
+    except OSError as exc:
+        _LOG.warning("could not prepare nmap cloud probes at %s: %s", target, exc)
+
+
 def register_recon_tools(gateway: MCPGateway) -> MCPGateway:
     """Register all reconnaissance tools on the gateway.
 
@@ -492,6 +583,7 @@ def register_recon_tools(gateway: MCPGateway) -> MCPGateway:
             "target": {"type": "string", "description": "Target IP or hostname"},
         },
         parser=_parse_nmap_output,
+        prepare=_ensure_nmap_cloud_probes,
     )
 
     gateway.register_shell_tool(
@@ -503,6 +595,7 @@ def register_recon_tools(gateway: MCPGateway) -> MCPGateway:
         },
         parser=_parse_nmap_output,
         timeout=150,
+        prepare=_ensure_nmap_cloud_probes,
     )
 
     gateway.register_shell_tool(
@@ -516,6 +609,7 @@ def register_recon_tools(gateway: MCPGateway) -> MCPGateway:
         },
         parser=_parse_nmap_output,
         timeout=180,
+        prepare=_ensure_nmap_cloud_probes,
     )
 
     # ── nmap vulners: CVE detection for services ─────────────────
@@ -528,6 +622,7 @@ def register_recon_tools(gateway: MCPGateway) -> MCPGateway:
             "ports": {"type": "string", "description": "Ports to scan (e.g. '80,443' or '1-1000')"},
         },
         timeout=300,
+        prepare=_ensure_nmap_cloud_probes,
     )
 
     # ── masscan: Fast port scanning ─────────────────────────────

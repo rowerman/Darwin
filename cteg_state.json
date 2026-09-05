@@ -7,13 +7,13 @@
       "abstract_description": "sqli exploitation; via sqlmap_test; (GET)",
       "vulnerability_type": "sqli",
       "required_context": "",
-      "total_attempts": 8,
-      "total_successes": 8,
+      "total_attempts": 9,
+      "total_successes": 9,
       "success_rate": 1.0,
-      "last_successful_use": "2026-08-31T09:04:39.920584",
+      "last_successful_use": "2026-09-05T02:27:06.406556",
       "half_life_days": 30,
       "created_at": "2026-08-26T09:20:45.082842",
-      "reinforcement_count": 7
+      "reinforcement_count": 8
     },
     {
       "id": "ep-xss-task-4",
@@ -432,9 +432,9 @@
       "abstract_description": "INJECTION exploitation; via send_payload; on http://localhost:10605/create; (POST)",
       "vulnerability_type": "INJECTION",
       "required_context": "",
-      "total_attempts": 8,
+      "total_attempts": 9,
       "total_successes": 8,
-      "success_rate": 1.0,
+      "success_rate": 0.8888888888888888,
       "last_successful_use": "2026-08-31T09:16:53.669329",
       "half_life_days": 30,
       "created_at": "2026-08-31T08:00:16.496382",
@@ -632,7 +632,7 @@
       "abstract_description": "SQLI exploitation; via sqlmap_test; on http://localhost:10611/; (GET)",
       "vulnerability_type": "SQLI",
       "required_context": "",
-      "total_attempts": 3,
+      "total_attempts": 4,
       "total_successes": 0,
       "success_rate": 0.0,
       "last_successful_use": "",
@@ -807,9 +807,37 @@
       "last_successful_use": "",
       "half_life_days": 30,
       "created_at": "2026-09-02T06:29:56.331727"
+    },
+    {
+      "id": "ep-shell_exec-task-enu",
+      "type": "ExploitPattern",
+      "mechanism": "shell_exec",
+      "abstract_description": "shell_exec exploitation; via shell_exec; (GET)",
+      "vulnerability_type": "shell_exec",
+      "required_context": "",
+      "total_attempts": 1,
+      "total_successes": 1,
+      "success_rate": 1.0,
+      "last_successful_use": "2026-09-04T08:16:15",
+      "half_life_days": 30,
+      "created_at": "2026-09-04T08:16:15.756837"
+    },
+    {
+      "id": "ep-injection-task-2",
+      "type": "ExploitPattern",
+      "mechanism": "send_payload",
+      "abstract_description": "injection exploitation; via send_payload; (GET)",
+      "vulnerability_type": "injection",
+      "required_context": "",
+      "total_attempts": 1,
+      "total_successes": 1,
+      "success_rate": 1.0,
+      "last_successful_use": "2026-09-05T02:27:34",
+      "half_life_days": 30,
+      "created_at": "2026-09-05T02:27:34.050446"
     }
   ],
   "edges": [],
-  "task_count": 104,
-  "created_at": "2026-09-02T06:24:02.113288"
+  "task_count": 108,
+  "created_at": "2026-09-05T02:22:18.221245"
 }

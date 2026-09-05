@@ -167,6 +167,7 @@ class MCPGateway:
         timeout: int = 60, retries: int = 1,
         domain: str | None = None,
         spec: ToolSpec | None = None,
+        prepare: Callable[[], None] | None = None,
     ) -> None:
         """Register a shell command as a tool.
 
@@ -181,6 +182,9 @@ class MCPGateway:
             domain: Optional domain tag for filtering (e.g. 'web', 'k8s', 'cloud', 'ad').
                     Tools without a domain are always registered.
             spec: Optional explicit ToolSpec.
+            prepare: Optional best-effort callable run once before the command
+                    starts (e.g. lazy environment setup). Failures are logged
+                    and do not block execution.
         """
         # Domain filter: skip if domain is set and not in enabled_domains
         if domain is not None and self._enabled_domains is not None:
@@ -197,6 +201,13 @@ class MCPGateway:
         _defaults = {k: v["default"] for k, v in parameters.items() if isinstance(v, dict) and "default" in v}
 
         async def _execute(**kwargs) -> ToolResult:
+            if prepare is not None:
+                try:
+                    prepare()
+                except Exception as e:
+                    _log.warning(
+                        "MCPGateway: prepare hook failed for tool '%s': %s", name, e
+                    )
             try:
                 # Fill missing params from defaults
                 for k, v in _defaults.items():

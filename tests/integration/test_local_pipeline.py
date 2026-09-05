@@ -209,6 +209,9 @@ def cli_stub_path(tmp_path, local_http_target, monkeypatch):
             wrapper.chmod(wrapper.stat().st_mode | stat.S_IXUSR)
     monkeypatch.setenv("PATH", os.pathsep.join((str(stub_dir), os.environ.get("PATH", ""))))
     monkeypatch.setenv("DARWIN_STUB_LOG", str(stub_dir / "calls.log"))
+    # Keep nmap cloud-probe preparation (triggered by real recon gateway calls)
+    # inside the sandbox instead of the developer's real ~/.nmap.
+    monkeypatch.setenv("NMAP_DATADIR", str(tmp_path / "nmap-datadir"))
     return stub_dir
 
 

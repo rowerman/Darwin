@@ -734,6 +734,8 @@ class ExecutionCoordinator(CoordinatorContext):
                 "id": f"direct-{task.id}",
             }]
             print(f"\n[solo:{iteration}] task={task.id} → {task_tool} [direct]")
+            log.info("task=%s tool=%s [direct] start (iteration=%d)",
+                     task.id, task_tool, iteration)
         else:
             # LLM-driven execution for flexible/exploratory tasks
             self._maybe_compress()
@@ -795,7 +797,7 @@ class ExecutionCoordinator(CoordinatorContext):
                 (f"{_topology_subgraph}\n" if _topology_subgraph else "") +
                 f"\n{freedom_note}"
             )
-            content, task_tool_calls = self.llm.generate(
+            content, task_tool_calls = await self._llm_generate_async(
                 prompt=task_prompt,
                 system_prompt=SYSTEM_PROMPT_ORCHESTRATOR_UNIFIED,
                 tools=tool_defs,
@@ -804,7 +806,7 @@ class ExecutionCoordinator(CoordinatorContext):
 
             if not task_tool_calls:
                 # Retry once with more explicit instruction
-                content2, task_tool_calls = self.llm.generate(
+                content2, task_tool_calls = await self._llm_generate_async(
                     prompt=f"You MUST call the tool '{task_tool}' now. "
                            f"Do not explain. Just execute the function call.",
                     system_prompt=SYSTEM_PROMPT_ORCHESTRATOR_UNIFIED,
@@ -821,6 +823,8 @@ class ExecutionCoordinator(CoordinatorContext):
             tc_names = [tc.get('name', '?') for tc in task_tool_calls]
             print(f"\n[solo:{iteration}] task={task.id} → "
                   f"{', '.join(tc_names)}")
+            log.info("task=%s tool(s)=%s start (iteration=%d)",
+                     task.id, ", ".join(tc_names), iteration)
 
         # Execute tool calls for this task
         tc_names = [tc.get('name', '?') for tc in task_tool_calls]
@@ -1105,7 +1109,7 @@ class ExecutionCoordinator(CoordinatorContext):
                 log.info("[EXPLOIT] %s: DEFENSE — %s", tc_name,
                          defence_probe[:120].replace('\n', ' '))
             elif getattr(result, 'success', False):
-                log.debug("[EXPLOIT] %s: OK (exit=%d, %d bytes) — no flag",
+                log.info("[EXPLOIT] %s: OK (exit=%d, %d bytes) — no flag",
                           tc_name, result_exit, len(result_stdout))
                 _any_success = True
             else:
@@ -2049,13 +2053,30 @@ class ExecutionCoordinator(CoordinatorContext):
         vuln_type_counts: dict[str, int] = {}
         for v in vulns:
             vt = (v.get("vuln_type") or "").lower()
-            if vt:
-                vuln_type_counts[vt] = vuln_type_counts.get(vt, 0) + 1
-        mapped_counts = {vt: c for vt, c in vuln_type_counts.items() if _resolve_tools(vt)}
-        unmapped_counts = {vt: c for vt, c in vuln_type_counts.items() if not _resolve_tools(vt)}
+            display = vt if vt else "(untyped)"
+            vuln_type_counts[display] = vuln_type_counts.get(display, 0) + 1
+        mapped_counts = {
+            vt: c for vt, c in vuln_type_counts.items()
+            if vt == "(untyped)" or _resolve_tools(vt)
+        }
+        unmapped_counts = {
+            vt: c for vt, c in vuln_type_counts.items()
+            if vt != "(untyped)" and not _resolve_tools(vt)
+        }
         print(f"[systematic] {len(vulns)} vulns: {len(llm_vulns) + len(other_mapped)} mapped ({len(llm_vulns)} LLM-suggested), {len(unmapped_vulns)} unmapped")
         print(f"[systematic]   mapped types: {mapped_counts}")
         print(f"[systematic]   unmapped types: {unmapped_counts}")
+        _untyped_with_endpoint = sum(
+            1 for v in vulns
+            if not (v.get("vuln_type") or "").strip()
+            and (v.get("endpoint") or v.get("url"))
+        )
+        if _untyped_with_endpoint:
+            print(
+                f"[systematic]   {_untyped_with_endpoint} untyped vuln(s) with endpoint "
+                "-> attempted with fallback HTTP tools",
+                flush=True,
+            )
         if session_cookies:
             print(f"[systematic]   session cookies: {session_cookies[:80]}...")
 
@@ -2072,7 +2093,7 @@ class ExecutionCoordinator(CoordinatorContext):
             param = v.get("parameter", "") or v.get("param", "")
             source = v.get("source", "")
 
-            if not vt or not endpoint:
+            if not endpoint:
                 continue
             # Skip infrastructure ports
             if any(s.get("skip_exploit") for s in self.dkg.query_nodes("Service")

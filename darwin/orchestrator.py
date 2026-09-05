@@ -360,8 +360,19 @@ class Orchestrator:
     def _sanitize_plan_tools(self, tasks: list[Task]) -> None:
         return self.planning._sanitize_plan_tools(tasks)
 
-    async def _generate_with_registry_lookup(self, prompt: str, system_prompt: str | None=None, stage: str | None=None, max_rounds: int=3) -> tuple[str, list | None, bool]:
-        return await self.planning._generate_with_registry_lookup(prompt, system_prompt, stage, max_rounds)
+    async def _generate_structured(
+        self,
+        stage: str,
+        prompt: str,
+        validator,
+        schema_example: str = "",
+        system_prompt: str | None = None,
+        max_attempts: int = 2,
+    ) -> tuple[str, Any | None, str]:
+        """Structured artifact generation with schema repair (no registry loop)."""
+        return await self.planning._generate_structured(
+            stage, prompt, validator, schema_example, system_prompt, max_attempts
+        )
 
     async def _generate_exploitation_plan(self, target_url: str, cteg_hints: dict | None=None) -> ExploitationPlan:
         return await self.planning._generate_exploitation_plan(target_url, cteg_hints)

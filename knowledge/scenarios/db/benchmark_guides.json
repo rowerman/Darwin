@@ -13,19 +13,12 @@
       "couchdb-rce",
       "N/A (Erlang native view RCE)"
     ],
-    "tools": [
-      "curl_get",
-      "http_post",
-      "send_payload",
-      "docker_registry",
-      "container_escape_docker_sock",
-      "shell_exec"
-    ],
+    "tools": [],
     "prerequisites": [],
     "confidence": 0.6,
     "mitre_attack": "",
     "references": [],
-    "flag": "flag{[^",
+    "flag": "flag{[^}",
     "source": "../benchmark/cve_challenges/scenarios/db/couchdb-rce/GUIDE.md"
   },
   {
@@ -42,19 +35,12 @@
       "elasticsearch-script",
       "N/A (script injection)"
     ],
-    "tools": [
-      "curl_get",
-      "http_post",
-      "send_payload",
-      "docker_registry",
-      "container_escape_docker_sock",
-      "shell_exec"
-    ],
+    "tools": [],
     "prerequisites": [],
     "confidence": 0.6,
     "mitre_attack": "",
     "references": [],
-    "flag": "flag{[^",
+    "flag": "flag{[^}",
     "source": "../benchmark/cve_challenges/scenarios/db/elasticsearch-script/GUIDE.md"
   },
   {
@@ -71,20 +57,12 @@
       "mongodb-nosqli",
       "N/A (NoSQL injection)"
     ],
-    "tools": [
-      "curl_get",
-      "http_post",
-      "send_payload",
-      "docker_registry",
-      "container_escape_docker_sock",
-      "shell_exec",
-      "php_serialize_generate"
-    ],
+    "tools": [],
     "prerequisites": [],
     "confidence": 0.6,
     "mitre_attack": "",
     "references": [],
-    "flag": "flag{db-09-xxxxxxxxxxxxxxxx",
+    "flag": "flag{db-09-xxxxxxxxxxxxxxxx}",
     "source": "../benchmark/cve_challenges/scenarios/db/mongodb-nosqli/GUIDE.md"
   },
   {
@@ -101,18 +79,12 @@
       "mongodb-unauth",
       "N/A (misconfiguration)"
     ],
-    "tools": [
-      "docker_registry",
-      "container_escape_docker_sock",
-      "shell_exec",
-      "mongodb_query",
-      "nosql_inject"
-    ],
+    "tools": [],
     "prerequisites": [],
     "confidence": 0.6,
     "mitre_attack": "",
     "references": [],
-    "flag": "flag{[^",
+    "flag": "flag{[^}",
     "source": "../benchmark/cve_challenges/scenarios/db/mongodb-unauth/GUIDE.md"
   },
   {
@@ -129,18 +101,12 @@
       "mssql-linked-server",
       "MSSQL Linked Server"
     ],
-    "tools": [
-      "docker_registry",
-      "container_escape_docker_sock",
-      "shell_exec",
-      "mssqlclient_query",
-      "mssql_query"
-    ],
+    "tools": [],
     "prerequisites": [],
     "confidence": 0.6,
     "mitre_attack": "",
     "references": [],
-    "flag": "flag{db-04-xxxxxxxxxxxxxxxx",
+    "flag": "flag{db-04-xxxxxxxxxxxxxxxx}",
     "source": "../benchmark/cve_challenges/scenarios/db/mssql-linked-server/GUIDE.md"
   },
   {
@@ -158,9 +124,6 @@
       "MySQL UDF Abuse"
     ],
     "tools": [
-      "docker_registry",
-      "container_escape_docker_sock",
-      "shell_exec",
       "mysql_query",
       "mysql_file_write"
     ],
@@ -168,7 +131,7 @@
     "confidence": 0.6,
     "mitre_attack": "",
     "references": [],
-    "flag": "flag{db-02-xxxxxxxxxxxxxxxx",
+    "flag": "flag{db-02-xxxxxxxxxxxxxxxx}",
     "source": "../benchmark/cve_challenges/scenarios/db/mysql-udf-direct/GUIDE.md"
   },
   {
@@ -185,18 +148,12 @@
       "oracle-tns",
       "TNS Poisoning"
     ],
-    "tools": [
-      "docker_registry",
-      "container_escape_docker_sock",
-      "shell_exec",
-      "oracle_query",
-      "oracle_tns_poison"
-    ],
+    "tools": [],
     "prerequisites": [],
     "confidence": 0.6,
     "mitre_attack": "",
     "references": [],
-    "flag": "flag{db-03-xxxxxxxxxxxxxxxx",
+    "flag": "flag{db-03-xxxxxxxxxxxxxxxx}",
     "source": "../benchmark/cve_challenges/scenarios/db/oracle-tns/GUIDE.md"
   },
   {
@@ -213,17 +170,12 @@
       "postgres-weak-auth",
       "N/A (misconfiguration)"
     ],
-    "tools": [
-      "docker_registry",
-      "container_escape_docker_sock",
-      "shell_exec",
-      "psql_query"
-    ],
+    "tools": [],
     "prerequisites": [],
     "confidence": 0.6,
     "mitre_attack": "",
     "references": [],
-    "flag": "flag{db-01-xxxxxxxxxxxxxxxx",
+    "flag": "flag{db-01-xxxxxxxxxxxxxxxx}",
     "source": "../benchmark/cve_challenges/scenarios/db/postgres-weak-auth/GUIDE.md"
   },
   {
@@ -241,16 +193,13 @@
       "N/A (misconfiguration)"
     ],
     "tools": [
-      "docker_registry",
-      "container_escape_docker_sock",
-      "shell_exec",
       "redis_cmd"
     ],
     "prerequisites": [],
     "confidence": 0.6,
     "mitre_attack": "",
     "references": [],
-    "flag": "flag{db-05-xxxxxxxxxxxxxxxx",
+    "flag": "flag{db-05-xxxxxxxxxxxxxxxx}",
     "source": "../benchmark/cve_challenges/scenarios/db/redis-unauth/GUIDE.md"
   }
 ]

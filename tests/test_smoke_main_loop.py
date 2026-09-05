@@ -316,11 +316,11 @@ async def test_plan_generation_injects_matched_cteg_hints_only(monkeypatch):
     orch = _make_orchestrator(llm, FakeGateway({}), FakeGateway({}), monkeypatch)
     captured = {}
 
-    async def _fake_generate(prompt, system_prompt=None, stage=None):
+    async def _fake_generate(stage=None, prompt=None, **kwargs):
         captured["prompt"] = prompt
-        return "[]", None
+        return "[]", None, ""
 
-    monkeypatch.setattr(orch, "_generate_with_registry_lookup", _fake_generate)
+    monkeypatch.setattr(orch, "_generate_structured", _fake_generate)
     monkeypatch.setattr("darwin.rag.get_rag", lambda: None)
 
     matched = {
@@ -368,12 +368,12 @@ async def test_analyze_injects_cteg_section_only_when_matched(monkeypatch):
     async def _fake_probe():
         return ""
 
-    async def _fake_generate(prompt, system_prompt=None, stage=None):
+    async def _fake_generate(stage=None, prompt=None, **kwargs):
         captured["prompt"] = prompt
-        return '{"application_understanding": "test app", "vulnerabilities": []}', None, False
+        return '{"application_understanding": "test app", "vulnerabilities": []}', None, ""
 
     monkeypatch.setattr(orch, "_probe_endpoints", _fake_probe)
-    monkeypatch.setattr(orch, "_generate_with_registry_lookup", _fake_generate)
+    monkeypatch.setattr(orch, "_generate_structured", _fake_generate)
 
     stub_cteg.suggestions = {
         "bypass_strategies": [{"mechanism": "double_encode", "overlap": 0.9}],

@@ -26,22 +26,27 @@ def test_planner_prompt_has_planning_responsibilities():
     assert "dependent_task_ids" in SYSTEM_PROMPT_PLANNER
 
 
-def test_unified_prompt_uses_registry_instead_of_static_catalog():
-    assert "tool_registry_list" in SYSTEM_PROMPT_ORCHESTRATOR_UNIFIED
-    assert "tool_registry_get" in SYSTEM_PROMPT_ORCHESTRATOR_UNIFIED
+def test_unified_prompt_uses_contract_card_not_registry_loop():
+    assert "Tool Contract" in SYSTEM_PROMPT_ORCHESTRATOR_UNIFIED
+    assert "tool_registry_list" not in SYSTEM_PROMPT_ORCHESTRATOR_UNIFIED
+    assert "tool_registry_get" not in SYSTEM_PROMPT_ORCHESTRATOR_UNIFIED
     assert "scenario-based categories" not in SYSTEM_PROMPT_ORCHESTRATOR_UNIFIED
     assert "file:///PATH" not in SYSTEM_PROMPT_ORCHESTRATOR_UNIFIED
 
 
-def test_planner_prompt_uses_registry_instead_of_static_catalog():
-    assert "tool_registry_list" in SYSTEM_PROMPT_PLANNER
-    assert "tool_registry_get" in SYSTEM_PROMPT_PLANNER
+def test_planner_prompt_uses_contract_card_not_registry_loop():
+    assert "Tool Contract" in SYSTEM_PROMPT_PLANNER
+    assert "tool_registry_list" not in SYSTEM_PROMPT_PLANNER
+    assert "tool_registry_get" not in SYSTEM_PROMPT_PLANNER
     assert "scenario-based categories" not in SYSTEM_PROMPT_PLANNER
 
 
-def test_analyze_prompt_uses_registry_instead_of_static_catalog():
-    assert "tool_registry_list" in SYSTEM_PROMPT_ANALYZE
-    assert "tool_registry_get" in SYSTEM_PROMPT_ANALYZE
+def test_analyze_prompt_treats_labels_as_hints_and_keeps_low_confidence():
+    assert "Tool Contract" in SYSTEM_PROMPT_ANALYZE
+    assert "tool_registry_list" not in SYSTEM_PROMPT_ANALYZE
+    assert "tool_registry_get" not in SYSTEM_PROMPT_ANALYZE
+    assert "ATTACK-SURFACE HINTS" in SYSTEM_PROMPT_ANALYZE
+    assert "LOW confidence" in SYSTEM_PROMPT_ANALYZE
     assert "{attack_tools}" not in SYSTEM_PROMPT_ANALYZE
     assert "{recon_tools}" not in SYSTEM_PROMPT_ANALYZE
 

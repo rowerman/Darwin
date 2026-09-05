@@ -1658,6 +1658,12 @@ class ReconCoordinator(CoordinatorContext):
             tasks = [asyncio.create_task(_probe_one(ep)) for ep in batch]
             tasks += [asyncio.create_task(_probe_cms(ep)) for ep in batch]
             await asyncio.gather(*tasks, return_exceptions=True)
+        # Service labels are attack-surface hints: probe the management
+        # endpoints the label implies (OMI/WSMan -> /health, /wsman/exec...).
+        # Banner mismatches (e.g. Werkzeug page on an "OMI Agent" service) do
+        # not make these candidates less relevant — analysis needs the actual
+        # responses instead of guessing from a 404 root.
+        await self._probe_service_hint_paths()
         log.info("_deep_recon: complete")
 
         # ── Deep recon summary ──────────────────────────────────────
@@ -1678,6 +1684,91 @@ class ReconCoordinator(CoordinatorContext):
                 print(f"    {f.get('url','?')[:60]} params={pstr}")
             if len(forms) > 4:
                 print(f"    ... and {len(forms) - 4} more forms")
+
+    async def _probe_service_hint_paths(self) -> None:
+        """Probe label-implied management endpoints for HTTP services."""
+        import re as _re
+
+        # (label keywords, [(path, method), ...]) — framework-side hints only;
+        # benchmark scenarios/apps are untouched.
+        hints = [
+            (("omi agent", "wsman", "omigod"),
+             [("/health", "GET"), ("/wsman/exec", "POST")]),
+            (("kubelet",), [("/pods", "GET"), ("/metrics", "GET")]),
+            (("etcd",), [("/health", "GET"), ("/version", "GET")]),
+            (("kubernetes", "k8s api"), [("/healthz", "GET"), ("/version", "GET")]),
+            (("docker registry", "registry"),
+             [("/v2/_catalog", "GET")]),
+        ]
+        try:
+            existing_urls = {
+                str(e.get("url", "")).split("?")[0]
+                for e in self.dkg.query_nodes("Endpoint")
+            }
+            base_by_port: dict[int, str] = {}
+            for ep in self.dkg.query_nodes("Endpoint"):
+                m = _re.search(r":(\d+)(/|$)", str(ep.get("url", "")))
+                if m:
+                    base_by_port.setdefault(int(m.group(1)), str(ep.get("url", "")))
+            for svc in self.dkg.query_nodes("Service"):
+                port = svc.get("port")
+                if not port:
+                    continue
+                label = " ".join(
+                    str(svc.get(k, "") or "")
+                    for k in ("service_name", "banner", "version")
+                ).lower()
+                candidates = None
+                for keys, cands in hints:
+                    if any(k in label for k in keys):
+                        candidates = cands
+                        break
+                if not candidates:
+                    continue
+                base = base_by_port.get(int(port))
+                if not base:
+                    continue
+                root = base.rstrip("/")
+                for path, method in candidates:
+                    url = f"{root}{path}"
+                    if url in existing_urls:
+                        continue
+                    ep_id = (
+                        f"ep-hint-{port}-"
+                        + path.strip("/").replace("/", "-").replace("_", "-")
+                    )
+                    if method == "GET":
+                        try:
+                            res = await self._call_tool(
+                                "curl_get", {"url": url, "timeout": 5}
+                            )
+                            if res and getattr(res, "success", False):
+                                out = str(getattr(res, "stdout", "") or "")
+                                existing_urls.add(url)
+                                self.dkg.add_node("Endpoint", ep_id, {
+                                    "url": url, "method": "GET", "params": "",
+                                    "sample_status": 200 if out else 0,
+                                    "sample_response": out[:1500],
+                                    "response_size": len(out),
+                                    "discovered_by": "service-hint-probe",
+                                })
+                                log.info(
+                                    "_deep_recon: hint probe %s (%d bytes) for service %s",
+                                    url, len(out), label,
+                                )
+                        except Exception as exc:  # noqa: BLE001
+                            log.debug("hint probe %s failed: %s", url, exc)
+                    else:
+                        existing_urls.add(url)
+                        self.dkg.add_node("Endpoint", ep_id, {
+                            "url": url, "method": method, "params": "",
+                            "body_format": "json",
+                            "discovered_by": "service-hint-probe",
+                        })
+                        log.info("_deep_recon: registered POST candidate %s (%s)",
+                                 url, label)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("_probe_service_hint_paths failed: %s", exc)
 
     async def _detect_defenses(self) -> None:
         """Run DPM defense probes on discovered endpoints and update defense_state.

@@ -17,6 +17,10 @@ Executor 与所有外部工具之间的唯一执行边界。
 契约，显式的 Windows `cmd /c {cmdline}` 模板在 POSIX 环境等价转为
 `/bin/sh -c`，并保留原始命令字符串（包含重定向等 shell 语法）。
 
+`register_shell_tool()` 支持可选的 `prepare` 回调：命令首次执行前调用一次，
+用于惰性准备运行时前置条件（如 nmap 自定义探针库）。回调异常只记录日志，
+不阻断命令执行，保证外部扫描在准备失败时仍可退化运行。
+
 ## 相关模块
 
 `core/executor.py`、`tools/spec.py`、`attack_server.py`、`recon_server.py`、`mcp_client.py`。

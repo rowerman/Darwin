@@ -113,6 +113,20 @@ class LifecycleCoordinator(CoordinatorContext):
             return False, None
         started = time.monotonic()
         value = None
+        stop_heartbeat = asyncio.Event()
+
+        async def _heartbeat():
+            while not stop_heartbeat.is_set():
+                try:
+                    await asyncio.wait_for(stop_heartbeat.wait(), timeout=15.0)
+                except asyncio.TimeoutError:
+                    print(
+                        f"[RUN] phase={name} elapsed={time.time() - self.start_time:.0f}s "
+                        f"remaining={max(0.0, self._remaining_budget()):.0f}s",
+                        flush=True,
+                    )
+
+        heartbeat_task = asyncio.create_task(_heartbeat())
         try:
             value = await asyncio.wait_for(awaitable, timeout=allowance)
         except asyncio.CancelledError:
@@ -130,6 +144,8 @@ class LifecycleCoordinator(CoordinatorContext):
                                  allocated_s=allowance)
             return False, None
         finally:
+            stop_heartbeat.set()
+            heartbeat_task.cancel()
             elapsed = time.monotonic() - started
             self._orch._phase_used[name] = used + min(elapsed, allowance)
             unused = max(0.0, allowance - elapsed)
@@ -936,7 +952,7 @@ class LifecycleCoordinator(CoordinatorContext):
         flag_paths = ["/flag", "/flag.txt", "/robots.txt", "/.git/HEAD"]  # sensible defaults
         try:
             self._maybe_compress()
-            llm_paths_content, _ = self.llm.generate(
+            llm_paths_content, _ = await self._llm_generate_async(
                 prompt=f"Target services: {svc_list}\n"
                        f"Discovered endpoints: {ep_list}\n\n"
                        f"Suggest additional URL paths to probe for flags/credentials. "

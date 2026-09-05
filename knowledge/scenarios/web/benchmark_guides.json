@@ -13,19 +13,12 @@
       "graphql-idor",
       "GraphQL introspection + IDOR"
     ],
-    "tools": [
-      "curl_get",
-      "http_post",
-      "send_payload",
-      "docker_registry",
-      "container_escape_docker_sock",
-      "shell_exec"
-    ],
+    "tools": [],
     "prerequisites": [],
     "confidence": 0.6,
     "mitre_attack": "",
     "references": [],
-    "flag": "flag{[^",
+    "flag": "flag{[^}",
     "source": "../benchmark/cve_challenges/scenarios/web/graphql-idor/GUIDE.md"
   },
   {
@@ -42,19 +35,12 @@
       "jwt-alg-none",
       "JWT alg:none"
     ],
-    "tools": [
-      "curl_get",
-      "http_post",
-      "send_payload",
-      "docker_registry",
-      "container_escape_docker_sock",
-      "shell_exec"
-    ],
+    "tools": [],
     "prerequisites": [],
     "confidence": 0.6,
     "mitre_attack": "",
     "references": [],
-    "flag": "flag{[^",
+    "flag": "flag{[^}",
     "source": "../benchmark/cve_challenges/scenarios/web/jwt-alg-none/GUIDE.md"
   },
   {
@@ -71,21 +57,12 @@
       "mssql-xp-cmdshell",
       "MSSQL xp_cmdshell"
     ],
-    "tools": [
-      "curl_get",
-      "http_post",
-      "send_payload",
-      "docker_registry",
-      "container_escape_docker_sock",
-      "shell_exec",
-      "mssqlclient_query",
-      "mssql_query"
-    ],
+    "tools": [],
     "prerequisites": [],
     "confidence": 0.6,
     "mitre_attack": "",
     "references": [],
-    "flag": "flag{web-09-xxxxxxxxxxxxxxxx",
+    "flag": "flag{web-09-xxxxxxxxxxxxxxxx}",
     "source": "../benchmark/cve_challenges/scenarios/web/mssql-xp-cmdshell/GUIDE.md"
   },
   {
@@ -102,23 +79,12 @@
       "mysql-udf",
       "MySQL UDF Abuse"
     ],
-    "tools": [
-      "curl_get",
-      "http_post",
-      "send_payload",
-      "docker_registry",
-      "container_escape_docker_sock",
-      "shell_exec",
-      "mysql_query",
-      "mysql_file_write",
-      "php_serialize_generate",
-      "php_filter_chain"
-    ],
+    "tools": [],
     "prerequisites": [],
     "confidence": 0.6,
     "mitre_attack": "",
     "references": [],
-    "flag": "flag{web-08-xxxxxxxxxxxxxxxx",
+    "flag": "flag{web-08-xxxxxxxxxxxxxxxx}",
     "source": "../benchmark/cve_challenges/scenarios/web/mysql-udf/GUIDE.md"
   },
   {
@@ -135,21 +101,12 @@
       "php-deserialization",
       "Insecure PHP deserialization"
     ],
-    "tools": [
-      "curl_get",
-      "http_post",
-      "send_payload",
-      "docker_registry",
-      "container_escape_docker_sock",
-      "shell_exec",
-      "php_serialize_generate",
-      "php_filter_chain"
-    ],
+    "tools": [],
     "prerequisites": [],
     "confidence": 0.6,
     "mitre_attack": "",
     "references": [],
-    "flag": "flag{[^",
+    "flag": "flag{[^}",
     "source": "../benchmark/cve_challenges/scenarios/web/php-deserialization/GUIDE.md"
   },
   {
@@ -166,19 +123,12 @@
       "postgres-sqli",
       "CVE-2025-1094"
     ],
-    "tools": [
-      "curl_get",
-      "http_post",
-      "send_payload",
-      "docker_registry",
-      "container_escape_docker_sock",
-      "shell_exec"
-    ],
+    "tools": [],
     "prerequisites": [],
     "confidence": 0.6,
     "mitre_attack": "",
     "references": [],
-    "flag": "flag{web-07-xxxxxxxxxxxxxxxx",
+    "flag": "flag{web-07-xxxxxxxxxxxxxxxx}",
     "source": "../benchmark/cve_challenges/scenarios/web/postgres-sqli/GUIDE.md"
   },
   {
@@ -195,19 +145,12 @@
       "ssrf-internal",
       "N/A (SSRF misconfiguration)"
     ],
-    "tools": [
-      "curl_get",
-      "http_post",
-      "send_payload",
-      "docker_registry",
-      "container_escape_docker_sock",
-      "shell_exec"
-    ],
+    "tools": [],
     "prerequisites": [],
     "confidence": 0.6,
     "mitre_attack": "",
     "references": [],
-    "flag": "flag{[^",
+    "flag": "flag{[^}",
     "source": "../benchmark/cve_challenges/scenarios/web/ssrf-internal/GUIDE.md"
   },
   {
@@ -224,20 +167,12 @@
       "ssrf-localhost",
       "N/A (SSRF misconfiguration)"
     ],
-    "tools": [
-      "curl_get",
-      "http_post",
-      "send_payload",
-      "docker_registry",
-      "container_escape_docker_sock",
-      "shell_exec",
-      "php_serialize_generate"
-    ],
+    "tools": [],
     "prerequisites": [],
     "confidence": 0.6,
     "mitre_attack": "",
     "references": [],
-    "flag": "flag{[^",
+    "flag": "flag{[^}",
     "source": "../benchmark/cve_challenges/scenarios/web/ssrf-localhost/GUIDE.md"
   },
   {
@@ -254,20 +189,12 @@
       "ssti-jinja2",
       "N/A (SSTI vulnerability)"
     ],
-    "tools": [
-      "curl_get",
-      "http_post",
-      "send_payload",
-      "docker_registry",
-      "container_escape_docker_sock",
-      "shell_exec",
-      "php_serialize_generate"
-    ],
+    "tools": [],
     "prerequisites": [],
     "confidence": 0.6,
     "mitre_attack": "",
     "references": [],
-    "flag": "flag{[^",
+    "flag": "flag{[^}",
     "source": "../benchmark/cve_challenges/scenarios/web/ssti-jinja2/GUIDE.md"
   },
   {
@@ -284,21 +211,12 @@
       "tomcat-deserialization",
       "CVE-2025-24813"
     ],
-    "tools": [
-      "curl_get",
-      "http_post",
-      "send_payload",
-      "docker_registry",
-      "container_escape_docker_sock",
-      "shell_exec",
-      "ysoserial_generate",
-      "tomcat_exploit"
-    ],
+    "tools": [],
     "prerequisites": [],
     "confidence": 0.6,
     "mitre_attack": "",
     "references": [],
-    "flag": "flag{web-01-xxxxxxxxxxxxxxxx",
+    "flag": "flag{web-01-xxxxxxxxxxxxxxxx}",
     "source": "../benchmark/cve_challenges/scenarios/web/tomcat-deserialization/GUIDE.md"
   },
   {
@@ -315,19 +233,12 @@
       "tomcat-race-condition",
       "CVE-2024-50379"
     ],
-    "tools": [
-      "curl_get",
-      "http_post",
-      "send_payload",
-      "docker_registry",
-      "container_escape_docker_sock",
-      "shell_exec"
-    ],
+    "tools": [],
     "prerequisites": [],
     "confidence": 0.6,
     "mitre_attack": "",
     "references": [],
-    "flag": "flag{web-02-xxxxxxxxxxxxxxxx",
+    "flag": "flag{web-02-xxxxxxxxxxxxxxxx}",
     "source": "../benchmark/cve_challenges/scenarios/web/tomcat-race-condition/GUIDE.md"
   },
   {
@@ -344,21 +255,12 @@
       "wordpress-jupiterx-lfi",
       "CVE-2025-0366"
     ],
-    "tools": [
-      "curl_get",
-      "http_post",
-      "send_payload",
-      "docker_registry",
-      "container_escape_docker_sock",
-      "shell_exec",
-      "php_serialize_generate",
-      "php_filter_chain"
-    ],
+    "tools": [],
     "prerequisites": [],
     "confidence": 0.6,
     "mitre_attack": "",
     "references": [],
-    "flag": "flag{web-06-xxxxxxxxxxxxxxxx",
+    "flag": "flag{web-06-xxxxxxxxxxxxxxxx}",
     "source": "../benchmark/cve_challenges/scenarios/web/wordpress-jupiterx-lfi/GUIDE.md"
   },
   {
@@ -375,21 +277,12 @@
       "wordpress-jwt-copypress",
       "CVE-2025-8625"
     ],
-    "tools": [
-      "curl_get",
-      "http_post",
-      "send_payload",
-      "docker_registry",
-      "container_escape_docker_sock",
-      "shell_exec",
-      "php_serialize_generate",
-      "php_filter_chain"
-    ],
+    "tools": [],
     "prerequisites": [],
     "confidence": 0.6,
     "mitre_attack": "",
     "references": [],
-    "flag": "flag{web-05-xxxxxxxxxxxxxxxx",
+    "flag": "flag{web-05-xxxxxxxxxxxxxxxx}",
     "source": "../benchmark/cve_challenges/scenarios/web/wordpress-jwt-copypress/GUIDE.md"
   },
   {
@@ -406,21 +299,12 @@
       "wordpress-simple-file-list",
       "CVE-2025-34085"
     ],
-    "tools": [
-      "curl_get",
-      "http_post",
-      "send_payload",
-      "docker_registry",
-      "container_escape_docker_sock",
-      "shell_exec",
-      "php_serialize_generate",
-      "php_filter_chain"
-    ],
+    "tools": [],
     "prerequisites": [],
     "confidence": 0.6,
     "mitre_attack": "",
     "references": [],
-    "flag": "flag{web-03-xxxxxxxxxxxxxxxx",
+    "flag": "flag{web-03-xxxxxxxxxxxxxxxx}",
     "source": "../benchmark/cve_challenges/scenarios/web/wordpress-simple-file-list/GUIDE.md"
   },
   {
@@ -437,21 +321,12 @@
       "wordpress-wpbookit",
       "CVE-2025-6058"
     ],
-    "tools": [
-      "curl_get",
-      "http_post",
-      "send_payload",
-      "docker_registry",
-      "container_escape_docker_sock",
-      "shell_exec",
-      "php_serialize_generate",
-      "php_filter_chain"
-    ],
+    "tools": [],
     "prerequisites": [],
     "confidence": 0.6,
     "mitre_attack": "",
     "references": [],
-    "flag": "flag{web-04-xxxxxxxxxxxxxxxx",
+    "flag": "flag{web-04-xxxxxxxxxxxxxxxx}",
     "source": "../benchmark/cve_challenges/scenarios/web/wordpress-wpbookit/GUIDE.md"
   },
   {
@@ -468,19 +343,12 @@
       "xss-stored",
       "Stored XSS"
     ],
-    "tools": [
-      "curl_get",
-      "http_post",
-      "send_payload",
-      "docker_registry",
-      "container_escape_docker_sock",
-      "shell_exec"
-    ],
+    "tools": [],
     "prerequisites": [],
     "confidence": 0.6,
     "mitre_attack": "",
     "references": [],
-    "flag": "flag{...",
+    "flag": "flag{...}",
     "source": "../benchmark/cve_challenges/scenarios/web/xss-stored/GUIDE.md"
   },
   {
@@ -497,19 +365,12 @@
       "xxe-basic",
       "XXE (XML External Entity)"
     ],
-    "tools": [
-      "curl_get",
-      "http_post",
-      "send_payload",
-      "docker_registry",
-      "container_escape_docker_sock",
-      "shell_exec"
-    ],
+    "tools": [],
     "prerequisites": [],
     "confidence": 0.6,
     "mitre_attack": "",
     "references": [],
-    "flag": "flag{[^",
+    "flag": "flag{[^}",
     "source": "../benchmark/cve_challenges/scenarios/web/xxe-basic/GUIDE.md"
   },
   {
@@ -526,19 +387,12 @@
       "xxe-svg",
       "XXE (XML External Entity)"
     ],
-    "tools": [
-      "curl_get",
-      "http_post",
-      "send_payload",
-      "docker_registry",
-      "container_escape_docker_sock",
-      "shell_exec"
-    ],
+    "tools": [],
     "prerequisites": [],
     "confidence": 0.6,
     "mitre_attack": "",
     "references": [],
-    "flag": "flag{[^",
+    "flag": "flag{[^}",
     "source": "../benchmark/cve_challenges/scenarios/web/xxe-svg/GUIDE.md"
   }
 ]

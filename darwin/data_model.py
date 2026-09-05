@@ -231,16 +231,39 @@ class ServiceInfo:
     protocol: str = "tcp"
     version: str = ""
     banner: str = ""
+    service_name: str = ""
+    fingerprint: list = field(default_factory=list)
     skip_exploit: bool = False
     http_reachable: Optional[bool] = None
 
+    def to_prompt_line(self) -> str:
+        parts = [f"port {self.port}/{self.protocol}"]
+        name = self.service_name or self.banner or ""
+        if name:
+            parts.append(name)
+        if self.version and self.version != name:
+            parts.append(f"version={self.version}")
+        if self.fingerprint:
+            parts.append(f"whatweb={', '.join(str(f) for f in self.fingerprint[:6])}")
+        if self.skip_exploit:
+            parts.append("[skip]")
+        return ": ".join(parts)
+
     @classmethod
     def from_dkg(cls, raw: Dict[str, Any]) -> "ServiceInfo":
+        fingerprint = raw.get("fingerprint") or []
+        if not isinstance(fingerprint, list):
+            try:
+                fingerprint = list(fingerprint)
+            except TypeError:
+                fingerprint = []
         return cls(
             port=int(raw.get("port", 0)),
             protocol=str(raw.get("protocol", "tcp")),
             version=str(raw.get("version", "") or ""),
             banner=str(raw.get("banner", "") or ""),
+            service_name=str(raw.get("service_name", "") or ""),
+            fingerprint=fingerprint,
             skip_exploit=bool(raw.get("skip_exploit", False)),
             http_reachable=raw.get("http_reachable"),
         )
@@ -372,9 +395,8 @@ class PipelineState:
         if self.services:
             parts.append("## Services")
             for s in self.services:
-                if s.port and s.version:
-                    parts.append(f"- port {s.port}/{s.protocol}: {s.version}"
-                                 + (" [skip]" if s.skip_exploit else ""))
+                if s.port and (s.version or s.service_name or s.banner):
+                    parts.append(f"- {s.to_prompt_line()}")
             parts.append("")
 
         if self.credentials:

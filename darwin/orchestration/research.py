@@ -42,6 +42,10 @@ from darwin.core.schemas import (
     parse_research_findings,
     parse_service_research_findings,
 )
+from darwin.orchestration.structured import (
+    normalize_analyze_output_lenient,
+    render_tool_contract_card,
+)
 from darwin.core.task import Task, deps_from_task_ids
 from darwin.core.task_graph import TaskGraph, dependency_task_ids
 from darwin.core.belief import (
@@ -73,6 +77,7 @@ from darwin.prompts.orchestrator import (
     SYSTEM_PROMPT_ANALYZE,
     SYSTEM_PROMPT_LOGIN,
     SYSTEM_PROMPT_BYPASS,
+    ANALYZE_OUTPUT_SCHEMA_EXAMPLE,
 )
 from darwin.prompts.planner import SYSTEM_PROMPT_PLANNER
 from darwin.prompts.evaluator import SYSTEM_PROMPT_EVALUATOR
@@ -91,11 +96,8 @@ class ResearchCoordinator(CoordinatorContext):
 
         # Build typed pipeline state from DKG (single source of truth)
         state = normalize_dkg_state(self.dkg)
-        # The analyze system prompt points the LLM at the tool registry
-        # (tool_registry_list / tool_registry_get) instead of embedding the
-        # full catalog; the registry query loop in
-        # _generate_with_registry_lookup gives it a channel to fetch
-        # contracts during analysis.
+        # Tool contracts are injected as a Tool Contract Card (no registry
+        # lookups in this stage — that loop caused non-convergent outputs).
         analyze_system_prompt = SYSTEM_PROMPT_ANALYZE
         self._analyze_prompt_formatted = analyze_system_prompt
 
@@ -185,6 +187,18 @@ class ResearchCoordinator(CoordinatorContext):
         except Exception as e:
             log.debug("CTAGE Reasoner: attack path computation skipped (%s)", e)
 
+        # Tool contracts are injected directly — the model must NOT query a
+        # registry in this stage (that caused non-convergent multi-round
+        # outputs).  The card is rendered from the same definitions the
+        # executors use, so names/params always match.
+        _tool_defs: list[dict] = []
+        for _gw in (self.attack_gateway, self.recon_gateway):
+            try:
+                _tool_defs.extend(_gw.get_tool_definitions())
+            except Exception:
+                pass
+        _tool_card = render_tool_contract_card(_tool_defs)
+
         prompt = (
             f"## Mission\n{self._task_description}\n\n"
             f"Target information:\n"
@@ -198,10 +212,19 @@ class ResearchCoordinator(CoordinatorContext):
             f"2. Identify what business logic each endpoint implements.\n"
             f"3. THEN identify potential vulnerabilities based on your understanding.\n"
             f"4. For each vulnerability, explain WHY you think it exists (not just pattern matching).\n"
-            f"5. If an endpoint returns static content regardless of input, note that it's "
-            f"likely NOT exploitable and skip it.\n"
-            f"6. CRITICAL: Use the EXACT parameter names from 'Known Parameter Names' above. "
-            f"Do NOT guess parameter names from response field names."
+            f"5. Service labels from nmap/service detection are ATTACK-SURFACE HINTS, not verdicts.\n"
+            f"   A banner or root page that disagrees with the label (e.g. an 'OMI Agent (WSMan)'\n"
+            f"   service answering with a Python/Werkzeug page) does NOT make the service inert —\n"
+            f"   middleware, agents and simulators routinely proxy or emulate a different stack.\n"
+            f"   When a label implies management/protocol endpoints (OMI/WSMan -> /health,\n"
+            f"   /wsman/exec; kubelet -> /pods; etc.), hypothesize probing those paths.\n"
+            f"6. A static 404/root response only proves the root is static — do NOT conclude the\n"
+            f"   whole service is unexploitable.  Uncertain leads belong in 'vulnerabilities' with\n"
+            f"   LOW confidence (0.2-0.4), never in extra fields or omitted entirely.\n"
+            f"7. CRITICAL: Use the EXACT parameter names from 'Known Parameter Names' above.\n"
+            f"   Do NOT guess parameter names from response field names.\n\n"
+            f"## Tool Contract Card (use these EXACT tool names and parameters)\n"
+            f"{_tool_card}"
         )
         # P4: hard-gated scenario match — no CTEG text at all when nothing
         # overlaps (the old unconditional "no prior experience" filler is gone).
@@ -222,9 +245,12 @@ class ResearchCoordinator(CoordinatorContext):
               f"{len(state.services)} services, "
               f"{len(state.vulnerabilities)} vulns")
 
-        content, _, _ = await self._generate_with_registry_lookup(
-            prompt=prompt,
+        content, _parsed_model, _schema_err = await self._generate_structured(
             stage="analyze",
+            prompt=prompt,
+            validator=parse_analyze_output,
+            schema_example=ANALYZE_OUTPUT_SCHEMA_EXAMPLE,
+            system_prompt=analyze_system_prompt,
         )
         tokens_used = self.llm.token_count - tokens_before
         self._task_log_event("info", "llm_analyze_call",
@@ -239,17 +265,34 @@ class ResearchCoordinator(CoordinatorContext):
             print(f"  ... ({len(content) - 1500} more chars)")
         print(f"{'='*50}\n")
 
-        # Parse LLM's vulnerability hypotheses
-        try:
-            _parsed_model, _schema_err = parse_analyze_output(content)
-            if _parsed_model is None:
-                self._task_log_event(
-                    "warning", "schema_violation",
-                    boundary="analyze", error=str(_schema_err)[:400],
+        # Parse LLM's vulnerability hypotheses.  A schema-conformant answer
+        # with zero hypotheses is still run through lenient normalization so
+        # report-style fields (unverified_hypotheses / endpoint assessment)
+        # are not silently dropped.
+        _base_url = state.endpoints[0].url if state.endpoints else ""
+        if _parsed_model is not None and not _parsed_model.vulnerabilities:
+            _lenient, _lenient_err = normalize_analyze_output_lenient(
+                content, base_url=_base_url
+            )
+            if _lenient is not None and _lenient.vulnerabilities:
+                log.warning(
+                    "ANALYZE: schema-valid but empty — recovered %d hypothesis(es) "
+                    "from report-style fields",
+                    len(_lenient.vulnerabilities),
                 )
-                parsed = self._extract_json(content)
-            else:
-                parsed = _parsed_model.model_dump()
+                _parsed_model = _lenient
+        if _parsed_model is None:
+            _parsed_model, _lenient_err = normalize_analyze_output_lenient(
+                content, base_url=_base_url
+            )
+            if _parsed_model is None:
+                print(
+                    f"[SCHEMA] analyze: strict validation AND lenient normalization "
+                    f"failed — {(_lenient_err or _schema_err or '')[:400]}",
+                    flush=True,
+                )
+        try:
+            parsed = _parsed_model.model_dump() if _parsed_model is not None else {}
             # New format: {{"application_understanding": "...", "vulnerabilities": [...]}}
             # Old format (backward compat): [...] flat array
             if isinstance(parsed, dict):
@@ -295,7 +338,11 @@ class ResearchCoordinator(CoordinatorContext):
                 for p in ep.params:
                     all_known_params.add(p)
 
+            _no_endpoint = 0
             for v in vulns_json:
+                if not v.get("endpoint", ""):
+                    _no_endpoint += 1
+                    continue
                 vt = v.get("vuln_type", "")
                 # Correct guessed parameter names against known params
                 llm_param = v.get("param", "")
@@ -360,6 +407,13 @@ class ResearchCoordinator(CoordinatorContext):
                 self.dkg.add_node("Vulnerability", f"vuln-{len(self.vulnerabilities)}", dkg_props)
         except Exception as e:
             log.warning("_analyze_phase: failed to parse LLM vulnerability output: %s", e)
+            _no_endpoint = 0
+        if _no_endpoint:
+            print(
+                f"[SCHEMA] analyze: dropped {_no_endpoint} hypothesis(es) with no endpoint — "
+                "unusable entries no longer reach the DKG",
+                flush=True,
+            )
 
         # Fallback: if LLM produced no hypotheses, build from DKG findings
         if not self.vulnerabilities:
@@ -371,6 +425,38 @@ class ResearchCoordinator(CoordinatorContext):
             if len(self.vulnerabilities) > before:
                 log.info("_analyze_phase: augmented %d LLM hypotheses with %d from DKG",
                          before, len(self.vulnerabilities) - before)
+
+        # If the model supplied no attack_paths, synthesize single-step paths
+        # from the (usable) hypotheses so the planner always has ordered input.
+        if self.vulnerabilities and not any(
+            n.get("phase") == "analyze"
+            and str(n.get("type", "")).startswith("attack_path")
+            for n in self.dkg.query_nodes("Analysis")
+        ):
+            steps = [
+                {
+                    "step": i + 1,
+                    "vuln_type": v.vuln_type or "generic",
+                    "endpoint": v.endpoint,
+                    "param": v.param,
+                    "goal": f"Exploit {v.vuln_type or 'vulnerability'} on {v.endpoint}",
+                }
+                for i, v in enumerate(self.vulnerabilities[:8])
+            ]
+            self.dkg.add_node(
+                "Analysis",
+                f"attack-path-fallback-{int(time.time())}",
+                {
+                    "phase": "analyze",
+                    "type": "attack_path",
+                    "content": "Single-step paths synthesized from repaired hypotheses",
+                    "path_id": "path-fallback",
+                    "steps": steps,
+                    "step_count": len(steps),
+                },
+            )
+            log.info("_analyze_phase: synthesized %d fallback attack path step(s)",
+                     len(steps))
 
         # ── Vulnerability summary ────────────────────────────────────
         if self.vulnerabilities:
@@ -1054,7 +1140,7 @@ class ResearchCoordinator(CoordinatorContext):
         )
 
         self._maybe_compress()
-        content, tool_calls = self.llm.generate(
+        content, tool_calls = await self._llm_generate_async(
             prompt=_first_prompt,
             system_prompt=SYSTEM_PROMPT_RESEARCH,
             tools=research_tools,
@@ -1108,7 +1194,7 @@ class ResearchCoordinator(CoordinatorContext):
                 self.llm.add_tool_result(tc_id, tool_stdout[:2000])
 
             self._maybe_compress()
-            content, tool_calls = self.llm.generate(
+            content, tool_calls = await self._llm_generate_async(
                 prompt="Continue researching. Output JSON summary when done.",
                 system_prompt=SYSTEM_PROMPT_RESEARCH,
                 tools=research_tools,
@@ -1116,13 +1202,38 @@ class ResearchCoordinator(CoordinatorContext):
             )
 
         # ── Parse findings from final content ──
-        try:
-            _findings_model, _schema_err = parse_research_findings(content)
-            if _findings_model is None:
-                self._task_log_event(
-                    "warning", "schema_violation",
-                    boundary="research", error=str(_schema_err)[:400],
+        _findings_model, _schema_err = parse_research_findings(content)
+        if _findings_model is None and content and str(content).strip():
+            log.info(
+                "Research findings schema violation (%s) — one strict JSON repair attempt",
+                str(_schema_err)[:200],
+            )
+            try:
+                repair_content, _ = await self._llm_generate_async(
+                    prompt=(
+                        "Return ONLY the research findings JSON array. Each object MUST "
+                        "contain ONLY these keys: vuln_type, cve_ids, exploit_modules, "
+                        "key_techniques, credentials_to_try, confidence_adjustment.\n"
+                        f"Validation error from the previous output:\n{str(_schema_err)[:500]}"
+                    ),
+                    system_prompt=SYSTEM_PROMPT_RESEARCH,
+                    stage="research_repair",
                 )
+                _repaired, _repair_err = parse_research_findings(repair_content)
+                if _repaired is not None:
+                    _findings_model = _repaired
+                    content = repair_content
+                else:
+                    log.warning("Research repair attempt still invalid: %s", str(_repair_err)[:200])
+            except Exception as exc:
+                log.warning("Research findings repair attempt failed: %s", exc)
+        if _findings_model is None:
+            print(
+                f"[SCHEMA] research: findings invalid after repair — {str(_schema_err)[:300]}",
+                flush=True,
+            )
+        try:
+            if _findings_model is None:
                 findings = self._extract_json(content)
             else:
                 findings = [f.model_dump() for f in _findings_model]
@@ -1211,7 +1322,7 @@ class ResearchCoordinator(CoordinatorContext):
         )
 
         self._maybe_compress()
-        content, tool_calls = self.llm.generate(
+        content, tool_calls = await self._llm_generate_async(
             prompt=prompt,
             system_prompt=SYSTEM_PROMPT_RESEARCH,
             tools=research_tools,
@@ -1234,7 +1345,7 @@ class ResearchCoordinator(CoordinatorContext):
                 self.llm.add_tool_result(tc_id, tool_stdout[:2000])
 
             self._maybe_compress()
-            content, tool_calls = self.llm.generate(
+            content, tool_calls = await self._llm_generate_async(
                 prompt="Continue researching. Output JSON summary when done.",
                 system_prompt=SYSTEM_PROMPT_RESEARCH,
                 tools=research_tools,

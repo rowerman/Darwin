@@ -129,20 +129,20 @@ class _RegistryGateway:
         )
 
 
-class _RoundFakeLLM:
-    """Returns scripted (content, tool_calls) rounds; records calls."""
+class _ScriptedLLM:
+    """Returns scripted plain contents; records whether tools were exposed."""
 
-    def __init__(self, rounds):
-        self.rounds = list(rounds)
+    def __init__(self, contents):
+        self.contents = list(contents)
         self.calls = []
         self.token_count = 100
 
     def generate(self, prompt, system_prompt=None, tools=None,
                  temperature=None, timeout=180.0, stage=None):
-        self.calls.append(("generate", prompt, system_prompt, stage))
-        if self.rounds:
-            return self.rounds.pop(0)
-        return "[]", None
+        self.calls.append((stage, prompt, tools is not None))
+        if self.contents:
+            return self.contents.pop(0), None
+        return "", None
 
     def add_tool_result(self, tool_call_id, result):
         self.calls.append(("add_tool_result", tool_call_id))
@@ -158,65 +158,66 @@ class _RoundFakeLLM:
 
 
 @pytest.mark.asyncio
-async def test_registry_lookup_loop_executes_registry_calls(
+async def test_generate_structured_never_exposes_registry_tools(
     make_orchestrator,
 ):
-    llm = _RoundFakeLLM([
-        ("", [{"name": "tool_registry_get",
-               "arguments": {"name": "shell_exec"},
-               "id": "reg-1"}]),
-        ('[{"id": "t1", "instruction": "x", "tool": "shell_exec", '
-         '"params": {"command": "echo hi"}, "dependent_task_ids": []}]', None),
-    ])
-    gw = _RegistryGateway()
+    from darwin.core.schemas import parse_analyze_output
+
+    llm = _ScriptedLLM(['{"application_understanding": "x", "vulnerabilities": []}'])
+    gw = _RegistryGateway()  # registry meta tools exist but must NOT be offered
     orch = make_orchestrator(llm, gw, gw)
 
-    content, tool_calls, registry_used = await orch._generate_with_registry_lookup(
-        prompt="plan", system_prompt="sys", stage="plan"
+    content, parsed, err = await orch.planning._generate_structured(
+        stage="analyze", prompt="p", validator=parse_analyze_output,
+        system_prompt="sys",
     )
 
-    assert registry_used is True
-    assert content.startswith("[")
-    assert tool_calls is None
-    assert gw.calls == [("tool_registry_get", {"name": "shell_exec"})]
-    assert any(c[0] == "add_tool_result" for c in llm.calls)
+    assert parsed is not None
+    assert err == ""
+    assert len(llm.calls) == 1
+    assert llm.calls[0][2] is False  # tools were not exposed
+    assert gw.calls == []
 
 
 @pytest.mark.asyncio
-async def test_registry_lookup_loop_degrades_without_registry_tools(
-    fake_llm, fake_gateway, make_orchestrator,
-):
-    llm = fake_llm(content="[1,2]")
-    gw = fake_gateway({})  # no tool definitions at all
-    orch = make_orchestrator(llm, gw, gw)
+async def test_generate_structured_repairs_schema_error(make_orchestrator):
+    from darwin.core.schemas import parse_analyze_output
 
-    content, tool_calls, registry_used = await orch._generate_with_registry_lookup(
-        prompt="p", system_prompt="s", stage="plan_review"
+    bad = '{"vulnerabilities": [{"name": "x", "affected_endpoint": "/api"}]}'
+    good = (
+        '{"application_understanding": "y", "vulnerabilities": ['
+        '{"vuln_type": "IDOR", "endpoint": "http://t/a", "confidence": 0.4}]}'
+    )
+    llm = _ScriptedLLM([bad, good])
+    orch = make_orchestrator(llm, _RegistryGateway(), _RegistryGateway())
+
+    content, parsed, err = await orch.planning._generate_structured(
+        stage="analyze", prompt="p", validator=parse_analyze_output,
+        system_prompt="sys", schema_example="{}",
     )
 
-    assert registry_used is False
-    assert content == "[1,2]"
-    assert not tool_calls
-    generates = [c for c in llm.calls if c[0] == "generate"]
-    assert len(generates) == 1
+    assert parsed is not None
+    assert err == ""
+    assert len(llm.calls) == 2
+    assert "SCHEMA REPAIR ATTEMPT" in llm.calls[1][1]
+    assert "Validation errors" in llm.calls[1][1]
 
 
 @pytest.mark.asyncio
-async def test_registry_lookup_forces_json_completion_after_tool_rounds(
-    make_orchestrator,
+async def test_generate_structured_exhausts_attempts_and_prints(
+    make_orchestrator, capsys,
 ):
-    llm = _RoundFakeLLM([
-        ("", [{"name": "tool_registry_get", "arguments": {"name": "shell_exec"}, "id": "r1"}]),
-        ("", [{"name": "tool_registry_get", "arguments": {"name": "shell_exec"}, "id": "r2"}]),
-        ("", [{"name": "tool_registry_get", "arguments": {"name": "shell_exec"}, "id": "r3"}]),
-        ('[{"id":"t1","instruction":"x","tool":"shell_exec"}]', None),
-    ])
-    gw = _RegistryGateway()
-    orch = make_orchestrator(llm, gw, gw)
+    from darwin.core.schemas import parse_plan_tasks
 
-    content, calls, used = await orch._generate_with_registry_lookup("plan", stage="plan")
+    llm = _ScriptedLLM(["not json", "also not json"])
+    orch = make_orchestrator(llm, _RegistryGateway(), _RegistryGateway())
 
-    assert content.startswith("[")
-    assert calls is None
-    assert used is True
-    assert len([c for c in llm.calls if c[0] == "generate"]) == 4
+    content, parsed, err = await orch.planning._generate_structured(
+        stage="plan", prompt="p", validator=parse_plan_tasks,
+        max_attempts=2,
+    )
+
+    assert parsed is None
+    assert err
+    assert len(llm.calls) == 2
+    assert "[SCHEMA] plan:" in capsys.readouterr().out

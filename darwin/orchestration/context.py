@@ -26,6 +26,53 @@ class CoordinatorContext:
     def __init__(self, orch):
         object.__setattr__(self, "_orch", orch)
 
+    async def _llm_generate_async(
+        self,
+        prompt: str,
+        system_prompt: str | None = None,
+        tools=None,
+        temperature: float | None = None,
+        timeout: float = 180.0,
+        stage: str | None = None,
+    ):
+        """Run an LLM call without letting a stuck request outlive its budget.
+
+        Prefers the real ``LLMSession.generate_async`` (threaded + bounded by
+        ``asyncio.wait_for``).  Test double sessions only implement the sync
+        ``generate``; those run in an executor under the same outer timeout so
+        structured phases never block the event loop indefinitely.
+        """
+        llm = getattr(self._orch, "llm", None)
+        timeout = max(1.0, float(timeout))
+        generate_async = getattr(llm, "generate_async", None)
+        if generate_async is not None:
+            return await generate_async(
+                prompt=prompt,
+                system_prompt=system_prompt,
+                tools=tools,
+                temperature=temperature,
+                timeout=timeout,
+                stage=stage,
+            )
+        loop = asyncio.get_running_loop()
+
+        def _run():
+            return llm.generate(
+                prompt, system_prompt, tools, temperature, timeout, stage
+            )
+
+        fut = loop.run_in_executor(None, _run)
+        deadline = loop.time() + timeout + 10.0
+        # Poll instead of asyncio.wait_for: a completed run_in_executor future
+        # occasionally never wakes wait_for's waiter in this event loop setup,
+        # stalling structured stages until their outer budget kills the run.
+        while not fut.done():
+            remaining = deadline - loop.time()
+            if remaining <= 0:
+                raise asyncio.TimeoutError()
+            await asyncio.sleep(min(0.25, remaining))
+        return fut.result()
+
     def __getattr__(self, name):
         return getattr(object.__getattribute__(self, "_orch"), name)
 
