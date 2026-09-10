@@ -8,6 +8,7 @@ from __future__ import annotations
 import html
 import json
 import time
+import contextlib
 import inspect
 import re
 from typing import Any, Callable, Dict, List, Optional
@@ -29,6 +30,20 @@ from darwin.prompts.memory import SYSTEM_PROMPT_MEMORY as SYSTEM_PROMPT_COMPRESS
 # O3.2: the cognition-snapshot marker used to keep decision-critical
 # messages out of the summarizer and verbatim in the preserved payload.
 from darwin.core.belief import SNAPSHOT_MARKER
+
+
+def _estimate_message_tokens(messages: list[dict]) -> int:
+    """Cheap token estimate for a message list (chars/4)."""
+    return sum(len(str(m.get("content", "") or "")) for m in messages) // 4
+
+
+def _merge_digests(existing: str, fresh: str) -> str:
+    """Append a new compression summary to the durable digest."""
+    if not existing:
+        return fresh
+    if not fresh:
+        return existing
+    return f"{existing}\n\n{fresh}"
 
 
 class LLMSession:
@@ -60,6 +75,16 @@ class LLMSession:
         self.thought_logger = thought_logger
         self._compressed_count = 0  # number of times compression has been applied
         self._pending_compressed_context = ""  # consumed once in next _build_messages
+        # Session-durable compressed memory.  Structured stages run with an
+        # isolated message list (their prompts are self-contained), so the
+        # summary of everything compressed away must live here rather than
+        # only inside the conversation history that isolation skips.
+        self._carried_digest = ""
+        self._isolate_depth = 0
+        # Cumulative usage accounting: context size (``token_count``) and
+        # real usage diverge once stages stop sharing one growing history.
+        self.total_tokens = 0
+        self.last_call_tokens = 0
         self._max_compressions = 3  # prevent cascading telephone-game degradation
 
         if api_key:
@@ -141,7 +166,9 @@ class LLMSession:
         if deadline:
             timeout = min(timeout, max(1.0, deadline - time.monotonic()))
         messages = self._build_messages(prompt, system_prompt)
-        self.conversation_history = messages.copy()
+        _isolated = self._isolate_depth > 0
+        if not _isolated:
+            self.conversation_history = messages.copy()
 
         temp = temperature if temperature is not None else self.temperature
         # gpt-5 only supports temperature=1
@@ -175,6 +202,10 @@ class LLMSession:
         choice = response.choices[0]
 
         content = choice.message.content or ""
+        self.last_call_tokens = _estimate_message_tokens(messages) + max(
+            1, len(content) // 4
+        )
+        self.total_tokens += self.last_call_tokens
         tool_calls_raw = getattr(choice.message, "tool_calls", None)
         reasoning = getattr(choice.message, "reasoning_content", None)
         if reasoning is None:
@@ -191,7 +222,8 @@ class LLMSession:
                  "function": {"name": tc.function.name, "arguments": tc.function.arguments}}
                 for tc in tool_calls_raw
             ]
-            self.conversation_history.append(assistant_msg)
+            if not _isolated:
+                self.conversation_history.append(assistant_msg)
             parsed_calls = [
                 {"id": tc.id, "name": tc.function.name,
                  "arguments": json.loads(tc.function.arguments)}
@@ -217,7 +249,8 @@ class LLMSession:
                     len(parsed_calls), stage or "?",
                     ", ".join(c["name"] for c in parsed_calls[:5]),
                 )
-            self.conversation_history.append(assistant_msg)
+            if not _isolated:
+                self.conversation_history.append(assistant_msg)
 
         # P0/P1: chain-of-thought capture — the observer owns persistence and
         # swallows its own errors, so this never affects the main flow.
@@ -322,8 +355,18 @@ class LLMSession:
         self, prompt: str, system_prompt: str | None
     ) -> List[Dict[str, str]]:
         """Build message list, continuing conversation history if available."""
+        if self._isolate_depth > 0:
+            # Isolated calls skip the session history, so a freshly produced
+            # compression summary must be folded into the durable digest
+            # instead — otherwise the memory it carries would be dropped the
+            # moment the scope exits.
+            if self._pending_compressed_context:
+                self._carried_digest = _merge_digests(
+                    self._carried_digest, self._pending_compressed_context
+                )
+                self._pending_compressed_context = ""
         # Consume pending compressed context exactly once
-        if self._pending_compressed_context:
+        elif self._pending_compressed_context:
             prompt = f"{self._pending_compressed_context}\n\n---\n\n{prompt}"
             self._pending_compressed_context = ""
 
@@ -363,6 +406,8 @@ class LLMSession:
             return messages
 
         messages = []
+        if self._isolate_depth > 0 and self._carried_digest:
+            prompt = f"{self._carried_digest}\n\n---\n\n{prompt}"
         if system_prompt:
             messages.append({"role": "system", "content": system_prompt})
         messages.append({"role": "user", "content": prompt})
@@ -370,6 +415,10 @@ class LLMSession:
 
     def add_tool_result(self, tool_call_id: str, result: str) -> None:
         """Add tool execution result to conversation history."""
+        if self._isolate_depth > 0:
+            # Structured stages never expose tools; a tool result arriving
+            # here would belong to no visible tool_calls message.
+            return
         self.conversation_history.append({
             "role": "tool",
             "tool_call_id": tool_call_id,
@@ -383,6 +432,8 @@ class LLMSession:
         """Inject a message into conversation history without requiring a tool call.
         Use for system diagnostics, filter debug reports, etc.
         """
+        if self._isolate_depth > 0:
+            return
         self.conversation_history.append({
             "role": role,
             "content": content,
@@ -402,6 +453,27 @@ class LLMSession:
         """Clear conversation history."""
         self.conversation_history = []
         self._pending_compressed_context = ""
+        self._carried_digest = ""
+
+    @contextlib.contextmanager
+    def isolated_scope(self):
+        """Run a self-contained call without touching the session history.
+
+        Structured stages (analyze/plan/plan_review, JSON repair steps) embed
+        everything they need in their own prompt, so continuing the shared
+        conversation only adds latency and lets one stage's output leak into
+        the next.  Inside the scope the message list is built from the prompt
+        plus the durable compressed digest; the outer history is restored
+        unchanged afterwards.
+        """
+        saved_history = self.conversation_history
+        self.conversation_history = []
+        self._isolate_depth += 1
+        try:
+            yield self
+        finally:
+            self._isolate_depth -= 1
+            self.conversation_history = saved_history
 
     @property
     def token_count(self) -> int:
@@ -497,6 +569,7 @@ class LLMSession:
                         + "\n\n".join(_preserved_parts)
                     )
                 self.conversation_history.insert(0, {"role": "user", "content": notice})
+                self._carried_digest = _merge_digests(self._carried_digest, notice)
             return 0
 
         # Protect tool_calls ↔ tool result pairs from being split across
@@ -619,6 +692,9 @@ class LLMSession:
         self._pending_compressed_context = (
             f"{prev}\n\n{context_text}" if prev else context_text
         )
+        # Mirror into the durable digest so isolated stages (which never read
+        # the conversation history) still receive everything compressed away.
+        self._carried_digest = _merge_digests(self._carried_digest, context_text)
         self.conversation_history = recent
         self._compressed_count += 1
 

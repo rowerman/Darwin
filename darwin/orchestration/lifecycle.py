@@ -81,13 +81,22 @@ from darwin.prompts.research import SYSTEM_PROMPT_RESEARCH
 
 from darwin.orchestration.context import CoordinatorContext
 
+
+class _RunFinished(Exception):
+    """Terminal signal: a verified flag ended the run before the plan loop."""
+
+
 class LifecycleCoordinator(CoordinatorContext):
+    # Share of the run budget per phase.  Overridable via
+    # ``darwin.phase_ratios`` in config/darwin.yaml.  Exploitation owns the
+    # larger share because every exploit task costs at least one LLM
+    # round-trip, while recon/research are mostly local tool calls.
     _PHASE_RATIOS = {
-        "recon": 0.20,
-        "service_research": 0.10,
-        "analyze": 0.10,
-        "vulnerability_research": 0.10,
-        "exploit": 0.45,
+        "recon": 0.15,
+        "service_research": 0.05,
+        "analyze": 0.12,
+        "vulnerability_research": 0.08,
+        "exploit": 0.55,
         "finalize": 0.05,
     }
 
@@ -133,12 +142,16 @@ class LifecycleCoordinator(CoordinatorContext):
             elapsed = time.time() - self.start_time
             result = TaskResult(
                 success=False, steps=self.step_count,
-                tokens_used=self.llm.token_count,
+                tokens_used=self._tokens_used(),
                 time_elapsed=elapsed,
                 phase_at_end=self.phase,
                 error="Run cancelled",
             )
             self._task_log_event("warning", "run_cancelled", elapsed_s=elapsed)
+        except _RunFinished:
+            # A verified flag was captured during reconnaissance; ``result``
+            # is already populated and the remaining phases are unnecessary.
+            pass
         except asyncio.TimeoutError:
             self._task_log_event("warning", "phase_timeout", phase=name,
                                  allocated_s=allowance)
@@ -194,6 +207,14 @@ class LifecycleCoordinator(CoordinatorContext):
                 _log_dir = _darwin.get("log_dir", "log")
                 _log_level = _darwin.get("log_level", "INFO")
                 _log_thoughts = _darwin.get("log_thoughts", True)
+                _ratios = _darwin.get("phase_ratios")
+                if isinstance(_ratios, dict):
+                    _override = {
+                        str(k): float(v) for k, v in _ratios.items()
+                        if k in self._PHASE_RATIOS and isinstance(v, (int, float))
+                    }
+                    if _override:
+                        self._PHASE_RATIOS = {**self._PHASE_RATIOS, **_override}
         except Exception:
             pass
         self.phase_logger = PhaseLogger(
@@ -284,6 +305,12 @@ class LifecycleCoordinator(CoordinatorContext):
 
             # ── Phase 1.5: Deep Recon (dirb, nikto, form_extract) ──
             await self._deep_recon()
+            # A flag found while checking freshly discovered paths ends the
+            # run here — no exploitation work is needed for this target.
+            if getattr(self, "_recon_flag_result", None) is not None:
+                result = self._recon_flag_result
+                self.phase = OrchestratorPhase.DONE
+                raise _RunFinished()
 
             # ── Phase log: recon ──
             if self.phase_logger:
@@ -458,7 +485,7 @@ class LifecycleCoordinator(CoordinatorContext):
                             self.phase = OrchestratorPhase.DONE
                             result = TaskResult(
                                 success=True, flag=fv, steps=self.step_count,
-                                tokens_used=self.llm.token_count,
+                                tokens_used=self._tokens_used(),
                                 time_elapsed=time.time() - self.start_time,
                             )
                         else:
@@ -479,7 +506,7 @@ class LifecycleCoordinator(CoordinatorContext):
                             final_flag = self._captured_flags[-1] if self._captured_flags else ""
                             result = TaskResult(
                                 success=True, flag=final_flag, steps=self.step_count,
-                                tokens_used=self.llm.token_count,
+                                tokens_used=self._tokens_used(),
                                 time_elapsed=time.time() - self.start_time,
                             )
                             result.all_flags = list(self._captured_flags)
@@ -581,7 +608,7 @@ class LifecycleCoordinator(CoordinatorContext):
                 if not phase_ok:
                     result = TaskResult(
                         success=False, steps=self.step_count,
-                        tokens_used=self.llm.token_count,
+                        tokens_used=self._tokens_used(),
                         time_elapsed=time.time() - self.start_time,
                         phase_at_end=self.phase, error="exploit phase budget exceeded",
                     )
@@ -641,7 +668,7 @@ class LifecycleCoordinator(CoordinatorContext):
                 error_msg = f"Internal timeout at {elapsed:.0f}s (budget: {self.time_budget}s)"
             result = TaskResult(
                 success=False, steps=self.step_count,
-                tokens_used=self.llm.token_count,
+                tokens_used=self._tokens_used(),
                 time_elapsed=elapsed,
                 phase_at_end=self.phase, error=error_msg,
             )
@@ -651,7 +678,7 @@ class LifecycleCoordinator(CoordinatorContext):
             log.warning("Traceback: %s", traceback.format_exc())
             result = TaskResult(
                 success=False, steps=self.step_count,
-                tokens_used=self.llm.token_count,
+                tokens_used=self._tokens_used(),
                 time_elapsed=time.time() - self.start_time,
                 phase_at_end=self.phase, error=str(e),
             )
@@ -670,7 +697,7 @@ class LifecycleCoordinator(CoordinatorContext):
         if result is None:
             result = TaskResult(
                 success=False, steps=self.step_count,
-                tokens_used=self.llm.token_count,
+                tokens_used=self._tokens_used(),
                 time_elapsed=time.time() - self.start_time,
                 phase_at_end=self.phase,
                 error="No result produced",
@@ -740,12 +767,20 @@ class LifecycleCoordinator(CoordinatorContext):
         ds = self.defense_state
         category = getattr(getattr(ds, "defense_category", None), "value", "")
         waf_type = str(getattr(ds, "waf_type", "") or "")
-        detected = bool(
-            (waf_type and waf_type.lower() not in {"unknown", "none"})
-            or (category and category.lower() not in {"none", "unknown"})
-            or getattr(ds, "cloak_detected", False)
-            or getattr(ds, "honeypot_count", 0) > 0
-        )
+        # Require corroboration: a single inconclusive signal (e.g. one
+        # probe that happened to look blocked) is not enough to report that
+        # the target is defended.  A named WAF type or an active honeypot
+        # stands on its own.
+        signals = 0
+        if waf_type and waf_type.lower() not in {"unknown", "none"}:
+            signals += 2
+        if category and category.lower() not in {"none", "unknown"}:
+            signals += 1
+        if getattr(ds, "cloak_detected", False):
+            signals += 1
+        if getattr(ds, "honeypot_count", 0) > 0:
+            signals += 2
+        detected = signals >= 2
         result.defense_detected = detected
         result.waf_type = "" if waf_type.lower() in {"unknown", "none"} else waf_type
         result.defense_complexity = float(getattr(ds, "defense_complexity", 0.0) or 0.0)
@@ -949,18 +984,26 @@ class LifecycleCoordinator(CoordinatorContext):
         svc_list = [f"{s.get('port')}/{s.get('protocol','tcp')} {s.get('version','')}"
                     for s in self.dkg.query_nodes("Service")]
         ep_list = [e.get("url", "") for e in self.dkg.query_nodes("Endpoint")[:20]]
-        flag_paths = ["/flag", "/flag.txt", "/robots.txt", "/.git/HEAD"]  # sensible defaults
+        # Generic diagnostic endpoints (health/status/metrics/API docs) plus
+        # the classic flag locations.  These are protocol-level conventions,
+        # not scenario knowledge.
+        flag_paths = [
+            "/flag", "/flag.txt", "/robots.txt", "/.git/HEAD",
+            "/health", "/status", "/metrics", "/logs", "/api", "/debug",
+            "/docs", "/api-docs", "/openapi.json", "/swagger.json",
+        ]
         try:
             self._maybe_compress()
-            llm_paths_content, _ = await self._llm_generate_async(
-                prompt=f"Target services: {svc_list}\n"
-                       f"Discovered endpoints: {ep_list}\n\n"
-                       f"Suggest additional URL paths to probe for flags/credentials. "
-                       f"Consider: backup files, config leaks, admin panels, API docs, "
-                       f"debug endpoints. Output JSON array of path strings only.",
-                system_prompt="You are a penetration tester. Output only a JSON array of URL paths.",
-                stage="flag_search",
-            )
+            with self._llm_isolated():
+                llm_paths_content, _ = await self._llm_generate_async(
+                    prompt=f"Target services: {svc_list}\n"
+                           f"Discovered endpoints: {ep_list}\n\n"
+                           f"Suggest additional URL paths to probe for flags/credentials. "
+                           f"Consider: backup files, config leaks, admin panels, API docs, "
+                           f"debug endpoints. Output JSON array of path strings only.",
+                    system_prompt="You are a penetration tester. Output only a JSON array of URL paths.",
+                    stage="flag_search",
+                )
             llm_paths = self._extract_json(llm_paths_content)
             if isinstance(llm_paths, list):
                 flag_paths = list(dict.fromkeys(flag_paths + llm_paths))  # dedup, defaults first
@@ -968,16 +1011,19 @@ class LifecycleCoordinator(CoordinatorContext):
             pass
 
         for bu in urls_to_check:
-            for path in flag_paths:
+            # The discovered endpoint itself is a candidate flag carrier
+            # (route discovery already proved it exists) — only then fall
+            # back to appending generic paths to the service roots.
+            for candidate in [bu] + [bu.rstrip("/") + path for path in flag_paths]:
                 try:
-                    response = await self.client.get(bu.rstrip("/") + path)
+                    response = await self.client.get(candidate)
                     flags = self.flag_pattern.findall(response.body)
                     if flags:
-                        self._task_log_event("info", "flag_found", url=bu+path, flag=flags[0])
+                        self._task_log_event("info", "flag_found", url=candidate, flag=flags[0])
                         self.phase = OrchestratorPhase.DONE
                         return TaskResult(
                             success=True, flag=flags[0], steps=self.step_count,
-                            tokens_used=self.llm.token_count,
+                            tokens_used=self._tokens_used(),
                             time_elapsed=time.time() - self.start_time,
                         )
                 except Exception:

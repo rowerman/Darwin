@@ -6,7 +6,12 @@ DPM（Defense Perception Module）检测 WAF、cloak、honeypot、trap 及云防
 
 ## 所在链路
 
-侦察/执行期间的防御感知，影响规划、工具选择和验证判定。
+**仅侦察期一次**的防御感知，影响规划提示、CTEG scenario profile 与实验指标。
+
+> 每任务自动探测与自动 payload 绕过已移除：它对每个 HTTP 类型任务额外发出
+> 2–5 次请求，在整套 benchmark 中从未产生过 flag，唯一的可测效果是把普通
+> 的 403/AccessDenied 判成“有 WAF”。防御感知现在只在
+> `ReconCoordinator._detect_defenses()` 中执行一次（不调用 LLM）。
 
 ## 关键入口
 
@@ -29,4 +34,3 @@ DPM（Defense Perception Module）检测 WAF、cloak、honeypot、trap 及云防
 ## 维护提示
 
 配置指纹、分类阈值和防御类别变化会影响工具计划及 DAVE 判定。
-

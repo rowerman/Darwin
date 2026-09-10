@@ -62,6 +62,7 @@ from darwin.tools.mcp_client import MCPClientPool, load_mcp_config
 from darwin.tools.mcp_gateway import ToolResult
 from darwin.tools.recon_server import create_recon_gateway, parse_response
 from darwin.tools.attack_server import create_attack_gateway
+from darwin.tools.availability import is_available as _spec_is_available
 from darwin.utils.http_client import HTTPClient, ProbeClient, HTTPResponse
 from darwin.utils.llm import LLMSession
 from darwin.utils.phase_logger import PhaseLogger
@@ -98,6 +99,76 @@ class TaskExecution:
 
 class _RuntimeFlagFound(Exception):
     """Terminal signal: the Runtime-driven path captured a verified flag."""
+
+
+def _json_body(stdout: str) -> Any:
+    """Extract a JSON object/array from a curl_get style tool output."""
+    body = str(stdout or "")
+    if not body.strip():
+        return None
+    try:
+        parsed = parse_tool_stdout(body)
+        if parsed.get("body"):
+            body = parsed["body"]
+    except Exception:
+        pass
+    stripped = body.strip()
+    start = min(
+        (i for i in (stripped.find("{"), stripped.find("[")) if i >= 0),
+        default=-1,
+    )
+    if start < 0:
+        return None
+    try:
+        return json.loads(stripped[start:])
+    except (json.JSONDecodeError, ValueError):
+        return None
+
+
+def _derive_filter_candidates(
+    payload: Any, known_paths: list[str] | None = None,
+    max_params: int = 4, max_values: int = 4,
+) -> list[tuple[str, str]]:
+    """Derive ``(query_param, value)`` candidates from a JSON response.
+
+    A JSON endpoint that returns records usually accepts filters named after
+    those records' own fields, so the parameter names are read off the
+    response instead of guessed.  Values are drawn from what the response
+    shows, from the endpoints already discovered on the target, and finally
+    from a token that cannot match anything (an empty filtered view is a
+    legitimate, and sometimes privileged, response).
+    """
+    if not isinstance(payload, dict):
+        return []
+    records: list[dict] = []
+    for value in payload.values():
+        if isinstance(value, list):
+            records.extend(r for r in value[:3] if isinstance(r, dict))
+    if not records:
+        return []
+
+    params: list[str] = []
+    for record in records:
+        for key in record:
+            if isinstance(key, str) and key and key not in params:
+                params.append(key)
+
+    known = [str(p) for p in (known_paths or []) if p]
+    candidates: list[tuple[str, str]] = []
+    for param in params[:max_params]:
+        observed = [
+            str(r.get(param)) for r in records
+            if r.get(param) not in (None, "")
+        ]
+        # Prefer values the response has NOT already shown: a different slice
+        # of the collection is where new information lives.
+        for value in known[:max_values]:
+            if value not in observed:
+                candidates.append((param, value))
+        for value in dict.fromkeys(observed):
+            candidates.append((param, value))
+        candidates.append((param, "darwin-probe-nonexistent"))
+    return candidates
 
 
 class _RuntimePlannerAdapter:
@@ -141,7 +212,7 @@ class _RuntimePlannerAdapter:
                         attempt_count=1,
                         result_summary=summary,
                     ),
-                    True, summary,
+                    True, summary, force=True,
                 )
         # The review mutates exploitation_plan — re-sync the graph.
         return TaskGraph(list(orch.exploitation_plan.tasks))
@@ -557,100 +628,12 @@ class ExecutionCoordinator(CoordinatorContext):
         return "\n".join(parts)
 
     # Per-vuln-type probe payloads for defense detection
-    _PROBE_PAYLOADS = {
-        "sqlmap_test":           ("' OR '1'='1", "SQLi"),
-        "send_payload":          ("{{7*7}}", "injection"),
-        "command_injection_test": ("; id", "CMDi"),
-        "xss_reflection_test":   ("<script>alert(1)</script>", "XSS"),
-        "ffuf_fuzz":             ("' OR '1'='1", "SQLi"),
-    }
-
-    async def _probe_for_defense(
-        self, url: str, param: str, method: str = "GET", tool_name: str = ""
-    ) -> str:
-        """Run light probes on an endpoint to detect app-level filtering.
-
-        Selects the right probe payload based on the exploit tool that was used.
-        For POST/JSON endpoints, sends a proper POST with JSON body.
-        Returns a formatted string describing any defense found, or empty string.
-        """
-        try:
-            import urllib.request as _ur, json as _json
-            probe_val, probe_type = self._PROBE_PAYLOADS.get(
-                tool_name, ("' OR '1'='1", "injection"))
-
-            if method.upper() == "POST":
-                baseline_data = _json.dumps({param: "normal"}).encode()
-                probe_data = _json.dumps({param: probe_val}).encode()
-                hdrs = {"Content-Type": "application/json", "User-Agent": "DARWIN/0.1"}
-
-                req0 = _ur.Request(url, data=baseline_data, headers=hdrs, method="POST")
-                try:
-                    with _ur.urlopen(req0, timeout=8) as r0:
-                        b_body = r0.read().decode(errors="replace")
-                        b_status = r0.status
-                except Exception:
-                    return ""
-
-                req1 = _ur.Request(url, data=probe_data, headers=hdrs, method="POST")
-                try:
-                    with _ur.urlopen(req1, timeout=8) as r1:
-                        p_body = r1.read().decode(errors="replace")
-                        p_status = r1.status
-                except Exception as e:
-                    p_body = str(e)
-                    p_status = getattr(e, 'code', 0)
-
-                b_len, p_len = len(b_body), len(p_body)
-                reflected = probe_val in p_body
-
-                if p_status >= 500 and b_status < 400:
-                    # 500 with injection probe = backend is processing input.
-                    # For SSTI this is actually positive signal (template engine
-                    # tried to render {{7*7}} and crashed).
-                    return (
-                        f"\n[DEFENSE PROBE — {probe_type}] "
-                        f"Probe caused HTTP {p_status} (baseline {b_status}). "
-                        f"Backend IS processing the input — crash/difference confirms "
-                        f"the parameter reaches server-side logic. "
-                        f"Try: different payload syntax or encodings."
-                    )
-                elif p_status in (403, 406, 429):
-                    return (
-                        f"\n[DEFENSE PROBE — {probe_type}] "
-                        f"Probe blocked with HTTP {p_status}. "
-                        f"WAF or rate limiter active. "
-                        f"Try: parameter pollution, encoding, content-type switch."
-                    )
-                elif not reflected and p_len < b_len * 0.9:
-                    return (
-                        f"\n[DEFENSE PROBE — {probe_type}] "
-                        f"Body shrunk ({p_len}/{b_len}B = {p_len/max(b_len,1):.0%}). "
-                        f"Keyword likely silently removed. "
-                        f"Try bypass: double-write, case variation."
-                    )
-            else:
-                # GET endpoint — use ProbeClient
-                baseline = await self.probe_client.get_baseline(url)
-                pr = await self.probe_client.send_probe(url, param, probe_val)
-                if baseline:
-                    b_len = len(baseline.body)
-                    p_len = len(pr.response.body) if hasattr(pr, 'response') else 0
-                    reflected = probe_val in (pr.response.body if hasattr(pr, 'response') else '')
-                    if pr.blocked:
-                        return (
-                            f"\n[DEFENSE PROBE — {probe_type}] "
-                            f"Probe BLOCKED. WAF or filter active."
-                        )
-                    elif not reflected and p_len < b_len * 0.9:
-                        return (
-                            f"\n[DEFENSE PROBE — {probe_type}] "
-                            f"Body shrunk ({p_len}/{b_len}B). Keyword likely removed. "
-                            f"Try bypass techniques."
-                        )
-        except Exception:
-            pass
-        return ""
+    # NOTE: per-task defense probing and automatic payload-bypass retries
+    # were removed.  They issued 2-5 extra requests per exploit task and,
+    # across the whole benchmark suite, never produced a flag — the only
+    # measurable effect was reporting a 403 AccessDenied response as an
+    # active WAF.  Defense awareness now comes from the single recon-time
+    # DPM pass in ReconCoordinator._detect_defenses().
 
     # ── Unified LLM-Driven Loop (v2: LLM drives EVERYTHING) ──────────
 
@@ -1042,50 +1025,6 @@ class ExecutionCoordinator(CoordinatorContext):
                     _label = f"{_host}:{_port}" if _port else _host
                     self._absent_services.add(_label)
 
-            # Defense probe + bypass attempt
-            defence_probe = ""
-            if tc_name in self.EXPLOIT_TOOLS:
-                url = str(tc_args.get("url", tc_args.get("target_url", "")))
-                param = str(tc_args.get("param", tc_args.get("parameter", "q")))
-                method = str(tc_args.get("method", "GET"))
-                if url and not self.flag_pattern.findall(
-                    getattr(result, 'stdout', '') or ''
-                ):
-                    defence_probe = await self._probe_for_defense(url, param, method, tc_name)
-                # Re-evaluate full DPM defense pipeline when defense first detected
-                if defence_probe and "BLOCKED" in defence_probe and not self.defense_state.waf_type:
-                    await self._detect_defenses()
-                # Attempt bypass if blocked
-                if defence_probe and "BLOCKED" in defence_probe:
-                    bypass_payloads = {
-                        "encoding_mutation": "<scr<script>ipt>alert(1)</scr</script>ipt>",
-                        "case_alternation": "<ScRiPt>alert(1)</sCrIpT>",
-                        "double_url": "%253Cscript%253Ealert(1)%253C%252Fscript%253E",
-                    }
-                    for strategy, payload in bypass_payloads.items():
-                        try:
-                            bp_result = await self._call_tool("send_payload", {
-                                "url": url, "param": param, "payload": payload,
-                                "method": method, "encode_type":
-                                    "double_url" if "url" in strategy else "none",
-                            })
-                            bp_stdout = getattr(bp_result, 'stdout', '') or ''
-                            bp_flags = self.flag_pattern.findall(bp_stdout)
-                            if bp_flags:
-                                is_valid, reason = await self._verify_flag(
-                                    bp_flags[0], bp_stdout,
-                                    {"url": url, "param": param, "payload": payload},
-                                    getattr(bp_result, "elapsed_ms", 0),
-                                )
-                                if is_valid:
-                                    result = bp_result
-                                    defence_probe = f"\n[DEFENSE BYPASS — {strategy}] SUCCESS: flag={bp_flags[0]}"
-                                    break
-                            elif getattr(bp_result, 'success', False):
-                                defence_probe += f"\n[DEFENSE BYPASS — {strategy}] Payload accepted, no flag"
-                        except Exception:
-                            pass
-
             # ── Trace: record final tool result (Execution Memory seed) ──
             self._task_log_event(
                 "info", "tool_result",
@@ -1105,9 +1044,6 @@ class ExecutionCoordinator(CoordinatorContext):
             if flags_found:
                 log.info("[EXPLOIT] %s: FLAG FOUND %s", tc_name, flags_found[0])
                 _any_success = True
-            elif defence_probe:
-                log.info("[EXPLOIT] %s: DEFENSE — %s", tc_name,
-                         defence_probe[:120].replace('\n', ' '))
             elif getattr(result, 'success', False):
                 log.info("[EXPLOIT] %s: OK (exit=%d, %d bytes) — no flag",
                           tc_name, result_exit, len(result_stdout))
@@ -1118,7 +1054,7 @@ class ExecutionCoordinator(CoordinatorContext):
                          (result_stdout[:100] or 'no output').replace('\n', ' '))
 
             # Format feedback for LLM
-            tool_stdout = self._format_tool_feedback(tc_name, tc_args, result, defence_probe)
+            tool_stdout = self._format_tool_feedback(tc_name, tc_args, result)
             if (tc_name == "file_upload" and not getattr(result, 'success', False)
                     and getattr(result, 'exit_code', 0) in (400, 403, 500)):
                 tool_stdout += (
@@ -1241,7 +1177,7 @@ class ExecutionCoordinator(CoordinatorContext):
                     self.phase = OrchestratorPhase.DONE
                     execution.flag_result = TaskResult(
                         success=True, flag=flags[0], steps=self.step_count,
-                        tokens_used=self.llm.token_count,
+                        tokens_used=self._tokens_used(),
                         time_elapsed=time.time() - self.start_time,
                     )
                     self._verified_flag_result = execution.flag_result
@@ -1351,7 +1287,7 @@ class ExecutionCoordinator(CoordinatorContext):
                         execution.flag_result = TaskResult(
                             success=True, flag=flags[0],
                             steps=self.step_count,
-                            tokens_used=self.llm.token_count,
+                            tokens_used=self._tokens_used(),
                             time_elapsed=time.time() - self.start_time,
                         )
                         self._verified_flag_result = execution.flag_result
@@ -1549,6 +1485,13 @@ class ExecutionCoordinator(CoordinatorContext):
                 tool_defs += mcp_defs
         except Exception:
             pass
+
+        # Response-derived filter probing runs first: it is bounded, GET-only,
+        # and cheaper than any plan task, and it is the only path that reaches
+        # data an endpoint discloses solely through a filtered view.
+        filter_result = await self._probe_json_filter_parameters()
+        if filter_result and filter_result.success:
+            return filter_result
 
         systematic_result = await self._systematic_exploit_pass(target_url)
         if systematic_result and systematic_result.success:
@@ -1855,6 +1798,84 @@ class ExecutionCoordinator(CoordinatorContext):
                 except Exception:
                     continue
 
+    # Bounded budget for response-derived filter probing.
+    _MAX_FILTER_ENDPOINTS = 6
+    _MAX_FILTER_PROBES = 12
+
+    async def _probe_json_filter_parameters(self) -> TaskResult | None:
+        """Try the filters a JSON endpoint's own records imply.
+
+        A collection endpoint usually accepts a filter named after a field of
+        the records it returns.  Reading those names off the response (and
+        drawing values from the endpoints already discovered) turns a plain
+        listing request into a filtered one — a different slice of the data,
+        which is where an impact proof can show up.  GET only, bounded.
+        """
+        from urllib.parse import quote, urlparse
+
+        endpoints = [
+            str(e.get("url", "")) for e in self.dkg.query_nodes("Endpoint")
+            if str(e.get("url", "")).startswith("http")
+        ]
+        if not endpoints:
+            return None
+        known_paths: list[str] = []
+        for url in endpoints:
+            path = urlparse(url).path
+            if path and path != "/" and path not in known_paths:
+                known_paths.append(path)
+
+        probes = 0
+        for url in endpoints[: self._MAX_FILTER_ENDPOINTS]:
+            if probes >= self._MAX_FILTER_PROBES:
+                break
+            try:
+                listing = await self._call_tool(
+                    "curl_get", {"url": url, "timeout": 10}
+                )
+            except Exception:
+                continue
+            payload = _json_body(getattr(listing, "stdout", "") or "")
+            candidates = _derive_filter_candidates(payload, known_paths)
+            if not candidates:
+                continue
+            log.info(
+                "[filter-probe] %s: %d derived filter candidate(s)",
+                url, len(candidates),
+            )
+            for param, value in candidates:
+                if probes >= self._MAX_FILTER_PROBES:
+                    break
+                probes += 1
+                separator = "&" if "?" in url else "?"
+                probe_url = f"{url}{separator}{quote(param)}={quote(str(value))}"
+                try:
+                    result = await self._call_tool(
+                        "curl_get", {"url": probe_url, "timeout": 10}
+                    )
+                except Exception:
+                    continue
+                stdout = getattr(result, "stdout", "") or ""
+                flags = self.flag_pattern.findall(stdout)
+                if not flags:
+                    continue
+                is_valid, reason = await self._verify_flag(
+                    flags[0], stdout,
+                    {"url": probe_url, "tool": "curl_get"}, 0, "curl_get",
+                )
+                if not is_valid:
+                    log.warning("[filter-probe] flag candidate rejected: %s", reason)
+                    continue
+                self._persist_verified_flag(flags[0], probe_url, "filter-probe")
+                log.info("[filter-probe] FLAG FOUND %s via %s", flags[0], probe_url)
+                self.phase = OrchestratorPhase.DONE
+                return TaskResult(
+                    success=True, flag=flags[0], steps=self.step_count,
+                    tokens_used=self._tokens_used(),
+                    time_elapsed=time.time() - self.start_time,
+                )
+        return None
+
     async def _systematic_exploit_pass(self, target_url: str) -> TaskResult | None:
         """Systematic exploit: iterate DKG Vulnerability nodes and run mapped tools.
 
@@ -2085,6 +2106,22 @@ class ExecutionCoordinator(CoordinatorContext):
         tried = self._tried_systematic  # (tool, url, param) dedup, cross-cycle
         tested_count = 0
         MAX_TESTS = 20
+        # Runtime capability snapshot: tools whose binary is missing on this
+        # host can only fail with exit=127, so they are dropped from the
+        # automatic pass (the registry and manifest stay complete).
+        _specs_by_name: dict = {}
+        for _gw in (self.attack_gateway, self.recon_gateway):
+            try:
+                _specs_by_name.update(_gw.get_tool_specs())
+            except Exception:
+                pass
+
+        def _tool_runnable(tool_name: str) -> bool:
+            if tool_name in self._BLACKLISTED_TOOLS:
+                return False
+            spec = _specs_by_name.get(tool_name)
+            return True if spec is None else _spec_is_available(spec)
+
         for v in vulns_sorted:
             if tested_count >= MAX_TESTS:
                 break
@@ -2101,6 +2138,7 @@ class ExecutionCoordinator(CoordinatorContext):
                 continue
 
             tools = _resolve_tools(vt)
+            tools = [name for name in tools if _tool_runnable(name)]
 
             # ── Privilege escalation: use dedicated exploitation method ──
             # rather than running generic shell_exec + linux_priv_check
@@ -2111,7 +2149,7 @@ class ExecutionCoordinator(CoordinatorContext):
                     self.phase = OrchestratorPhase.DONE
                     result = TaskResult(
                         success=True, flag=privesc_flag, steps=self.step_count,
-                        tokens_used=self.llm.token_count,
+                        tokens_used=self._tokens_used(),
                         time_elapsed=time.time() - self.start_time,
                     )
                     self._verified_flag_result = result
@@ -2375,7 +2413,7 @@ class ExecutionCoordinator(CoordinatorContext):
                             self.phase = OrchestratorPhase.DONE
                             return TaskResult(
                                 success=True, flag=f, steps=self.step_count,
-                                tokens_used=self.llm.token_count,
+                                tokens_used=self._tokens_used(),
                                 time_elapsed=time.time() - self.start_time,
                             )
                         else:
@@ -2405,7 +2443,7 @@ class ExecutionCoordinator(CoordinatorContext):
                             self.phase = OrchestratorPhase.DONE
                             return TaskResult(
                                 success=True, flag=f, steps=self.step_count,
-                                tokens_used=self.llm.token_count,
+                                tokens_used=self._tokens_used(),
                                 time_elapsed=time.time() - self.start_time,
                             )
                 except Exception:
@@ -2446,7 +2484,7 @@ class ExecutionCoordinator(CoordinatorContext):
                             self.phase = OrchestratorPhase.DONE
                             return TaskResult(
                                 success=True, flag=f, steps=self.step_count,
-                                tokens_used=self.llm.token_count,
+                                tokens_used=self._tokens_used(),
                                 time_elapsed=time.time() - self.start_time,
                             )
                 except Exception as e:

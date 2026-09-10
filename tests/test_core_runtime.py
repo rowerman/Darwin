@@ -223,3 +223,54 @@ async def test_executor_called_for_each_ready_task_in_order():
     await runtime.run(None, objective(), Budget(max_loops=10))
 
     assert executor.calls == ["t1", "t2"]
+
+
+@pytest.mark.asyncio
+async def test_replan_cap_does_not_abandon_ready_tasks():
+    """Exhausting the replan budget must not end a run that still has work.
+
+    Previously the loop broke out as soon as three replans had happened,
+    even with pending tasks and time left — the cloud-24 run stopped with
+    ~200s of budget unused and never executed its ready tasks.
+    """
+    tasks = [task(f"t{i}") for i in range(1, 7)]
+    planner = FakePlanner(tasks)
+    evaluations = {
+        t.id: Evaluation(
+            task_id=t.id,
+            outcome=TaskOutcome.SUCCESS,
+            replan=ReplanRecommendation.LOCAL,  # every task asks for a replan
+        )
+        for t in tasks
+    }
+    executor = FakeExecutor()
+    runtime = make_runtime(planner, executor=executor, evaluator=FakeEvaluator(evaluations))
+
+    outcome = await runtime.run(None, objective(), Budget(max_loops=20))
+
+    # All six tasks were executed even though replans stopped after the cap.
+    assert outcome.executed_tasks == [t.id for t in tasks]
+    assert planner.replan_calls == 3
+    assert outcome.replan_count == 3
+    assert outcome.stopped_reason == "plan_exhausted"
+
+
+@pytest.mark.asyncio
+async def test_replan_cap_still_stops_when_nothing_is_ready():
+    planner = FakePlanner([task("t1")])
+    evaluations = {
+        "t1": Evaluation(
+            task_id="t1",
+            outcome=TaskOutcome.FAILED,
+            failure_type=FailureType.DEFENSE_BLOCKED,
+            replan=ReplanRecommendation.LOCAL,
+        )
+    }
+    runtime = make_runtime(planner, evaluator=FakeEvaluator(evaluations))
+
+    outcome = await runtime.run(None, objective(), Budget(max_loops=20))
+
+    # One executed task, then replans revisit the empty plan and stop.
+    assert outcome.executed_tasks == ["t1"]
+    assert outcome.stopped_reason == "plan_exhausted"
+    assert planner.replan_calls <= 3

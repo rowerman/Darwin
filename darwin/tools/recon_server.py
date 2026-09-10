@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 from darwin.tools.mcp_gateway import MCPGateway, ToolResult
+from darwin.tools.paths import resolve_wordlist
 
 
 _LOG = logging.getLogger(__name__)
@@ -102,11 +103,17 @@ def _parse_gobuster_output(stdout: str) -> Dict[str, Any]:
         line = line.strip()
         if not line or line.startswith("[") or line.startswith("=") or "Error" in line:
             continue
-        match = re.match(r"(/\S+)", line)
+        # gobuster prints "<path> (Status: NNN) [Size: N]" when quiet and
+        # "/<path>  (Status: NNN) [Size: N]" otherwise; the leading slash is
+        # not guaranteed, so accept both shapes and normalize to "/path".
+        match = re.match(r"(/?[A-Za-z0-9._~%!$&'()*+,;=:@-]\S*)\s+\(Status:", line)
         if match:
+            path = match.group(1)
+            if not path.startswith("/"):
+                path = "/" + path
             code_match = re.search(r"\(Status:\s*(\d+)", line)
             code = code_match.group(1) if code_match else "200"
-            paths.append({"path": match.group(1), "code": code})
+            paths.append({"path": path, "code": code})
     return {"discovered_paths": paths, "count": len(paths)}
 
 
@@ -649,17 +656,24 @@ def register_recon_tools(gateway: MCPGateway) -> MCPGateway:
     )
 
     # ── gobuster: Fast directory enumeration ─────────────────────
+    def _prepare_gobuster(params: dict) -> dict:
+        resolved = resolve_wordlist(str(params.get("wordlist", "") or ""))
+        params["wordlist"] = resolved
+        return params
+
     gateway.register_shell_tool(
         name="gobuster_dir",
-        command_template="gobuster -u {target_url} -w {wordlist} -m dir -k -q 2>&1",
-        description="Fast directory brute-force using gobuster. Uses raft-large-directories.txt wordlist by default. Automatically skips TLS verification (-k) for self-signed certs. Target URL must include scheme (e.g. https://host:port).",
+        command_template="gobuster dir -u {target_url} -w {wordlist} -k -q -t 50 2>&1",
+        description="Fast directory brute-force using gobuster. Defaults to a bounded general wordlist (common.txt); pass a larger list name for deeper coverage. Automatically skips TLS verification (-k) for self-signed certs. Target URL must include scheme (e.g. https://host:port).",
         parameters={
             "target_url": {"type": "string", "description": "Target URL with scheme (e.g. http://host:port)"},
             "url": {"type": "string", "description": "Alias for target_url — same as target_url parameter"},
-            "wordlist": {"type": "string", "description": "Wordlist path", "default": "/home/kianabin/Darwin/wordlists/raft-large-directories.txt"},
+            "wordlist": {"type": "string", "description": "Wordlist name or absolute path (resolved against the project wordlist directory)", "default": "common.txt"},
         },
         parser=_parse_gobuster_output,
-        timeout=45,
+        timeout=60,
+        retries=0,
+        prepare_params=_prepare_gobuster,
     )
 
     # ── nikto: Web server scanner ───────────────────────────────

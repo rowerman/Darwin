@@ -31,6 +31,26 @@ from darwin.tools.spec import (
     auto_spec,
     shlex_split_value,
 )
+from darwin.tools.paths import tool_path_env
+
+# Pipefail-capable shell.  ``create_subprocess_shell`` passes the command to
+# ``<executable> -c <cmd>``; without an explicit prefix, a trailing
+# ``| head`` would mask a failing command's exit status.
+_PIPEFAIL_SHELL = "/bin/bash"
+_PIPEFAIL_PREFIX = "set -o pipefail; "
+
+
+def _pipeline_returncode(returncode: int | None, stdout: str) -> int:
+    """Normalize a shell pipeline's exit status for tool reporting.
+
+    With ``pipefail`` enabled a reader that closes early (``... | head``)
+    makes the producer die on SIGPIPE (141) even though the command worked
+    and produced output; that must not be reported as a failure.
+    """
+    rc = returncode or 0
+    if rc == 141 and stdout.strip():
+        return 0
+    return rc
 
 
 # ── Semantic parameter alias table ────────────────────────────────────
@@ -168,6 +188,7 @@ class MCPGateway:
         domain: str | None = None,
         spec: ToolSpec | None = None,
         prepare: Callable[[], None] | None = None,
+        prepare_params: Callable[[Dict[str, Any]], Dict[str, Any]] | None = None,
     ) -> None:
         """Register a shell command as a tool.
 
@@ -185,6 +206,10 @@ class MCPGateway:
             prepare: Optional best-effort callable run once before the command
                     starts (e.g. lazy environment setup). Failures are logged
                     and do not block execution.
+            prepare_params: Optional callable applied to the merged parameter
+                    dict (after defaults, before template formatting) that
+                    may normalize values — e.g. resolve a logical wordlist
+                    name to a path, or complete a required URL keyword.
         """
         # Domain filter: skip if domain is set and not in enabled_domains
         if domain is not None and self._enabled_domains is not None:
@@ -213,6 +238,15 @@ class MCPGateway:
                 for k, v in _defaults.items():
                     kwargs.setdefault(k, v)
 
+                if prepare_params is not None:
+                    try:
+                        kwargs = dict(prepare_params(dict(kwargs)))
+                    except Exception as e:
+                        _log.warning(
+                            "MCPGateway: prepare_params failed for tool '%s': %s",
+                            name, e,
+                        )
+
                 # Extract template variables — only pass what the
                 # command template actually uses to format()
                 import string as _string
@@ -239,12 +273,16 @@ class MCPGateway:
                 proc = None
                 try:
                     # Prevent psql/mysql from blocking on interactive password prompts
-                    no_prompt_env = {**__import__("os").environ, "PGPASSWORD": ""}
+                    no_prompt_env = tool_path_env({**os.environ, "PGPASSWORD": ""})
+                    _use_pipefail = os.path.exists(_PIPEFAIL_SHELL)
+                    if _use_pipefail:
+                        cmd = _PIPEFAIL_PREFIX + cmd
                     proc = await asyncio.create_subprocess_shell(
                         cmd,
                         stdout=asyncio.subprocess.PIPE,
                         stderr=asyncio.subprocess.PIPE,
                         env=no_prompt_env,
+                        executable=_PIPEFAIL_SHELL if _use_pipefail else None,
                     )
                     stdout, stderr = await asyncio.wait_for(
                         proc.communicate(), timeout=current_timeout
@@ -264,10 +302,10 @@ class MCPGateway:
 
                     result = ToolResult(
                         tool_name=name,
-                        success=proc.returncode == 0,
+                        success=_pipeline_returncode(proc.returncode, stdout_s) == 0,
                         stdout=stdout_s,
                         stderr=stderr_s,
-                        exit_code=proc.returncode or 0,
+                        exit_code=_pipeline_returncode(proc.returncode, stdout_s),
                         elapsed_ms=elapsed,
                         parsed_output=parsed,
                     )
@@ -394,7 +432,7 @@ class MCPGateway:
                 current_timeout = timeout * (1.5 ** attempt)
                 proc = None
                 try:
-                    no_prompt_env = {**os.environ, "PGPASSWORD": ""}
+                    no_prompt_env = tool_path_env({**os.environ, "PGPASSWORD": ""})
                     proc = await asyncio.create_subprocess_exec(
                         *argv,
                         stdout=asyncio.subprocess.PIPE,

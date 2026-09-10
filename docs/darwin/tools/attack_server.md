@@ -14,6 +14,15 @@ Planner 发现工具、Executor 执行工具的攻击域注册层。
 - `create_attack_gateway()`：创建攻击 gateway。
 - `_apply_domain_filter()`：按启用域过滤。
 
+## 契约要点（通用工具）
+
+- `send_payload`：`param`/`payload` 均可为空（与实现的空值分支对齐），
+  支持用完整 JSON 字符串作为 body；`headers` 支持
+  `Key: v|Key2: v2` 或换行分隔，用于 header 驱动的鉴权（如 `X-Api-Key`）。
+- `ffuf_fuzz`：`normalize_fuzz_url()` 在 URL 缺少 `FUZZ` 时自动补 `/FUZZ`
+  （ffuf 缺占位符时会打印错误却仍以 0 退出）；字典默认走逻辑名，
+  运行时由 `tools/paths.resolve_wordlist()` 解析。
+
 ## 相关模块
 
 `mcp_gateway.py`、`spec.py`、`manifest.py`、`core/capabilities.py`。

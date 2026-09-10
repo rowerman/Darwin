@@ -5,6 +5,7 @@ Owns plan sanitization, structured generation with schema repair, cycle detectio
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import os
@@ -15,6 +16,33 @@ from dataclasses import dataclass, field, replace
 from typing import Any, Dict, List, Optional
 
 log = logging.getLogger(__name__)
+
+# Parameter names that carry an HTTP request target.  A tool declaring any of
+# these is an HTTP-capable tool even when it is not literally called "url".
+_HTTP_TARGET_PARAMS = frozenset(
+    {"url", "endpoint_url", "target_url", "base_url", "ssrf_url"}
+)
+
+# Preference order when a planned tool has to be replaced by a generic HTTP
+# tool: arbitrary-method first (headers + JSON body), then form POST, then the
+# payload injector, then the plain fetcher.
+_HTTP_TOOL_PRIORITY = ("http_method_probe", "http_post", "send_payload", "curl_get")
+
+
+def _pick_http_tool(
+    tool_specs: dict, declared_params: dict | None = None,
+) -> str:
+    """First available HTTP tool from the preference order, or ""."""
+    for name in _HTTP_TOOL_PRIORITY:
+        spec = tool_specs.get(name)
+        if spec is None:
+            continue
+        if not (_HTTP_TARGET_PARAMS & set(getattr(spec, "parameters", {}) or {})):
+            continue
+        if not is_available(spec):
+            continue
+        return name
+    return ""
 
 from darwin.cteg import CTEG, TaskRecord, build_scenario_profile
 from darwin.core.context import ContextManager
@@ -62,6 +90,7 @@ from darwin.tools.mcp_client import MCPClientPool, load_mcp_config
 from darwin.tools.mcp_gateway import ToolResult
 from darwin.tools.recon_server import create_recon_gateway, parse_response
 from darwin.tools.attack_server import create_attack_gateway
+from darwin.tools.availability import is_available
 from darwin.utils.http_client import HTTPClient, ProbeClient, HTTPResponse
 from darwin.utils.llm import LLMSession
 from darwin.utils.phase_logger import PhaseLogger
@@ -310,32 +339,35 @@ class PlanCoordinator(CoordinatorContext):
                 str(t.get("instruction", "")),
                 str(_params_probe.get("url", "")),
                 str(_params_probe.get("target_url", "")),
+                str(_params_probe.get("endpoint_url", "")),
+                str(_params_probe.get("base_url", "")),
                 str(_params_probe.get("command", "")),
             ]).lower()
             _spec = _tool_specs.get(tool)
             _spec_domains = {str(d).lower() for d in getattr(_spec, "domains", [])} if _spec else set()
             if tool and ("http://" in _evidence or "https://" in _evidence):
-                if "cloud" in _spec_domains and "url" not in getattr(_spec, "parameters", {}):
-                    _http_candidates = [
-                        name for name, spec in _tool_specs.items()
-                        if "url" in getattr(spec, "parameters", {})
-                        and ("method" in getattr(spec, "parameters", {})
-                             or "data" in getattr(spec, "parameters", {}))
-                    ]
-                    if len(_http_candidates) == 1:
-                        t["tool"] = _http_candidates[0]
-                        tool = _http_candidates[0]
+                # A tool whose only request target is a non-``url`` alias
+                # (endpoint_url/target_url) is still a legitimate HTTP tool —
+                # cloud/object-store tools must not be discarded just because
+                # their parameter is not literally named "url".
+                _declared = getattr(_spec, "parameters", {}) if _spec else {}
+                if "cloud" in _spec_domains and not _HTTP_TARGET_PARAMS & set(_declared):
+                    _replacement = _pick_http_tool(_tool_specs, _declared)
+                    if _replacement:
+                        t["tool"] = _replacement
                         t["instruction"] = (
                             t.get("instruction", "")
-                            + f" [auto-corrected by ToolSpec: {tool}]"
+                            + f" [auto-corrected by ToolSpec: {_replacement}]"
                         )
+                        tool = _replacement
                     else:
-                        t["status"] = "skipped"
-                        t["instruction"] = (
-                            t.get("instruction", "")
-                            + " [rejected: no unique HTTP-compatible tool]"
+                        # No usable HTTP substitute — keep the task and let the
+                        # executor surface the real error instead of silently
+                        # dropping an otherwise valid plan entry.
+                        log.warning(
+                            "No HTTP-compatible substitute for tool '%s'; "
+                            "keeping the task as planned", tool,
                         )
-                        continue
 
             # ── Post-generation tool inference ─────────────────────
             # When the plan LLM leaves tool empty, infer the correct
@@ -485,6 +517,43 @@ class PlanCoordinator(CoordinatorContext):
                                 _rep_params["host"] = _target
                             _rep_params.pop("target", None)
                             t["params"] = _rep_params
+
+            # Host availability gate: a planned tool whose binary is not
+            # installed can only fail with exit=127, so swap it for an
+            # available HTTP-capable tool when the task is an HTTP task, and
+            # otherwise drop it with a recorded reason instead of burning a
+            # scheduler slot.
+            if tool and tool not in self._BLACKLISTED_TOOLS:
+                _avail_spec = _tool_specs.get(tool)
+                if _avail_spec is not None and not is_available(_avail_spec):
+                    _is_http_task = "http://" in _evidence or "https://" in _evidence
+                    _substitute = (
+                        _pick_http_tool(_tool_specs) if _is_http_task else ""
+                    )
+                    if _substitute and _substitute != tool:
+                        log.warning(
+                            "Tool '%s' is not installed on this host — "
+                            "replacing with '%s'", tool, _substitute,
+                        )
+                        t["tool"] = _substitute
+                        t["instruction"] = (
+                            t.get("instruction", "")
+                            + f" [auto-corrected: {tool}→{_substitute} "
+                              f"(binary not installed)]"
+                        )
+                        tool = _substitute
+                    else:
+                        log.warning(
+                            "Tool '%s' is not installed on this host — "
+                            "skipping task '%s'", tool, t.get("id", "?"),
+                        )
+                        t["status"] = "skipped"
+                        t["instruction"] = (
+                            t.get("instruction", "")
+                            + f" [skipped: {tool} binary not installed]"
+                        )
+                        continue
+
             # Block raw SSH in shell_exec — running "ssh" or "sshpass"
             # triggers an interactive password prompt that hangs the tool.
             # Scan the ENTIRE command for ssh/sshpass — LLMs often embed
@@ -765,26 +834,53 @@ class PlanCoordinator(CoordinatorContext):
                 })
 
         # ── Post-generation: shell_exec → specialized tool correction ─
-        # LLM often defaults to shell_exec for tasks that have dedicated
-        # tools (aws_cli, curl_get, send_payload).  Detect these at the
-        # code level and correct — this is more reliable than prompt fixes.
+        # shell_exec is the LLM's generic fallback for tasks that have a
+        # dedicated tool.  Rewrite only when the replacement is (a) runnable
+        # on this host and (b) fully parameterisable from the original task;
+        # otherwise the original command stays intact.  Rewriting into a tool
+        # whose binary is missing — or dropping the command and leaving empty
+        # params — turns a workable task into a guaranteed failure.
+        def _first_url(text: str) -> str:
+            match = re.search(r"https?://[^\s'\"]+", text)
+            return match.group(0).rstrip(").,;\"'") if match else ""
+
+        def _aws_params(command: str) -> dict | None:
+            match = re.search(r"\baws\s+([a-z0-9-]+)\s+([a-z0-9-]+)", command)
+            if not match:
+                return None
+            return {"service": match.group(1), "action": match.group(2)}
+
+        def _ready(replacement: str, params: dict) -> bool:
+            spec = _tool_specs.get(replacement)
+            if spec is None or not is_available(spec):
+                return False
+            return all(str(params.get(req, "")).strip() for req in spec.required)
+
+        def _rewrite(task: dict, replacement: str, params: dict, note: str) -> None:
+            task["tool"] = replacement
+            task["params"] = params
+            task["instruction"] = (
+                f"[auto-corrected: shell_exec->{replacement} ({note})] "
+                f"{task.get('instruction', '')}"
+            )
+
         for t in tasks:
             if t.get("tool") != "shell_exec" or t.get("status") not in (None, "", "pending"):
                 continue
             _inst = str(t.get("instruction", "")).lower()
-            _cmd = str(t.get("params", {}).get("command", "")).lower()
+            _raw_cmd = str(t.get("params", {}).get("command", "") or "")
+            _cmd = _raw_cmd.lower()
             _combined = f"{_inst} {_cmd}"
+            _url = _first_url(_raw_cmd) or _first_url(str(t.get("instruction", "")))
+            _aws = _aws_params(_cmd)
 
             # S3 / AWS operations → aws_cli or curl_get
             if any(kw in _combined for kw in ("s3 ", "s3:", "bucket", "list-buckets",
                                                "list-objects", "aws s3", "object storage")):
-                t["tool"] = "curl_get"
-                t["instruction"] = (
-                    f"[auto-corrected: shell_exec->curl_get (S3/object storage)] "
-                    f"{t.get('instruction', '')}"
-                )
-                if "command" in t.get("params", {}):
-                    del t["params"]["command"]
+                if _ready("aws_cli", _aws or {}):
+                    _rewrite(t, "aws_cli", _aws, "S3/object storage")
+                elif _url and _ready("curl_get", {"url": _url}):
+                    _rewrite(t, "curl_get", {"url": _url}, "S3/object storage")
                 continue
 
             # AWS IAM / STS / credential operations → aws_cli
@@ -792,24 +888,19 @@ class PlanCoordinator(CoordinatorContext):
                                                "accesskeyid", "secretaccesskey",
                                                "list-roles", "get-caller-identity",
                                                "assume-role", "aws cli")):
-                t["tool"] = "aws_cli"
-                t["instruction"] = (
-                    f"[auto-corrected: shell_exec->aws_cli (AWS cloud operation)] "
-                    f"{t.get('instruction', '')}"
-                )
-                if "command" in t.get("params", {}):
-                    del t["params"]["command"]
+                if _ready("aws_cli", _aws or {}):
+                    _rewrite(t, "aws_cli", _aws, "AWS cloud operation")
+                else:
+                    log.info(
+                        "Keeping shell_exec for task %s: aws_cli unavailable or "
+                        "service/action not derivable", t.get("id", "?"),
+                    )
                 continue
 
             # curl-based HTTP operations → curl_get
-            if _cmd.strip().startswith("curl ") and "aws " not in _cmd:
-                t["tool"] = "curl_get"
-                t["instruction"] = (
-                    f"[auto-corrected: shell_exec->curl_get (curl in shell_exec)] "
-                    f"{t.get('instruction', '')}"
-                )
-                if "command" in t.get("params", {}):
-                    del t["params"]["command"]
+            if _cmd.strip().startswith("curl ") and "aws " not in _cmd and _url:
+                if _ready("curl_get", {"url": _url}):
+                    _rewrite(t, "curl_get", {"url": _url}, "curl in shell_exec")
 
         # ── Write back to typed Task objects ──────────────────────
         for t, d in zip(_plan_tasks, tasks[: len(_plan_tasks)]):
@@ -875,11 +966,22 @@ class PlanCoordinator(CoordinatorContext):
         def _llm_timeout(default: float = 60.0) -> float:
             return max(1.0, min(default, float(self._remaining_budget())))
 
+        def _isolated():
+            """Run these self-contained prompts without the session history.
+
+            Each structured prompt carries its own world state, so continuing
+            the shared conversation only makes the call slower.  Test doubles
+            without ``isolated_scope`` simply run unchanged.
+            """
+            scope = getattr(self.llm, "isolated_scope", None)
+            return scope() if callable(scope) else contextlib.nullcontext()
+
         content = ""
         err = ""
+        _timed_out = False
         for attempt in range(1, max_attempts + 1):
             attempt_prompt = prompt
-            if attempt > 1:
+            if attempt > 1 and not _timed_out:
                 attempt_prompt = (
                     f"{prompt}\n\n[SCHEMA REPAIR ATTEMPT {attempt}/{max_attempts}]\n"
                     "Your previous response was rejected because it does not match "
@@ -890,20 +992,28 @@ class PlanCoordinator(CoordinatorContext):
                       "No markdown, no extra keys, no commentary."
                 )
             timeout = _llm_timeout()
+            if _timed_out:
+                # A timeout is a latency problem, not a schema problem:
+                # retry the same prompt with a longer budget instead of
+                # telling the model its (never-seen) output was invalid.
+                timeout = _llm_timeout(120.0)
             log.info(
                 "Structured generation stage=%s attempt=%d/%d timeout=%.0fs "
                 "(no registry tools exposed)",
                 stage, attempt, max_attempts, timeout,
             )
             try:
-                content, _ = await self._llm_generate_async(
-                    prompt=attempt_prompt,
-                    system_prompt=system_prompt,
-                    stage=stage,
-                    timeout=timeout,
-                )
+                with _isolated():
+                    content, _ = await self._llm_generate_async(
+                        prompt=attempt_prompt,
+                        system_prompt=system_prompt,
+                        stage=stage,
+                        timeout=timeout,
+                    )
+                _timed_out = False
             except asyncio.TimeoutError:
                 err = "LLM call timed out"
+                _timed_out = True
                 log.warning("Structured %s attempt %d timed out", stage, attempt)
                 continue
             except Exception as exc:  # noqa: BLE001 - surfaced to repair loop
@@ -2449,10 +2559,11 @@ Output ONLY valid JSON:
 {{"fixable": true/false, "corrected_params": {{...}}, "partial_success": true/false, "credentials": {{...}}, "reason": "..."}}"""
 
         try:
-            content, _ = await self._llm_generate_async(
-                prompt=prompt, system_prompt=SYSTEM_PROMPT_EVALUATOR,
-                stage="fix_analysis",
-            )
+            with self._llm_isolated():
+                content, _ = await self._llm_generate_async(
+                    prompt=prompt, system_prompt=SYSTEM_PROMPT_EVALUATOR,
+                    stage="fix_analysis",
+                )
             # Extract JSON from response
             match = re.search(r"\{[\s\S]*\}", content)
             if not match:
@@ -2744,12 +2855,15 @@ Output ONLY valid JSON:
         return [t for t in tasks if t.id not in _to_remove]
 
     async def _review_and_update_plan(
-        self, task: Task, success: bool, task_result: str = ""
+        self, task: Task, success: bool, task_result: str = "",
+        force: bool = False,
     ) -> None:
-        """LLM reviews and updates the plan after every task (VulnBot-style).
+        """Review the plan after a task and let the LLM add/remove/reorder.
 
-        Called after each task completes, regardless of success or failure.
-        The LLM sees what was learned and can add/remove/reorder tasks.
+        Status bookkeeping always runs; the LLM call is gated on there being
+        something to react to (a failure, or a change to the world model).
+        Reviewing after every successful no-op task consumed whole minutes of
+        the exploit allowance without changing the plan.
         """
         if not getattr(self, 'exploitation_plan', None):
             return
@@ -2827,11 +2941,25 @@ Output ONLY valid JSON:
         # "latest endpoints/credentials" view when there is no per-task
         # baseline (e.g. the plan-exhausted review).
         _before_nodes = getattr(self, "_cognition_before", None)
+        _had_baseline = _before_nodes is not None
         try:
-            new_discoveries = render_new_discoveries(_before_nodes, self.dkg)
+            _discovered_nodes = render_new_discoveries(_before_nodes, self.dkg)
         except Exception:
-            new_discoveries = ""
+            _discovered_nodes = ""
         self._cognition_before = None
+        # Something new to reason about: a failure, a changed world model, or
+        # an explicit stall review.  Otherwise the plan cannot improve and the
+        # LLM round-trip is pure cost.
+        _has_delta = bool((_discovered_nodes or "").strip()) or bool(
+            (_topology_diff_text or "").strip()
+        )
+        if success and _had_baseline and not _has_delta and not force:
+            log.info(
+                "Skipping plan review after task %s: no new state discovered",
+                task.id,
+            )
+            return
+        new_discoveries = _discovered_nodes
         if not new_discoveries:
             if state.endpoints:
                 new_discoveries = "\n## Latest Discoveries\n" + "\n".join(

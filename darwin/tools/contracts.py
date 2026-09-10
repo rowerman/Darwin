@@ -9,6 +9,7 @@ spec is the single source consumed by discovery, filtering and the manifest.
 from __future__ import annotations
 
 import inspect
+import os
 import shlex
 from typing import Any
 
@@ -130,8 +131,34 @@ def _sync_python_defaults(entry: Any, parameters: dict[str, dict]) -> dict[str, 
     return parameters
 
 
+def _relax_alias_parameters(parameters: dict[str, dict]) -> dict[str, dict]:
+    """Declared alternative names for one value must not be required.
+
+    Registrations commonly expose the same target under two names (e.g.
+    ``target_url`` and ``url``) by declaring both.  Without a default the
+    alias becomes a second REQUIRED parameter, so a valid call that supplies
+    only the canonical name is rejected before it ever reaches the tool.
+    """
+    for name, meta in parameters.items():
+        if not isinstance(meta, dict) or "default" in meta:
+            continue
+        if "alias for" in str(meta.get("description", "")).lower():
+            relaxed = dict(meta)
+            relaxed["default"] = ""
+            parameters[name] = relaxed
+    return parameters
+
+
 def _dependencies(name: str, spec: Any) -> list[str]:
-    """Return the primary external executable(s) used by a tool."""
+    """Return the primary external executable(s) used by a tool.
+
+    Only machine-independent binary *names* are recorded: a template that
+    points into an interpreter-owned directory (e.g. a virtualenv console
+    script) contributes its basename, and the executor resolves the concrete
+    path through the augmented PATH.  Templates whose executable is supplied
+    at call time (``{command}``) or that lead with an environment assignment
+    contribute nothing.
+    """
     command = spec.command_template or " ".join(spec.shell_args)
     try:
         tokens = shlex.split(command)
@@ -140,8 +167,12 @@ def _dependencies(name: str, spec: Any) -> list[str]:
     wrappers = {"timeout", "env", "sudo"}
     if tokens and tokens[0] in wrappers:
         tokens = tokens[2:] if tokens[0] == "timeout" and len(tokens) > 1 else tokens[1:]
+    while tokens and "=" in tokens[0] and not tokens[0].startswith("/"):
+        tokens = tokens[1:]  # VAR=value prefix
+    if tokens and tokens[0].startswith("{"):
+        return []
     if tokens and tokens[0] not in {"bash", "sh", "python", "python3", "curl"}:
-        return [tokens[0]]
+        return [os.path.basename(tokens[0])]
     executable_by_name = {
         "sqlmap_test": "sqlmap", "hydra_http_brute": "hydra", "hydra_ssh_brute": "hydra",
         "test_credential": "sshpass", "test_db_credential": "nc",
@@ -168,7 +199,11 @@ def apply_explicit_contracts(gateway: Any) -> None:
     """Replace auto-derived specs with explicit, enriched contracts in-place."""
     for name, entry in gateway._registry.items():
         old = entry.spec or gateway.get_tool_specs().get(name)
-        parameters = _sync_python_defaults(entry, {k: dict(v) for k, v in entry.parameters.items()})
+        parameters = _relax_alias_parameters(
+            _sync_python_defaults(
+                entry, {k: dict(v) for k, v in entry.parameters.items()}
+            )
+        )
         domains = _domain_for(name, entry)
         capability = _capability_for(name, domains[0] if domains else "")
         aliases = {

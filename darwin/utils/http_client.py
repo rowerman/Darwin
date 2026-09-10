@@ -394,21 +394,44 @@ class ProbeClient(HTTPClient):
         modified = False
         reflected = ""
 
-        # Check for blocking indicators
-        if response.status_code in (403, 406, 429, 493, 999, 1020):
+        # A "blocked" verdict must mean the PROBE changed the outcome, not
+        # that the endpoint answers that way to everyone.  Endpoints whose
+        # normal response is already 403/AccessDenied (authorization oracles)
+        # are extremely common in cloud APIs; treating them as a WAF made the
+        # framework chase defenses that do not exist.
+        baseline = self._baselines.get(baseline_url)
+        baseline_status = (
+            baseline.response.status_code
+            if baseline is not None and baseline.response is not None
+            else 0
+        )
+
+        block_statuses = (403, 406, 429, 493, 999, 1020)
+        if response.status_code in block_statuses and baseline_status not in block_statuses:
             blocked = True
-        elif response.elapsed_ms > 5000:  # significant delay
+        elif response.elapsed_ms > 5000 and baseline is not None \
+                and baseline.response is not None \
+                and baseline.response.elapsed_ms <= 5000:
             blocked = True
 
-        # Check for WAF block page patterns
+        # WAF block-page fingerprints.  Only "access denied"/"forbidden"
+        # style phrasing is ignored on its own — it appears in ordinary
+        # application error bodies — unless the baseline did not contain it.
         block_patterns = [
-            r"blocked", r"forbidden", r"access denied", r"mod.security",
-            r"naxsi", r"cloudflare", r"attention required",
+            r"mod.security", r"naxsi", r"cloudflare", r"attention required",
         ]
         for pattern in block_patterns:
             if re.search(pattern, response.body, re.IGNORECASE):
                 blocked = True
                 break
+        if not blocked and baseline_status in (200, 201, 204):
+            generic_markers = (r"\bblocked\b", r"\bforbidden\b", r"access denied")
+            baseline_body = baseline.response.body if baseline is not None else ""
+            for pattern in generic_markers:
+                if (re.search(pattern, response.body, re.IGNORECASE)
+                        and not re.search(pattern, baseline_body, re.IGNORECASE)):
+                    blocked = True
+                    break
 
         # Look for reflected value
         if probe_value in response.body:
@@ -422,7 +445,6 @@ class ProbeClient(HTTPClient):
                 modified = True
 
         # Check for significant body size reduction (possible content filtering)
-        baseline = self._baselines.get(baseline_url)
         if baseline and baseline.response.body:
             baseline_len = len(baseline.response.body)
             response_len = len(response.body)

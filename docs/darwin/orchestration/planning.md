@@ -27,3 +27,26 @@
 
 注册表查询结束后使用无工具的结构化收敛请求；工具替换需依据已注册
 `ToolSpec` 的参数和域信息，无法唯一匹配时不猜测替换。
+
+## 工具可见性、可用性与纠错（通用规则）
+
+- 工具契约卡渲染**全部**已注册工具（不再按条数截断）。此前截断会隐藏
+  注册顺序靠后的 HTTP/侦察工具族，规划只能退回到可见的少数工具。
+- 后生成改写（`shell_exec → aws_cli/curl_get`）只有在目标工具**本机可用**
+  且所需参数可从原任务推导时才执行，否则保留原命令；禁止改写后留下空
+  `params`。不可用工具在计划校验阶段替换为同域可用替代，或标记
+  skipped 并写明原因。
+- HTTP 目标参数集合包含 `url | endpoint_url | target_url | base_url |
+  ssrf_url`；需要替换时按 `http_method_probe → http_post → send_payload →
+  curl_get` 的优先级取第一个可用者，取不到则保留原工具（不静默丢弃任务）。
+- 结构化阶段（analyze/plan/plan_review）通过 `LLMSession.isolated_scope()`
+  在无历史上下文中单发；超时重试用同 prompt + 更长超时，而不是发送
+  schema 修复文案。
+
+## plan review 触发条件
+
+`_review_and_update_plan()` 的确定性记账（`attempt_count`、状态流转、
+`_exhausted_task_ids`、`result_summary`、PlanMemory 同步）始终执行；
+LLM 复审仅在“任务失败 / 本任务产生 DKG 增量 / 无 ready 任务的 stall
+复审（`force=True`）”时调用。没有基线（`_cognition_before` 为空）的调用
+保持旧行为，一定复审。

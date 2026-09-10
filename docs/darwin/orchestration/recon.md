@@ -36,3 +36,15 @@ DAVE 验证的 flag 会带来源和位置写入 DKG。
 HTTP 状态码写入 DKG，非 HTML 或错误状态端点不会进入 gobuster/nikto 重扫描。
 API 方法探测使用 recon 域的 `http_method_probe` 工具（OPTIONS/POST/JSON），
 工具调用统一经 `_call_tool()` → `MCPGateway`，不绕过工具契约。
+
+## 深侦察的失败可见性与发现即校验
+
+- gobuster/dirb/nikto 的失败会写 WARNING 日志并进入任务日志，不再静默吞掉；
+  字典缺失、CLI 语法不匹配这类问题会直接暴露。
+- 目录枚举新发现的路径会被**立即** GET 一次（上限
+  `_MAX_DISCOVERY_VERIFY`，默认 15）：响应写入对应 Endpoint 的
+  `sample_response`，并用统一 flag 正则扫描，命中后走 DAVE 校验；验证通过
+  则 `_recon_flag_result` 置位，`LifecycleCoordinator.run()` 会以 `_RunFinished`
+  结束本次运行，不再进入利用阶段。
+- `_detect_defenses()` 在探测前先用 `get_baseline(url)` 建立基线，
+  使 `ProbeClient` 的拦截判定只在“探针改变了结果”时成立。

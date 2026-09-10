@@ -309,9 +309,6 @@ class Orchestrator:
     def _format_tool_feedback(self, tc_name: str, tc_args: dict, result, defence_probe: str='') -> str:
         return self.execution._format_tool_feedback(tc_name, tc_args, result, defence_probe)
 
-    async def _probe_for_defense(self, url: str, param: str, method: str='GET', tool_name: str='') -> str:
-        return await self.execution._probe_for_defense(url, param, method, tool_name)
-
     async def _execute_task_with_policies(self, task: Task, tool_defs: list[dict], iteration: int=0, max_iter: int=25) -> 'TaskExecution':
         return await self.execution._execute_task_with_policies(task, tool_defs, iteration, max_iter)
 
@@ -427,8 +424,8 @@ class Orchestrator:
     def _cap_pending_tasks(self, tasks: list[Task], max_total: int=20, max_new_this_cycle: int=8) -> list[Task]:
         return self.planning._cap_pending_tasks(tasks, max_total, max_new_this_cycle)
 
-    async def _review_and_update_plan(self, task: Task, success: bool, task_result: str='') -> None:
-        return await self.planning._review_and_update_plan(task, success, task_result)
+    async def _review_and_update_plan(self, task: Task, success: bool, task_result: str='', force: bool=False) -> None:
+        return await self.planning._review_and_update_plan(task, success, task_result, force)
 
     def _persist_plan(self, phase: str='exploit') -> None:
         return self.planning._persist_plan(phase)

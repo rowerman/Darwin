@@ -96,15 +96,29 @@ class ContextManager:
         return saved > 0
 
     def tokens_exceeded(self, token_budget: int) -> bool:
-        """Check if the token budget is exceeded, attempting compression first."""
+        """Check if the token budget is exceeded, attempting compression first.
+
+        The budget guards total spend, so it is measured against cumulative
+        usage (``total_tokens``) rather than the current context size — with
+        isolated structured stages the context stays small while the run can
+        still consume a large number of tokens.
+        """
         try:
-            if self.llm.token_count <= token_budget:
+            used = self._usage_tokens()
+            if used <= token_budget:
                 return False
             if self.maybe_compress():
-                return self.llm.token_count > token_budget
+                return self._usage_tokens() > token_budget
         except Exception:
             return True
         return True
+
+    def _usage_tokens(self) -> int:
+        """Cumulative tokens used, falling back to context size."""
+        total = getattr(self.llm, "total_tokens", 0)
+        if total:
+            return int(total)
+        return int(getattr(self.llm, "token_count", 0) or 0)
 
     def truncation_context(self) -> str:
         """Structured DKG state for injection when history is truncated.

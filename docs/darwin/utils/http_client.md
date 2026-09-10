@@ -26,3 +26,11 @@ bootstrap recon、DPM 防御感知和 DAVE HTTP 验证的网络基础设施。
 
 请求超时、重定向和响应截断策略会影响防御检测和验证结果。
 
+## 探针拦截判定（ProbeClient）
+
+`_analyze_response()` 采用**基线对比**：先记录无探针时的状态/长度，
+只有探针相对基线发生“被拦截式”变化（如基线 2xx → 探针 403）才置
+`blocked`。基线本身就是 403/406/429 的端点（典型的授权/身份 oracle）
+不再被判成 WAF；`mod_security`/`naxsi`/`cloudflare` 等指纹仍单独识别。
+调用方在探测前必须先用 `get_baseline(url)` 建立基线（`_detect_defenses()`
+已如此实现），否则判定退化为“无基线”。

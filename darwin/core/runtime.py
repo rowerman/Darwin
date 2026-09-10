@@ -124,13 +124,21 @@ class Runtime:
         objective: Objective,
         budget: Budget,
     ) -> RuntimeOutcome:
-        """Drive one run to exhaustion (max loops, time budget, or stall)."""
+        """Drive one run to exhaustion (max loops, time budget, or stall).
+
+        ``max_replans`` caps how many times the run may ask the planner to
+        re-plan; it is a control on planning cost, not a reason to abandon
+        work that is already scheduled.  Once the cap is reached the loop
+        keeps executing ready tasks and only stops when nothing is ready,
+        the time budget is spent, or ``max_loops`` is reached.
+        """
         outcome = RuntimeOutcome()
         graph: TaskGraph | None = None
         started = time.monotonic()
         stall_tried = False
         max_replans = 3
         current_state = self._current_state(state)
+        replans_capped = False
 
         for iteration in range(1, budget.max_loops + 1):
             if time.monotonic() - started > budget.time_budget_seconds:
@@ -147,10 +155,7 @@ class Runtime:
                 # Preserve compatibility with injected legacy schedulers.
                 task = self.scheduler.next_ready(graph, budget)
             if task is None:
-                if outcome.replan_count >= max_replans:
-                    outcome.stopped_reason = "plan_exhausted"
-                    break
-                if stall_tried:
+                if replans_capped or outcome.replan_count >= max_replans or stall_tried:
                     outcome.stopped_reason = "plan_exhausted"
                     break
                 stall_tried = True
@@ -181,14 +186,16 @@ class Runtime:
 
             if evaluation.replan is not ReplanRecommendation.NONE:
                 if outcome.replan_count >= max_replans:
-                    outcome.stopped_reason = "plan_exhausted"
-                    break
-                current_state = self._current_state(current_state)
-                graph = await self.planner.replan(
-                    current_state, graph, evaluation, self.memory
-                ) or graph
-                outcome.replan_count += 1
-                stall_tried = False
+                    # Planning budget spent: keep executing the tasks already
+                    # in the graph instead of ending the run with time left.
+                    replans_capped = True
+                else:
+                    current_state = self._current_state(current_state)
+                    graph = await self.planner.replan(
+                        current_state, graph, evaluation, self.memory
+                    ) or graph
+                    outcome.replan_count += 1
+                    stall_tried = False
 
         if not outcome.stopped_reason:
             outcome.stopped_reason = "max_loops"

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from darwin.tools.mcp_gateway import ToolResult
 import asyncio
+import contextlib
 
 
 class CoordinatorContext:
@@ -72,6 +73,26 @@ class CoordinatorContext:
                 raise asyncio.TimeoutError()
             await asyncio.sleep(min(0.25, remaining))
         return fut.result()
+
+    def _llm_isolated(self):
+        """Scope for self-contained prompts (no shared conversation history).
+
+        Stages such as fix_analysis/flag_search embed all the state they need,
+        so replaying the whole session history only slows the call down and
+        lets one stage's raw output leak into the next.  Session doubles
+        without ``isolated_scope`` run unchanged.
+        """
+        llm = getattr(self._orch, "llm", None)
+        scope = getattr(llm, "isolated_scope", None)
+        return scope() if callable(scope) else contextlib.nullcontext()
+
+    def _tokens_used(self) -> int:
+        """Tokens consumed by this run (cumulative, not current context size)."""
+        llm = getattr(self._orch, "llm", None)
+        total = getattr(llm, "total_tokens", 0)
+        if total:
+            return int(total)
+        return int(getattr(llm, "token_count", 0) or 0)
 
     def __getattr__(self, name):
         return getattr(object.__getattribute__(self, "_orch"), name)

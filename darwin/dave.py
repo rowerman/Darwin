@@ -109,13 +109,11 @@ class DAVE:
     async def verify(
         self,
         exploit_attempt: ExploitAttempt,
-        probe_results: List[Any] | None = None,
     ) -> VerificationResult:
         """Run full 4-layer verification.
 
         Args:
             exploit_attempt: Details of the exploitation attempt
-            probe_results: Optional filter probe results for L3 comparison
 
         Returns:
             VerificationResult with pass/fail and detailed layer results
@@ -126,7 +124,12 @@ class DAVE:
         # L1: HTTP Response verification
         l1 = self._verify_http(exploit_attempt)
         layer_results.append(l1)
-        if l1.status == VerifyStatus.BLOCKED_BY_WAF:
+        # A response that carries a valid impact proof is a success even when
+        # its status/body phrasing looks like a block: cloud APIs routinely
+        # return AccessDenied/403 alongside the very data the step was after.
+        l4 = self._verify_impact(exploit_attempt)
+        if (l1.status == VerifyStatus.BLOCKED_BY_WAF
+                and l4.status != VerifyStatus.PASS):
             return VerificationResult(
                 passed=False, status=VerifyStatus.BLOCKED_BY_WAF,
                 confidence=l1.confidence, layer_results=layer_results,
@@ -139,15 +142,7 @@ class DAVE:
             l2 = await self._verify_browser(exploit_attempt)
             layer_results.append(l2)
 
-        # L3: Defense Integrity verification
-        if probe_results:
-            l3 = self._verify_defense_integrity(exploit_attempt, probe_results)
-            layer_results.append(l3)
-            if l3.status == VerifyStatus.MODIFIED:
-                notes.append("L3: Payload modified by defense — still checking for flag")
-
-        # L4: Impact Confirmation (flag extraction) — runs even if L3 detected modification
-        l4 = self._verify_impact(exploit_attempt)
+        # L4: Impact Confirmation (flag extraction)
         layer_results.append(l4)
 
         passed = l4.status == VerifyStatus.PASS
@@ -267,51 +262,10 @@ class DAVE:
             finally:
                 await browser.close()
 
-    # ── Layer 3: Defense Integrity ───────────────────────────────────
-
-    def _verify_defense_integrity(
-        self, attempt: ExploitAttempt, probe_results: List[Any]
-    ) -> LayerResult:
-        """Verify that the payload was not modified by a defense mechanism.
-
-        Reference: AWE ContextAnalyzer — reflection analysis
-        """
-        sent = attempt.payload or ""
-        if not sent:
-            return LayerResult(3, VerifyStatus.UNKNOWN, 0.0, "No payload to verify")
-
-        # Check if payload appears in response (possibly modified)
-        reflected = ""
-        resp_body = attempt.http_response.body if attempt.http_response else ""
-
-        if sent in resp_body:
-            reflected = sent
-            return LayerResult(
-                3, VerifyStatus.PASS, 0.95,
-                "Payload reflected intact",
-                evidence={"sent": sent, "reflected": reflected},
-            )
-
-        # Check for HTML-encoded version
-        import html
-        encoded = html.escape(sent)
-        if encoded != sent and encoded in resp_body:
-            return LayerResult(
-                3, VerifyStatus.MODIFIED, 0.7,
-                "Payload HTML-encoded by defense",
-                evidence={"sent": sent, "reflected": encoded, "modification": "html_encode"},
-            )
-
-        # Check probe results for modification patterns
-        for probe in probe_results:
-            if probe.modified and probe.probe_value in sent:
-                return LayerResult(
-                    3, VerifyStatus.MODIFIED, 0.6,
-                    f"Payload modified: {probe.probe_value} → {probe.reflected_value}",
-                    evidence={"modification_type": probe.probe_class},
-                )
-
-        return LayerResult(3, VerifyStatus.UNKNOWN, 0.3, "Payload not found in response")
+    # Layer 3 (defense integrity via filter probes) was removed together
+    # with the per-task probe pass: its only input was a probe list that no
+    # caller ever supplied, so the layer could not run.  Payload-integrity
+    # evidence now comes from L1 (status/body) and L4 (impact).
 
     # ── Layer 4: Impact Confirmation ─────────────────────────────────
 

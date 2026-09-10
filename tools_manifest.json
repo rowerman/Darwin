@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0.0",
-  "generated_at": "2026-09-02T11:01:20+00:00",
+  "generated_at": "2026-09-10T11:46:40+00:00",
   "source": "darwin.tools.manifest",
   "tool_count": 135,
   "tools": [
@@ -1633,13 +1633,18 @@
         "url": {
           "type": "string",
           "description": "Target URL with FUZZ keyword"
+        },
+        "wordlist": {
+          "type": "string",
+          "description": "Wordlist name or absolute path (resolved against the project wordlist directory)",
+          "default": "common.txt"
         }
       },
       "required": [
         "url"
       ],
       "executor": "shell",
-      "command_template": "ffuf -u '{url}' -w /usr/share/dirb/wordlists/common.txt -mc 200,301,302,403 -o /dev/null 2>&1 | head -100",
+      "command_template": "ffuf -u '{url}' -w {wordlist} -mc 200,204,301,302,307,401,403,405 -o /dev/null 2>&1 | head -200",
       "shell_args": [],
       "split_params": [],
       "dependencies": [
@@ -1960,7 +1965,7 @@
     {
       "name": "gobuster_dir",
       "version": "1.0.0",
-      "description": "Fast directory brute-force using gobuster. Uses raft-large-directories.txt wordlist by default. Automatically skips TLS verification (-k) for self-signed certs. Target URL must include scheme (e.g. https://host:port).",
+      "description": "Fast directory brute-force using gobuster. Defaults to a bounded general wordlist (common.txt); pass a larger list name for deeper coverage. Automatically skips TLS verification (-k) for self-signed certs. Target URL must include scheme (e.g. https://host:port).",
       "domains": [
         "web"
       ],
@@ -1972,20 +1977,20 @@
         },
         "url": {
           "type": "string",
-          "description": "Alias for target_url — same as target_url parameter"
+          "description": "Alias for target_url — same as target_url parameter",
+          "default": ""
         },
         "wordlist": {
           "type": "string",
-          "description": "Wordlist path",
-          "default": "/home/kianabin/Darwin/wordlists/raft-large-directories.txt"
+          "description": "Wordlist name or absolute path (resolved against the project wordlist directory)",
+          "default": "common.txt"
         }
       },
       "required": [
-        "target_url",
-        "url"
+        "target_url"
       ],
       "executor": "shell",
-      "command_template": "gobuster -u {target_url} -w {wordlist} -m dir -k -q 2>&1",
+      "command_template": "gobuster dir -u {target_url} -w {wordlist} -k -q -t 50 2>&1",
       "shell_args": [],
       "split_params": [],
       "dependencies": [
@@ -2635,7 +2640,7 @@
         "target"
       ],
       "executor": "shell",
-      "command_template": "python3 /home/kianabin/Darwin/venv/bin/getST.py -spn {spn} -impersonate {target_user} {target} 2>&1 | head -80",
+      "command_template": "python3 -m impacket.examples.getST -spn {spn} -impersonate {target_user} {target} 2>&1 | head -80",
       "shell_args": [],
       "split_params": [],
       "dependencies": [],
@@ -2683,7 +2688,7 @@
         "extra_args"
       ],
       "executor": "shell",
-      "command_template": "timeout 30 python3 /home/kianabin/Darwin/venv/bin/ntlmrelayx.py -t {target_url} {extra_args} 2>&1",
+      "command_template": "timeout 30 python3 -m impacket.examples.ntlmrelayx -t {target_url} {extra_args} 2>&1",
       "shell_args": [],
       "split_params": [],
       "dependencies": [],
@@ -2726,7 +2731,7 @@
         "target"
       ],
       "executor": "shell",
-      "command_template": "python3 /home/kianabin/Darwin/venv/bin/psexec.py {target} 2>&1",
+      "command_template": "python3 -m impacket.examples.psexec {target} 2>&1",
       "shell_args": [],
       "split_params": [],
       "dependencies": [],
@@ -2774,7 +2779,7 @@
         "target"
       ],
       "executor": "shell",
-      "command_template": "python3 /home/kianabin/Darwin/venv/bin/psexec.py -hashes :{nthash} {target} 2>&1",
+      "command_template": "python3 -m impacket.examples.psexec -hashes :{nthash} {target} 2>&1",
       "shell_args": [],
       "split_params": [],
       "dependencies": [],
@@ -2817,7 +2822,7 @@
         "target"
       ],
       "executor": "shell",
-      "command_template": "python3 /home/kianabin/Darwin/venv/bin/secretsdump.py {target} 2>&1 | head -100",
+      "command_template": "python3 -m impacket.examples.secretsdump {target} 2>&1 | head -100",
       "shell_args": [],
       "split_params": [],
       "dependencies": [],
@@ -2860,7 +2865,7 @@
         "target"
       ],
       "executor": "shell",
-      "command_template": "python3 /home/kianabin/Darwin/venv/bin/secretsdump.py -just-dc {target} 2>&1 | head -100",
+      "command_template": "python3 -m impacket.examples.secretsdump -just-dc {target} 2>&1 | head -100",
       "shell_args": [],
       "split_params": [],
       "dependencies": [],
@@ -2923,7 +2928,7 @@
         "user"
       ],
       "executor": "shell",
-      "command_template": "python3 /home/kianabin/Darwin/venv/bin/ticketer.py -nthash {service_hash} -domain-sid {domain_sid} -domain {domain} -spn {service_spn} {user} 2>&1 | head -50",
+      "command_template": "python3 -m impacket.examples.ticketer -nthash {service_hash} -domain-sid {domain_sid} -domain {domain} -spn {service_spn} {user} 2>&1 | head -50",
       "shell_args": [],
       "split_params": [],
       "dependencies": [],
@@ -2981,7 +2986,7 @@
         "user"
       ],
       "executor": "shell",
-      "command_template": "python3 /home/kianabin/Darwin/venv/bin/ticketer.py -nthash {krbtgt_hash} -domain-sid {domain_sid} -domain {domain} {user} 2>&1 | head -50",
+      "command_template": "python3 -m impacket.examples.ticketer -nthash {krbtgt_hash} -domain-sid {domain_sid} -domain {domain} {user} 2>&1 | head -50",
       "shell_args": [],
       "split_params": [],
       "dependencies": [],
@@ -3024,7 +3029,7 @@
         "target"
       ],
       "executor": "shell",
-      "command_template": "python3 /home/kianabin/Darwin/venv/bin/wmiexec.py {target} 2>&1",
+      "command_template": "python3 -m impacket.examples.wmiexec {target} 2>&1",
       "shell_args": [],
       "split_params": [],
       "dependencies": [],
@@ -3073,13 +3078,13 @@
         },
         "claims": {
           "type": "string",
-          "description": "Alias for claims_b64 — base64-encoded JSON claims"
+          "description": "Alias for claims_b64 — base64-encoded JSON claims",
+          "default": ""
         }
       },
       "required": [
         "secret",
-        "claims_b64",
-        "claims"
+        "claims_b64"
       ],
       "executor": "shell",
       "command_template": "python3 -c \"import jwt,json,time,base64; payload=json.loads(base64.b64decode('{claims_b64}').decode()); print(jwt.encode(payload,'{secret}',algorithm='{algorithm}'))\" 2>&1",
@@ -4461,11 +4466,11 @@
         "target"
       ],
       "executor": "shell",
-      "command_template": "/home/kianabin/Darwin/venv/bin/netexec {protocol} {target} -u '{user}' -p '{password}' {extra_flags} 2>&1",
+      "command_template": "netexec {protocol} {target} -u '{user}' -p '{password}' {extra_flags} 2>&1",
       "shell_args": [],
       "split_params": [],
       "dependencies": [
-        "/home/kianabin/Darwin/venv/bin/netexec"
+        "netexec"
       ],
       "flags": {
         "destructive": true,
@@ -4536,11 +4541,11 @@
         "password"
       ],
       "executor": "shell",
-      "command_template": "/home/kianabin/Darwin/venv/bin/netexec ldap {target} -u '{user}' -p '{password}' --kerberoasting {output_file} 2>&1 | head -100",
+      "command_template": "netexec ldap {target} -u '{user}' -p '{password}' --kerberoasting {output_file} 2>&1 | head -100",
       "shell_args": [],
       "split_params": [],
       "dependencies": [
-        "/home/kianabin/Darwin/venv/bin/netexec"
+        "netexec"
       ],
       "flags": {
         "destructive": true,
@@ -4603,11 +4608,11 @@
         "password"
       ],
       "executor": "shell",
-      "command_template": "/home/kianabin/Darwin/venv/bin/netexec ldap {target} -u '{user}' -p '{password}' --users 2>&1",
+      "command_template": "netexec ldap {target} -u '{user}' -p '{password}' --users 2>&1",
       "shell_args": [],
       "split_params": [],
       "dependencies": [
-        "/home/kianabin/Darwin/venv/bin/netexec"
+        "netexec"
       ],
       "flags": {
         "destructive": true,
@@ -4673,11 +4678,11 @@
         "password"
       ],
       "executor": "shell",
-      "command_template": "/home/kianabin/Darwin/venv/bin/netexec smb {target} -u '{user}' -p '{password}' --sam 2>&1 | head -100",
+      "command_template": "netexec smb {target} -u '{user}' -p '{password}' --sam 2>&1 | head -100",
       "shell_args": [],
       "split_params": [],
       "dependencies": [
-        "/home/kianabin/Darwin/venv/bin/netexec"
+        "netexec"
       ],
       "flags": {
         "destructive": true,
@@ -4743,11 +4748,11 @@
         "password"
       ],
       "executor": "shell",
-      "command_template": "/home/kianabin/Darwin/venv/bin/netexec smb {target} -u '{user}' -p '{password}' --shares 2>&1",
+      "command_template": "netexec smb {target} -u '{user}' -p '{password}' --shares 2>&1",
       "shell_args": [],
       "split_params": [],
       "dependencies": [
-        "/home/kianabin/Darwin/venv/bin/netexec"
+        "netexec"
       ],
       "flags": {
         "destructive": true,
@@ -4813,11 +4818,11 @@
         "password"
       ],
       "executor": "shell",
-      "command_template": "/home/kianabin/Darwin/venv/bin/netexec smb {target} -u '{user}' -p '{password}' --users 2>&1",
+      "command_template": "netexec smb {target} -u '{user}' -p '{password}' --users 2>&1",
       "shell_args": [],
       "split_params": [],
       "dependencies": [
-        "/home/kianabin/Darwin/venv/bin/netexec"
+        "netexec"
       ],
       "flags": {
         "destructive": true,
@@ -5454,7 +5459,8 @@
         },
         "url": {
           "type": "string",
-          "description": "Alias for file_path — server-side PHP file path"
+          "description": "Alias for file_path — server-side PHP file path",
+          "default": ""
         },
         "chain_depth": {
           "type": "integer",
@@ -5463,8 +5469,7 @@
         }
       },
       "required": [
-        "file_path",
-        "url"
+        "file_path"
       ],
       "executor": "shell",
       "command_template": "python3 -c \"\nbase = '{file_path}'\nchain = 'php://filter/convert.base64-encode/resource=' + base\nfor _ in range({chain_depth}):\n    chain = 'php://filter/convert.base64-decode|convert.base64-encode/resource=' + chain\nprint(chain)\n\" 2>&1",
@@ -5572,7 +5577,7 @@
       "shell_args": [],
       "split_params": [],
       "dependencies": [
-        "PGPASSWORD={password}"
+        "psql"
       ],
       "flags": {
         "destructive": false,
@@ -5645,11 +5650,11 @@
         "target_user"
       ],
       "executor": "shell",
-      "command_template": "/home/kianabin/Darwin/venv/bin/pywhisker -d {domain} -u {user} -p '{password}' -t {target} --action add -D {target_user} 2>&1 | head -50",
+      "command_template": "pywhisker -d {domain} -u {user} -p '{password}' -t {target} --action add -D {target_user} 2>&1 | head -50",
       "shell_args": [],
       "split_params": [],
       "dependencies": [
-        "/home/kianabin/Darwin/venv/bin/pywhisker"
+        "pywhisker"
       ],
       "flags": {
         "destructive": false,
@@ -5975,7 +5980,7 @@
     {
       "name": "send_payload",
       "version": "1.0.0",
-      "description": "Send an exploitation payload to a target. Supports GET/POST with form or JSON body. Use insecure=true for self-signed TLS.",
+      "description": "Send an exploitation payload to a target. Supports GET/POST with form or JSON body; pass a complete JSON string in payload for APIs that take a structured body, and use the headers parameter for header-driven auth (e.g. X-Api-Key: k|Authorization: Bearer t). param may be empty when nothing is injected into a single named parameter. Use insecure=true for self-signed TLS.",
       "domains": [
         "web"
       ],
@@ -5987,11 +5992,13 @@
         },
         "param": {
           "type": "string",
-          "description": "Parameter name to inject"
+          "description": "Parameter name to inject (optional: leave empty when the body is sent verbatim)",
+          "default": ""
         },
         "payload": {
           "type": "string",
-          "description": "Payload string to send"
+          "description": "Payload string to send (optional)",
+          "default": ""
         },
         "method": {
           "type": "string",
@@ -6008,6 +6015,11 @@
           "description": "POST body format: form or json (default form)",
           "default": "form"
         },
+        "headers": {
+          "type": "string",
+          "description": "Extra headers, pipe- or newline-separated (e.g. 'X-Api-Key: k|Authorization: Bearer t')",
+          "default": ""
+        },
         "insecure": {
           "type": "boolean",
           "description": "Skip TLS verification for self-signed certs",
@@ -6015,9 +6027,7 @@
         }
       },
       "required": [
-        "url",
-        "param",
-        "payload"
+        "url"
       ],
       "executor": "python",
       "command_template": "",
@@ -6059,9 +6069,7 @@
       "command_template": "{command} 2>&1",
       "shell_args": [],
       "split_params": [],
-      "dependencies": [
-        "{command}"
-      ],
+      "dependencies": [],
       "flags": {
         "destructive": true,
         "interactive": false,

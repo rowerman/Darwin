@@ -270,11 +270,15 @@ async def test_public_orchestrator_run_uses_local_target_and_real_gateways(
     endpoint_nodes = orchestrator.dkg.query_nodes("Endpoint", with_provenance=True)
     assert endpoint_nodes and all(isinstance(node["provenance"], dict) for node in endpoint_nodes)
     assert any(call[0] == "generate" for call in llm.calls)
-    review_prompts = [
-        str(entry[2]) for entry in llm.calls
-        if entry[0] == "generate" and entry[1] == "plan_review"
+    # Plan review is now conditional (failure / world-model delta / stall), so
+    # assert the topology-aware context reaches the LLM loop rather than
+    # requiring a review prompt in a run that never needed one.  The review
+    # prompt contract itself is covered by
+    # tests/test_topology_context.py::test_execution_to_review_prompt_contains_topology_diff
+    llm_prompts = [
+        str(entry[2]) for entry in llm.calls if entry[0] == "generate"
     ]
-    assert any("Topology (revision=" in p for p in review_prompts)
+    assert any("Topology (revision=" in p for p in llm_prompts)
     assert orchestrator.phase.value == "done"
     stub_calls = (cli_stub_path / "calls.log").read_text(encoding="utf-8")
     assert "nmap" in stub_calls
@@ -503,7 +507,7 @@ def test_dpm_detects_waf_from_probe_contract():
 
 
 @pytest.mark.asyncio
-async def test_dave_covers_l1_l3_l4_and_honeypot():
+async def test_dave_covers_l1_l4_and_honeypot():
     dave = DAVE(browser_enabled=False)
     valid = ExploitAttempt(
         target_url="http://local/flag",
@@ -518,6 +522,8 @@ async def test_dave_covers_l1_l3_l4_and_honeypot():
     assert accepted.layer_results[0].layer == 1
     assert accepted.layer_results[-1].layer == 4
 
+    # A payload echoed back HTML-encoded still counts as impact: verification
+    # is decided by L4 (flag extraction), and L3 no longer exists.
     modified = ExploitAttempt(
         target_url="http://local/search", payload="<script>alert(1)</script>",
         http_response=HTTPResponse(
@@ -525,13 +531,23 @@ async def test_dave_covers_l1_l3_l4_and_honeypot():
             body="&lt;script&gt;alert(1)&lt;/script&gt; " + FLAG, elapsed_ms=1.0,
         ),
     )
-    modified_result = await dave.verify(
-        modified,
-        [SimpleNamespace(modified=True, probe_value="<", reflected_value="&lt;", probe_class="B")],
-    )
+    modified_result = await dave.verify(modified)
     assert modified_result.passed is True
-    assert any(layer.status is VerifyStatus.MODIFIED for layer in modified_result.layer_results)
-    assert modified_result.defense_detected is True
+    assert modified_result.flag_value == FLAG
+    assert modified_result.layer_results[-1].layer == 4
+
+    # A flag returned inside a 403/AccessDenied body must not be discarded by
+    # the L1 block heuristics (cloud APIs answer this way routinely).
+    forbidden_with_flag = ExploitAttempt(
+        target_url="http://local/audit",
+        http_response=HTTPResponse(
+            url="http://local/audit", status_code=403, headers={},
+            body='{"error":"AccessDenied","flag":"%s"}' % FLAG, elapsed_ms=1.0,
+        ),
+    )
+    forbidden_result = await dave.verify(forbidden_with_flag)
+    assert forbidden_result.passed is True
+    assert forbidden_result.flag_value == FLAG
 
     blocked = ExploitAttempt(
         target_url="http://local/search?q=%3Cscript%3E",

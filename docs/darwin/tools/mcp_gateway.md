@@ -21,6 +21,15 @@ Executor 与所有外部工具之间的唯一执行边界。
 用于惰性准备运行时前置条件（如 nmap 自定义探针库）。回调异常只记录日志，
 不阻断命令执行，保证外部扫描在准备失败时仍可退化运行。
 
+`register_shell_tool()` 还支持可选的 `prepare_params` 回调：在默认值填充之后、
+模板格式化之前对参数字典做归一化（解析逻辑字典名、补齐 URL 必需的 `FUZZ`
+占位符等）。异常只记录日志，不阻断执行。
+
+shell 模板统一通过 `bash -c` 执行并前置 `set -o pipefail`（无 bash 时回退
+`/bin/sh`），使 `cmd | head` 这类管道的退出码反映真实命令结果；
+`_pipeline_returncode()` 把“管道读者提前关闭（SIGPIPE=141）但有输出”视为成功。
+子进程环境经 `tools/paths.tool_path_env()` 注入，venv 的控制台脚本无需写死路径。
+
 ## 相关模块
 
 `core/executor.py`、`tools/spec.py`、`attack_server.py`、`recon_server.py`、`mcp_client.py`。

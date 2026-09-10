@@ -16,6 +16,15 @@ bootstrap recon 和后续服务研究阶段的工具注册层。
   响应头与 body；用于自适应侦察的 API 路由发现与 POST/JSON 验证。
 - 各 `_parse_*` 函数：外部 CLI 输出适配。
 
+## gobuster 目录枚举
+
+`gobuster_dir` 使用 gobuster 3.x 的子命令形式
+（`gobuster dir -u URL -w WORDLIST -k -q`），字典参数是**逻辑名**
+（默认 `raft-large-directories.txt`），由 `prepare_params` 钩子在执行前经
+`tools/paths.resolve_wordlist()` 解析为绝对路径。这样 `tools_manifest.json`
+保持机器无关，同时仍能优先命中仓库自带的 `wordlists/`。
+注册时若解析失败，命令会带着明确的“字典不存在”错误返回，而不是静默产出空结果。
+
 ## nmap 云探针自动准备
 
 四个 nmap 工具（`nmap_scan` / `nmap_full_scan` / `nmap_port_range` /

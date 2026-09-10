@@ -1382,6 +1382,14 @@ class ReconCoordinator(CoordinatorContext):
             return
         log.info("_deep_recon: scanning %d endpoints", len(endpoints))
 
+        self._recon_flag_result = None
+
+        # Paths discovered by directory brute-force on this pass.  They are
+        # fetched once after the scan and scanned for flags, so a discovered
+        # endpoint is not deferred to a later (possibly destructive)
+        # exploitation phase before anyone has looked at its response.
+        _new_paths: list[str] = []
+
         async def _probe_one(endpoint: dict):
             url = endpoint.get("url", "")
             ep_id = endpoint.get("id", "") or f"ep-{url[:50]}"
@@ -1522,19 +1530,25 @@ class ReconCoordinator(CoordinatorContext):
                     bust_result = await self._call_tool("gobuster_dir",
                         {"target_url": url})
                     scanned = True
-                    if bust_result.success:
-                        paths = getattr(bust_result, "parsed_output", {}).get("discovered_paths", [])
-                        for pi in paths[:15]:
-                            path = pi.get("path", "")
-                            if path:
-                                ep_url = f"{url.rstrip('/')}{path}"
-                                self.dkg.add_node("Endpoint", f"ep-dirb-{path[:40]}", {
-                                    "url": ep_url, "method": "GET", "params": "",
-                                    "sample_status": pi.get("code", 200),
-                                    "discovered_by": "deep-recon-dirb",
-                                })
-                except Exception:
-                    pass
+                    paths = getattr(bust_result, "parsed_output", {}).get("discovered_paths", [])
+                    if not bust_result.success and not paths:
+                        log.warning(
+                            "_deep_recon: gobuster failed for %s — %s",
+                            url, (getattr(bust_result, "stdout", "") or "").strip()[:200],
+                        )
+                    for pi in paths[:15]:
+                        path = pi.get("path", "")
+                        if path:
+                            ep_url = f"{url.rstrip('/')}{path}"
+                            self.dkg.add_node("Endpoint", f"ep-dirb-{path[:40]}", {
+                                "url": ep_url, "method": "GET", "params": "",
+                                "sample_status": pi.get("code", 200),
+                                "discovered_by": "deep-recon-dirb",
+                            })
+                            if ep_url not in _new_paths:
+                                _new_paths.append(ep_url)
+                except Exception as exc:
+                    log.warning("_deep_recon: gobuster error for %s — %s", url, exc)
                 try:
                     nikto_result = await self._call_tool("nikto_scan",
                         {"target_url": url})
@@ -1547,10 +1561,12 @@ class ReconCoordinator(CoordinatorContext):
                                     self.dkg.add_node("Vulnerability", f"vuln-nikto-{len(line[:20])}", {
                                         "vuln_type": "XSS", "endpoint": url,
                                         "parameter": "", "severity": "low",
-                                        "source": "nikto", "detail": line[:200],
-                                    })
-                except Exception:
-                    pass
+                                    "source": "nikto", "detail": line[:200],
+                                })
+                    elif not getattr(nikto_result, "success", False):
+                        log.info("_deep_recon: nikto failed for %s", url)
+                except Exception as exc:
+                    log.warning("_deep_recon: nikto error for %s — %s", url, exc)
                 try:
                     form_result = await self._call_tool("form_extract",
                         {"url": url})
@@ -1664,6 +1680,7 @@ class ReconCoordinator(CoordinatorContext):
         # not make these candidates less relevant — analysis needs the actual
         # responses instead of guessing from a 404 root.
         await self._probe_service_hint_paths()
+        await self._verify_discovered_paths(_new_paths)
         log.info("_deep_recon: complete")
 
         # ── Deep recon summary ──────────────────────────────────────
@@ -1685,7 +1702,57 @@ class ReconCoordinator(CoordinatorContext):
             if len(forms) > 4:
                 print(f"    ... and {len(forms) - 4} more forms")
 
+    # Bounded fetch-and-scan budget for freshly discovered paths.
+    _MAX_DISCOVERY_VERIFY = 15
+
+    async def _verify_discovered_paths(self, urls: list[str]) -> None:
+        """Fetch newly discovered paths once and scan them for flags.
+
+        Discovery output (gobuster/dirb) is the first place a hidden route
+        becomes known; looking at its response immediately keeps the evidence
+        fresh, records it in the DKG, and avoids deferring the first contact
+        to a later phase that may have already changed target state.
+        """
+        checked = 0
+        for url in dict.fromkeys(urls):
+            if checked >= self._MAX_DISCOVERY_VERIFY:
+                break
+            checked += 1
+            try:
+                result = await self._call_tool("curl_get", {"url": url, "timeout": 10})
+            except Exception as exc:
+                log.info("_deep_recon: fetch of discovered path %s failed — %s", url, exc)
+                continue
+            stdout = getattr(result, "stdout", "") or ""
+            if not stdout:
+                continue
+            safe_id = re.sub(r"[^A-Za-z0-9_.-]+", "_", url)[:48]
+            self.dkg.add_node("Endpoint", f"ep-verified-{safe_id}", {
+                "url": url, "method": "GET", "params": "",
+                "sample_response": stdout[:5000],
+                "response_size": len(stdout),
+                "discovered_by": "deep-recon-verified",
+            })
+            flags = self.flag_pattern.findall(stdout)
+            if not flags:
+                continue
+            is_valid, reason = await self._verify_flag(
+                flags[0], stdout, {"url": url}, 0, "curl_get",
+            )
+            if not is_valid:
+                log.warning("Discovered-path flag candidate rejected: %s", reason)
+                continue
+            self._persist_verified_flags(stdout, url, "deep-recon")
+            self._recon_flag_result = TaskResult(
+                success=True, flag=flags[0], steps=self.step_count,
+                tokens_used=self._tokens_used(),
+                time_elapsed=time.time() - self.start_time,
+            )
+            log.info("Flag found during deep recon at %s", url)
+            return
+
     async def _probe_service_hint_paths(self) -> None:
+        """Probe label-implied management endpoints for HTTP services."""
         """Probe label-implied management endpoints for HTTP services."""
         import re as _re
 
@@ -1799,6 +1866,14 @@ class ReconCoordinator(CoordinatorContext):
             url = ep["url"]
             param = (ep.get("params") or ["q"])[0] if ep.get("params") else "q"
             try:
+                # Establish the un-probed baseline first: the probe analyzer
+                # only reports "blocked" when the probe changes the outcome
+                # relative to it, and an endpoint whose normal answer is 403
+                # must not look like an active WAF.
+                try:
+                    await self.probe_client.get_baseline(url)
+                except Exception:
+                    pass
                 probe_results = await self.probe_client.send_all_probe_classes(url, param)
                 all_probe_results.extend(probe_results)
                 all_responses.extend(

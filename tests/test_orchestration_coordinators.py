@@ -59,7 +59,7 @@ METHOD_OWNER = {
     ],
     "execution": [
         "_find_vuln_dkg_id", "_apply_vulnerability_feedback",
-        "_format_parse_summary", "_format_tool_feedback", "_probe_for_defense",
+        "_format_parse_summary", "_format_tool_feedback",
         "_execute_task_with_policies", "_run_with_runtime",
         "_build_plan_exhaustion_context", "_execute_privesc",
         "_try_db_default_credentials", "_systematic_exploit_pass",

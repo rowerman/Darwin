@@ -22,12 +22,20 @@ from darwin.core.schemas import (
 log = logging.getLogger(__name__)
 
 
-def render_tool_contract_card(tool_defs: list[dict], max_tools: int = 90) -> str:
+def render_tool_contract_card(
+    tool_defs: list[dict], max_tools: int | None = None
+) -> str:
     """Render compact per-tool contracts (name, params, one-line description).
 
     OpenAI-style tool definitions are the single source used by both the
     registry tools and the execution gateways, so the card always matches the
     tool names the executor accepts.  Required parameters are marked with '*'.
+
+    The card must list every registered tool: truncating it hides whole
+    capability families from the planner (HTTP/recon tools are registered
+    after the attack tools), which makes the LLM fall back to whatever tool
+    happens to survive the cut.  ``max_tools`` exists only for explicit
+    callers that want a bounded preview.
     """
     lines: list[str] = []
     for td in tool_defs or []:
@@ -42,7 +50,7 @@ def render_tool_contract_card(tool_defs: list[dict], max_tools: int = 90) -> str
         )
         desc = str(fn.get("description", "") or "")[:100].replace("\n", " ")
         lines.append(f"- {name}({param_str}) — {desc}")
-        if len(lines) >= max_tools:
+        if max_tools is not None and len(lines) >= max_tools:
             break
     if not lines:
         return "(no tool contracts available)"
