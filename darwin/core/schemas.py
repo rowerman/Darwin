@@ -18,10 +18,13 @@ Parse contract:
 from __future__ import annotations
 
 import json
+import logging
 import re
 from typing import Any
 
 from pydantic import BaseModel, Field, field_validator, model_validator
+
+log = logging.getLogger(__name__)
 
 
 # ── Analyze output ──────────────────────────────────────────────────
@@ -47,8 +50,8 @@ class AnalyzeVulnV1(BaseModel):
                 parsed = json.loads(value)
                 if isinstance(parsed, dict):
                     return parsed
-            except (json.JSONDecodeError, TypeError):
-                pass
+            except (json.JSONDecodeError, TypeError) as exc:
+                log.debug("swallowed exception: %s", exc, exc_info=True)
             return {"url": value}
         if isinstance(value, dict):
             return value
@@ -78,6 +81,11 @@ class AnalyzeOutputV1(BaseModel):
     application_understanding: str = ""
     vulnerabilities: list[AnalyzeVulnV1] = Field(default_factory=list)
     attack_paths: list[AttackPathV1] = Field(default_factory=list)
+    # Pattern-only guesses with no observed evidence. They are deliberately
+    # kept out of the vulnerability pipeline (no research, no plan tasks, no
+    # DKG Vulnerability nodes) and only feed the bounded deterministic
+    # fallback pass once the grounded plan is exhausted.
+    speculative: list[AnalyzeVulnV1] = Field(default_factory=list)
 
 
 # ── Research output ─────────────────────────────────────────────────
@@ -141,6 +149,9 @@ class PlanTaskV1(BaseModel):
     reason: str = ""
     dependent_task_ids: list[str] = Field(default_factory=list)
     priority: float = 0.5
+    # Machine-checked completion criterion — see SUCCESS_CONDITION_TYPES.
+    # Optional so legacy/looser plan outputs still validate.
+    success_condition: dict[str, Any] | None = None
     # Canonical optional fields the legacy runtime consumed beyond the
     # prompt contract (tool guessing / scheduler priority).
     vuln_type: str = ""
@@ -166,8 +177,8 @@ class PlanTaskV1(BaseModel):
                 parsed = json.loads(value)
                 if isinstance(parsed, dict):
                     return parsed
-            except (json.JSONDecodeError, TypeError):
-                pass
+            except (json.JSONDecodeError, TypeError) as exc:
+                log.debug("swallowed exception: %s", exc, exc_info=True)
             return {"url": value}
         if isinstance(value, dict):
             return value
@@ -188,13 +199,13 @@ def extract_json_value(text: str) -> Any | None:
         return None
     try:
         return json.loads(text)
-    except json.JSONDecodeError:
+    except json.JSONDecodeError:  # silent-ok: parse fallback
         pass
     match = _FENCED_RE.search(text)
     if match:
         try:
             return json.loads(match.group(1))
-        except json.JSONDecodeError:
+        except json.JSONDecodeError:  # silent-ok: parse fallback
             pass
     # Bracket counting for arrays (handles nesting + trailing text).
     start = text.find("[")
@@ -215,7 +226,7 @@ def extract_json_value(text: str) -> Any | None:
     if match:
         try:
             return json.loads(match.group(0))
-        except json.JSONDecodeError:
+        except json.JSONDecodeError:  # silent-ok: parse fallback
             pass
     return None
 

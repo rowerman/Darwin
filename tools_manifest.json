@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0.0",
-  "generated_at": "2026-09-10T11:46:40+00:00",
+  "generated_at": "2026-09-11T11:48:26+00:00",
   "source": "darwin.tools.manifest",
   "tool_count": 135,
   "tools": [
@@ -2195,7 +2195,7 @@
     {
       "name": "http_method_probe",
       "version": "1.0.0",
-      "description": "Send a generic HTTP request with an arbitrary method (OPTIONS, POST, HEAD, PUT...). OPTIONS returns the Allow header for route discovery; POST sends an optional body (JSON by default). Returns status, headers and body.",
+      "description": "Send a generic HTTP request with an arbitrary method and an optional body — this is the tool for PUT/PATCH/DELETE writes (e.g. method=PUT with data=<payload> to create/overwrite a resource). OPTIONS returns the Allow header for route discovery; POST/PUT send the body given in data= (set content_type= when it is not JSON). Returns status, headers and body, including for 4xx/5xx responses.",
       "domains": [
         "web"
       ],
@@ -2207,12 +2207,12 @@
         },
         "method": {
           "type": "string",
-          "description": "HTTP method: OPTIONS, POST, HEAD, PUT...",
+          "description": "HTTP method: OPTIONS, GET, POST, HEAD, PUT, PATCH, DELETE",
           "default": "OPTIONS"
         },
         "data": {
           "type": "string",
-          "description": "Request body (JSON string for POST)",
+          "description": "Request body sent with POST/PUT/PATCH (JSON by default; use content_type for raw text/plain payloads)",
           "default": ""
         },
         "content_type": {
@@ -2270,8 +2270,8 @@
     },
     {
       "name": "http_post",
-      "version": "1.0.0",
-      "description": "Send HTTP POST request. Use insecure=true for self-signed TLS. Use cookie parameter for session.",
+      "version": "1.1.0",
+      "description": "Send an HTTP POST request with a body (data=...). Use insecure=true for self-signed TLS and cookie= for a session. 4xx/5xx responses are returned with their status, headers and body — read them to tell a missing route (404) from a wrong method (405 + Allow). For other verbs (PUT/PATCH/DELETE) use http_method_probe with method=...",
       "domains": [
         "web"
       ],

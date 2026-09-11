@@ -30,8 +30,11 @@ Design rules:
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import Any, Iterable
+
+log = logging.getLogger(__name__)
 
 
 SNAPSHOT_MARKER = "[COGNITION SNAPSHOT]"
@@ -98,8 +101,8 @@ def _render_facts(state: Any, caps: SnapshotCaps) -> str:
         flags = list(getattr(state, "flags", None) or [])
         if flags:
             lines.append(f"Flags: {', '.join(str(f) for f in flags[:3])}")
-    except Exception:
-        pass
+    except Exception as exc:
+        log.debug("swallowed exception: %s", exc, exc_info=True)
     try:
         sessions = list(getattr(state, "sessions", None) or [])
         if sessions:
@@ -111,8 +114,8 @@ def _render_facts(state: Any, caps: SnapshotCaps) -> str:
                 else:
                     _s.append(str(s))
             lines.append(f"Sessions: {', '.join(_s)}")
-    except Exception:
-        pass
+    except Exception as exc:
+        log.debug("swallowed exception: %s", exc, exc_info=True)
     try:
         creds = list(getattr(state, "credentials", None) or [])
         if creds:
@@ -122,8 +125,8 @@ def _render_facts(state: Any, caps: SnapshotCaps) -> str:
                 host = getattr(c, "source_host", "") or ""
                 _c.append(f"{user}@{host}" if host else user)
             lines.append(f"Credentials ({len(creds)}): {', '.join(_c)}")
-    except Exception:
-        pass
+    except Exception as exc:
+        log.debug("swallowed exception: %s", exc, exc_info=True)
     try:
         services = list(getattr(state, "services", None) or [])
         _svc = []
@@ -134,8 +137,8 @@ def _render_facts(state: Any, caps: SnapshotCaps) -> str:
             _svc.append(f":{port}/{proto} {_clip(ver, 60)}".strip())
         if _svc:
             lines.append("Services: " + " | ".join(_svc))
-    except Exception:
-        pass
+    except Exception as exc:
+        log.debug("swallowed exception: %s", exc, exc_info=True)
     try:
         endpoints = list(getattr(state, "endpoints", None) or [])
         _ep = []
@@ -146,8 +149,8 @@ def _render_facts(state: Any, caps: SnapshotCaps) -> str:
             _ep.append(f"{method} {url}" + (f" params={','.join(params)}" if params else ""))
         if _ep:
             lines.append("Endpoints:\n" + "\n".join(f"  - {_clip(e, caps.line_len)}" for e in _ep))
-    except Exception:
-        pass
+    except Exception as exc:
+        log.debug("swallowed exception: %s", exc, exc_info=True)
     return "\n".join(lines)
 
 
@@ -405,8 +408,8 @@ def render_critical_facts(state: Any, caps: SnapshotCaps | None = None) -> str:
         flags = list(getattr(state, "flags", None) or [])
         if flags:
             lines.append(f"Flags: {', '.join(str(f) for f in flags[:5])}")
-    except Exception:
-        pass
+    except Exception as exc:
+        log.debug("swallowed exception: %s", exc, exc_info=True)
     try:
         creds = list(getattr(state, "credentials", None) or [])
         if creds:
@@ -423,8 +426,8 @@ def render_critical_facts(state: Any, caps: SnapshotCaps | None = None) -> str:
                 else:
                     _c.append(f"{user}@{host}")
             lines.append("Credentials (full values):\n" + "\n".join(f"  - {x}" for x in _c))
-    except Exception:
-        pass
+    except Exception as exc:
+        log.debug("swallowed exception: %s", exc, exc_info=True)
     try:
         sessions = list(getattr(state, "sessions", None) or [])
         if sessions:
@@ -442,8 +445,8 @@ def render_critical_facts(state: Any, caps: SnapshotCaps | None = None) -> str:
                 else:
                     _s.append(str(s))
             lines.append("Sessions (with tokens when known): " + " | ".join(_s))
-    except Exception:
-        pass
+    except Exception as exc:
+        log.debug("swallowed exception: %s", exc, exc_info=True)
     try:
         vulns = list(getattr(state, "vulnerabilities", None) or [])
         if vulns:
@@ -455,8 +458,8 @@ def render_critical_facts(state: Any, caps: SnapshotCaps | None = None) -> str:
                 conf = float(getattr(v, "confidence", 0.5) or 0.5)
                 _v.append(f"[{vt}] {ep}" + (f" param={param}" if param else "") + f" conf={conf:.0%}")
             lines.append("Vulnerabilities:\n" + "\n".join(f"  - {x}" for x in _v))
-    except Exception:
-        pass
+    except Exception as exc:
+        log.debug("swallowed exception: %s", exc, exc_info=True)
     try:
         services = list(getattr(state, "services", None) or [])
         _svc = []
@@ -467,8 +470,8 @@ def render_critical_facts(state: Any, caps: SnapshotCaps | None = None) -> str:
             _svc.append(f":{port}/{proto} {_clip(ver, 80)}".strip())
         if _svc:
             lines.append("Services: " + " | ".join(_svc))
-    except Exception:
-        pass
+    except Exception as exc:
+        log.debug("swallowed exception: %s", exc, exc_info=True)
     try:
         endpoints = list(getattr(state, "endpoints", None) or [])
         _ep = []
@@ -479,14 +482,14 @@ def render_critical_facts(state: Any, caps: SnapshotCaps | None = None) -> str:
             _ep.append(f"{method} {url}" + (f" params={','.join(params)}" if params else ""))
         if _ep:
             lines.append("Endpoints:\n" + "\n".join(f"  - {_clip(e, caps.line_len)}" for e in _ep))
-    except Exception:
-        pass
+    except Exception as exc:
+        log.debug("swallowed exception: %s", exc, exc_info=True)
     try:
         notes = list(getattr(state, "analysis_notes", None) or [])
         if notes:
             lines.append("Application understanding: " + _clip(notes[-1], 200))
-    except Exception:
-        pass
+    except Exception as exc:
+        log.debug("swallowed exception: %s", exc, exc_info=True)
     if not lines:
         return ""
     return "\n".join(lines)
@@ -542,8 +545,8 @@ def _node_label(ntype: str, node: dict, fallback: str) -> str:
                 f"{node.get('service_name', '')} "
                 f"{node.get('version', '')}".strip()
             )
-    except Exception:
-        pass
+    except Exception as exc:
+        log.debug("swallowed exception: %s", exc, exc_info=True)
     return fallback
 
 

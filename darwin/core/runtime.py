@@ -23,8 +23,11 @@ Migration stages after 2c (each gated by behavior-parity checks):
 
 from __future__ import annotations
 
+import logging
 import time
 from dataclasses import dataclass, field
+
+log = logging.getLogger(__name__)
 
 from darwin.core.contracts import (
     Budget,
@@ -99,8 +102,8 @@ class Runtime:
                 refreshed = self.state_provider()
                 if refreshed is not None:
                     return refreshed
-            except Exception:
-                pass
+            except Exception as exc:
+                log.debug("swallowed exception: %s", exc, exc_info=True)
         return fallback
 
     @staticmethod

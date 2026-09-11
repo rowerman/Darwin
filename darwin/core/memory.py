@@ -21,6 +21,7 @@ does not rewrite them.
 
 from __future__ import annotations
 
+import logging
 import time
 from dataclasses import dataclass, field
 from enum import Enum
@@ -28,6 +29,8 @@ from typing import Any
 
 from darwin.core.task import Task
 from darwin.data_model import normalize_dkg_state
+
+log = logging.getLogger(__name__)
 
 
 # ── Unified execution record ────────────────────────────────────────
@@ -434,8 +437,8 @@ class MemoryManager:
             return
         try:
             record_fn(record)
-        except Exception:
-            pass
+        except Exception as exc:
+            log.debug("swallowed exception: %s", exc, exc_info=True)
 
     def experience_hints(self, **kwargs) -> dict:
         """Reverse path (P15 G3): pull cross-task suggestions from the
@@ -577,8 +580,8 @@ class MemoryManager:
                         line += f" | evidence: {ev}"
                     lines.append(line)
                 parts.append("\n".join(lines))
-        except Exception:
-            pass
+        except Exception as exc:
+            log.debug("swallowed exception: %s", exc, exc_info=True)
         view = self.compression_view(max_compressible=max_compressible)
         if view.compressible:
             lines = ["## Compressible Execution History (one-line records)"]

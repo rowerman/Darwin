@@ -237,7 +237,7 @@ def build_scenario_profile(
             vt = str(getattr(v, "vuln_type", "") or "").strip().lower()
             if vt:
                 vuln_types.add(vt)
-    except Exception:
+    except Exception:  # silent-ok: best-effort; failure is non-fatal
         pass
     for v in vulnerabilities or []:
         try:
@@ -252,7 +252,7 @@ def build_scenario_profile(
         waf = str(getattr(defense, "waf_type", "") or "").strip().lower()
         if waf:
             defense_types.add(waf)
-    except Exception:
+    except Exception:  # silent-ok: best-effort; failure is non-fatal
         pass
 
     tech_stack: set = set()
@@ -264,7 +264,7 @@ def build_scenario_profile(
             tech_stack |= _tech_terms_from_text(f"{ver} {banner}")
             if proto:
                 tech_stack |= _tech_terms_from_text(proto)
-    except Exception:
+    except Exception:  # silent-ok: best-effort; failure is non-fatal
         pass
     try:
         for note in list(getattr(state, "analysis_notes", None) or []):
@@ -272,7 +272,7 @@ def build_scenario_profile(
             for kw in _APP_TECH_KEYWORDS:
                 if kw in note_l:
                     tech_stack.add(kw)
-    except Exception:
+    except Exception:  # silent-ok: best-effort; failure is non-fatal
         pass
 
     domains = _domain_for_vulns(sorted(vuln_types))
@@ -282,7 +282,7 @@ def build_scenario_profile(
             d = _DOMAIN_BY_PROTO.get(proto.strip().lower())
             if d:
                 domains.add(d)
-    except Exception:
+    except Exception:  # silent-ok: best-effort; failure is non-fatal
         pass
 
     return ScenarioProfile(
@@ -510,7 +510,7 @@ class CTEG:
                         age_days = (datetime.now() - last_dt).days
                         if age_days > data.get("half_life_days", 14):
                             continue
-                    except Exception:
+                    except Exception:  # silent-ok: best-effort; failure is non-fatal
                         pass
                 creds.append({
                     "host": data.get("host", ""),
@@ -940,7 +940,7 @@ class CTEG:
                 if u and v:
                     self.graph.add_edge(u, v, **edge)
             self._task_count = data.get("task_count", 0)
-        except (FileNotFoundError, json.JSONDecodeError):
+        except (FileNotFoundError, json.JSONDecodeError):  # silent-ok: parse fallback
             pass
 
     def commit_attempt(

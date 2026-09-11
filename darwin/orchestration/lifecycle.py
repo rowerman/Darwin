@@ -87,6 +87,11 @@ class _RunFinished(Exception):
 
 
 class LifecycleCoordinator(CoordinatorContext):
+    # Token usage stays metered even when the (now default) token budget is
+    # unlimited; crossing this cap logs a one-shot warning instead of
+    # terminating the run.
+    _TOKEN_SOFT_CAP = 200000
+
     # Share of the run budget per phase.  Overridable via
     # ``darwin.phase_ratios`` in config/darwin.yaml.  Exploitation owns the
     # larger share because every exploit task costs at least one LLM
@@ -148,7 +153,7 @@ class LifecycleCoordinator(CoordinatorContext):
                 error="Run cancelled",
             )
             self._task_log_event("warning", "run_cancelled", elapsed_s=elapsed)
-        except _RunFinished:
+        except _RunFinished:  # silent-ok: terminal control-flow signal
             # A verified flag was captured during reconnaissance; ``result``
             # is already populated and the remaining phases are unnecessary.
             pass
@@ -184,6 +189,12 @@ class LifecycleCoordinator(CoordinatorContext):
         self._phase_carryover = 0.0
         self._phase_used = {name: 0.0 for name in self._PHASE_RATIOS}
         self._solo_cycle_context_injected = False
+        self._stop_reason = ""
+        self._token_soft_cap_warned = False
+        self._forced_reconsiders = 0
+        self._force_plan_reconsider = False
+        self.speculative_hypotheses = []
+        self._identity_probe_tried = set()
         self.target_url = target_url
         self._provided_username = username
         self._provided_password = password
@@ -215,8 +226,8 @@ class LifecycleCoordinator(CoordinatorContext):
                     }
                     if _override:
                         self._PHASE_RATIOS = {**self._PHASE_RATIOS, **_override}
-        except Exception:
-            pass
+        except Exception as exc:
+            log.debug("swallowed exception: %s", exc, exc_info=True)
         self.phase_logger = PhaseLogger(
             run_id=ts,
             log_dir=_log_dir,
@@ -267,8 +278,8 @@ class LifecycleCoordinator(CoordinatorContext):
         try:
             from darwin.rag import get_rag
             _rag_task = asyncio.create_task(asyncio.to_thread(get_rag))
-        except Exception:
-            pass
+        except Exception as exc:
+            log.debug("swallowed exception: %s", exc, exc_info=True)
 
         self.phase = OrchestratorPhase.RECON
         result: TaskResult | None = None
@@ -439,8 +450,8 @@ class LifecycleCoordinator(CoordinatorContext):
                         _config_max_loops = _configured
                     _chain_mode_config = _darwin.get("chain_mode", "auto")
                     _chain_max_flags = int(_darwin.get("chain_max_flags", 10))
-            except Exception:
-                pass
+            except Exception as exc:
+                log.debug("swallowed exception: %s", exc, exc_info=True)
             MAX_LOOPS = _config_max_loops
             self._known_flags: set[str] = set()
 
@@ -618,7 +629,7 @@ class LifecycleCoordinator(CoordinatorContext):
                 self._solo_iterations += 1
                 if result is None or not result.success:
                     if self._solo_iterations >= 5:
-                        self._solo_exhausted = True
+                        self._solo_exhausted = not self._request_forced_reconsideration()
                     # Fast exhaust: 2 consecutive plan-exhausted runs with 0 done tasks
                     _done_count = sum(
                         1 for t in (self.exploitation_plan.tasks if self.exploitation_plan else [])
@@ -629,8 +640,16 @@ class LifecycleCoordinator(CoordinatorContext):
                         _empty_runs = getattr(self, '_solo_empty_runs', 0) + 1
                         self._solo_empty_runs = _empty_runs
                         if _empty_runs >= 2:
-                            log.info("Solo mode: 2 runs with no new progress — marking exhausted")
-                            self._solo_exhausted = True
+                            if self._request_forced_reconsideration():
+                                # The forced round gets a clean no-progress counter:
+                                # it must produce new state or the run stops next cycle.
+                                self._solo_empty_runs = 0
+                            else:
+                                log.info(
+                                    "Solo mode: 2 runs with no new progress and no "
+                                    "reconsideration budget left — marking exhausted"
+                                )
+                                self._solo_exhausted = True
                     else:
                         self._solo_empty_runs = 0
                     self._prev_solo_done_count = _done_count
@@ -702,6 +721,8 @@ class LifecycleCoordinator(CoordinatorContext):
                 phase_at_end=self.phase,
                 error="No result produced",
             )
+        if not result.stop_reason:
+            result.stop_reason = self._stop_reason or "completed"
         self._apply_final_defense_state(result)
         self._task_log_event("info" if result.success else "error", "task_end",
             success=result.success,
@@ -709,6 +730,7 @@ class LifecycleCoordinator(CoordinatorContext):
             steps=result.steps,
             tokens_used=result.tokens_used,
             time_elapsed=result.time_elapsed,
+            stop_reason=result.stop_reason,
             error=result.error,
         )
 
@@ -722,6 +744,7 @@ class LifecycleCoordinator(CoordinatorContext):
                     "loop_count": getattr(self, '_loop_count', 0),
                     "solo_iterations": self._solo_iterations,
                     "step_count": self.step_count,
+                    "stop_reason": result.stop_reason,
                 },
             )
 
@@ -803,11 +826,23 @@ class LifecycleCoordinator(CoordinatorContext):
                 # Otherwise continue — don't terminate on intermediate flag
             else:
                 return True
-        if self._time_exceeded() or self._tokens_exceeded():
+        if self._time_exceeded():
+            self._set_stop_reason(
+                f"time_budget_exceeded (used {time.time() - self.start_time:.0f}s "
+                f"of {self.time_budget}s)"
+            )
+            return True
+        if self._tokens_exceeded():
+            self._set_stop_reason(
+                f"token_budget_exceeded (used {self._tokens_used()} of "
+                f"{self.token_budget})"
+            )
             return True
         if self.phase in (OrchestratorPhase.DONE, OrchestratorPhase.FAILED):
+            self._set_stop_reason(f"phase_{self.phase.value}")
             return True
         if self._loop_count >= max_loops:
+            self._set_stop_reason(f"max_loops ({max_loops})")
             log.info("Max loops (%d) reached", max_loops)
             return True
         if getattr(self, '_solo_exhausted', False):
@@ -815,15 +850,57 @@ class LifecycleCoordinator(CoordinatorContext):
             # for Solo mode.  Continuing outer iterations only replays the
             # same blocked graph and wastes the remaining loop budget.
             if not getattr(self, '_chain_mode', False):
+                self._set_stop_reason("solo_exhausted (plan exhausted, no new progress)")
                 log.info("Solo mode exhausted — terminating after plan exhaustion")
                 return True
         else:
             self._solo_exhausted_stall = 0
         # No-progress: consecutive outer loops with zero new discoveries
         if getattr(self, '_no_progress_loops', 0) >= 2:
+            self._set_stop_reason(
+                f"no_progress ({self._no_progress_loops} consecutive loops)"
+            )
             log.info("No progress for %d consecutive loops — terminating", self._no_progress_loops)
             return True
         return False
+
+    def _set_stop_reason(self, reason: str) -> None:
+        """Record (once) why the main loop stopped, so it is never silent."""
+        if self._stop_reason:
+            return
+        self._stop_reason = reason
+        log.info("[RUN] terminating: %s", reason)
+        self._task_log_event("info", "run_stopped", reason=reason)
+
+    def _request_forced_reconsideration(self) -> bool:
+        """Spend remaining time on one forced plan reconsideration.
+
+        Solo mode used to terminate after two plan-exhausted cycles even with
+        most of the time budget left.  Instead of exiting, grant up to two
+        extra rounds that re-open the plan-exhausted review (the Runtime stall
+        path already forces one review per ``_run_with_runtime`` call) and
+        unlock the speculative fallback for the deterministic pass.
+        """
+        if getattr(self, "_forced_round_for_loop", -1) == self._loop_count:
+            return False  # one extra round per outer iteration
+        if getattr(self, "_forced_reconsiders", 0) >= 2:
+            return False
+        remaining = self._remaining_budget()
+        if remaining <= max(60.0, self.time_budget * 0.20):
+            return False
+        self._forced_reconsiders += 1
+        self._forced_round_for_loop = self._loop_count
+        self._force_plan_reconsider = True
+        self._plan_review_exhausted = False
+        log.info(
+            "[PLAN] forced reconsideration %d/2 (remaining=%.0fs)",
+            self._forced_reconsiders, remaining,
+        )
+        self._task_log_event(
+            "info", "forced_reconsider",
+            round=self._forced_reconsiders, remaining_s=round(remaining, 1),
+        )
+        return True
 
     # ── Chain Topology Detection ──────────────────────────────────
 
@@ -903,8 +980,8 @@ class LifecycleCoordinator(CoordinatorContext):
             snapshot = self.memory.working_snapshot()
             if snapshot is not None:
                 return snapshot
-        except Exception:
-            pass
+        except Exception as exc:
+            log.debug("swallowed exception: %s", exc, exc_info=True)
         return normalize_dkg_state(self.dkg)
 
     def _belief_context(self, *, compact: bool = False) -> str:
@@ -918,8 +995,8 @@ class LifecycleCoordinator(CoordinatorContext):
             rationale: list = []
             try:
                 rationale = self.memory.plan.active_entries()
-            except Exception:
-                pass
+            except Exception as exc:
+                log.debug("swallowed exception: %s", exc, exc_info=True)
             rendered = render_belief_snapshot(
                 state=self._get_state(),
                 vulnerabilities=self.vulnerabilities,
@@ -1007,8 +1084,8 @@ class LifecycleCoordinator(CoordinatorContext):
             llm_paths = self._extract_json(llm_paths_content)
             if isinstance(llm_paths, list):
                 flag_paths = list(dict.fromkeys(flag_paths + llm_paths))  # dedup, defaults first
-        except Exception:
-            pass
+        except Exception as exc:
+            log.debug("swallowed exception: %s", exc, exc_info=True)
 
         for bu in urls_to_check:
             # The discovered endpoint itself is a candidate flag carrier
@@ -1126,7 +1203,25 @@ class LifecycleCoordinator(CoordinatorContext):
         """Check if token budget is exceeded. Attempts compression first.
 
         Thin delegate — the logic lives in ContextManager (P3).
+
+        ``token_budget <= 0`` means unlimited: the run keeps going and only a
+        one-shot soft-cap warning is emitted, so an unbounded-token run still
+        surfaces how much it spent.
         """
+        if not self.token_budget or self.token_budget <= 0:
+            used = self._tokens_used()
+            if used >= self._TOKEN_SOFT_CAP and not self._token_soft_cap_warned:
+                self._token_soft_cap_warned = True
+                log.warning(
+                    "[BUDGET] tokens=%d crossed soft cap %d — token budget is "
+                    "unlimited (0); run bounded by time budget only",
+                    used, self._TOKEN_SOFT_CAP,
+                )
+                self._task_log_event(
+                    "warning", "token_soft_cap",
+                    used=used, cap=self._TOKEN_SOFT_CAP,
+                )
+            return False
         return self.context.tokens_exceeded(self.token_budget)
 
     def _maybe_compress(self) -> bool:
@@ -1173,14 +1268,14 @@ class LifecycleCoordinator(CoordinatorContext):
         # Try direct parse
         try:
             return json.loads(text)
-        except json.JSONDecodeError:
+        except json.JSONDecodeError:  # silent-ok: try next JSON parser
             pass
         # Try to find JSON array/object in markdown code blocks
         match = re.search(r"```(?:json)?\s*([\s\S]*?)```", text)
         if match:
             try:
                 return json.loads(match.group(1))
-            except json.JSONDecodeError:
+            except json.JSONDecodeError:  # silent-ok: try next JSON parser
                 pass
         # Try bracket-counting for JSON arrays (handles nesting + trailing text)
         result = LifecycleCoordinator._extract_json_array(text)
@@ -1191,6 +1286,6 @@ class LifecycleCoordinator(CoordinatorContext):
         if match:
             try:
                 return json.loads(match.group(0))
-            except json.JSONDecodeError:
+            except json.JSONDecodeError:  # silent-ok: try next JSON parser
                 pass
         return {}

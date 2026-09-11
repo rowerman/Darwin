@@ -72,7 +72,7 @@ class Budget:
     """Execution budgets consumed by Scheduler and the Runtime loop."""
 
     time_budget_seconds: int = 1200
-    token_budget: int = 200000
+    token_budget: int = 0  # 0 = unlimited (metered + soft-cap warning only)
     max_loops: int = 30
 
 

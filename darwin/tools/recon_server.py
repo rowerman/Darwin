@@ -14,6 +14,7 @@ from typing import Any, Dict, List
 
 from darwin.tools.mcp_gateway import MCPGateway, ToolResult
 from darwin.tools.paths import resolve_wordlist
+from darwin.tools.spec import auto_spec
 
 
 _LOG = logging.getLogger(__name__)
@@ -736,8 +737,8 @@ def register_recon_tools(gateway: MCPGateway) -> MCPGateway:
             try:
                 proc.kill()
                 await proc.communicate()
-            except (ProcessLookupError, OSError):
-                pass
+            except (ProcessLookupError, OSError) as exc:
+                _LOG.debug("swallowed exception: %s", exc, exc_info=True)
             return ToolResult(
                 tool_name="curl_get", success=False, stdout="",
                 stderr=f"curl timeout after {timeout}s", exit_code=-1,
@@ -799,6 +800,7 @@ def register_recon_tools(gateway: MCPGateway) -> MCPGateway:
                         cookie: str = "", content_type: str = "application/x-www-form-urlencoded",
                         insecure: bool = False) -> ToolResult:
         import urllib.request as _ur
+        import urllib.error as _ue
         import ssl
         try:
             ctx = ssl.create_default_context()
@@ -825,19 +827,52 @@ def register_recon_tools(gateway: MCPGateway) -> MCPGateway:
                     stderr="", exit_code=0, elapsed_ms=0,
                     parsed_output={"status": resp.status, "headers": rhdrs, "body": rbody[:8000]},
                 )
+        except _ue.HTTPError as e:
+            # 4xx/5xx is a normal HTTP answer, not a transport failure: keep
+            # status/headers/body as evidence (a 405 Allow header or a 404 body
+            # tells the caller whether the route/method exists) while leaving
+            # success=False so the task still counts as unmet.
+            try:
+                rbody = (e.read() or b"").decode(errors="replace")
+            except Exception:
+                rbody = ""
+            rhdrs = dict(e.headers or {})
+            return ToolResult(
+                tool_name="http_post", success=False,
+                stdout=("HTTP %s\n" % getattr(e, "code", "?")) + "\n".join(
+                    f"{k}: {v}" for k, v in rhdrs.items()) + f"\n\n{rbody[:8000]}",
+                stderr=f"HTTP Error {getattr(e, 'code', '?')}: {getattr(e, 'reason', '')}",
+                exit_code=int(getattr(e, "code", 1) or 1), elapsed_ms=0,
+                parsed_output={"status": getattr(e, "code", None),
+                               "headers": rhdrs, "body": rbody[:8000]},
+            )
         except Exception as e:
             return ToolResult(tool_name="http_post", success=False, stdout="", stderr=str(e), exit_code=1, elapsed_ms=0)
 
+    _http_post_desc = (
+        "Send an HTTP POST request with a body (data=...). Use insecure=true "
+        "for self-signed TLS and cookie= for a session. 4xx/5xx responses are "
+        "returned with their status, headers and body — read them to tell a "
+        "missing route (404) from a wrong method (405 + Allow). For other "
+        "verbs (PUT/PATCH/DELETE) use http_method_probe with method=..."
+    )
+    _http_post_params = {
+        "url": {"type": "string", "description": "Target URL"},
+        "data": {"type": "string", "description": "POST body data (key=value&key=value format)"},
+        "headers": {"type": "string", "description": "Optional headers"},
+        "cookie": {"type": "string", "description": "Session cookie string from try_login"},
+        "insecure": {"type": "boolean", "description": "Skip TLS verification for self-signed certs"},
+    }
+    _http_post_spec = auto_spec(
+        name="http_post", description=_http_post_desc,
+        parameters=_http_post_params, domain="web",
+    )
+    # 1.1.0: non-2xx responses now carry status/headers/body as evidence.
+    _http_post_spec.version = "1.1.0"
     gateway.register(
         name="http_post", func=_http_post,
-        description="Send HTTP POST request. Use insecure=true for self-signed TLS. Use cookie parameter for session.",
-        parameters={
-            "url": {"type": "string", "description": "Target URL"},
-            "data": {"type": "string", "description": "POST body data (key=value&key=value format)"},
-            "headers": {"type": "string", "description": "Optional headers"},
-            "cookie": {"type": "string", "description": "Session cookie string from try_login"},
-            "insecure": {"type": "boolean", "description": "Skip TLS verification for self-signed certs"},
-        },
+        description=_http_post_desc, parameters=_http_post_params,
+        spec=_http_post_spec,
     )
 
     # ── Generic HTTP method probe (OPTIONS/POST/HEAD etc.) ──────
@@ -888,8 +923,8 @@ def register_recon_tools(gateway: MCPGateway) -> MCPGateway:
             finally:
                 try:
                     resp.close()
-                except Exception:
-                    pass
+                except Exception as exc:
+                    _LOG.debug("swallowed exception: %s", exc, exc_info=True)
             if rstatus:
                 return ToolResult(
                     tool_name="http_method_probe",
@@ -914,15 +949,17 @@ def register_recon_tools(gateway: MCPGateway) -> MCPGateway:
     gateway.register(
         name="http_method_probe", func=_http_method_probe,
         description=(
-            "Send a generic HTTP request with an arbitrary method (OPTIONS, POST, "
-            "HEAD, PUT...). OPTIONS returns the Allow header for route discovery; "
-            "POST sends an optional body (JSON by default). Returns status, headers "
-            "and body."
+            "Send a generic HTTP request with an arbitrary method and an optional "
+            "body — this is the tool for PUT/PATCH/DELETE writes (e.g. method=PUT "
+            "with data=<payload> to create/overwrite a resource). OPTIONS returns "
+            "the Allow header for route discovery; POST/PUT send the body given in "
+            "data= (set content_type= when it is not JSON). Returns status, headers "
+            "and body, including for 4xx/5xx responses."
         ),
         parameters={
             "url": {"type": "string", "description": "Target URL"},
-            "method": {"type": "string", "description": "HTTP method: OPTIONS, POST, HEAD, PUT...", "default": "OPTIONS"},
-            "data": {"type": "string", "description": "Request body (JSON string for POST)", "default": ""},
+            "method": {"type": "string", "description": "HTTP method: OPTIONS, GET, POST, HEAD, PUT, PATCH, DELETE", "default": "OPTIONS"},
+            "data": {"type": "string", "description": "Request body sent with POST/PUT/PATCH (JSON by default; use content_type for raw text/plain payloads)", "default": ""},
             "content_type": {"type": "string", "description": "Content-Type header (auto detects form bodies containing key=value)", "default": "auto"},
             "headers": {"type": "string", "description": "Optional extra headers, pipe-separated (Key: val|Key2: val2)", "default": ""},
             "cookie": {"type": "string", "description": "Session cookie string", "default": ""},
@@ -1027,8 +1064,8 @@ def register_recon_tools(gateway: MCPGateway) -> MCPGateway:
                         try:
                             async with sess.post(submit_url, data=pw_data, timeout=aiohttp.ClientTimeout(total=10)) as r:
                                 await r.text()
-                        except Exception:
-                            pass
+                        except Exception as exc:
+                            _LOG.debug("swallowed exception: %s", exc, exc_info=True)
                     break
                 post_cookies = len(list(jar))
                 new_cookies = post_cookies - pre_cookies

@@ -195,8 +195,8 @@ class ResearchCoordinator(CoordinatorContext):
         for _gw in (self.attack_gateway, self.recon_gateway):
             try:
                 _tool_defs.extend(_gw.get_tool_definitions())
-            except Exception:
-                pass
+            except Exception as exc:
+                log.debug("swallowed exception: %s", exc, exc_info=True)
         _tool_card = render_tool_contract_card(_tool_defs)
 
         prompt = (
@@ -211,7 +211,9 @@ class ResearchCoordinator(CoordinatorContext):
             f"1. First, understand what this application DOES based on the endpoint responses above.\n"
             f"2. Identify what business logic each endpoint implements.\n"
             f"3. THEN identify potential vulnerabilities based on your understanding.\n"
-            f"4. For each vulnerability, explain WHY you think it exists (not just pattern matching).\n"
+            f"4. Every entry in 'vulnerabilities' MUST cite an OBSERVED signal from this\n"
+            f"   target (response field, status code, echoed input, error message, or a\n"
+            f"   route the response itself documents). Pure pattern matching is not evidence.\n"
             f"5. Service labels from nmap/service detection are ATTACK-SURFACE HINTS, not verdicts.\n"
             f"   A banner or root page that disagrees with the label (e.g. an 'OMI Agent (WSMan)'\n"
             f"   service answering with a Python/Werkzeug page) does NOT make the service inert —\n"
@@ -219,8 +221,9 @@ class ResearchCoordinator(CoordinatorContext):
             f"   When a label implies management/protocol endpoints (OMI/WSMan -> /health,\n"
             f"   /wsman/exec; kubelet -> /pods; etc.), hypothesize probing those paths.\n"
             f"6. A static 404/root response only proves the root is static — do NOT conclude the\n"
-            f"   whole service is unexploitable.  Uncertain leads belong in 'vulnerabilities' with\n"
-            f"   LOW confidence (0.2-0.4), never in extra fields or omitted entirely.\n"
+            f"   whole service is unexploitable.  Hypotheses WITHOUT observed evidence belong in\n"
+            f"   'speculative' (they are not researched and not planned); evidence-backed ones go\n"
+            f"   in 'vulnerabilities'.\n"
             f"7. CRITICAL: Use the EXACT parameter names from 'Known Parameter Names' above.\n"
             f"   Do NOT guess parameter names from response field names.\n\n"
             f"## Tool Contract Card (use these EXACT tool names and parameters)\n"
@@ -338,29 +341,56 @@ class ResearchCoordinator(CoordinatorContext):
                 for p in ep.params:
                     all_known_params.add(p)
 
+            def _correct_guessed_param(item: dict) -> None:
+                """Align a guessed param name with the DKG's declared params."""
+                llm_param = item.get("param", "")
+                if not llm_param or not all_known_params or llm_param in all_known_params:
+                    return
+                ep_url = item.get("endpoint", "")
+                ep_params = state.get_params_for_url(ep_url)
+                if ep_params:
+                    log.warning(
+                        "ANALYZE: LLM guessed param '%s' but DKG has %s for %s — correcting",
+                        llm_param, ep_params, ep_url,
+                    )
+                    item["param"] = ep_params[0]
+                else:
+                    log.warning(
+                        "ANALYZE: LLM guessed param '%s' but no DKG params found for %s",
+                        llm_param, ep_url,
+                    )
+
+            # Evidence-free pattern guesses: kept out of the vulnerability
+            # pipeline (no research, no plan tasks, no DKG Vulnerability nodes)
+            # and used only by the bounded deterministic fallback pass.
+            self.speculative_hypotheses = []
+            for v in parsed.get("speculative", []) if isinstance(parsed, dict) else []:
+                if not isinstance(v, dict) or not v.get("endpoint"):
+                    continue
+                _correct_guessed_param(v)
+                self.speculative_hypotheses.append({
+                    "vuln_type": v.get("vuln_type", ""),
+                    "endpoint": v.get("endpoint", ""),
+                    "parameter": v.get("param", ""),
+                    "confidence": float(v.get("confidence", 0.2) or 0.2),
+                    "evidence": v.get("evidence", ""),
+                    "suggested_tool": "",
+                    "tool_args": {},
+                    "source": "llm_speculation",
+                })
+            if self.speculative_hypotheses:
+                print(
+                    f"[ANALYZE] Deferred {len(self.speculative_hypotheses)} "
+                    "evidence-free guess(es) to the fallback probe pass"
+                )
+
             _no_endpoint = 0
             for v in vulns_json:
                 if not v.get("endpoint", ""):
                     _no_endpoint += 1
                     continue
                 vt = v.get("vuln_type", "")
-                # Correct guessed parameter names against known params
-                llm_param = v.get("param", "")
-                if llm_param and all_known_params and llm_param not in all_known_params:
-                    ep_url = v.get("endpoint", "")
-                    ep_params = state.get_params_for_url(ep_url)
-                    if ep_params:
-                        log.warning(
-                            "ANALYZE: LLM guessed param '%s' but DKG has %s for %s — correcting",
-                            llm_param, ep_params, ep_url,
-                        )
-                        v["param"] = ep_params[0]
-                    else:
-                        log.warning(
-                            "ANALYZE: LLM guessed param '%s' but no DKG params found for %s",
-                            llm_param, ep_url,
-                        )
-
+                _correct_guessed_param(v)
                 vt = v.get("vuln_type", "")
                 hypothesis = VulnerabilityHypothesis(
                     vuln_type=vt,
@@ -801,8 +831,8 @@ class ResearchCoordinator(CoordinatorContext):
                         text = content[0].get("text", "") if content else ""
                         if text and "0 matching CVEs" not in text:
                             service_research_text += f"  [NVD CVEs] {text[:400]}\n"
-                except Exception:
-                    pass
+                except Exception as exc:
+                    log.debug("swallowed exception: %s", exc, exc_info=True)
 
                 # RAG knowledge_search for non-HTTP database services.
                 # Results use the unified research-evidence JSON envelope
@@ -822,8 +852,8 @@ class ResearchCoordinator(CoordinatorContext):
                                 service_research_text += (
                                     f"\n  [RAG Knowledge for {svc_name}]: {rag_text}\n"
                                 )
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        log.debug("swallowed exception: %s", exc, exc_info=True)
 
             if service_research_text:
                 self.llm.add_context_message(
@@ -900,8 +930,8 @@ class ResearchCoordinator(CoordinatorContext):
                     research_tools.append(td)
             log.info("MCP research tools: %d (from %d total MCP tools)",
                      len(research_tools), len(_all_mcp_names))
-        except Exception:
-            pass
+        except Exception as exc:
+            log.debug("swallowed exception: %s", exc, exc_info=True)
 
         # ddg_web_search is always available via attack_gateway (Python ddgs library)
         _web_search_line = (
@@ -1050,32 +1080,32 @@ class ResearchCoordinator(CoordinatorContext):
             _tasks["rag"] = asyncio.create_task(
                 self._call_tool("knowledge_search",
                     {"query": _queries["rag"], "category": ""}))
-        except Exception:
-            pass
+        except Exception as exc:
+            log.debug("swallowed exception: %s", exc, exc_info=True)
 
         # go_exploitdb_search — local SQLite exploit DB
         try:
             _tasks["exploitdb"] = asyncio.create_task(
                 self._call_tool("go_exploitdb_search",
                     {"query": _queries["exploitdb"], "limit": 10}))
-        except Exception:
-            pass
+        except Exception as exc:
+            log.debug("swallowed exception: %s", exc, exc_info=True)
 
         # searchsploit_search — Exploit-DB CLI
         try:
             _tasks["searchsploit"] = asyncio.create_task(
                 self._call_tool("searchsploit_search",
                     {"query": _queries["searchsploit"]}))
-        except Exception:
-            pass
+        except Exception as exc:
+            log.debug("swallowed exception: %s", exc, exc_info=True)
 
         # ddg_web_search — Python DuckDuckGo web search (unified evidence JSON)
         try:
             _tasks["web"] = asyncio.create_task(
                 self._call_tool("ddg_web_search",
                     {"query": _queries["web"], "max_results": 8}))
-        except Exception:
-            pass
+        except Exception as exc:
+            log.debug("swallowed exception: %s", exc, exc_info=True)
 
         # Wait for all tasks (failures are non-fatal)
         _results: dict[str, str] = {}
@@ -1307,8 +1337,8 @@ class ResearchCoordinator(CoordinatorContext):
                 if any(kw in name.lower() for kw in
                        ("search", "cve", "vuln", "exploit", "code", "repo")):
                     research_tools.append(td)
-        except Exception:
-            pass
+        except Exception as exc:
+            log.debug("swallowed exception: %s", exc, exc_info=True)
 
         prompt = (
             f"Discovered services — research each one for known exploits:\n"
@@ -1533,8 +1563,8 @@ class ResearchCoordinator(CoordinatorContext):
                         elif isinstance(parsed, dict):
                             keys = list(parsed.keys())[:5]
                             result_parts.append(f"  NOTE: returns JSON object with OUTPUT keys: {keys}")
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        log.debug("swallowed exception: %s", exc, exc_info=True)
 
             except Exception as e:
                 result_parts.append(f"  ERROR: {str(e)[:150]}")

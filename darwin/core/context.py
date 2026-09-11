@@ -102,7 +102,12 @@ class ContextManager:
         usage (``total_tokens``) rather than the current context size — with
         isolated structured stages the context stays small while the run can
         still consume a large number of tokens.
+
+        ``token_budget <= 0`` means unlimited: usage is metered elsewhere, but
+        this check never reports an overrun.
         """
+        if not token_budget or token_budget <= 0:
+            return False
         try:
             used = self._usage_tokens()
             if used <= token_budget:
@@ -133,8 +138,8 @@ class ContextManager:
                 ctx = provider()
                 if ctx:
                     return ctx
-            except Exception:
-                pass
+            except Exception as exc:
+                log.debug("swallowed exception: %s", exc, exc_info=True)
         lines = ["[DKG STATE AT TRUNCATION — structured facts preserved]"]
         if self.dkg is None:
             return "\n".join(lines)
@@ -188,5 +193,5 @@ class ContextManager:
             return
         try:
             self.event_logger("info", name, **kwargs)
-        except Exception:
-            pass
+        except Exception as exc:
+            log.debug("swallowed exception: %s", exc, exc_info=True)

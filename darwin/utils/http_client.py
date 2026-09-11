@@ -216,7 +216,7 @@ class HTTPClient:
                 redirect_url = _urljoin(submit_url, login_resp.headers.get("location", ""))
                 try:
                     await self.get(redirect_url)
-                except Exception:
+                except Exception:  # silent-ok: best-effort; failure is non-fatal
                     pass
                 login_success = True
                 break
@@ -271,7 +271,7 @@ class HTTPClient:
                             redirect_url = _urljoin(submit_url, pw_resp.headers.get("location", ""))
                             try:
                                 await self.get(redirect_url)
-                            except Exception:
+                            except Exception:  # silent-ok: best-effort; failure is non-fatal
                                 pass
                             login_success = True
                             break
@@ -284,7 +284,7 @@ class HTTPClient:
                                      post_cookies - pre_cookies)
                             login_success = True
                             break
-                    except Exception:
+                    except Exception:  # silent-ok: best-effort; failure is non-fatal
                         pass
 
         # After for loop: check if we succeeded (redirect OR genuine new cookies)

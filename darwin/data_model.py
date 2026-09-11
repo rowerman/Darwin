@@ -46,6 +46,7 @@ class TaskResult:
     defense_complexity: float = 0.0
     dkg_summary: str = ""
     error: str = ""
+    stop_reason: str = ""
 
 
 @dataclass
@@ -585,37 +586,37 @@ def normalize_dkg_state(dkg: Any) -> PipelineState:
                 )
                 for path in dkg.attack_path_summary(max_paths=12)
             ]
-        except Exception:
+        except Exception:  # silent-ok: best-effort; failure is non-fatal
             pass
-    except Exception:
+    except Exception:  # silent-ok: best-effort; failure is non-fatal
         pass
 
     # Endpoints
     for raw in dkg.query_nodes("Endpoint"):
         try:
             state.endpoints.append(EndpointInfo.from_dkg(raw))
-        except Exception:
+        except Exception:  # silent-ok: best-effort; failure is non-fatal
             pass  # Skip malformed entries
 
     # Services
     for raw in dkg.query_nodes("Service"):
         try:
             state.services.append(ServiceInfo.from_dkg(raw))
-        except Exception:
+        except Exception:  # silent-ok: best-effort; failure is non-fatal
             pass
 
     # Vulnerabilities
     for raw in dkg.query_nodes("Vulnerability"):
         try:
             state.vulnerabilities.append(VulnerabilityInfo.from_dkg(raw))
-        except Exception:
+        except Exception:  # silent-ok: best-effort; failure is non-fatal
             pass
 
     # Credentials
     for raw in dkg.query_nodes("Credential"):
         try:
             state.credentials.append(CredentialInfo.from_dkg(raw))
-        except Exception:
+        except Exception:  # silent-ok: best-effort; failure is non-fatal
             pass
 
     # Flags
@@ -642,7 +643,7 @@ def normalize_dkg_state(dkg: Any) -> PipelineState:
                     continue
                 host_dict[k] = v
             state.hosts.append(host_dict)
-        except Exception:
+        except Exception:  # silent-ok: best-effort; failure is non-fatal
             pass
 
     # Sessions
@@ -651,7 +652,7 @@ def normalize_dkg_state(dkg: Any) -> PipelineState:
             state.sessions.append({"host": raw.get("host", ""),
                                    "user": raw.get("user", ""),
                                    "access_level": raw.get("access_level", "user")})
-        except Exception:
+        except Exception:  # silent-ok: best-effort; failure is non-fatal
             pass
 
     # Domains
@@ -660,7 +661,7 @@ def normalize_dkg_state(dkg: Any) -> PipelineState:
             state.domains.append({"name": raw.get("name", ""),
                                   "dc_ip": raw.get("dc_ip", ""),
                                   "functional_level": raw.get("functional_level", "")})
-        except Exception:
+        except Exception:  # silent-ok: best-effort; failure is non-fatal
             pass
 
     return state

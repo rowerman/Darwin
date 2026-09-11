@@ -117,7 +117,7 @@ Time/token budgets, solo mode limits, defense probe settings, browser config, an
 | Parameter | Default | Description |
 |-----------|---------|-------------|
 | `time_budget_seconds` | 600 | Max time per task (10 minutes) |
-| `token_budget` | 200000 | Max tokens per task |
+| `token_budget` | 0 | Token hard cap. 0 = unlimited (usage is still metered; crossing 200k logs a warning). Pass `--token-budget N` to re-enable a hard limit |
 | `max_context_tokens` | 180000 | Token count considered 100% context load |
 | `context_compression_threshold` | 0.4 | Trigger compression at 40% context load |
 | `pass_at_k` | 3 | Attempts per challenge (benchmark mode) |

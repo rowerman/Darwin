@@ -101,6 +101,60 @@ class _RuntimeFlagFound(Exception):
     """Terminal signal: the Runtime-driven path captured a verified flag."""
 
 
+# ── Success-condition helpers ───────────────────────────────────────
+# Writes are judged by the persisted effect, not by a 2xx on the write call.
+_WRITE_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
+_WRITE_TOOLS = frozenset({"http_post", "file_upload", "tomcat_exploit", "php_filter_chain"})
+_METHOD_DEFAULT = {"http_post": "POST", "curl_get": "GET", "http_method_probe": "OPTIONS"}
+_HTTP_STATUS_RE = re.compile(r"HTTP/\d(?:\.\d)?\s+(\d{3})|\bHTTP\s+(\d{3})")
+
+# Identity propagation: when a resource read is denied and the target itself
+# disclosed an identity/token value, retry the denied request presenting that
+# value verbatim. Header names are generic conventions, the values are always
+# observed (never guessed).
+_IDENTITY_HEADERS = ("X-Caller-ARN", "X-Amz-Caller-Arn", "Authorization",
+                     "X-User", "X-Username", "X-User-Id")
+_IDENTITY_ARN_RE = re.compile(r"arn:[a-z0-9-]+:[^\s\"'\\,\]})]+", re.IGNORECASE)
+_IDENTITY_KV_RE = re.compile(
+    r'"(?:caller_arn|callerArn|user_arn|identity|access_token|session_token'
+    r'|api_key|token)"\s*:\s*"([^"]{3,160})"',
+    re.IGNORECASE,
+)
+_DENIED_MARKERS = ("accessdenied", "access denied", "unauthorized", "forbidden")
+_IDENTITY_PROBE_MAX = 10  # hard cap on extra requests per task
+
+
+def _call_method(name: str, args: dict | None) -> str:
+    """HTTP verb used by a planned/executed call ('' when not method-based)."""
+    args = args if isinstance(args, dict) else {}
+    method = str(args.get("method", "") or "").upper()
+    return method or _METHOD_DEFAULT.get(name, "")
+
+
+def _planned_write_intent(tool: str, params: dict | None) -> bool:
+    """True when the planned call is expected to mutate target-side state."""
+    if tool in _WRITE_TOOLS:
+        return True
+    return _call_method(tool, params) in _WRITE_METHODS
+
+
+def _http_status_of(text: str) -> int | None:
+    """Extract the HTTP status code from curl/urllib style tool output."""
+    match = _HTTP_STATUS_RE.search(str(text or ""))
+    if not match:
+        return None
+    return int(match.group(1) or match.group(2))
+
+
+def _args_fingerprint(args: dict) -> str:
+    """Stable short digest of a tool call's arguments (for dedup keys)."""
+    try:
+        blob = json.dumps(args, sort_keys=True, default=str)
+    except Exception:
+        blob = str(args)
+    return hashlib.sha1(blob.encode()).hexdigest()[:12]
+
+
 def _json_body(stdout: str) -> Any:
     """Extract a JSON object/array from a curl_get style tool output."""
     body = str(stdout or "")
@@ -110,8 +164,8 @@ def _json_body(stdout: str) -> Any:
         parsed = parse_tool_stdout(body)
         if parsed.get("body"):
             body = parsed["body"]
-    except Exception:
-        pass
+    except Exception as exc:
+        log.debug("swallowed exception: %s", exc, exc_info=True)
     stripped = body.strip()
     start = min(
         (i for i in (stripped.find("{"), stripped.find("[")) if i >= 0),
@@ -305,6 +359,232 @@ class ExecutionCoordinator(CoordinatorContext):
             "provenance": {"source": source, "location": location},
         })
 
+    def _plan_params_complete(
+        self, tool: str, params: dict, known_tools: set[str],
+    ) -> tuple[bool, list[str]]:
+        """Plan-first execution check: can ``tool`` run with ``params`` as-is?
+
+        Reuses the gateway's own normalization so plan spellings (``url`` vs
+        ``target_url``, ``host`` vs ``target``) are honoured exactly like the
+        dispatch path. Returns ``(ok, missing_required_params)``.
+        """
+        if not tool or not isinstance(params, dict) or not params:
+            return False, []
+        if tool not in known_tools:
+            return False, []
+        gateway = None
+        for _gw in (self.attack_gateway, self.recon_gateway):
+            try:
+                if tool in _gw.get_tool_names():
+                    gateway = _gw
+                    break
+            except Exception as exc:
+                log.debug("gateway lookup failed for %s: %s", tool, exc)
+        if gateway is None:
+            return False, []
+        try:
+            spec = gateway.get_tool_specs().get(tool)
+        except Exception as exc:
+            log.debug("tool spec lookup failed for %s: %s", tool, exc)
+            spec = None
+        normalize = getattr(gateway, "normalize_params", None)
+        try:
+            normalized = normalize(tool, params) if callable(normalize) else dict(params)
+        except Exception as exc:
+            log.debug("param normalization failed for %s: %s", tool, exc)
+            normalized = dict(params)
+        if not normalized:
+            return False, []
+        if spec is None:
+            # No contract available (e.g. a test double): params provided means
+            # the plan is executable as written.
+            return True, []
+        required = list(getattr(spec, "required", None) or [])
+        missing = [name for name in required if name not in normalized]
+        return (not missing), missing
+
+    async def _verify_success_condition(
+        self,
+        condition: dict,
+        executed: list[dict],
+        any_success: bool,
+        flag_found: bool,
+    ) -> tuple[bool, str]:
+        """Verify a task's ``success_condition`` against what actually ran.
+
+        Returns ``(met, detail)``.  A task whose tool returned exit code 0 but
+        whose observable goal was not achieved must NOT be treated as done —
+        that is how a planned PUT got replaced by an unrelated GET and still
+        counted as success.
+        """
+        ctype = str(condition.get("type", "") or "").strip().lower()
+        joined = "\n".join(str(c.get("stdout", "") or "") for c in executed)
+
+        if ctype == "tool_success":
+            want = str(condition.get("tool", "") or "")
+            want_method = str(condition.get("method", "") or "").upper()
+            if not want:
+                return any_success, "tool_success without a tool name"
+            matched = [
+                c for c in executed
+                if c.get("name") == want
+                and (not want_method or c.get("method") == want_method)
+            ]
+            if not matched:
+                ran = ", ".join(sorted({str(c.get("name", "")) for c in executed})) or "nothing"
+                exp = f"{want} {want_method}".strip()
+                return False, f"expected {exp} to run, but ran: {ran}"
+            ok = any(bool(c.get("success")) for c in matched)
+            suffix = f" {want_method}" if want_method else ""
+            return ok, (f"{want}{suffix} executed" if ok else f"{want}{suffix} executed but failed")
+
+        if ctype in ("body_contains", "body_not_contains"):
+            value = str(condition.get("value", "") or "")
+            if not value:
+                return any_success, f"{ctype} without a value"
+            present = value.lower() in joined.lower()
+            if ctype == "body_contains":
+                return present, (f"output contains {value!r}" if present
+                                 else f"output does not contain {value!r}")
+            return (not present), (f"output excludes {value!r}" if not present
+                                   else f"output unexpectedly contains {value!r}")
+
+        if ctype == "http_status_in":
+            wanted = {int(s) for s in (condition.get("status") or []) if str(s).isdigit()}
+            if not wanted:
+                return any_success, "http_status_in without status codes"
+            observed = next(
+                (s for s in (_http_status_of(c.get("stdout", "")) for c in executed)
+                 if s is not None),
+                None,
+            )
+            if observed is None:
+                return False, f"no HTTP status in output (expected one of {sorted(wanted)})"
+            return observed in wanted, f"HTTP {observed} (expected one of {sorted(wanted)})"
+
+        if ctype == "flag_captured":
+            return bool(flag_found), ("flag captured" if flag_found else "no flag captured")
+
+        if ctype == "probe":
+            url = str(condition.get("url", "") or "")
+            if not url:
+                return any_success, "probe without a url"
+            args: dict = {"url": url, "follow_redirects": True}
+            if condition.get("headers"):
+                args["headers"] = str(condition["headers"])
+            if condition.get("cookie"):
+                args["cookie"] = str(condition["cookie"])
+            try:
+                probe = await self._call_tool("curl_get", args)
+            except Exception as exc:  # noqa: BLE001 - reported as unmet
+                return False, f"probe request failed: {exc}"
+            body = str(getattr(probe, "stdout", "") or "")
+            if condition.get("contains") and (
+                str(condition["contains"]).lower() not in body.lower()
+            ):
+                return False, f"probe {url} lacks {condition['contains']!r}"
+            if condition.get("not_contains") and (
+                str(condition["not_contains"]).lower() in body.lower()
+            ):
+                return False, f"probe {url} contains {condition['not_contains']!r}"
+            wanted = {int(s) for s in (condition.get("status_in") or []) if str(s).isdigit()}
+            if wanted:
+                observed = _http_status_of(body)
+                if observed is None or observed not in wanted:
+                    return False, f"probe {url} returned HTTP {observed} (expected {sorted(wanted)})"
+            return True, f"probe {url} confirmed the effect"
+
+        # Unknown condition type: do not fail a task the planner described
+        # with a vocabulary this runtime does not know yet.
+        log.warning("Unknown success_condition type %r — falling back to tool success", ctype)
+        return any_success, f"unknown condition type {ctype!r}"
+
+    def _observed_identity_values(self, limit: int = 4) -> list[str]:
+        """Identity/token values this target already disclosed (never guessed)."""
+        blobs: list[str] = []
+        for node_type in ("Endpoint", "Analysis", "Session", "Credential", "Service"):
+            for node in self.dkg.query_nodes(node_type):
+                for key in ("sample_response", "content", "value", "token", "username"):
+                    _v = node.get(key)
+                    if _v:
+                        blobs.append(str(_v))
+        text = "\n".join(blobs)
+        values: list[str] = []
+        for match in _IDENTITY_ARN_RE.finditer(text):
+            values.append(match.group(0))
+        for match in _IDENTITY_KV_RE.finditer(text):
+            values.append(match.group(1))
+        out: list[str] = []
+        for value in values:
+            value = value.strip().strip('"')
+            if len(value) >= 3 and value not in out:
+                out.append(value)
+        return out[:limit]
+
+    async def _probe_identity_propagation(self, executed: list[dict]) -> str | None:
+        """Retry denied reads with the identity value the target disclosed.
+
+        Generic pattern: a resource answers 401/403 while another endpoint on
+        the same target returns the caller identity (caller_arn / token / user).
+        Presenting that value verbatim in the conventional header is the
+        documented way such APIs authorise the read. Bounded and deduplicated.
+        """
+        denied: list[str] = []
+        for call in executed:
+            out = str(call.get("stdout", "") or "")
+            status = _http_status_of(out)
+            lowered = out.lower()
+            if status in (401, 403) or any(m in lowered for m in _DENIED_MARKERS):
+                url = str((call.get("args") or {}).get("url", "") or "")
+                if url and url not in denied:
+                    denied.append(url)
+        if not denied:
+            return None
+        values = self._observed_identity_values()
+        if not values:
+            return None
+        tried = getattr(self, "_identity_probe_tried", None)
+        if tried is None:
+            tried = set()
+            self._identity_probe_tried = tried
+        attempts = 0
+        for url in denied[:2]:
+            for value in values[:2]:
+                for header in _IDENTITY_HEADERS:
+                    if attempts >= _IDENTITY_PROBE_MAX:
+                        return None
+                    key = (url, header, value)
+                    if key in tried:
+                        continue
+                    tried.add(key)
+                    attempts += 1
+                    presented = (
+                        f"Bearer {value}" if header == "Authorization" else value
+                    )
+                    res = await self._call_tool("curl_get", {
+                        "url": url,
+                        "headers": f"{header}: {presented}",
+                        "follow_redirects": True,
+                    })
+                    self.step_count += 1
+                    text = str(getattr(res, "stdout", "") or "")
+                    self._task_log_event(
+                        "info", "identity_probe",
+                        url=url, header=header, status=_http_status_of(text),
+                    )
+                    for found in self.flag_pattern.findall(text):
+                        ok, reason = await self._verify_flag(
+                            found, text, {"url": url}, tool_name="curl_get",
+                        )
+                        if ok:
+                            return found
+                        log.debug("identity probe flag rejected: %s", reason)
+                    # A non-denial answer means this header was accepted —
+                    # no need to keep trying other spellings for this URL.
+                    if _http_status_of(text) not in (401, 403):
+                        break
+        return None
+
     def _task_anchor_ids(self, task: Task) -> list[str]:
         """Resolve task target to DKG node ids usable as topology anchors."""
         action = task.action or {}
@@ -465,8 +745,8 @@ class ExecutionCoordinator(CoordinatorContext):
                         "status": status,
                         "last_tested_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
                     })
-            except Exception:
-                pass
+            except Exception as exc:
+                log.debug("swallowed exception: %s", exc, exc_info=True)
 
     def _apply_attack_path_feedback(self, task: Task, *, success: bool,
                                     failure_type: str | None = None) -> None:
@@ -622,8 +902,8 @@ class ExecutionCoordinator(CoordinatorContext):
                 summary = self._format_parse_summary(parsed)
                 if summary:
                     parts.append(f"PARSED SUMMARY:\n{summary}")
-            except Exception:
-                pass  # best-effort, never break feedback
+            except Exception as exc:
+                log.debug("swallowed exception (best-effort, never break feedback): %s", exc, exc_info=True)
 
         return "\n".join(parts)
 
@@ -679,28 +959,13 @@ class ExecutionCoordinator(CoordinatorContext):
         if not isinstance(task_params, dict):
             task_params = {"value": task_params}
 
-        # ── Direct execution for concrete tasks ──────────────────────
-        # When the plan specifies exact tool + params, execute directly
-        # instead of going through the LLM (which may silently change params).
-        # Tasks without concrete params (e.g. exploratory curl_get) still
-        # go through the LLM for creative decision-making.
-        _direct_tools = {
-            # Concrete curl/SSRF tasks carry authoritative plan parameters;
-            # execute them directly through ToolExecutor instead of asking
-            # the LLM to recreate the call.
-            "curl_get", "ssrf_probe",
-            "shell_exec", "redis_cmd", "mysql_query", "psql_query",
-            "mssql_query", "oracle_query", "ssh_exec", "ssh_key_exec",
-            "impacket_psexec", "impacket_wmiexec", "impacket_pth",
-            "impacket_secretsdump", "impacket_secretsdump_dcsync",
-            "impacket_ticketer", "impacket_silver_ticket",
-            "impacket_GetUserSPNs", "impacket_GetNPUsers",
-            "nmap_port_range", "nmap_full_scan", "nmap_vulners_scan",
-            "whatweb_scan", "dirb_scan", "gobuster_dir", "nikto_scan",
-            "hydra_http_brute", "ffuf_fuzz", "tomcat_exploit",
-            "php_filter_chain", "jwt_forge", "searchsploit_copy",
-            "impacket_ntlmrelayx",
-        }
+        # ── Plan-first execution ─────────────────────────────────────
+        # The plan is authoritative: when it already carries every required
+        # parameter for its tool, execute that tool directly through the
+        # Executor instead of letting the LLM re-select a tool (which silently
+        # replaced planned write calls such as PUT with unrelated read tools).
+        # Only plans that are under-specified — or need creative argument
+        # construction — fall through to the LLM-driven path.
         if task_tool == "ssrf_probe" and isinstance(task_params, dict):
             # Legacy plans used url/param; canonicalize only this migrated tool.
             if not task_params.get("ssrf_url") and task_params.get("url"):
@@ -710,7 +975,10 @@ class ExecutionCoordinator(CoordinatorContext):
         _known_gateway_tools = set(self.attack_gateway.get_tool_names()) | set(
             self.recon_gateway.get_tool_names()
         )
-        if task_tool and task_params and task_tool in _direct_tools and task_tool in _known_gateway_tools:
+        _direct_ok, _direct_missing = self._plan_params_complete(
+            task_tool, task_params, _known_gateway_tools
+        )
+        if _direct_ok:
             # Execute directly — plan params are authoritative
             task_tool_calls = [{
                 "name": task_tool, "arguments": task_params,
@@ -719,8 +987,16 @@ class ExecutionCoordinator(CoordinatorContext):
             print(f"\n[solo:{iteration}] task={task.id} → {task_tool} [direct]")
             log.info("task=%s tool=%s [direct] start (iteration=%d)",
                      task.id, task_tool, iteration)
+            self._task_log_event("info", "execution_mode",
+                                 task_id=task.id, mode="direct", tool=task_tool)
         else:
             # LLM-driven execution for flexible/exploratory tasks
+            if task_tool and _direct_missing:
+                log.info("task=%s tool=%s [llm] — missing required params %s",
+                         task.id, task_tool, _direct_missing)
+            self._task_log_event("info", "execution_mode",
+                                 task_id=task.id, mode="llm", tool=task_tool,
+                                 missing=list(_direct_missing))
             self._maybe_compress()
             if "-manual" in task.id:
                 # Manual retry: force the LLM to use send_payload with the
@@ -816,6 +1092,9 @@ class ExecutionCoordinator(CoordinatorContext):
         task_summary = ""
         _all_task_stdouts: list[str] = []  # accumulate all tool outputs (truncated)
         _raw_task_stdouts: list[str] = []  # full stdout for credential extraction
+        # Executed calls (name/args/success/stdout) — success_condition and
+        # plan-adherence checks read what actually ran, not what was planned.
+        _executed_calls: list[dict] = []
         _auto_test_negative = False  # track "no evidence" / "no flag"
         _last_result = None
 
@@ -944,8 +1223,8 @@ class ExecutionCoordinator(CoordinatorContext):
                                 result = await self._call_tool(tc_name, tc_args)
                             elif tc_name in self.recon_gateway.get_tool_names():
                                 result = await self._call_tool(tc_name, tc_args)
-                        except Exception:
-                            pass  # retry failed — keep original error
+                        except Exception as exc:
+                            log.debug("swallowed exception (retry failed — keep original error): %s", exc, exc_info=True)
                     elif _cur_format in ("form", ""):
                         tc_args["body_format"] = "json"
                         try:
@@ -953,8 +1232,8 @@ class ExecutionCoordinator(CoordinatorContext):
                                 result = await self._call_tool(tc_name, tc_args)
                             elif tc_name in self.recon_gateway.get_tool_names():
                                 result = await self._call_tool(tc_name, tc_args)
-                        except Exception:
-                            pass  # retry failed — keep original error
+                        except Exception as exc:
+                            log.debug("swallowed exception (retry failed — keep original error): %s", exc, exc_info=True)
 
             # ── Runtime tool blacklist & absent-service tracking ──
             _exit_code = getattr(result, 'exit_code', 0)
@@ -1051,7 +1330,9 @@ class ExecutionCoordinator(CoordinatorContext):
             else:
                 log.info("[EXPLOIT] %s: FAILED (exit=%d) — %s",
                          tc_name, result_exit,
-                         (result_stdout[:100] or 'no output').replace('\n', ' '))
+                         (result_stdout[:100]
+                          or getattr(result, 'stderr', '')[:100]
+                          or 'no output').replace('\n', ' '))
 
             # Format feedback for LLM
             tool_stdout = self._format_tool_feedback(tc_name, tc_args, result)
@@ -1137,6 +1418,14 @@ class ExecutionCoordinator(CoordinatorContext):
                     "or similar plugin-specific parameters.]"
                 )
             _all_task_stdouts.append(f"[{tc_name}] {_combined[:600]}{_hint}")
+            _executed_calls.append({
+                "name": tc_name,
+                "args": dict(tc_args) if isinstance(tc_args, dict) else {},
+                "success": bool(getattr(result, "success", False)),
+                "stdout": getattr(result, "stdout", "") or "",
+                "stderr": getattr(result, "stderr", "") or "",
+                "method": _call_method(tc_name, tc_args),
+            })
             # Track if automated test found nothing
             rl = (getattr(result, 'stdout', '') or '').lower()
             if "no evidence" in rl or "no flag" in rl:
@@ -1184,8 +1473,66 @@ class ExecutionCoordinator(CoordinatorContext):
                     return execution
                 log.warning("Flag candidate rejected by verifier: %s", reason)
 
-        # ── LLM reviews and updates plan after every task (VulnBot-style) ──
-        task_success = _any_success
+        # ── Identity propagation ────────────────────────────────────────
+        # A denied read plus a disclosed caller identity is a complete
+        # authorisation recipe on this class of API; try it before declaring
+        # the task failed.
+        if not execution.flag_result:
+            try:
+                _identity_flag = await self._probe_identity_propagation(_executed_calls)
+            except Exception as exc:
+                log.warning("identity propagation probe failed: %s", exc)
+                _identity_flag = None
+            if _identity_flag:
+                self._persist_verified_flag(
+                    _identity_flag,
+                    str(task_params.get("url", task_params.get("target_url", "")) or "")
+                    or task_instruction,
+                    "identity-propagation",
+                )
+                self.phase = OrchestratorPhase.DONE
+                execution.flag_result = TaskResult(
+                    success=True, flag=_identity_flag,
+                    steps=self.step_count,
+                    tokens_used=self._tokens_used(),
+                    time_elapsed=time.time() - self.start_time,
+                )
+                self._verified_flag_result = execution.flag_result
+                return execution
+
+        # ── success_condition: judge the task by its observable goal ─────
+        # Falling back to "any tool returned exit 0" let a substituted read
+        # tool masquerade as a completed write task.
+        _condition = (
+            dict(task.success_condition)
+            if isinstance(getattr(task, "success_condition", None), dict)
+            else {}
+        )
+        if not _condition and _planned_write_intent(task_tool, task_params):
+            _condition = {"type": "tool_success", "tool": task_tool,
+                          "method": _call_method(task_tool, task_params)}
+        _condition_detail = ""
+        if _condition:
+            _cond_met, _condition_detail = await self._verify_success_condition(
+                _condition,
+                _executed_calls,
+                _any_success,
+                bool(execution.flag_result),
+            )
+            if not _cond_met:
+                task_success = False
+                log.info("[CONDITION] task=%s not met — %s", task.id, _condition_detail)
+            else:
+                task_success = _any_success
+            self._task_log_event(
+                "info", "success_condition",
+                task_id=task.id,
+                condition=_condition,
+                met=bool(_cond_met),
+                detail=_condition_detail,
+            )
+        else:
+            task_success = _any_success
 
         # O2.1: positive belief feedback — a successful task raises the
         # confidence of the matching vulnerability hypothesis.
@@ -1196,11 +1543,15 @@ class ExecutionCoordinator(CoordinatorContext):
                     flag_found=bool(execution.flag_result),
                 )
                 self._apply_attack_path_feedback(task, success=True)
-        except Exception:
-            pass
+        except Exception as exc:
+            log.debug("swallowed exception: %s", exc, exc_info=True)
         task_result_text = self._summarize_task_result(
             tc_names, task_success, _all_task_stdouts
         )
+        if not task_success and _condition_detail:
+            task_result_text = (
+                f"[SUCCESS CONDITION NOT MET] {_condition_detail}\n{task_result_text}"
+            )
 
         # ── Fix-and-retry: LLM analyzes failures, fixes param errors ──
         _fix_attempts = 0
@@ -1236,8 +1587,8 @@ class ExecutionCoordinator(CoordinatorContext):
                             username=_cred_user, password=_cred_pass,
                             source="partial_success",
                         )
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        log.debug("swallowed exception: %s", exc, exc_info=True)
                     log.info("[PARTIAL SUCCESS] Stored credential '%s' (auth OK → CTEG)",
                              creds["username"])
                 task_success = True
@@ -1265,11 +1616,42 @@ class ExecutionCoordinator(CoordinatorContext):
             retry_stderr = retry_result.stderr or ""
 
             if retry_result.success:
-                task_success = True
+                _retry_condition_ok = True
+                if _condition:
+                    # The corrected params must still satisfy the task's
+                    # success_condition (a repaired write is not done until
+                    # its effect is observable).
+                    _retry_condition_ok, _condition_detail = (
+                        await self._verify_success_condition(
+                            _condition,
+                            [{
+                                "name": _task_tool,
+                                "args": dict(task_params),
+                                "success": True,
+                                "stdout": retry_stdout,
+                                "stderr": retry_stderr,
+                                "method": _call_method(_task_tool, task_params),
+                            }],
+                            True,
+                            bool(execution.flag_result),
+                        )
+                    )
+                    self._task_log_event(
+                        "info", "success_condition",
+                        task_id=task.id, condition=_condition,
+                        met=bool(_retry_condition_ok), detail=_condition_detail,
+                        phase="retry",
+                    )
+                task_success = _retry_condition_ok
                 task_result_text = (
                     f"[FIXED — {reason[:100]}] "
                     f"{retry_stdout[:1200] or 'OK'}"
                 )
+                if not _retry_condition_ok:
+                    task_result_text = (
+                        f"[SUCCESS CONDITION NOT MET] {_condition_detail}\n"
+                        f"{task_result_text}"
+                    )
                 # Check for flag
                 flags = self.flag_pattern.findall(retry_stdout)
                 if flags:
@@ -1344,8 +1726,8 @@ class ExecutionCoordinator(CoordinatorContext):
                         if _eval2.failure_type is not None else None
                     ),
                 )
-            except Exception:
-                pass
+            except Exception as exc:
+                log.debug("swallowed exception: %s", exc, exc_info=True)
             self._task_log_event(
                 "info", "replan_requested",
                 task_id=task.id,
@@ -1468,8 +1850,8 @@ class ExecutionCoordinator(CoordinatorContext):
                 f"{belief_block}",
                 role="user",
             )
-        except Exception:
-            pass
+        except Exception as exc:
+            log.debug("swallowed exception: %s", exc, exc_info=True)
 
         tool_defs = [
             d for d in self.attack_gateway.get_tool_definitions()
@@ -1483,8 +1865,8 @@ class ExecutionCoordinator(CoordinatorContext):
             mcp_defs = self.mcp_pool.get_tool_definitions()
             if mcp_defs:
                 tool_defs += mcp_defs
-        except Exception:
-            pass
+        except Exception as exc:
+            log.debug("swallowed exception: %s", exc, exc_info=True)
 
         # Response-derived filter probing runs first: it is bounded, GET-only,
         # and cheaper than any plan task, and it is the only path that reaches
@@ -1493,7 +1875,21 @@ class ExecutionCoordinator(CoordinatorContext):
         if filter_result and filter_result.success:
             return filter_result
 
-        systematic_result = await self._systematic_exploit_pass(target_url)
+        # A forced reconsideration round also lets the deferred evidence-free
+        # guesses through the deterministic pass — once, bounded, and only when
+        # the grounded plan produced no new progress.
+        _extra_vulns: list[dict] | None = None
+        if getattr(self, "_force_plan_reconsider", False):
+            self._force_plan_reconsider = False
+            _extra_vulns = list(getattr(self, "speculative_hypotheses", []) or [])
+            if _extra_vulns:
+                log.info(
+                    "[systematic] forced reconsideration: probing %d deferred "
+                    "evidence-free guess(es)", len(_extra_vulns),
+                )
+        systematic_result = await self._systematic_exploit_pass(
+            target_url, extra_vulns=_extra_vulns
+        )
         if systematic_result and systematic_result.success:
             return systematic_result
 
@@ -1876,17 +2272,25 @@ class ExecutionCoordinator(CoordinatorContext):
                 )
         return None
 
-    async def _systematic_exploit_pass(self, target_url: str) -> TaskResult | None:
+    async def _systematic_exploit_pass(
+        self, target_url: str, extra_vulns: list[dict] | None = None,
+    ) -> TaskResult | None:
         """Systematic exploit: iterate DKG Vulnerability nodes and run mapped tools.
 
         Runs BEFORE the LLM-driven loop in Solo mode. This catches
         straightforward vulnerabilities without any LLM cost — for each
         known Vulnerability node, we run the appropriate tool automatically.
 
+        ``extra_vulns`` carries the deferred evidence-free guesses, which are
+        only probed during a forced reconsideration round (bounded by MAX_TESTS
+        and the same dedup cache as everything else).
+
         Returns TaskResult if a flag is found, None otherwise.
         """
         state = self._get_state()
         vulns = self.dkg.query_nodes("Vulnerability")  # raw for toolkit fields
+        if extra_vulns:
+            vulns = list(vulns) + [v for v in extra_vulns if isinstance(v, dict)]
         if not vulns:
             print("[systematic] No Vulnerability nodes in DKG — skipping")
             return None
@@ -2113,14 +2517,25 @@ class ExecutionCoordinator(CoordinatorContext):
         for _gw in (self.attack_gateway, self.recon_gateway):
             try:
                 _specs_by_name.update(_gw.get_tool_specs())
-            except Exception:
-                pass
+            except Exception as exc:
+                log.debug("swallowed exception: %s", exc, exc_info=True)
 
         def _tool_runnable(tool_name: str) -> bool:
             if tool_name in self._BLACKLISTED_TOOLS:
                 return False
             spec = _specs_by_name.get(tool_name)
             return True if spec is None else _spec_is_available(spec)
+
+        # HTTP endpoints only accept tools whose contract speaks HTTP. This is
+        # derived from the ToolSpec parameter names (not a hardcoded tool list),
+        # so DB/SSH/cloud CLI tools are never even attempted against a URL.
+        _HTTP_SPEC_PARAMS = {"url", "target_url", "ssrf_url"}
+
+        def _tool_http_viable(tool_name: str) -> bool:
+            spec = _specs_by_name.get(tool_name)
+            if spec is None:
+                return True
+            return bool(_HTTP_SPEC_PARAMS & set((spec.parameters or {}).keys()))
 
         for v in vulns_sorted:
             if tested_count >= MAX_TESTS:
@@ -2139,6 +2554,8 @@ class ExecutionCoordinator(CoordinatorContext):
 
             tools = _resolve_tools(vt)
             tools = [name for name in tools if _tool_runnable(name)]
+            if endpoint.startswith(("http://", "https://")):
+                tools = [name for name in tools if _tool_http_viable(name)]
 
             # ── Privilege escalation: use dedicated exploitation method ──
             # rather than running generic shell_exec + linux_priv_check
@@ -2239,10 +2656,6 @@ class ExecutionCoordinator(CoordinatorContext):
             for tool_name in tools:
                 if tested_count >= MAX_TESTS:
                     break
-                dedup_key = (tool_name, endpoint, param)
-                if dedup_key in tried:
-                    continue
-
                 # Build args: start with defaults, merge LLM-suggested overrides
                 args: dict = {}
                 if tool_name == "sqlmap_test":
@@ -2361,10 +2774,16 @@ class ExecutionCoordinator(CoordinatorContext):
                         )
                         continue
 
-                # Only count as tried once schema check passes — prevents
+                # Only count as tried once the schema check passes — prevents
                 # vulns without LLM args from poisoning the dedup cache for
                 # vulns that DO have correct args (e.g. XSS vuln processed
                 # before AuthBypass vuln, both on same etcd endpoint).
+                # The key includes an args fingerprint so a later cycle that
+                # constructs a genuinely different call on the same
+                # (tool, endpoint, param) is not silently skipped.
+                dedup_key = (tool_name, endpoint, param, _args_fingerprint(args))
+                if dedup_key in tried:
+                    continue
                 tried.add(dedup_key)
                 tested_count += 1
 
@@ -2446,8 +2865,8 @@ class ExecutionCoordinator(CoordinatorContext):
                                 tokens_used=self._tokens_used(),
                                 time_elapsed=time.time() - self.start_time,
                             )
-                except Exception:
-                    pass
+                except Exception as exc:
+                    log.debug("swallowed exception: %s", exc, exc_info=True)
 
         # ── Authenticated endpoint crawl ──────────────────────────
         # If we have session cookies, fetch ALL discovered endpoints with auth.

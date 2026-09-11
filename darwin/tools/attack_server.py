@@ -7,12 +7,15 @@ Reference: AWE xss_agent, sqli_agent — exploitation patterns
 from __future__ import annotations
 
 import asyncio
+import logging
 import os as _os_module
 import random
 import re
 import string
 import time
 from pathlib import Path
+
+log = logging.getLogger(__name__)
 from typing import Any, Dict
 
 from darwin.tools.mcp_gateway import MCPGateway, ToolResult
@@ -205,8 +208,8 @@ except Exception as e:
     finally:
         try:
             _os.unlink(tmpath)
-        except OSError:
-            pass
+        except OSError as exc:
+            log.debug("swallowed exception: %s", exc, exc_info=True)
     return result
 
 
@@ -842,8 +845,8 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
                     try:
                         proc.kill()
                         await proc.wait()
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        log.debug("swallowed exception: %s", exc, exc_info=True)
                 return {"probe": probe_url, "body": "", "response_len": 0,
                         "response_preview": "", "flag": None,
                         "credentials_detected": None, "error": "timeout"}
@@ -886,8 +889,8 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
                     except Exception:
                         continue
                 pending = list(dict.fromkeys(derived + pending))[:max(0, budget - sent_total)]
-        except Exception:
-            pass
+        except Exception as exc:
+            log.debug("swallowed exception: %s", exc, exc_info=True)
 
         for item in results:
             item.pop("body", None)
@@ -1472,8 +1475,8 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
                         )
                         return ToolResult(tool_name="knowledge_search", success=True,
                             stdout=output, stderr="", exit_code=0, elapsed_ms=0)
-                except ImportError:
-                    pass
+                except ImportError as exc:
+                    log.debug("swallowed exception: %s", exc, exc_info=True)
                 return ToolResult(tool_name="knowledge_search", success=True,
                     stdout=empty_evidence("rag", query),
                     stderr="", exit_code=0, elapsed_ms=0)
@@ -1517,8 +1520,8 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
                 if "yandex" not in _DDGS_ENGINES.get("text", {}):
                     _DDGS_Yandex.disabled = False
                     _DDGS_ENGINES["text"]["yandex"] = _DDGS_Yandex
-            except Exception:
-                pass
+            except Exception as exc:
+                log.debug("swallowed exception: %s", exc, exc_info=True)
             results = list(DDGS(timeout=8).text(
                 query,
                 max_results=max(1, min(max_results, 15)),
@@ -1666,8 +1669,8 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
                     return ToolResult(tool_name="go_exploitdb_search", success=True,
                         stdout="\n---\n".join(results), stderr="",
                         exit_code=0, elapsed_ms=0)
-            except Exception:
-                pass
+            except Exception as exc:
+                log.debug("swallowed exception: %s", exc, exc_info=True)
 
         # Fallback to searchsploit
         import asyncio
@@ -2259,6 +2262,7 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
             proc = await asyncio.create_subprocess_shell(
                 cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
                 env=tool_path_env())
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=120)
             stdout_s = stdout.decode("utf-8", errors="replace")
             stderr_s = stderr.decode("utf-8", errors="replace")
             elapsed = (time.perf_counter() - start) * 1000
@@ -2300,6 +2304,7 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
             proc = await asyncio.create_subprocess_shell(
                 cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
                 env=tool_path_env())
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=120)
             stdout_s = stdout.decode("utf-8", errors="replace")
             stderr_s = stderr.decode("utf-8", errors="replace")
             elapsed = (time.perf_counter() - start) * 1000
@@ -2495,8 +2500,8 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
             if _lines:
                 try:
                     _http_status = int(_lines[-1].strip())
-                except ValueError:
-                    pass
+                except ValueError as exc:
+                    log.debug("swallowed exception: %s", exc, exc_info=True)
             _ok = (proc.returncode == 0
                    and _http_status not in (0, 400, 401, 403, 404, 405, 500, 502, 503))
 
@@ -2579,14 +2584,14 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
                         if _rl:
                             try:
                                 _rst = int(_rl[-1].strip())
-                            except ValueError:
-                                pass
+                            except ValueError as exc:
+                                log.debug("swallowed exception: %s", exc, exc_info=True)
                         _auto_retries.append((_rst, _rs, _ap))
                         if _rst not in (0, 400, 401, 403, 404, 405, 500, 502, 503):
                             # Found a working pattern — stop trying more
                             break
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        log.debug("swallowed exception: %s", exc, exc_info=True)
 
             if _auto_retries:
                 _best = min(_auto_retries, key=lambda x: x[0] if x[0] >= 200 else 999)
@@ -2617,8 +2622,8 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
             if tmp_path:
                 try:
                     _os.unlink(tmp_path)
-                except OSError:
-                    pass
+                except OSError as exc:
+                    log.debug("swallowed exception: %s", exc, exc_info=True)
 
     gateway.register(
         name="file_upload",
@@ -2667,8 +2672,8 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
                     with open(_config_path, encoding="utf-8") as _f:
                         _cfg = _yaml.safe_load(_f) or {}
                     api_token = (_cfg.get("wpscan", {}) or {}).get("api_token", "") or ""
-            except Exception:
-                pass
+            except Exception as exc:
+                log.debug("swallowed exception: %s", exc, exc_info=True)
 
         has_token = bool(api_token and api_token.strip())
 
@@ -3219,8 +3224,8 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
                                         name = item.get("name") or item.get("key") or item.get("object") or ""
                                         if name:
                                             objects.append(name)
-                except (ValueError, TypeError):
-                    pass
+                except (ValueError, TypeError) as exc:
+                    log.debug("swallowed exception: %s", exc, exc_info=True)
 
         # Also try /{filename} directly if not in objects yet (LLM may already know it)
         if not objects:
@@ -3278,8 +3283,8 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
                         is_listing = isinstance(parsed_body, dict) and any(
                             key in parsed_body for key in ("objects", "files", "keys", "contents", "items")
                         )
-                    except (ValueError, TypeError):
-                        pass
+                    except (ValueError, TypeError) as exc:
+                        log.debug("swallowed exception: %s", exc, exc_info=True)
                     # A repeated object listing is discovery evidence, not a
                     # successful retrieval of the requested object.
                     if is_listing and not flag_m:
@@ -4169,8 +4174,8 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
             try:
                 if _os.path.exists(enc_path):
                     _os.unlink(enc_path)
-            except Exception:
-                pass
+            except Exception as exc:
+                log.debug("swallowed exception: %s", exc, exc_info=True)
 
     gateway.register(
         name="gpp_decrypt",
@@ -4228,8 +4233,8 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
             try:
                 if tmp_path and _os.path.exists(tmp_path):
                     _os.unlink(tmp_path)
-            except Exception:
-                pass
+            except Exception as exc:
+                log.debug("swallowed exception: %s", exc, exc_info=True)
 
         try:
             # Write hash to temp file
@@ -4269,10 +4274,10 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
                         return ToolResult(tool_name="hash_crack", success=True,
                             stdout=out, stderr="", exit_code=0, elapsed_ms=elapsed)
 
-        except FileNotFoundError:
-            pass  # hashcat not installed, try john below
-        except Exception:
-            pass
+        except FileNotFoundError as exc:
+            log.debug("swallowed exception (hashcat not installed, try john below): %s", exc, exc_info=True)
+        except Exception as exc:
+            log.debug("swallowed exception: %s", exc, exc_info=True)
 
         # Fall back to john-the-ripper
         try:
@@ -4290,10 +4295,10 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
                     elapsed = int((time.perf_counter() - t0) * 1000)
                     return ToolResult(tool_name="hash_crack", success=True,
                         stdout=show_j.stdout.strip(), stderr="", exit_code=0, elapsed_ms=elapsed)
-        except FileNotFoundError:
-            pass
-        except Exception:
-            pass
+        except FileNotFoundError as exc:
+            log.debug("swallowed exception: %s", exc, exc_info=True)
+        except Exception as exc:
+            log.debug("swallowed exception: %s", exc, exc_info=True)
 
         _cleanup()
         elapsed = int((time.perf_counter() - t0) * 1000)
@@ -5309,8 +5314,8 @@ def create_attack_gateway() -> MCPGateway:
             _domains = _cfg.get("tools", {}).get("enabled_domains", None)
             if _domains is not None and isinstance(_domains, list):
                 _enabled_domains = set(_domains)
-    except Exception:
-        pass
+    except Exception as exc:
+        log.debug("swallowed exception: %s", exc, exc_info=True)
 
     _apply_domain_filter(gateway, _enabled_domains)
     gateway.ensure_specs()

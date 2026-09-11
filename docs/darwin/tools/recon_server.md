@@ -41,6 +41,15 @@ STS/SAML/云控制面等）。
 - 自定义探针路径可用 `DARWIN_NMAP_CLOUD_PROBES` 覆盖。
 - 探针合并逻辑不影响工具参数/命令模板，manifest 无变化。
 
+## HTTP 写工具语义
+
+- `http_post`（v1.1.0）：4xx/5xx 不再是"无输出失败"——HTTPError 的
+  status/headers/body 会写进 stdout（`success` 仍为 False），据此可区分
+  路由缺失（404）与方法不对（405 + Allow）。
+- `http_method_probe`：描述明确其为 PUT/PATCH/DELETE 写入的入口（`method`
+  + `data` + `content_type`），4xx/5xx 同样返回 status/headers/body。
+- 两者参数/语义变化需同步 `tools_manifest.json` 与 version。
+
 ## 相关模块
 
 `mcp_gateway.py`、`spec.py`、`utils/http_client.py`、`orchestrator.py`。

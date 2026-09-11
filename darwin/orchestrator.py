@@ -142,7 +142,7 @@ class Orchestrator:
         self,
         llm_session: LLMSession | None = None,
         time_budget: int = 1200,
-        token_budget: int = 200000,
+        token_budget: int = 0,
         max_context_tokens: int = 384000,
         compression_threshold: float = 0.4,
         browser_enabled: bool = False,

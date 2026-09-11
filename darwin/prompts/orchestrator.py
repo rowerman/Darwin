@@ -18,6 +18,17 @@ ANALYZE_OUTPUT_SCHEMA_EXAMPLE = """{
       "tool_args": {"param_name": "value"}
     }
   ],
+  "speculative": [
+    {
+      "vuln_type": "...",
+      "endpoint": "full URL",
+      "param": "",
+      "confidence": 0.2,
+      "evidence": "pattern-only guess (no observed evidence)",
+      "suggested_tool": "",
+      "tool_args": {}
+    }
+  ],
   "attack_paths": [
     {
       "path_id": "path-1",
@@ -37,10 +48,46 @@ PLANNER_TASKS_SCHEMA_EXAMPLE = """[
     "instruction": "what to exploit and how",
     "tool": "exact tool name",
     "params": {"param_name": "value"},
+    "success_condition": {"type": "body_contains", "value": "expected substring"},
     "reason": "which vulnerability this targets",
     "priority": 0.7
   }
 ]"""
+
+# Machine-checked completion criteria.  The runtime verifies these against
+# what actually executed; a task whose condition is unmet is FAILED even when
+# its tool returned exit code 0.
+SUCCESS_CONDITION_GUIDE = """
+## Task success conditions (machine-checked — REQUIRED for every task)
+Every task MUST carry `success_condition`, describing the OBSERVABLE effect of
+doing the task correctly. The runtime verifies it against what actually ran:
+
+- {"type": "tool_success", "tool": "<exact tool>", "method": "PUT"}
+  The planned call must actually be executed (not substituted) and succeed.
+  Add "method" whenever the verb matters (PUT/POST/PATCH/DELETE).
+- {"type": "body_contains", "value": "<substring>"}
+  The task's own output must contain the substring.
+- {"type": "body_not_contains", "value": "<substring>"}
+  Negative evidence — e.g. the output must NOT contain "AccessDenied",
+  "NotFound", "invalid", "unauthorized".
+- {"type": "http_status_in", "status": [200, 201]}
+  The response status of the task's call must be one of these.
+- {"type": "probe", "url": "<follow-up URL>", "contains": "<substring>",
+   "method": "GET", "status_in": [200], "headers": "Name: value"}
+  A bounded follow-up request confirms the effect. USE THIS FOR EVERY WRITE
+  (POST/PUT/PATCH/DELETE, upload, publish, create, update, register): probe the
+  listing/read endpoint and require the created or updated artifact to appear.
+  A 2xx on the write alone is NOT proof — the artifact must be readable after.
+- {"type": "flag_captured"}
+  The task itself is expected to yield the flag.
+
+Rules:
+- Write-intent tasks (method POST/PUT/PATCH/DELETE, upload/publish tools) MUST
+  use a `probe` condition that reads back the persisted artifact.
+- Read/recon tasks should use `body_contains` / `http_status_in` with a value
+  you actually expect from the target, not a guess.
+- Never omit `success_condition`.
+"""
 
 # ── Unified Orchestrator Prompt (v2: LLM-driven from bootstrap onward) ──
 
@@ -184,14 +231,30 @@ First, study the probed endpoint responses carefully. Figure out:
   response only proves the ROOT is static — middleware, agents and simulators
   hide real endpoints behind a plain root, so do NOT conclude the service is inert.
 
-## Phase 2: Identify Vulnerabilities
-Based on your understanding from Phase 1, hypothesize potential vulnerabilities.
-- Consider both URL patterns AND response content as signals
-- An endpoint with params/form fields is CANDIDATE for injection (SQLI, XSS, CMDI)
-- An endpoint with numeric path segments is CANDIDATE for IDOR
-- An endpoint returning JSON/API responses is CANDIDATE for data exposure
+## Phase 2: Identify Vulnerabilities (evidence only)
+Every entry in `vulnerabilities` MUST cite something OBSERVED on this target.
+The `evidence` field must name the concrete observation that makes the
+hypothesis credible — a response field, status code, echo of input, error
+message, or a documented route the response itself advertises.
+
+- Good evidence: "GET /search?q= returns every resource, /resources/<id>
+  answers 403 while /whoami returns the caller identity this API expects"
+  → IDOR/AuthBypass is grounded.
+- Good evidence: "the root JSON documents GET /resources/<id> and the endpoint
+  answers 403 instead of 404" → the route exists and is access-controlled.
+- NOT evidence: "the endpoint has a q parameter, so it might be injectable".
+  Generic type-based guessing (params → SQLI/XSS/CMDI, numeric path → IDOR)
+  proves nothing about this application and wastes the research and exploit
+  budget on invented tasks.
+
+- `vulnerabilities`: only evidence-backed hypotheses. They are researched and
+  turned into plan tasks.
+- `speculative`: pattern-only guesses with no observed evidence. List them here
+  (usually 0-3) instead of inventing hypotheses. They are NOT researched and
+  NOT planned; they are only used as a bounded last-resort probe if the
+  evidence-backed plan finds nothing.
 - An endpoint returning error messages is CANDIDATE for information disclosure
-- Low confidence is acceptable — the research and exploit phases will validate
+- Low confidence is fine when the evidence exists — the exploit phase validates it.
 - Service labels from nmap/service detection are ATTACK-SURFACE HINTS, not
   verdicts. A label/banner mismatch (e.g. "OMI Agent (WSMan)" answering with a
   Python/Werkzeug page) is common for middleware and simulators and does NOT make
@@ -200,14 +263,13 @@ Based on your understanding from Phase 1, hypothesize potential vulnerabilities.
 - Uncertain leads MUST be written into 'vulnerabilities' with LOW confidence
   (0.2-0.4). Never hide them in extra fields (e.g. 'unverified_hypotheses') —
   the schema has exactly three keys and extra keys are rejected.
-- For EACH endpoint with any kind of user input surface, suggest at least one vuln_type
 - For each discovered service version, consider whether that specific version has
   publicly known vulnerabilities — an outdated service is often the fastest path in.
 - If response samples are too short to understand the application (e.g. truncated),
   call curl_get on the root URL to fetch the full page before forming hypotheses.
 - If the evidence strongly suggests one application type, briefly note 1-2
-  alternative interpretations. If your primary hypothesis is wrong, these
-  fallback paths will prevent wasted exploration.
+  alternative interpretations in `speculative`. If your primary hypothesis is
+  wrong, these fallback paths will prevent wasted exploration.
 
 ## Non-HTTP Services
 Also analyze non-HTTP services (Redis, MySQL, SSH, PostgreSQL, MSSQL, Oracle, MongoDB):

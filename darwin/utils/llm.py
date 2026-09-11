@@ -345,7 +345,7 @@ class LLMSession:
                 except (json.JSONDecodeError, TypeError):
                     try:
                         value = json.loads(value)
-                    except (json.JSONDecodeError, TypeError):
+                    except (json.JSONDecodeError, TypeError):  # silent-ok: parse fallback
                         pass
                 arguments[arg_name] = value
             calls.append({"id": f"dsml-{index}", "name": name, "arguments": arguments})

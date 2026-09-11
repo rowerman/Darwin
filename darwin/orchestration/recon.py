@@ -543,8 +543,8 @@ class ReconCoordinator(CoordinatorContext):
                     })
                     self._task_log_event("info", "ssh_session_established",
                         host=host, user=self._provided_username)
-            except Exception:
-                pass  # SSH test failure is non-fatal
+            except Exception as exc:
+                log.debug("swallowed exception (SSH test failure is non-fatal): %s", exc, exc_info=True)
 
         # ── Auto-try default credentials for database services ────────
         await self._try_db_default_credentials(host, discovered_ports)
@@ -679,8 +679,8 @@ class ReconCoordinator(CoordinatorContext):
                     log.info("openssl s_client cert=%s → identified as %s on port %d",
                              cn, _name, _port)
                     _identified = True
-            except Exception:
-                pass
+            except Exception as exc:
+                log.debug("swallowed exception: %s", exc, exc_info=True)
 
             # Phase 2: HTTP API probe for unknown services (both HTTP
             # and HTTPS — tries HTTPS first for TLS ports, HTTP fallback).
@@ -779,8 +779,8 @@ class ReconCoordinator(CoordinatorContext):
                     if parse_result.success:
                         parsed = getattr(parse_result, "parsed_output", {})
                         forms = parsed.get("forms", [])
-                except Exception:
-                    pass
+                except Exception as exc:
+                    log.debug("swallowed exception: %s", exc, exc_info=True)
                 # whatweb
                 technologies = []
                 try:
@@ -788,8 +788,8 @@ class ReconCoordinator(CoordinatorContext):
                         {"target_url": url})
                     if ww.success:
                         technologies = getattr(ww, "parsed_output", {}).get("technologies", [])
-                except Exception:
-                    pass
+                except Exception as exc:
+                    log.debug("swallowed exception: %s", exc, exc_info=True)
                 return (url, stdout, http_status, technologies, forms, parsed)
             except Exception:
                 return (url, "", 0, [], [], {})
@@ -988,8 +988,8 @@ class ReconCoordinator(CoordinatorContext):
             out = result.stdout or ""
             if result.success:
                 nodes_data = _json.loads(out) if out.strip().startswith("{") else {}
-        except Exception:
-            pass
+        except Exception as exc:
+            log.debug("swallowed exception: %s", exc, exc_info=True)
 
         k8s_nodes: list[dict] = []
         for item in nodes_data.get("items", []):
@@ -1025,8 +1025,8 @@ class ReconCoordinator(CoordinatorContext):
             out = result.stdout or ""
             if result.success:
                 pods_data = _json.loads(out) if out.strip().startswith("{") else {}
-        except Exception:
-            pass
+        except Exception as exc:
+            log.debug("swallowed exception: %s", exc, exc_info=True)
 
         k8s_pods: list[dict] = []
         for item in pods_data.get("items", []):
@@ -1050,8 +1050,8 @@ class ReconCoordinator(CoordinatorContext):
             out = result.stdout or ""
             if result.success:
                 svcs_data = _json.loads(out) if out.strip().startswith("{") else {}
-        except Exception:
-            pass
+        except Exception as exc:
+            log.debug("swallowed exception: %s", exc, exc_info=True)
 
         k8s_svcs: list[dict] = []
         for item in svcs_data.get("items", []):
@@ -1077,8 +1077,8 @@ class ReconCoordinator(CoordinatorContext):
                 ns_data = _json.loads(out)
                 ns_list = [i.get("metadata", {}).get("name", "")
                            for i in ns_data.get("items", [])]
-        except Exception:
-            pass
+        except Exception as exc:
+            log.debug("swallowed exception: %s", exc, exc_info=True)
 
         # ── Step 6: Check current permissions ──
         permissions: list[str] = []
@@ -1090,8 +1090,8 @@ class ReconCoordinator(CoordinatorContext):
                     line = line.strip()
                     if line and not line.startswith("Resources") and "yes" in line.lower():
                         permissions.append(line)
-        except Exception:
-            pass
+        except Exception as exc:
+            log.debug("swallowed exception: %s", exc, exc_info=True)
 
         # ── Write DKG nodes ───────────────────────────────────────────
 
@@ -1338,8 +1338,8 @@ class ReconCoordinator(CoordinatorContext):
                         methods |= {
                             m.strip().upper() for m in allow.split(",") if m.strip()
                         }
-            except Exception:
-                pass
+            except Exception as exc:
+                log.debug("swallowed exception: %s", exc, exc_info=True)
             method_list = sorted(methods & {"GET", "POST", "PUT", "DELETE",
                                             "PATCH", "HEAD", "OPTIONS"})
             if not method_list and route.get("methods"):
@@ -1412,8 +1412,8 @@ class ReconCoordinator(CoordinatorContext):
                         parsed_forms = getattr(form_result, "parsed_output", {}) or {}
                         for form in parsed_forms.get("forms", []):
                             _add_form_endpoint(form, url)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    log.debug("swallowed exception: %s", exc, exc_info=True)
                 api_eps = [e for e in self.dkg.query_nodes("Endpoint")
                            if e.get("discovered_by", "").startswith("bootstrap-api-")
                            and e.get("url", "").startswith(url)]
@@ -1448,8 +1448,8 @@ class ReconCoordinator(CoordinatorContext):
                                 await self._api_route_discovery(
                                     getattr(self, "target_host", "") or "", api_url, out
                                 )
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        log.debug("swallowed exception: %s", exc, exc_info=True)
                 scanned = True
 
             elif resp_len < 500000:
@@ -1574,8 +1574,8 @@ class ReconCoordinator(CoordinatorContext):
                         parsed = getattr(form_result, "parsed_output", {})
                         for form in parsed.get("forms", []):
                             _add_form_endpoint(form, url)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    log.debug("swallowed exception: %s", exc, exc_info=True)
 
             elif "json" in sample.lower() or sample.strip().startswith("{"):
                 # JSON/API response — structural parse + HTTP method validation.
@@ -1586,8 +1586,8 @@ class ReconCoordinator(CoordinatorContext):
                         getattr(self, "target_host", "") or "", url, sample[:100000]
                     )
                     scanned = True
-                except Exception:
-                    pass
+                except Exception as exc:
+                    log.debug("swallowed exception: %s", exc, exc_info=True)
 
             else:
                 # Medium/large HTML page (500KB-1MB) that isn't JSON/SPA.
@@ -1601,8 +1601,8 @@ class ReconCoordinator(CoordinatorContext):
                         for form in parsed.get("forms", []):
                             _add_form_endpoint(form, url)
                     scanned = True
-                except Exception:
-                    pass
+                except Exception as exc:
+                    log.debug("swallowed exception: %s", exc, exc_info=True)
 
             # Mark scanned to prevent redundant agent work
             if scanned:
@@ -1665,8 +1665,8 @@ class ReconCoordinator(CoordinatorContext):
                                 "response_size": len(out),
                                 "discovered_by": "cms-probe",
                             })
-                except Exception:
-                    pass
+                except Exception as exc:
+                    log.debug("swallowed exception: %s", exc, exc_info=True)
 
         # Run deep recon in parallel across endpoints (max 6 concurrent)
         batch = [ep for ep in endpoints[:8] if ep.get("url","").startswith("http")]
@@ -1872,8 +1872,8 @@ class ReconCoordinator(CoordinatorContext):
                 # must not look like an active WAF.
                 try:
                     await self.probe_client.get_baseline(url)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    log.debug("swallowed exception: %s", exc, exc_info=True)
                 probe_results = await self.probe_client.send_all_probe_classes(url, param)
                 all_probe_results.extend(probe_results)
                 all_responses.extend(

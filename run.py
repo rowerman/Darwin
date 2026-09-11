@@ -45,7 +45,8 @@ async def main():
     parser.add_argument("--username", "-u", default=None, help="Username for auto-login")
     parser.add_argument("--password", "-p", default=None, help="Password for auto-login")
     parser.add_argument("--time-budget", type=int, default=1200, help="Time budget in seconds (default: 1200)")
-    parser.add_argument("--token-budget", type=int, default=200000, help="Token budget (default: 200000)")
+    parser.add_argument("--token-budget", type=int, default=0,
+                        help="Token hard cap. 0 = unlimited (default; usage is still metered and warned)")
     parser.add_argument("--port-range", "-r", default="10000-14000",
                         help="Nmap port range. Default '10000-14000' for benchmark. Pass '' for full scan.")
     args = parser.parse_args()
@@ -158,13 +159,16 @@ async def main():
     print(f"Time elapsed:   {result.time_elapsed:.1f}s")
     print(f"Defense found:  {result.defense_detected}")
     print(f"WAF bypassed:   {result.waf_bypassed}")
+    if result.stop_reason:
+        print(f"Stop reason:    {result.stop_reason}")
     if result.error:
         print(f"Error:          {result.error}")
     print(f"{'='*50}")
     print(
         f"[RESULT] success={result.success} flag={result.flag or '(none)'} "
         f"steps={result.steps} tokens={result.tokens_used} "
-        f"elapsed={result.time_elapsed:.1f}s",
+        f"elapsed={result.time_elapsed:.1f}s "
+        f"stop={result.stop_reason or 'n/a'}",
         flush=True,
     )
 

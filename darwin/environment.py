@@ -144,7 +144,7 @@ class EnvironmentClassifier:
                     if matched:
                         public = True
                         signals.append("dkg:cloud-evidence:" + matched[0])
-            except Exception:
+            except Exception:  # silent-ok: best-effort; failure is non-fatal
                 pass
 
         # Preserve order while removing repeated signals/providers.

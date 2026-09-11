@@ -118,6 +118,7 @@ from darwin.prompts.orchestrator import (
     SYSTEM_PROMPT_LOGIN,
     SYSTEM_PROMPT_BYPASS,
     PLANNER_TASKS_SCHEMA_EXAMPLE,
+    SUCCESS_CONDITION_GUIDE,
 )
 from darwin.prompts.planner import SYSTEM_PROMPT_PLANNER
 from darwin.prompts.evaluator import SYSTEM_PROMPT_EVALUATOR
@@ -597,8 +598,8 @@ class PlanCoordinator(CoordinatorContext):
                                 else:
                                     try:
                                         _ssh_port = int(_cmd_words[i + 1])
-                                    except ValueError:
-                                        pass
+                                    except ValueError as exc:
+                                        log.debug("swallowed exception: %s", exc, exc_info=True)
                             elif w == "-l" and i + 1 < len(_cmd_words):
                                 _ssh_user = _cmd_words[i + 1]
                             elif "@" in w and not w.startswith("-"):
@@ -1123,8 +1124,8 @@ class PlanCoordinator(CoordinatorContext):
                             try:
                                 _br = rag.search(_bq, top_k=5, min_keyword_overlap=0.2)
                                 _broad_results.extend(_br)
-                            except Exception:
-                                pass
+                            except Exception as exc:
+                                log.debug("swallowed exception: %s", exc, exc_info=True)
                         # Merge: deduplicate by title, keep highest-score copy
                         seen_titles: set[str] = set()
                         merged: list[dict] = []
@@ -1185,8 +1186,8 @@ class PlanCoordinator(CoordinatorContext):
                                     if _rt and _rt not in _cloud_seen:
                                         _cloud_seen.add(_rt)
                                         _cloud_merged.append(_r)
-                            except Exception:
-                                pass
+                            except Exception as exc:
+                                log.debug("swallowed exception: %s", exc, exc_info=True)
                         if _cloud_merged:
                             # Merge cloud results with existing RAG results:
                             # cloud-specific knowledge about privilege
@@ -1276,8 +1277,8 @@ class PlanCoordinator(CoordinatorContext):
                                         "url": ep_url, "status": st,
                                         "size": len(out),
                                     })
-                            except Exception:
-                                pass
+                            except Exception as exc:
+                                log.debug("swallowed exception: %s", exc, exc_info=True)
 
                         if _probed:
                             # Endpoint exists if status is not 404 (includes 200, 403,
@@ -1305,9 +1306,17 @@ class PlanCoordinator(CoordinatorContext):
                             title = r.get("title", "") or ""
                             desc = (r.get("description", "") or "")
                             techniques = r.get("techniques", []) or []
-                            tech_str = (" Techniques: " + "; ".join(str(t) for t in techniques[:3])) if techniques else ""
+                            # Techniques carry the concrete steps (endpoint,
+                            # header, verb); render them verbatim and treat the
+                            # description as secondary context so truncation
+                            # cannot drop an actionable step.
+                            tech_str = (
+                                " Steps: " + "; ".join(str(t) for t in techniques[:3])
+                            ) if techniques else ""
                             snippet = (desc[:250] + "...") if len(desc) > 250 else desc
-                            lines.append(f"- **{title}**: {snippet}{tech_str}")
+                            lines.append(f"- **{title}**:{tech_str}")
+                            if snippet:
+                                lines.append(f"  Context: {snippet}")
                             lines.append("")
                         lines.append("**CRITICAL: RAG results above contain proven attack techniques "
                                      "and credential combinations for the detected services. "
@@ -1322,13 +1331,13 @@ class PlanCoordinator(CoordinatorContext):
                             for tech in (r.get("techniques", []) or []):
                                 tech_str = str(tech)
                                 # Match payload-like patterns: ${...}, Fn::..., {{...}}
-                                if (_re.search(r'\$\{[^}]+\}', tech_str)
+                                if (re.search(r'\$\{[^}]+\}', tech_str)
                                         or 'Fn::' in tech_str
                                         or '{{' in tech_str):
                                     _rag_payloads.append(tech_str[:200])
                             # Also check description for payload patterns
                             desc = r.get("description", "") or ""
-                            if _re.search(r'\$\{[^}]+\}', desc):
+                            if re.search(r'\$\{[^}]+\}', desc):
                                 _rag_payloads.append(desc[:200])
                         if _rag_payloads:
                             _deduped = list(dict.fromkeys(_rag_payloads))  # preserve order, remove dups
@@ -1338,8 +1347,10 @@ class PlanCoordinator(CoordinatorContext):
                                 lines.append(f"  - `{_p}`")
 
                         rag_context = "\n".join(lines)
-        except Exception:
-            pass
+        except Exception as exc:
+            # This block feeds the plan prompt: swallowing it silently hid a
+            # NameError for weeks and left every plan without RAG knowledge.
+            log.warning("Plan RAG injection failed: %s", exc, exc_info=True)
 
         # If RAG returned nothing, provide a clear fallback so the prompt
         # doesn't have a blank "Attack Pattern Knowledge" section.
@@ -1460,8 +1471,8 @@ class PlanCoordinator(CoordinatorContext):
         for _gw in (self.attack_gateway, self.recon_gateway):
             try:
                 _all_tool_defs.extend(_gw.get_tool_definitions())
-            except Exception:
-                pass
+            except Exception as exc:
+                log.debug("swallowed exception: %s", exc, exc_info=True)
         _tool_card = render_tool_contract_card(_all_tool_defs)
 
         # Tool candidates derived from the current hypotheses.
@@ -1563,10 +1574,13 @@ have already been completed. Each task should test or exploit a vulnerability:
 - priority (optional): 0.0-1.0 execution priority hint
 
 **Task object contract**: each task MUST contain ONLY these keys:
-id, dependent_task_ids, instruction, tool, params, reason, priority.
+id, dependent_task_ids, instruction, tool, params, success_condition,
+reason, priority.
 Do NOT include "status", "dependencies", or any other key — the system
 owns task status. dependent_task_ids is a JSON array of strings (empty
 array for independent tasks). params is a JSON object of tool arguments.
+
+{SUCCESS_CONDITION_GUIDE}
 
 **CRITICAL: Generate at most 15 tasks.** Include diverse attack strategies
 (SQLi, XSS, CMDi, LFI, file upload, auth bypass, etc.) even for medium-confidence
@@ -1657,6 +1671,10 @@ Output ONLY valid JSON array (3-20 tasks depending on complexity. More tasks != 
                         status=TaskStatus.READY,
                         source=t.source,
                         vuln_type=t.vuln_type,
+                        success_condition=(
+                            dict(t.success_condition)
+                            if isinstance(t.success_condition, dict) else None
+                        ),
                     )
                     for t in _plan_model
                 ]
@@ -1670,8 +1688,8 @@ Output ONLY valid JSON array (3-20 tasks depending on complexity. More tasks != 
             # Include MCP tools in validation set
             try:
                 all_valid_tools += self.mcp_pool.get_tool_names()
-            except Exception:
-                pass
+            except Exception as exc:
+                log.debug("swallowed exception: %s", exc, exc_info=True)
             for t in tasks:
                 tool = str((t.action or {}).get("tool", "") or "")
                 if tool and tool not in all_valid_tools:
@@ -1943,6 +1961,10 @@ Output ONLY valid JSON array (3-20 tasks depending on complexity. More tasks != 
             status=status,
             source=str(d.get("source", "") or ""),
             vuln_type=str(d.get("vuln_type", "") or ""),
+            success_condition=(
+                dict(d["success_condition"])
+                if isinstance(d.get("success_condition"), dict) else None
+            ),
         )
 
     def _topological_sort(self, tasks: list[Task]) -> list[Task]:
@@ -2324,8 +2346,8 @@ Output ONLY valid JSON array (3-20 tasks depending on complexity. More tasks != 
                     for p in _paths if getattr(p, "path_id", "")
                 ]
             })
-        except Exception:
-            pass
+        except Exception as exc:
+            log.debug("swallowed exception: %s", exc, exc_info=True)
         done = sum(1 for t in plan.tasks if t.status is TaskStatus.SUCCESS)
         failed = sum(
             1 for t in plan.tasks
@@ -2498,6 +2520,7 @@ Output ONLY valid JSON array (3-20 tasks depending on complexity. More tasks != 
             svc_name = svc_match.group(0) if svc_match else ""
             if svc_name:
                 try:
+                    from darwin.rag import get_rag
                     rag = get_rag()
                     rag_results = rag.search(f"{svc_name} exploitation authentication bypass techniques", top_k=3, category="", min_keyword_overlap=0.1)
                     if rag_results:
@@ -2511,8 +2534,8 @@ Output ONLY valid JSON array (3-20 tasks depending on complexity. More tasks != 
                             f"Based on this knowledge, re-evaluate whether the task can be fixed "
                             f"by using the correct tool/protocol for {svc_name}."
                         )
-                except Exception:
-                    pass
+                except Exception as exc:
+                    log.debug("swallowed exception: %s", exc, exc_info=True)
 
         # Detect timeout/hang failures and add targeted hints
         timeout_hint = ""
@@ -2582,8 +2605,8 @@ Output ONLY valid JSON:
                     "credentials": result.get("credentials", {}),
                     "reason": result.get("reason", ""),
                 }
-        except Exception:
-            pass
+        except Exception as exc:
+            log.debug("swallowed exception: %s", exc, exc_info=True)
         return None
 
     async def _extract_credentials_from_task(
@@ -2751,8 +2774,8 @@ Output ONLY valid JSON:
                     username=username, password=password,
                     source="task_discovery",
                 )
-            except Exception:
-                pass
+            except Exception as exc:
+                log.debug("swallowed exception: %s", exc, exc_info=True)
             log.info(
                 "Credential extracted from task output: %s:*** → DKG + CTEG",
                 username,
@@ -2877,8 +2900,8 @@ Output ONLY valid JSON:
         # the tasks blocked on them into the replanning queue.
         try:
             self._migrate_blocked_path_tasks()
-        except Exception:
-            pass
+        except Exception as exc:
+            log.debug("swallowed exception: %s", exc, exc_info=True)
 
         # Mark task status with retry enforcement
         _task_tool = str((task.action or {}).get("tool", "") or "")
@@ -2898,8 +2921,8 @@ Output ONLY valid JSON:
         # status to decide which rationale is still active.
         try:
             self.memory.record_task(task)
-        except Exception:
-            pass
+        except Exception as exc:
+            log.debug("swallowed exception: %s", exc, exc_info=True)
 
         # Build prompt: what just happened + current plan + new DKG state
         state = self._get_state()
@@ -2934,8 +2957,8 @@ Output ONLY valid JSON:
                             lines.append(f"{label}: {json.dumps(rows[:8], default=str)[:1200]}")
                     _topology_diff_text = "\n" + "\n".join(lines) + "\n"
             self._topology_before = None
-        except Exception:
-            pass
+        except Exception as exc:
+            log.debug("swallowed exception: %s", exc, exc_info=True)
         # O1.2: diff-based discoveries — the review LLM sees exactly which
         # nodes this task added to the world model. Falls back to the legacy
         # "latest endpoints/credentials" view when there is no per-task
@@ -3169,8 +3192,8 @@ Output ONLY valid JSON:
                     f"## Preserved Memory (rationale & evidence)\n"
                     f"{_mem_ctx[:2000]}\n"
                 )
-        except Exception:
-            pass
+        except Exception as exc:
+            log.debug("swallowed exception: %s", exc, exc_info=True)
 
         # P15 G2: inject DKG node provenance so the replan LLM can judge
         # how trustworthy each world-state fact is.
@@ -3182,8 +3205,8 @@ Output ONLY valid JSON:
                     f"## World State Provenance (source & evidence)\n"
                     f"{_prov_ctx}\n"
                 )
-        except Exception:
-            pass
+        except Exception as exc:
+            log.debug("swallowed exception: %s", exc, exc_info=True)
 
         # O1.3: unified cognition snapshot — beliefs (hypotheses with
         # confidence/status), plan summary, defense and preserved rationale,
@@ -3193,15 +3216,15 @@ Output ONLY valid JSON:
             _belief_text = self._belief_context(compact=True)
             if _belief_text:
                 _belief_text = f"\n{_belief_text}\n"
-        except Exception:
-            pass
+        except Exception as exc:
+            log.debug("swallowed exception: %s", exc, exc_info=True)
 
         _review_tool_defs: list[dict] = []
         for _gw in (self.attack_gateway, self.recon_gateway):
             try:
                 _review_tool_defs.extend(_gw.get_tool_definitions())
-            except Exception:
-                pass
+            except Exception as exc:
+                log.debug("swallowed exception: %s", exc, exc_info=True)
         _review_tool_card = render_tool_contract_card(_review_tool_defs)
 
         prompt = (
@@ -3244,8 +3267,9 @@ Output ONLY valid JSON:
             f"tasks. Prefer 10-20 high-quality exploitation tasks over 50+ probe tasks.\n\n"
             f"Output the COMPLETE updated task list as a JSON array. "
             f"Each task object MUST contain ONLY these keys: id, dependent_task_ids, "
-            f"instruction, tool, params, reason, priority. Do NOT include status or "
-            f"dependencies — the system owns task status. "
+            f"instruction, tool, params, success_condition, reason, priority. Do NOT "
+            f"include status or dependencies — the system owns task status. "
+            f"{SUCCESS_CONDITION_GUIDE}\n"
             f"Preserve done/failed tasks. Output ONLY valid JSON array.\n\n"
             f"## Tool Contract Card (use EXACT names/params)\n"
             f"{_review_tool_card}"

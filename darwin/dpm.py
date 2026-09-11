@@ -476,7 +476,7 @@ class DefensePerceptionModule:
             if "defense_category" in result:
                 dsv.defense_category = DefenseCategory(result["defense_category"])
             dsv.observation_count += 1
-        except (json.JSONDecodeError, ValueError):
+        except (json.JSONDecodeError, ValueError):  # silent-ok: parse fallback
             pass  # keep rule-based result
 
         return dsv
@@ -649,7 +649,7 @@ async def _probe_k8s_defenses(profile: CloudDefenseProfile) -> None:
         out = stdout.decode("utf-8", errors="replace")
         if "yes" in out.lower():
             profile.rbac_enabled = True
-    except Exception:
+    except Exception:  # silent-ok: best-effort; failure is non-fatal
         pass
 
     # Detect admission controllers: try creating a pod with invalid config
@@ -667,7 +667,7 @@ async def _probe_k8s_defenses(profile: CloudDefenseProfile) -> None:
         if any(kw in combined.lower() for kw in
                ["admission webhook", "denied by", "gatekeeper", "kyverno", "opa"]):
             profile.admission_controller_detected = True
-    except Exception:
+    except Exception:  # silent-ok: best-effort; failure is non-fatal
         pass
 
 
@@ -690,7 +690,7 @@ async def _probe_iam_boundaries(profile: CloudDefenseProfile) -> None:
                 profile.permission_boundary_detected = True
             if "explicit deny" in combined.lower() or "scp" in combined.lower():
                 profile.scp_restrictions_detected = True
-    except Exception:
+    except Exception:  # silent-ok: best-effort; failure is non-fatal
         pass
 
     # Try to enumerate CloudTrail (if accessible, monitoring is active)
@@ -705,7 +705,7 @@ async def _probe_iam_boundaries(profile: CloudDefenseProfile) -> None:
         if "trailARN" in out or "IsMultiRegionTrail" in out:
             profile.cloudtrail_active = True
             profile.cloud_monitoring_confidence += 0.7
-    except Exception:
+    except Exception:  # silent-ok: best-effort; failure is non-fatal
         pass
 
     # GuardDuty detection (inferred)

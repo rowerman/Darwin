@@ -233,8 +233,8 @@ class CloudTopologyMapper:
                 ok2, stdout2 = await self._run_discovery("kubectl config current-context", timeout=5)
                 if ok2:
                     cluster_name = stdout2.strip()
-            except Exception:
-                pass
+            except Exception as exc:
+                log.debug("swallowed exception: %s", exc, exc_info=True)
 
             # Get server version
             version = ""
@@ -244,8 +244,8 @@ class CloudTopologyMapper:
                     vm = re.search(r"Server Version: v?(\S+)", out3)
                     if vm:
                         version = vm.group(1)
-            except Exception:
-                pass
+            except Exception as exc:
+                log.debug("swallowed exception: %s", exc, exc_info=True)
 
             topology.clusters.append({
                 "name": cluster_name,
@@ -700,10 +700,10 @@ class CloudTopologyMapper:
                             "source": "imds",
                             "imds_version": 2 if (token and len(token) > 10) else 1,
                         }
-                    except Exception:
-                        pass
-        except Exception:
-            pass
+                    except Exception as exc:
+                        log.debug("swallowed exception: %s", exc, exc_info=True)
+        except Exception as exc:
+            log.debug("swallowed exception: %s", exc, exc_info=True)
         return None
 
     async def _discover_aws_roles(self, topology: CloudTopology) -> None:
@@ -777,8 +777,8 @@ class CloudTopologyMapper:
                                 "action": statement.get("Action", ""),
                                 "condition": condition,
                             })
-        except Exception:
-            pass
+        except Exception as exc:
+            log.debug("swallowed exception: %s", exc, exc_info=True)
         return trusts
 
     @staticmethod

@@ -380,7 +380,7 @@ class DarwinRAG:
                             continue
                         if score > 0:
                             all_scored.append((float(score), entries[i]))
-                except Exception:
+                except Exception:  # silent-ok: best-effort; failure is non-fatal
                     pass  # fall through to TF-IDF
             elif coll in self._vectorizers:
                 # TF-IDF search

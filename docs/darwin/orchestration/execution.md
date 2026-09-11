@@ -20,7 +20,38 @@
 `core/runtime.py`、`core/executor.py`、`core/evaluator.py`、`dave.py`、
 `ports.py`。
 
-已迁移的 curl/SSRF 任务在参数完整时按计划 direct 执行；Runtime Adapter 保留底层 stderr、退出码和规范化结果供 Evaluator 使用。
+计划优先执行：`_plan_params_complete()` 用工具自身的 ToolSpec（必填参数，
+经网关别名归一化）判断计划是否可直接执行，参数齐全即按计划 direct 执行，
+不再依赖固定的 `_direct_tools` 白名单——计划里的写入调用（如
+`http_method_probe` method=PUT）不会被 LLM 换成别的工具。参数不齐才回退到
+LLM 选择工具。Runtime Adapter 保留底层 stderr、退出码和规范化结果供
+Evaluator 使用。
+
+## 任务成功判定（success_condition）
+
+`_verify_success_condition()` 按任务自身声明的完成条件判定成败，支持
+`tool_success` / `body_contains` / `body_not_contains` / `http_status_in` /
+`flag_captured` / `probe`（一次有界 GET 读回副作用）。条件未达成即判
+FAILED，进入既有 fix-retry 并把"未达成的条件 + 实际观测"写入 result_text。
+计划未给条件时：探索类任务维持原语义，写入类任务（POST/PUT/PATCH/DELETE、
+upload 等）自动合成 `tool_success`，避免"计划 PUT、实际 GET 也算成功"。
+任务日志记录 `success_condition` 事件（condition/met/detail）。
+
+## 身份传播探测
+
+`_probe_identity_propagation()`：当某次读取被 401/403 拒绝，且目标自身在
+别处披露过身份/令牌值（`caller_arn`、`arn:`、token 类字段）时，用**观测到的
+原值**按通用 header 约定（X-Caller-ARN / X-Amz-Caller-Arn / Authorization /
+X-User / X-Username / X-User-Id）重试被拒 URL；有界（≤10 次请求）且跨任务
+去重（`_identity_probe_tried`），命中 flag 走 DAVE 校验。
+
+## 无证据猜测的兜底
+
+`_systematic_exploit_pass(extra_vulns=...)` 接受分析阶段推迟的
+`speculative` 猜测：它们不进入研究、不进计划、不写 DKG Vulnerability 节点，
+只在强制重考虑轮作为确定性探测输入，仍受 `MAX_TESTS` 与去重约束。
+HTTP 端点只尝试合同里确实带 HTTP 参数（url/target_url/ssrf_url）的工具；
+去重键含参数指纹，避免后续轮次因"同 tool+url+param"被静默跳过。
 
 systematic exploit pre-pass 仅在本轮内部去重；无明确成功时不会阻断 Runtime
 计划任务，后续可用不同参数或策略再次尝试。

@@ -7,6 +7,9 @@
 ## 关键入口
 
 - `_analyze_phase()`：LLM 漏洞分析 + DKG 增强（`_augment_from_dkg`）。
+  `vulnerabilities` 只接收有观测证据的假设；无证据的模式猜测写入
+  `speculative`，只保存在内存（`speculative_hypotheses`），不进入研究、
+  计划与 DKG Vulnerability 节点，仅在强制重考虑轮作为确定性探测输入。
 - `_service_research()` / `_active_service_research()`：服务与主动研究。
 - `_research_phase()`：研究主流程（RAG / 搜索引擎 / exploit-db）。
 - `_probe_endpoints()`：端点探测。

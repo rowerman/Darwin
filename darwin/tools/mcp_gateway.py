@@ -33,6 +33,8 @@ from darwin.tools.spec import (
 )
 from darwin.tools.paths import tool_path_env
 
+log = logging.getLogger(__name__)
+
 # Pipefail-capable shell.  ``create_subprocess_shell`` passes the command to
 # ``<executable> -c <cmd>``; without an explicit prefix, a trailing
 # ``| head`` would mask a failing command's exit status.
@@ -98,15 +100,15 @@ async def _kill_and_reap(proc: asyncio.subprocess.Process) -> None:
     """Terminate a timed-out child and drain its pipes before returning."""
     try:
         proc.kill()
-    except (ProcessLookupError, OSError):
-        pass
+    except (ProcessLookupError, OSError) as exc:
+        log.debug("swallowed exception: %s", exc, exc_info=True)
     try:
         await asyncio.wait_for(proc.communicate(), timeout=2.0)
     except (asyncio.TimeoutError, ProcessLookupError, OSError):
         try:
             await asyncio.wait_for(proc.wait(), timeout=0.5)
-        except (asyncio.TimeoutError, ProcessLookupError, OSError):
-            pass
+        except (asyncio.TimeoutError, ProcessLookupError, OSError) as exc:
+            log.debug("swallowed exception: %s", exc, exc_info=True)
 
 
 @dataclass
@@ -321,8 +323,8 @@ class MCPGateway:
                     try:
                         if proc is not None:
                             await _kill_and_reap(proc)
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        log.debug("swallowed exception: %s", exc, exc_info=True)
 
             elapsed = (time.perf_counter() - start) * 1000
             result = ToolResult(
@@ -472,8 +474,8 @@ class MCPGateway:
                     try:
                         if proc is not None:
                             await _kill_and_reap(proc)
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        log.debug("swallowed exception: %s", exc, exc_info=True)
 
             elapsed = (time.perf_counter() - start) * 1000
             return ToolResult(
@@ -646,6 +648,23 @@ class MCPGateway:
     def get_tool_names(self) -> List[str]:
         """List all registered tool names."""
         return list(self._registry.keys())
+
+    def normalize_params(self, name: str, params: Dict[str, Any]) -> Dict[str, Any]:
+        """Public form of the dispatch-time parameter normalization.
+
+        Callers that need to know which parameters a tool would actually
+        receive (e.g. the plan-first execution check in the orchestrator) must
+        not re-implement alias handling, so this exposes the same rules the
+        call path applies. Unknown tools yield an empty dict.
+        """
+        entry = self._registry.get(name)
+        if entry is None:
+            return {}
+        try:
+            return self._normalize_params(name, dict(params or {}), entry)
+        except Exception as exc:
+            self._log.warning("normalize_params failed for %s: %s", name, exc)
+            return {}
 
     def get_tool_specs(self) -> Dict[str, ToolSpec]:
         """Return {tool_name: ToolSpec} for every registered tool.

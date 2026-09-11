@@ -69,7 +69,7 @@ class KnowledgeBase:
                                 setattr(ke, field_name, val)
                         self.entries.append(ke)
                         self._index_entry(ke, len(self.entries) - 1)
-            except Exception:
+            except Exception:  # silent-ok: best-effort; failure is non-fatal
                 pass  # Skip malformed files
 
     def _index_entry(self, entry: KnowledgeEntry, idx: int) -> None:

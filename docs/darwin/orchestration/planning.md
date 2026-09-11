@@ -7,6 +7,9 @@
 ## 关键入口
 
 - `_generate_exploitation_plan()`：基于 DKG/CTEG/注册表生成利用计划。
+  RAG「Attack Pattern Knowledge」按 techniques 优先渲染并注入 prompt；
+  该块异常会记 warning（历史上被静默吞掉，导致所有计划都拿不到 RAG 步骤）。
+  计划任务必须带 `success_condition`（见 core/schemas.md），计划评审同样透传。
 - `_generate_with_registry_lookup()`：注册表查询 + LLM 生成（经门面转发，
   保证测试/调用方对门面的 patch 生效）；查询轮次耗尽且内容无效时执行一次
   无工具 JSON-only 收敛重试；DSML 工具调用会先被 `LLMSession` 归一化，最终

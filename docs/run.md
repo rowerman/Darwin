@@ -16,6 +16,9 @@ CLI 启动层，位于 `Orchestrator.run()` 之前。
 ## 输入/输出概览
 
 输入来自命令行和 `config/` 配置；输出为一次 `TaskResult` 的摘要、flag 和错误信息。
+`--token-budget` 默认 `0` = 不限（用量仍计量，跨 200k 只告警）；`--time-budget`
+是主要约束。摘要额外打印 `Stop reason`（来自 `TaskResult.stop_reason`），
+用于解释主循环为何结束。
 
 ## 相关模块
 
@@ -28,4 +31,3 @@ CLI 启动层，位于 `Orchestrator.run()` 之前。
 ## 维护提示
 
 新增 CLI 参数时同步更新 README、配置说明和本导航文档。
-

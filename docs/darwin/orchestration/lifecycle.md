@@ -38,3 +38,14 @@
   约定，不含任何场景名。
 - `Result.tokens_used` 取 `LLMSession.total_tokens`（累计真实用量），
   `token_count` 仅表示当前上下文规模。
+- token 预算默认 `0` = 不限：`_tokens_exceeded()` 只在累计用量跨过 200k
+  软上限时记一次 warning，不再终止运行；运行由时间预算约束。传
+  `--token-budget N`（N>0）可恢复硬上限语义。
+- 主循环退出必须可解释：`_should_terminate()` 的每条分支都会调用
+  `_set_stop_reason()`，原因写入 task log 事件 `run_stopped` 与
+  `TaskResult.stop_reason`（run.py 也会打印 `Stop reason` 行）。
+- solo 耗尽不再直接终止：`_request_forced_reconsideration()` 在剩余时间
+  `> max(60s, 20%×budget)` 时最多批准 2 轮强制 [RECONSIDER] 计划评审
+  （重置 `_plan_review_exhausted`，并要求产出新任务或明确无可行动作）；
+  同时置 `_force_plan_reconsider`，让该轮的确定性探测可以消费被推迟的
+  无证据猜测（见 execution.md 的 speculative 兜底）。

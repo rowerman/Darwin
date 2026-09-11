@@ -108,21 +108,21 @@ class MCPClient:
             self._reader_task.cancel()
             try:
                 await self._reader_task
-            except asyncio.CancelledError:
-                pass
+            except asyncio.CancelledError as exc:
+                log.debug("swallowed exception: %s", exc, exc_info=True)
         if self._proc:
             try:
                 self._proc.stdin.close()
-            except Exception:
-                pass
+            except Exception as exc:
+                log.debug("swallowed exception: %s", exc, exc_info=True)
             try:
                 self._proc.terminate()
                 await asyncio.wait_for(self._proc.wait(), timeout=5)
             except asyncio.TimeoutError:
                 self._proc.kill()
                 await self._proc.wait()
-            except Exception:
-                pass
+            except Exception as exc:
+                log.debug("swallowed exception: %s", exc, exc_info=True)
         self._initialized = False
 
     # ── Tool Discovery ────────────────────────────────────────────
@@ -216,8 +216,8 @@ class MCPClient:
         if first_str.lower().startswith("content-length:"):
             try:
                 content_length = int(first_str.split(":", 1)[1].strip())
-            except ValueError:
-                pass
+            except ValueError as exc:
+                log.debug("swallowed exception: %s", exc, exc_info=True)
 
         if content_length > 0:
             # Read remaining headers until empty line
@@ -231,8 +231,8 @@ class MCPClient:
                 if line.lower().startswith("content-length:"):
                     try:
                         content_length = int(line.split(":", 1)[1].strip())
-                    except ValueError:
-                        pass
+                    except ValueError as exc:
+                        log.debug("swallowed exception: %s", exc, exc_info=True)
 
         if content_length <= 0:
             return None
@@ -315,8 +315,8 @@ class MCPClientPool:
             for t in pending:
                 try:
                     await t
-                except (asyncio.CancelledError, Exception):
-                    pass
+                except (asyncio.CancelledError, Exception) as exc:
+                    log.debug("swallowed exception: %s", exc, exc_info=True)
         except Exception:
             for t in tasks:
                 t.cancel()
