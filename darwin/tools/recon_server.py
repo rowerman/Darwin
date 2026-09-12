@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 from darwin.tools.mcp_gateway import MCPGateway, ToolResult
+from darwin.tools.params import coerce_body, normalize_headers
 from darwin.tools.paths import resolve_wordlist
 from darwin.tools.spec import auto_spec
 
@@ -795,28 +796,48 @@ def register_recon_tools(gateway: MCPGateway) -> MCPGateway:
         timeout=35,
     )
 
-    # ── HTTP POST tool ──────────────────────────────────────────
-    async def _http_post(url: str, data: str = "", headers: str = "",
-                        cookie: str = "", content_type: str = "application/x-www-form-urlencoded",
-                        insecure: bool = False) -> ToolResult:
+    # ── HTTP write tool (POST by default, method= for PUT/PATCH/DELETE) ──
+    _DEFAULT_FORM_CT = "application/x-www-form-urlencoded"
+    _HTTP_WRITE_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
+
+    async def _http_post(url: str, data: Any = "", headers: Any = "",
+                        cookie: str = "", content_type: str = _DEFAULT_FORM_CT,
+                        method: str = "POST", insecure: bool = False) -> ToolResult:
         import urllib.request as _ur
         import urllib.error as _ue
         import ssl
+        _method = str(method or "POST").strip().upper() or "POST"
+        if _method not in _HTTP_WRITE_METHODS:
+            return ToolResult(
+                tool_name="http_post", success=False, stdout="",
+                stderr=(
+                    f"unsupported method '{method}' for http_post — use one of "
+                    f"{sorted(_HTTP_WRITE_METHODS)} (reads: curl_get, "
+                    "arbitrary verbs/OPTIONS: http_method_probe)"
+                ),
+                exit_code=2, elapsed_ms=0,
+            )
         try:
             ctx = ssl.create_default_context()
             if insecure:
                 ctx.check_hostname = False
                 ctx.verify_mode = ssl.CERT_NONE
-            hdrs = {"Content-Type": content_type}
+            hdrs = normalize_headers(headers)
             if cookie:
                 hdrs["Cookie"] = cookie.strip().rstrip(";")
-            if headers:
-                for h in headers.split("|"):
-                    if ":" in h:
-                        k, v = h.split(":", 1)
-                        hdrs[k.strip()] = v.strip()
-            body = data.encode() if isinstance(data, str) else data
-            req = _ur.Request(url, data=body, headers=hdrs, method="POST")
+            body, _inferred_ct = coerce_body(data)
+            # Explicit Content-Type wins, then an explicit non-default
+            # content_type argument, then the type inferred from the body.
+            _explicit_ct = next(
+                (v for k, v in hdrs.items() if k.lower() == "content-type"), "",
+            )
+            if _explicit_ct:
+                hdrs["Content-Type"] = _explicit_ct
+            elif content_type and content_type != _DEFAULT_FORM_CT:
+                hdrs["Content-Type"] = content_type
+            else:
+                hdrs["Content-Type"] = _inferred_ct or content_type or _DEFAULT_FORM_CT
+            req = _ur.Request(url, data=body, headers=hdrs, method=_method)
             with _ur.urlopen(req, timeout=30, context=ctx) as resp:
                 rbody = resp.read().decode(errors="replace")
                 rhdrs = dict(resp.headers)
@@ -825,7 +846,9 @@ def register_recon_tools(gateway: MCPGateway) -> MCPGateway:
                     stdout=f"HTTP {resp.status}\n" + "\n".join(
                         f"{k}: {v}" for k, v in rhdrs.items()) + f"\n\n{rbody[:8000]}",
                     stderr="", exit_code=0, elapsed_ms=0,
-                    parsed_output={"status": resp.status, "headers": rhdrs, "body": rbody[:8000]},
+                    parsed_output={"status": resp.status, "headers": rhdrs,
+                                   "body": rbody[:8000], "method": _method,
+                                   "url": url},
                 )
         except _ue.HTTPError as e:
             # 4xx/5xx is a normal HTTP answer, not a transport failure: keep
@@ -844,31 +867,38 @@ def register_recon_tools(gateway: MCPGateway) -> MCPGateway:
                 stderr=f"HTTP Error {getattr(e, 'code', '?')}: {getattr(e, 'reason', '')}",
                 exit_code=int(getattr(e, "code", 1) or 1), elapsed_ms=0,
                 parsed_output={"status": getattr(e, "code", None),
-                               "headers": rhdrs, "body": rbody[:8000]},
+                               "headers": rhdrs, "body": rbody[:8000],
+                               "method": _method, "url": url},
             )
         except Exception as e:
             return ToolResult(tool_name="http_post", success=False, stdout="", stderr=str(e), exit_code=1, elapsed_ms=0)
 
     _http_post_desc = (
-        "Send an HTTP POST request with a body (data=...). Use insecure=true "
-        "for self-signed TLS and cookie= for a session. 4xx/5xx responses are "
+        "Send an HTTP write request with a body. method defaults to POST and "
+        "also accepts PUT/PATCH/DELETE — use method=PUT to register/overwrite "
+        "a resource. data may be a raw body string or a dict/list (sent as "
+        "JSON); headers accepts dict/str/list. Use insecure=true for "
+        "self-signed TLS and cookie= for a session. 4xx/5xx responses are "
         "returned with their status, headers and body — read them to tell a "
-        "missing route (404) from a wrong method (405 + Allow). For other "
-        "verbs (PUT/PATCH/DELETE) use http_method_probe with method=..."
+        "missing route (404) from a wrong method (405 + Allow)."
     )
     _http_post_params = {
         "url": {"type": "string", "description": "Target URL"},
-        "data": {"type": "string", "description": "POST body data (key=value&key=value format)"},
-        "headers": {"type": "string", "description": "Optional headers"},
-        "cookie": {"type": "string", "description": "Session cookie string from try_login"},
-        "insecure": {"type": "boolean", "description": "Skip TLS verification for self-signed certs"},
+        "method": {"type": "string", "description": "HTTP write method: POST (default), PUT, PATCH, DELETE", "default": "POST"},
+        "data": {"type": "string", "description": "Request body: raw string, or dict/list sent as JSON"},
+        "headers": {"type": "string", "description": "Optional headers (str, dict or list)"},
+        "cookie": {"type": "string", "description": "Session cookie string from try_login", "default": ""},
+        "content_type": {"type": "string", "description": "Content-Type override (defaults to form; dict/list bodies default to JSON)", "default": _DEFAULT_FORM_CT},
+        "insecure": {"type": "boolean", "description": "Skip TLS verification for self-signed certs", "default": False},
     }
     _http_post_spec = auto_spec(
         name="http_post", description=_http_post_desc,
         parameters=_http_post_params, domain="web",
     )
     # 1.1.0: non-2xx responses now carry status/headers/body as evidence.
-    _http_post_spec.version = "1.1.0"
+    # 1.2.0: optional method= (PUT/PATCH/DELETE) + dict/list data.
+    # 1.3.0: dict/list headers normalized instead of crashing on .split().
+    _http_post_spec.version = "1.3.0"
     gateway.register(
         name="http_post", func=_http_post,
         description=_http_post_desc, parameters=_http_post_params,
@@ -877,8 +907,8 @@ def register_recon_tools(gateway: MCPGateway) -> MCPGateway:
 
     # ── Generic HTTP method probe (OPTIONS/POST/HEAD etc.) ──────
     async def _http_method_probe(
-        url: str, method: str = "OPTIONS", data: str = "",
-        content_type: str = "auto", headers: str = "",
+        url: str, method: str = "OPTIONS", data: Any = "",
+        content_type: str = "auto", headers: Any = "",
         cookie: str = "", insecure: bool = False,
     ) -> ToolResult:
         """Send an arbitrary HTTP method (OPTIONS/POST/HEAD/PUT...) and return
@@ -892,21 +922,17 @@ def register_recon_tools(gateway: MCPGateway) -> MCPGateway:
                 ctx.check_hostname = False
                 ctx.verify_mode = ssl.CERT_NONE
             method = str(method or "OPTIONS").strip().upper()
+            body, _inferred_ct = coerce_body(data)
             if content_type in (None, "", "auto"):
-                content_type = (
+                content_type = _inferred_ct or (
                     "application/x-www-form-urlencoded"
                     if isinstance(data, str) and "=" in data
                     else "application/json"
                 )
-            hdrs = {"Content-Type": content_type}
+            hdrs = normalize_headers(headers)
             if cookie:
                 hdrs["Cookie"] = cookie.strip().rstrip(";")
-            if headers:
-                for h in str(headers).split("|"):
-                    if ":" in h:
-                        k, v = h.split(":", 1)
-                        hdrs[k.strip()] = v.strip()
-            body = data.encode() if isinstance(data, str) else data
+            hdrs.setdefault("Content-Type", content_type)
             req = _ur.Request(url, data=body or None, headers=hdrs, method=method)
             resp = None
             try:
@@ -938,6 +964,8 @@ def register_recon_tools(gateway: MCPGateway) -> MCPGateway:
                         "allow": str(rhdrs.get("Allow", "")),
                         "content_type": str(rhdrs.get("content-type", "")),
                         "body": rbody[:8000],
+                        "method": method,
+                        "url": url,
                     },
                 )
         except Exception as e:

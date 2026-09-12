@@ -28,6 +28,18 @@ _HTTP_TARGET_PARAMS = frozenset(
 # payload injector, then the plain fetcher.
 _HTTP_TOOL_PRIORITY = ("http_method_probe", "http_post", "send_payload", "curl_get")
 
+# Vulnerability families whose exploitation IS a write (publish / register /
+# overwrite a resource). A read-only default tool can never satisfy them, so
+# they resolve to a tool that can express PUT/POST/PATCH/DELETE.
+_WRITE_VULN_KEYWORDS = (
+    "dependency", "supply", "poison", "squat", "publish", "package", "artifact",
+)
+_WRITE_DEFAULT_TOOL = "http_method_probe"
+
+# A plan review regenerates the whole plan, so it is only worth its cost once
+# the previous rewrite has been TESTED by real executions.
+_MIN_EXECUTIONS_BETWEEN_REVIEWS = 3
+
 
 def _pick_http_tool(
     tool_specs: dict, declared_params: dict | None = None,
@@ -71,6 +83,11 @@ from darwin.core.schemas import (
     parse_service_research_findings,
 )
 from darwin.orchestration.structured import render_tool_contract_card
+from darwin.orchestration.execution import (
+    _WRITE_METHODS,
+    _call_method,
+    _planned_write_intent,
+)
 from darwin.core.task import Task, deps_from_task_ids
 from darwin.core.task_graph import TaskGraph, dependency_task_ids
 from darwin.core.belief import (
@@ -1555,6 +1572,11 @@ entries are the authoritative source for service-specific defaults.
 - Tasks targeting DIFFERENT services or vulnerabilities with no shared prerequisites should have empty dependent_task_ids so they can execute in parallel.
 - If 'API self-describing: YES', the root response already documented every route — do NOT
   add directory enumeration, route fuzzing, dirb, gobuster or ffuf tasks for those services.
+- **Write-intent tasks** (publish / register / create / overwrite / upload): the task MUST
+  use a tool that can express the verb (`http_method_probe` with method=PUT/POST/PATCH, or
+  `http_post` with method=PUT) and MUST carry a `probe` success_condition that reads the
+  artifact back. When research gives an exact verb + route, use it verbatim in
+  params.url instead of renaming it to a collection route.
 
 ## Tool Contract Card (use these EXACT tool names and parameters)
 {_tool_card}
@@ -1902,10 +1924,43 @@ Output ONLY valid JSON array (3-20 tasks depending on complexity. More tasks != 
         if "xss" in vt: return "xss_reflection_test"
         if "cmdi" in vt or "command" in vt: return "command_injection_test"
         if "ssti" in vt: return "send_payload"
+        if any(kw in vt for kw in _WRITE_VULN_KEYWORDS):
+            return _WRITE_DEFAULT_TOOL
         if "lfi" in vt or "path" in vt: return "curl_get"
         if "idor" in vt: return "curl_get"
         if "ssrf" in vt: return "curl_get"
         return "curl_get"
+
+    def _render_tool_params(self, tool: str) -> str:
+        """Declared parameter contract of ``tool`` for the fix-analysis prompt.
+
+        The fix LLM only sees the failure text, so without the contract it
+        guesses shapes (dict body, json= key) that the tool does not accept.
+        """
+        for _gw in (self.attack_gateway, self.recon_gateway):
+            try:
+                spec = _gw.get_tool_specs().get(tool)
+            except Exception as exc:
+                log.debug("tool spec lookup failed for %s: %s", tool, exc)
+                continue
+            if spec is None:
+                continue
+            params = dict(getattr(spec, "parameters", {}) or {})
+            if not params:
+                return "  (no declared parameters)"
+            lines = []
+            for name, schema in params.items():
+                schema = schema if isinstance(schema, dict) else {}
+                ptype = str(schema.get("type", "string"))
+                if "default" in schema:
+                    lines.append(
+                        f"  - {name}: {ptype} (optional, "
+                        f"default={schema['default']!r})"
+                    )
+                else:
+                    lines.append(f"  - {name}: {ptype} (REQUIRED)")
+            return "\n".join(lines)
+        return "  (tool contract unavailable)"
 
     @staticmethod
     def _task_from_llm_dict(d: dict) -> Task:
@@ -2558,6 +2613,8 @@ is genuinely not vulnerable to this attack (not fixable).
 
 Task instruction: {instruction}
 Tool called: {tool}
+Tool contract (declared parameters — corrected_params keys MUST be among these):
+{self._render_tool_params(tool)}
 Parameters used: {params_str}
 Tool output:
 {output_trunc}
@@ -2877,6 +2934,81 @@ Output ONLY valid JSON:
 
         return [t for t in tasks if t.id not in _to_remove]
 
+    def _enforce_write_intent(
+        self, tasks: list[Task], pre_review: dict[str, tuple[str, dict]],
+    ) -> list[str]:
+        """Keep a review from destroying the plan's write steps.
+
+        Blocked tasks are not part of the preserved set, so a review replaces
+        them wholesale — and it has been observed replacing a
+        ``http_method_probe(method=PUT)`` task with a POST-only tool, which
+        makes the write unreachable. A replacement is accepted only when it
+        is itself a write that can express the original method; otherwise the
+        pre-review tool/params are restored. Returns the reverted task ids.
+        """
+        reverted: list[str] = []
+        for task in tasks or []:
+            original = (pre_review or {}).get(task.id)
+            if not original:
+                continue
+            orig_tool, orig_params = original
+            orig_method = _call_method(orig_tool, orig_params)
+            if orig_method not in _WRITE_METHODS:
+                continue
+            new_tool = str((task.action or {}).get("tool", "") or "")
+            new_params = dict((task.action or {}).get("params", {}) or {})
+            if new_tool == orig_tool:
+                continue
+            new_method = _call_method(new_tool, new_params)
+            if _planned_write_intent(new_tool, new_params) and (
+                new_method == orig_method or not new_method
+            ):
+                continue
+            log.warning(
+                "[PLAN REVIEW] reverted write task %s: %s(%s) cannot express "
+                "%s — keeping %s",
+                task.id, new_tool or "?", new_method or "-",
+                orig_method, orig_tool,
+            )
+            task.action = {
+                **(task.action or {}),
+                "tool": orig_tool,
+                "params": dict(orig_params),
+            }
+            reverted.append(task.id)
+        return reverted
+
+    def _review_skip_reason(self, task: Task, force: bool = False) -> str:
+        """Why the plan review should be skipped now ("" = run it).
+
+        A review regenerates the whole task list, so it must be paid for by
+        the executions that TESTED the previous rewrite. The first review of
+        a cycle is always allowed; after that the plan needs
+        ``_MIN_EXECUTIONS_BETWEEN_REVIEWS`` executions before another one.
+        A stall review (nothing left to execute) is unavoidable, but a second
+        one with zero executions in between is not.
+        """
+        if force:
+            return ""
+        if not getattr(self, "_review_done_this_cycle", False):
+            return ""
+        executions = int(getattr(self, "_executions_since_review", 0) or 0)
+        if executions >= _MIN_EXECUTIONS_BETWEEN_REVIEWS:
+            return ""
+        if str(getattr(task, "id", "")) != "plan-exhausted":
+            return (
+                f"Skipping plan review after task {task.id}: {executions} "
+                f"executed task(s) since the last review "
+                f"(need {_MIN_EXECUTIONS_BETWEEN_REVIEWS})"
+            )
+        if getattr(self, "_stall_review_since_execution", False):
+            return (
+                "Skipping repeated stall review: no task executed since the "
+                "previous review"
+            )
+        self._stall_review_since_execution = True
+        return ""
+
     async def _review_and_update_plan(
         self, task: Task, success: bool, task_result: str = "",
         force: bool = False,
@@ -2923,6 +3055,18 @@ Output ONLY valid JSON:
             self.memory.record_task(task)
         except Exception as exc:
             log.debug("swallowed exception: %s", exc, exc_info=True)
+
+        # Pre-review snapshot of every task's tool+params. The review may
+        # replace a blocked task wholesale (blocked tasks are not in the
+        # preserved set), so the guard below needs the original write intent
+        # to detect a downgrade.
+        _pre_review: dict[str, tuple[str, dict]] = {
+            t.id: (
+                str((t.action or {}).get("tool", "") or ""),
+                dict((t.action or {}).get("params", {}) or {}),
+            )
+            for t in (self.exploitation_plan.tasks or [])
+        }
 
         # Build prompt: what just happened + current plan + new DKG state
         state = self._get_state()
@@ -3276,6 +3420,10 @@ Output ONLY valid JSON:
         )
 
         try:
+            _skip_reason = self._review_skip_reason(task, force)
+            if _skip_reason:
+                log.info(_skip_reason)
+                return
             self._maybe_compress()
             content, _review_model, _review_err = await self._orch._generate_structured(
                 stage="plan_review",
@@ -3284,6 +3432,11 @@ Output ONLY valid JSON:
                 schema_example=PLANNER_TASKS_SCHEMA_EXAMPLE,
                 system_prompt=SYSTEM_PROMPT_PLANNER,
             )
+            # The review budget is spent now: the next review must wait for
+            # this plan to be tested by real executions.
+            self._review_done_this_cycle = True
+            self._executions_since_review = 0
+            self._stall_review_since_execution = False
             if _review_model is None:
                 new_tasks = self._extract_json_array(content) or []
             else:
@@ -3360,6 +3513,10 @@ Output ONLY valid JSON:
                 # Priority: tasks WITH tools (exploit/probe) are kept before
                 # tasks without tools (speculative recon).
                 self.exploitation_plan.tasks = self._cap_pending_tasks(preserved, max_total=20)
+
+                self._enforce_write_intent(
+                    self.exploitation_plan.tasks, _pre_review
+                )
 
                 # ── Dependency resolution: rewrite stale references ──
                 # LLM may reference task IDs that were renamed or removed.

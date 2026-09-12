@@ -22,6 +22,9 @@ log = logging.getLogger(__name__)
 # candidates per origin and only recurse one extra layer (candidate responses).
 _MAX_ROUTE_CANDIDATES = 30
 _MAX_ROUTE_DEPTH = 2
+#: Identifiers harvested from the host's own responses when deriving child
+#: routes of a JSON collection endpoint.
+_MAX_ROUTE_IDENTIFIERS = 4
 
 _JS_ROUTE_RE = re.compile(
     r"(?:fetch|axios\.(?:get|post|put|delete|patch)|\$\.ajax)\s*"
@@ -318,6 +321,7 @@ from darwin.tools.mcp_client import MCPClientPool, load_mcp_config
 from darwin.tools.mcp_gateway import ToolResult
 from darwin.tools.recon_server import create_recon_gateway, parse_response
 from darwin.tools.attack_server import create_attack_gateway
+from darwin.utils.urls import observed_identifiers, response_body, route_variants
 from darwin.utils.http_client import HTTPClient, ProbeClient, HTTPResponse
 from darwin.utils.llm import LLMSession
 from darwin.utils.phase_logger import PhaseLogger
@@ -1266,6 +1270,87 @@ class ReconCoordinator(CoordinatorContext):
             if out.strip().startswith(("{", "[")) or "openapi" in head or "swagger" in head:
                 await self._api_route_discovery(host, url, out)
 
+    def _observed_host_identifiers(self, limit: int = _MAX_ROUTE_IDENTIFIERS) -> list[str]:
+        """Identifier-looking values this host already disclosed.
+
+        A collection route ("{"packages": []}") documents the collection but
+        not its detail/write routes; the identifiers that name those children
+        usually come from a sibling service's response, so the search spans
+        every endpoint of the same host.
+        """
+        host = str(getattr(self, "target_host", "") or "")
+        found: list[str] = []
+        for endpoint in self.dkg.query_nodes("Endpoint"):
+            url = str(endpoint.get("url", "") or "")
+            if host and host not in url:
+                continue
+            for token in observed_identifiers(
+                str(endpoint.get("sample_response", "") or ""), limit
+            ):
+                if token not in found:
+                    found.append(token)
+        return found[:limit]
+
+    async def _probe_collection_children(self, base_url: str, body: str) -> None:
+        """OPTIONS-probe derived child paths of a JSON collection route.
+
+        Safe-verb only (OPTIONS/GET): the probe discovers which routes exist
+        and which verbs they accept, and never creates anything on the
+        target. Records each answer as an Endpoint so the planner can issue
+        the real write against a verified route.
+        """
+        identifiers = self._observed_host_identifiers()
+        if not identifiers:
+            return
+        try:
+            known = {ep.get("url") for ep in self.dkg.query_nodes("Endpoint")}
+        except Exception as exc:
+            log.debug("swallowed exception: %s", exc, exc_info=True)
+            known = set()
+        probed = 0
+        for url in route_variants(base_url, identifiers):
+            if url in known:
+                continue
+            try:
+                result = await self._call_tool(
+                    "http_method_probe", {"url": url, "method": "OPTIONS"}
+                )
+            except Exception as exc:
+                log.debug("collection child probe failed for %s: %s", url, exc)
+                continue
+            parsed = getattr(result, "parsed_output", {}) or {}
+            status = int(parsed.get("status", 0) or 0)
+            allow = str(parsed.get("allow", "") or "")
+            probed += 1
+            log.info(
+                "_collection_child_probe: %s -> HTTP %s Allow=%s",
+                url, status, allow or "-",
+            )
+            if not status or status >= 400:
+                continue
+            self.dkg.add_node(
+                "Endpoint",
+                f"ep-route-{hashlib.sha1(url.encode()).hexdigest()[:10]}",
+                {
+                    "url": url,
+                    "method": "OPTIONS",
+                    "methods": {
+                        m.strip().upper(): status
+                        for m in allow.split(",") if m.strip()
+                    },
+                    "sample_status": status,
+                    "sample_response": str(getattr(result, "stdout", "") or "")[:2000],
+                    "params": "",
+                    "body_format": "json",
+                    "discovered_by": "collection-child-probe",
+                },
+            )
+        if probed:
+            log.info(
+                "_collection_child_probe: %d derived route(s) probed from %s",
+                probed, base_url,
+            )
+
     async def _api_route_discovery(
         self, host: str, base_url: str, stdout: str
     ) -> None:
@@ -1310,6 +1395,7 @@ class ReconCoordinator(CoordinatorContext):
                 })
         candidates = candidates[:_MAX_ROUTE_CANDIDATES]
         if not candidates:
+            await self._probe_collection_children(base_url, stdout)
             return
         log.info(
             "_api_route_discovery: %d candidate route(s) from %s",
@@ -1472,9 +1558,10 @@ class ReconCoordinator(CoordinatorContext):
                 # Skip gobuster on REST API / JSON endpoints — these don't have
                 # directory structures to brute-force. A JSON response means
                 # this is a programmatic API, not a directory-browsable web app.
-                _sample = endpoint.get("sample_response", "")
-                if _sample.strip().startswith("{") or _sample.strip().startswith("["):
+                _sample = response_body(endpoint.get("sample_response", "")).strip()
+                if _sample.startswith("{") or _sample.startswith("["):
                     log.info("_deep_recon: skipping JSON/API endpoint %s", url)
+                    await self._probe_collection_children(url, _sample)
                     return
 
                 # Pre-flight curl check: verify the endpoint is reachable and
@@ -1489,14 +1576,20 @@ class ReconCoordinator(CoordinatorContext):
                     if not _pre.success or not _pre_stdout.strip():
                         log.info("_deep_recon: pre-flight unreachable, skipping gobuster/nikto for %s", url)
                         return
-                    if _pre_stdout.strip().startswith("{") or _pre_stdout.strip().startswith("["):
+                    # curl_get output carries the response headers first, so
+                    # the body must be isolated before the JSON/HTML checks —
+                    # otherwise every JSON API falls through to the
+                    # plain-text branch and no route discovery happens.
+                    _pre_body = response_body(_pre_stdout).strip()
+                    if _pre_body.startswith("{") or _pre_body.startswith("["):
                         log.info("_deep_recon: pre-flight JSON/API, skipping gobuster/nikto for %s", url)
+                        await self._probe_collection_children(url, _pre_body)
                         return
                     # Non-HTML response detection: plain-text APIs (IMDS,
                     # cloud simulators, etc.) return content without HTML
                     # tags.  gobuster/nikto are directory brute-forcers that
                     # only make sense for HTML web apps.
-                    _body = _pre_stdout.strip()
+                    _body = _pre_body or _pre_stdout.strip()
                     _is_html = (
                         _body.startswith("<")
                         or "<!DOCTYPE" in _body[:200]

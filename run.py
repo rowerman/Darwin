@@ -138,7 +138,9 @@ async def main():
         if len(endpoints) > 15:
             print(f"  ... and {len(endpoints) - 15} more")
     if vulns:
-        print(f"Vulnerabilities found: {len(vulns)}")
+        # Hypotheses are not findings: report how many were actually probed.
+        tested = len([v for v in vulns if v.get("tested_at")])
+        print(f"Vulnerability hypotheses: {len(vulns)} (tested: {tested})")
         for v in vulns[:5]:
             print(f"  - [{v.get('type', '?')}] {v.get('endpoint', '')} {v.get('parameter', '')}".strip())
     if flags:

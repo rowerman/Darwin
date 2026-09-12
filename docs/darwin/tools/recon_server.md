@@ -16,6 +16,19 @@ bootstrap recon 和后续服务研究阶段的工具注册层。
   响应头与 body；用于自适应侦察的 API 路由发现与 POST/JSON 验证。
 - 各 `_parse_*` 函数：外部 CLI 输出适配。
 
+## HTTP 写请求（`http_post`）
+
+`http_post` 是 HTTP **写**工具：`method` 默认 `POST`，可选
+`PUT/PATCH/DELETE`（用于注册/覆盖资源这类 REST 写），其它动词返回明确的
+`unsupported method` 错误而不会静默改成 POST。`data` 接受原始字符串或
+dict/list（后者按 JSON 发送），`headers` 接受 str/dict/list，统一经
+`tools/params.py` 归一化——LLM 传 dict 头不会再触发
+`'dict' object has no attribute 'split'`。
+
+`content_type` 优先级：显式 `Content-Type` 头 > 非默认的 `content_type`
+参数 > 由 body 类型推断（dict/list → `application/json`）> 表单默认值。
+`http_method_probe` 的 `headers` 走同一套归一化。
+
 ## gobuster 目录枚举
 
 `gobuster_dir` 使用 gobuster 3.x 的子命令形式

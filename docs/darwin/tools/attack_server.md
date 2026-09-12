@@ -39,3 +39,9 @@ Planner 发现工具、Executor 执行工具的攻击域注册层。
 `probe_timeout`、`max_duration` 和 `concurrency` 在预算内受控并发；先覆盖
 host/port/path，再根据对象列表派生读取候选，并在结果中返回超时、错误和预算信息。
 `object_store_get` 将列表响应视为发现证据，只有实际对象内容或 flag 才算成功。
+## `send_payload` 的动词与头
+
+`send_payload` 的 `method` 对非 GET 请求真实生效（`POST/PUT/PATCH/DELETE`），
+不再一律 POST；非法动词返回 `unsupported method`。`headers` 接受
+str/dict/list，经 `tools/params.py` 归一化为换行分隔的 `K: v` 交给
+`_python_request`；dict 头不会被 `str(dict)` 拼成垃圾头名。

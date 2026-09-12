@@ -4,5 +4,4 @@
 
 ## 推荐阅读顺序
 
-`llm.py` → `http_client.py` → `phase_logger.py` / `thought_logger.py`。
-
+`llm.py` → `http_client.py` → `urls.py` → `phase_logger.py` / `thought_logger.py`。

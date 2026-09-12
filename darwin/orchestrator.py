@@ -239,6 +239,11 @@ class Orchestrator:
         self._solo_exhausted_stall = 0  # stalled loops when solo exhausted but multi never entered
         self._solo_empty_runs = 0  # consecutive solo runs with 0 done tasks
         self._prev_solo_done_count = 0  # done task count from previous solo run
+        # Plan-review cadence: tasks executed since the last review, and
+        # whether a stall review already ran without any execution after it.
+        self._executions_since_review = 0
+        self._stall_review_since_execution = False
+        self._review_done_this_cycle = False
 
         # Chain / multi-flag mode
         self._chain_mode = False

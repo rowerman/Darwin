@@ -523,6 +523,7 @@ class MCPGateway:
         alias_table: Dict[str, list[str]] = {}
         alias_table.update(_PARAM_ALIASES)
         alias_table.update(spec_aliases)  # spec aliases take precedence
+        applied_aliases: set[str] = set()
         for alias, canonical_list in alias_table.items():
             if alias not in normalized:
                 continue
@@ -538,6 +539,7 @@ class MCPGateway:
                     if alias == "host" and "port" in normalized:
                         val = f"{val}:{normalized['port']}"
                     normalized[canonical] = val
+                    applied_aliases.add(alias)
                     break  # only apply the first matching canonical
 
         # Phase 2: handle 'anonymous' flag — set empty credentials
@@ -583,6 +585,19 @@ class MCPGateway:
         # Keep alias-source keys as well — they'll be dropped later if
         # the template doesn't need them (shell path) or ignored via
         # the strip below.
+        _unknown = [
+            k for k in normalized
+            if k not in tool_params and k not in applied_aliases
+        ]
+        if _unknown:
+            # A silently dropped parameter is a lost intent: log it so the
+            # fix loop (and the operator) can see why a call ignored an
+            # argument instead of failing invisibly inside the tool.
+            log.warning(
+                "tool '%s': dropping undeclared parameter(s) %s "
+                "(declared: %s)",
+                name, sorted(_unknown), sorted(tool_params),
+            )
         normalized = {
             k: v for k, v in normalized.items()
             if k in tool_params
@@ -603,6 +618,29 @@ class MCPGateway:
         # This single call site covers BOTH register() Python functions
         # AND register_shell_tool() shell commands.
         params = self._normalize_params(name, params, entry)
+
+        # Refuse a call whose declared required parameters are absent: the
+        # tool can only fail, and doing it here turns an opaque runtime error
+        # ("TypeError: missing 1 required positional argument") into an
+        # actionable INVALID_ARGUMENT the fix loop can repair.
+        _missing = [
+            _param for _param, _schema in (entry.parameters or {}).items()
+            if isinstance(_schema, dict) and "default" not in _schema
+            and _param not in params
+        ]
+        if _missing:
+            log.warning(
+                "tool '%s': refusing call, missing required parameter(s) %s",
+                name, _missing,
+            )
+            return ToolResult(
+                tool_name=name, success=False, stdout="",
+                stderr=(
+                    f"invalid argument: missing required parameter(s) "
+                    f"{_missing} for tool '{name}'"
+                ),
+                exit_code=1, elapsed_ms=0,
+            )
 
         try:
             if asyncio.iscoroutinefunction(entry.func):

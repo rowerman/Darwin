@@ -13,6 +13,7 @@ import shutil
 import time
 from dataclasses import dataclass, field, replace
 from typing import Any, Dict, List, Optional
+from urllib.parse import urlparse
 
 log = logging.getLogger(__name__)
 
@@ -87,6 +88,80 @@ from darwin.prompts.research import SYSTEM_PROMPT_RESEARCH
 from darwin.orchestration.context import CoordinatorContext
 
 class ResearchCoordinator(CoordinatorContext):
+    def _discovered_host_ports(self) -> set[str]:
+        """``host:port`` pairs the reconnaissance phase actually discovered."""
+        ports: set[str] = set()
+        for endpoint in self.dkg.query_nodes("Endpoint"):
+            netloc = urlparse(str(endpoint.get("url", "") or "")).netloc
+            if netloc:
+                ports.add(netloc.lower())
+        for service in self.dkg.query_nodes("Service"):
+            port = service.get("port")
+            host = str(getattr(self, "target_host", "") or "")
+            if port and host:
+                ports.add(f"{host}:{port}".lower())
+        target = str(getattr(self, "target_url", "") or "")
+        if target:
+            netloc = urlparse(target).netloc
+            if netloc:
+                ports.add(netloc.lower())
+        return ports
+
+    def _normalize_hypothesis_endpoint(self, endpoint: str) -> str:
+        """Repair or reject an LLM-supplied endpoint URL.
+
+        The analyze LLM occasionally encodes the port as a path segment
+        (``http://host/10726``). That URL targets a different service and
+        burns a task, so it is rewritten to the discovered ``host:port`` when
+        the segment matches a real port, and dropped when the resulting
+        host:port was never discovered.
+        """
+        raw = str(endpoint or "").strip()
+        if not raw:
+            return ""
+        parsed = urlparse(raw)
+        if not parsed.scheme or not parsed.netloc:
+            return raw  # non-URL endpoint (e.g. a file path) — leave as-is
+        netloc = parsed.netloc.lower()
+        known = self._discovered_host_ports()
+        if ":" in netloc:
+            if known and netloc not in known:
+                log.warning(
+                    "ANALYZE: dropping hypothesis endpoint %s — host:port was "
+                    "never discovered", raw,
+                )
+                return ""
+            return raw
+        host = parsed.hostname or ""
+        segments = [s for s in parsed.path.split("/") if s]
+        if segments and segments[0].isdigit():
+            candidate = f"{host}:{int(segments[0])}".lower()
+            if candidate in known:
+                rest = "/".join(segments[1:])
+                repaired = parsed._replace(
+                    netloc=candidate,
+                    path=f"/{rest}" if rest else "",
+                ).geturl()
+                log.warning(
+                    "ANALYZE: repaired endpoint %s -> %s (port was a path segment)",
+                    raw, repaired,
+                )
+                return repaired
+            log.warning(
+                "ANALYZE: dropping hypothesis endpoint %s — no service on that port",
+                raw,
+            )
+            return ""
+        if known and netloc not in known:
+            same_host = any(entry.split(":")[0] == netloc for entry in known)
+            if same_host:
+                log.warning(
+                    "ANALYZE: dropping hypothesis endpoint %s — host:port was "
+                    "never discovered", raw,
+                )
+                return ""
+        return raw
+
     async def _analyze_phase(self) -> None:
         """Analyze reconnaissance data to identify potential vulnerabilities."""
         self.phase = OrchestratorPhase.ANALYZE
@@ -226,6 +301,11 @@ class ResearchCoordinator(CoordinatorContext):
             f"   in 'vulnerabilities'.\n"
             f"7. CRITICAL: Use the EXACT parameter names from 'Known Parameter Names' above.\n"
             f"   Do NOT guess parameter names from response field names.\n\n"
+            f"8. NAME the vulnerability by its actual mechanism. A hypothesis whose exploit\n"
+            f"   is a WRITE (publishing/registering/overwriting a resource such as a package,\n"
+            f"   artifact or record) must say so (e.g. 'dependency_confusion',\n"
+            f"   'registry_poisoning', 'artifact_poisoning') instead of a read-class label\n"
+            f"   like IDOR — the label selects the tool that can express the verb.\n\n"
             f"## Tool Contract Card (use these EXACT tool names and parameters)\n"
             f"{_tool_card}"
         )
@@ -385,10 +465,16 @@ class ResearchCoordinator(CoordinatorContext):
                 )
 
             _no_endpoint = 0
+            _unknown_endpoint = 0
             for v in vulns_json:
                 if not v.get("endpoint", ""):
                     _no_endpoint += 1
                     continue
+                _endpoint = self._normalize_hypothesis_endpoint(str(v.get("endpoint", "")))
+                if not _endpoint:
+                    _unknown_endpoint += 1
+                    continue
+                v["endpoint"] = _endpoint
                 vt = v.get("vuln_type", "")
                 _correct_guessed_param(v)
                 vt = v.get("vuln_type", "")
@@ -438,10 +524,17 @@ class ResearchCoordinator(CoordinatorContext):
         except Exception as e:
             log.warning("_analyze_phase: failed to parse LLM vulnerability output: %s", e)
             _no_endpoint = 0
+            _unknown_endpoint = 0
         if _no_endpoint:
             print(
                 f"[SCHEMA] analyze: dropped {_no_endpoint} hypothesis(es) with no endpoint — "
                 "unusable entries no longer reach the DKG",
+                flush=True,
+            )
+        if _unknown_endpoint:
+            print(
+                f"[SCHEMA] analyze: dropped {_unknown_endpoint} hypothesis(es) whose "
+                "endpoint host:port was never discovered — the planner cannot reach it",
                 flush=True,
             )
 

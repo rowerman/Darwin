@@ -31,3 +31,9 @@ CLI 启动层，位于 `Orchestrator.run()` 之前。
 ## 维护提示
 
 新增 CLI 参数时同步更新 README、配置说明和本导航文档。
+
+## 结果摘要的语义
+
+摘要中的 `Vulnerability hypotheses: N (tested: M)` 只报告**假设**及其被
+探测条数（DKG Vulnerability 节点的 `tested_at`），不把未验证假设当成
+“发现的漏洞”。`M == 0` 表示这些假设都还没有被任何工具验证过。

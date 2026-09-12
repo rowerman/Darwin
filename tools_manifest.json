@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0.0",
-  "generated_at": "2026-09-11T11:48:26+00:00",
+  "generated_at": "2026-09-12T08:03:38+00:00",
   "source": "darwin.tools.manifest",
   "tool_count": 135,
   "tools": [
@@ -2263,6 +2263,12 @@
         ],
         "json_body": [
           "data"
+        ],
+        "json": [
+          "data"
+        ],
+        "request_body": [
+          "data"
         ]
       },
       "deprecated": false,
@@ -2270,8 +2276,8 @@
     },
     {
       "name": "http_post",
-      "version": "1.1.0",
-      "description": "Send an HTTP POST request with a body (data=...). Use insecure=true for self-signed TLS and cookie= for a session. 4xx/5xx responses are returned with their status, headers and body — read them to tell a missing route (404) from a wrong method (405 + Allow). For other verbs (PUT/PATCH/DELETE) use http_method_probe with method=...",
+      "version": "1.3.0",
+      "description": "Send an HTTP write request with a body. method defaults to POST and also accepts PUT/PATCH/DELETE — use method=PUT to register/overwrite a resource. data may be a raw body string or a dict/list (sent as JSON); headers accepts dict/str/list. Use insecure=true for self-signed TLS and cookie= for a session. 4xx/5xx responses are returned with their status, headers and body — read them to tell a missing route (404) from a wrong method (405 + Allow).",
       "domains": [
         "web"
       ],
@@ -2281,20 +2287,30 @@
           "type": "string",
           "description": "Target URL"
         },
+        "method": {
+          "type": "string",
+          "description": "HTTP write method: POST (default), PUT, PATCH, DELETE",
+          "default": "POST"
+        },
         "data": {
           "type": "string",
-          "description": "POST body data (key=value&key=value format)",
+          "description": "Request body: raw string, or dict/list sent as JSON",
           "default": ""
         },
         "headers": {
           "type": "string",
-          "description": "Optional headers",
+          "description": "Optional headers (str, dict or list)",
           "default": ""
         },
         "cookie": {
           "type": "string",
           "description": "Session cookie string from try_login",
           "default": ""
+        },
+        "content_type": {
+          "type": "string",
+          "description": "Content-Type override (defaults to form; dict/list bodies default to JSON)",
+          "default": "application/x-www-form-urlencoded"
         },
         "insecure": {
           "type": "boolean",
@@ -2328,6 +2344,12 @@
           "data"
         ],
         "json_body": [
+          "data"
+        ],
+        "json": [
+          "data"
+        ],
+        "request_body": [
           "data"
         ]
       },
@@ -5798,6 +5820,12 @@
           "data"
         ],
         "json_body": [
+          "data"
+        ],
+        "json": [
+          "data"
+        ],
+        "request_body": [
           "data"
         ]
       },

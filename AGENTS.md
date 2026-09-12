@@ -268,3 +268,29 @@ conda run -n env_name python -m pytest -m acceptance -v
 - Docker/benchmark 联调属于显式 live 测试，不进入默认回归。
 - 修改工具、知识库或核心循环后，跑全量测试及相关 `integration/acceptance`；manifest/taxonomy 必须同步校验。
 - 复用 `tests/conftest.py` fixtures；未知工具必须失败，不得用默认成功的 fake 掩盖错误；不伪造或跳过失败测试。
+
+### 本机已知问题：pytest 退出卡死（非代码缺陷）
+
+本机跑测试时，用例结束后进程可能不退出：pytest-asyncio 收尾调用
+`Runner.close()` → `run_until_complete(shutdown_asyncgens())`，被未关闭的异步
+客户端顶住并阻塞在 `select()`，表现为"用例已 PASS 但没有 summary，只能靠超时结束"。
+用 `git archive HEAD` 导出的未改动代码可复现，与改动无关。
+
+绕过方式：用一个**不入库**的临时插件跳过阻塞关闭（仅跳过 loop close，不影响用例判定），
+并配合 `-u` + 小批量/单文件运行：
+
+```bash
+cat > /tmp/fastloop.py <<'EOF'
+import asyncio.runners
+def _fast_close(self):
+    loop = getattr(self, "_loop", None)
+    if loop is not None:
+        try: loop.close()
+        except Exception: pass
+asyncio.runners.Runner.close = _fast_close
+EOF
+PYTHONPATH=/tmp venv/bin/python -u -m pytest tests/ -q -p no:cacheprovider -p fastloop
+```
+
+注意：不要反复重启全量测试；先用 `timeout <秒> pytest <文件>` 分批（必要时单个用例）定位。
+`tests/integration` 需要绑定本地端口，沙箱内会 `PermissionError`，须在沙箱外运行。

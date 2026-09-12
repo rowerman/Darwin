@@ -48,3 +48,17 @@ API 方法探测使用 recon 域的 `http_method_probe` 工具（OPTIONS/POST/JS
   结束本次运行，不再进入利用阶段。
 - `_detect_defenses()` 在探测前先用 `get_baseline(url)` 建立基线，
   使 `ProbeClient` 的拦截判定只在“探针改变了结果”时成立。
+
+## JSON / API 端点的判定与子路径探测
+
+pre-flight 与 `sample_response` 判定 JSON/API 时先经
+`utils.urls.response_body()` 剥离响应头块——curl/urllib 输出以
+`HTTP/1.1 200 OK` 开头，直接 `startswith("{")` 永远不成立，会把所有 JSON
+API 误判成“plain text/API”。
+
+判定为 JSON 集合端点后调用 `_probe_collection_children()`：从**同主机所有
+已发现端点**的响应里抽取标识符（`_observed_host_identifiers()`），用
+`route_variants()` 推导子路径并只发 **OPTIONS**（安全动词，不在目标上创建
+任何东西），把存在且非 4xx 的路径连同 `Allow` 方法写入 DKG Endpoint
+（`discovered_by="collection-child-probe"`）。`_api_route_discovery()` 在
+没有任何候选路由时同样走这条路径。

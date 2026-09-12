@@ -53,3 +53,32 @@
 LLM 复审仅在“任务失败 / 本任务产生 DKG 增量 / 无 ready 任务的 stall
 复审（`force=True`）”时调用。没有基线（`_cognition_before` 为空）的调用
 保持旧行为，一定复审。
+
+### 复审节律（`_review_skip_reason()`）
+
+复审会重写整份计划，因此必须由“上一版计划被真实执行验证过”来支付：
+每个 runtime cycle 的**第一次**复审始终允许；其后两次复审之间至少要有
+`_MIN_EXECUTIONS_BETWEEN_REVIEWS`（3）个任务执行完（或存在 DKG 增量）。
+计划确实无任务可执行时允许一次 stall 复审（`task.id == "plan-exhausted"`），
+但“上次复审后零执行”时不再连发。计数由
+`execution._execute_task_with_policies()` 自增、复审调用后清零。
+
+### 写意图护栏（`_enforce_write_intent()`）
+
+blocked 任务不在 preserved 集合里，复审会整体替换它——历史上曾把
+`http_method_probe(method=PUT)` 的写任务换成只能 POST 的工具，使写步骤
+不可达。复审后对 id 未变、原方法属于 `POST/PUT/PATCH/DELETE` 的任务：
+仅当新工具本身是写工具且携带相同方法（或无方法概念）时接受替换，
+否则回滚到复审前的 tool+params 并记 WARNING。
+
+### 工具契约与读写分流
+
+- fix_analysis 提示词附带当前工具的紧凑参数契约
+  （`_render_tool_params()`：名称/类型/必填/默认），避免 LLM 猜测
+  `json=`、dict body 这类工具不接受的形状。
+- `_guess_tool()` 在无 suggested_tool 时按语义分流：写类关键词
+  （dependency/supply/poison/squat/publish/package/artifact）返回可表达
+  写动词的工具，其余沿用读类默认，而不是一律 `curl_get`。
+- plan 提示词要求写类任务使用可表达该动词的工具并带 `probe` 回读条件；
+  analyze 提示词要求把写类机制命名成 `dependency_confusion` /
+  `registry_poisoning` / `artifact_poisoning`，而不是 `IDOR`。

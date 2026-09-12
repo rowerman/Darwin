@@ -19,6 +19,7 @@ log = logging.getLogger(__name__)
 from typing import Any, Dict
 
 from darwin.tools.mcp_gateway import MCPGateway, ToolResult
+from darwin.tools.params import headers_to_lines, normalize_headers
 from darwin.tools.paths import resolve_wordlist, tool_path_env
 
 
@@ -119,15 +120,7 @@ def _normalize_header_arg(headers: str) -> str:
     one header per line.  Values are never split on commas, so headers whose
     values legitimately contain commas stay intact.
     """
-    if not headers:
-        return ""
-    lines = []
-    for chunk in str(headers).replace("\r", "\n").split("\n"):
-        for part in chunk.split("|"):
-            part = part.strip()
-            if part and ":" in part:
-                lines.append(part)
-    return "\n".join(lines)
+    return headers_to_lines(headers)
 
 
 def normalize_fuzz_url(url: str) -> str:
@@ -405,18 +398,29 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
 
     # ── HTTP request with custom payload ────────────────────────
     async def send_payload(
-        url: str, param: str = "", payload: str = "", method: str = "GET",
+        url: str, param: str = "", payload: Any = "", method: str = "GET",
         encode_type: str = "none", body_format: str = "form",
-        headers: str = "", insecure: bool = False,
+        headers: Any = "", insecure: bool = False,
     ) -> ToolResult:
         """Send a custom payload to a target. Supports GET query string and
-        POST with form-encoded or JSON body.
+        POST/PUT/PATCH/DELETE with form-encoded or JSON body.
 
         ``param``/``payload`` may be empty: a POST whose JSON body is given
         verbatim, or a plain non-injecting request, are both legitimate uses
         (header-driven APIs authenticate via ``headers``)."""
         import urllib.parse, json
 
+        _method = str(method or "GET").strip().upper() or "GET"
+        if _method not in {"GET", "POST", "PUT", "PATCH", "DELETE"}:
+            return ToolResult(
+                tool_name="send_payload", success=False, stdout="",
+                stderr=f"unsupported method '{method}' for send_payload",
+                exit_code=2, elapsed_ms=0,
+            )
+        if isinstance(payload, (dict, list)):
+            payload = json.dumps(payload, ensure_ascii=False)
+        else:
+            payload = str(payload or "")
         extra_headers = _normalize_header_arg(headers)
 
         # Apply encoding
@@ -428,7 +432,7 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
         elif encode_type == "html_entity":
             encoded_payload = "".join(f"&#{ord(c)};" for c in payload)
 
-        if method.upper() == "GET":
+        if _method == "GET":
             separator = "&" if "?" in url else "?"
             full_url = url
             if param:
@@ -453,7 +457,7 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
             if extra_headers:
                 _hdr = f"{_hdr}\n{extra_headers}"
             return await _python_request(
-                "POST", url, body,
+                _method, url, body,
                 headers=_hdr,
                 insecure=insecure,
             )
@@ -462,12 +466,12 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
             # (contains = or &), send it raw — the LLM constructed a
             # multi-parameter payload like "ak=X&sk=Y&Version=Z".
             if not param and ('=' in payload or '&' in payload):
-                return await _python_request("POST", url, encoded_payload,
+                return await _python_request(_method, url, encoded_payload,
                                             headers=extra_headers or "",
                                             insecure=insecure)
             body = urllib.parse.urlencode({param: encoded_payload})
             return await _python_request(
-                "POST", url, body,
+                _method, url, body,
                 headers=extra_headers or "",
                 insecure=insecure,
             )

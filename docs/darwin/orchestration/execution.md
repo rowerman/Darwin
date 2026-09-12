@@ -74,3 +74,26 @@ HTTP 类任务额外发出 2–5 次请求，在全套 benchmark 中从未产生
 `_derive_filter_candidates()` 负责推导，便于单测。
 边界：≤6 个端点、≤12 次请求、仅 GET；解析用 `_json_body()`（容忍工具输出里
 的 HTTP 头前缀）。
+
+## 写请求的路由变体重试
+
+写意图任务（方法 ∈ POST/PUT/PATCH/DELETE）首次返回 `404/405` 时，在
+LLM 修复回路之前执行一次**确定性**变体重试：用
+`utils.urls.route_variants()` 从「任务自身参数 + 同主机端点响应 + 本次失败
+输出」抽出的标识符推导相邻路径，并用**原方法**重试（≤6 个候选、≤2 个追加
+段）。REST 集合路由与详情路由的形状差异（`/packages` vs
+`/packages/<name>/<version>`）就属于这一类。
+
+每次尝试都写任务日志 `route_variant_probe`，并把
+`_record_route_probe()` 的结果写进 DKG Endpoint（含 method/status），供
+planner 直接使用；命中 flag 走既有 DAVE 校验。
+
+## 系统性兜底的读写分流
+
+- `_VULN_TOOL_MAP` / `_VULN_FUZZY_MAP` 为**写类**漏洞族
+  （dependency_confusion / supply_chain / package_poisoning /
+  registry_poisoning / artifact_poisoning，以及 dependency/supply/poison/
+  squat/publish/package 模糊匹配）映射到 `http_method_probe`，并排在
+  cloud 的 `registry` 条目前，避免被容器 registry 助手截胡。
+- 未映射类型回退到 `_FALLBACK_HTTP_TOOLS`（首个是 `http_method_probe`），
+  保证“写类但标签不正确”的假设仍有可表达写动词的工具可用。

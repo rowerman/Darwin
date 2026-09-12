@@ -45,6 +45,12 @@ from darwin.core.schemas import (
 )
 from darwin.core.task import Task, deps_from_task_ids
 from darwin.core.task_graph import TaskGraph, dependency_task_ids
+from darwin.utils.urls import (
+    IDENTIFIER_RE as _IDENTIFIER_RE,
+    ROUTE_VARIANT_MAX_IDENTIFIERS as _ROUTE_VARIANT_MAX_IDENTIFIERS,
+    observed_identifiers,
+    route_variants,
+)
 from darwin.core.belief import (
     node_ids_by_type,
     render_belief_snapshot,
@@ -144,6 +150,128 @@ def _http_status_of(text: str) -> int | None:
     if not match:
         return None
     return int(match.group(1) or match.group(2))
+
+
+# ── Route-variant retry ─────────────────────────────────────────────
+# A wrong path SHAPE (collection route vs detail route) answers 404/405 even
+# when the verb is right; the neighbour paths come from identifiers the task
+# already observed (see darwin.utils.urls).
+_ROUTE_VARIANT_STATUSES = (404, 405)
+
+# Tools the systematic pass falls back to for an unmapped vulnerability. The
+# first entry must be able to express a write verb, otherwise a write-class
+# hypothesis that arrives unlabelled can only ever be tested with a read.
+_FALLBACK_HTTP_TOOLS = [
+    "http_method_probe", "http_post", "send_payload", "curl_get",
+]
+
+# Vulnerability type -> systematic-pass tool mapping (with fuzzy matching).
+# A type whose exploit IS a write (publish/register/overwrite) must map to a
+# tool that can express PUT/POST/PATCH/DELETE — a read-only fallback can
+# never satisfy it.
+_VULN_TOOL_MAP: dict[str, list[str]] = {
+    "sqli": ["sqlmap_test"],
+    "sql": ["sqlmap_test"],
+    "xss": ["xss_reflection_test"],
+    "cmdi": ["command_injection_test"],
+    "command injection": ["command_injection_test"],
+    "ssti": ["send_payload"],
+    "lfi": ["curl_get"],
+    "file upload": ["send_payload"],
+    "idor": ["curl_get"],
+    "idor-url-path": ["curl_get"],
+    "auth": ["curl_get"],
+    "csrf": ["curl_get"],
+    "deserialization": ["send_payload", "shell_exec"],
+    "ssrf": ["ssrf_probe"],
+    "xxe": ["send_payload"],
+    "jwt": ["jwt_forge"],
+    "race condition": ["send_payload", "shell_exec"],
+    "informationdisclosure": ["curl_get"],  # metadata/API endpoints should use curl_get, not send_payload
+    "unauthenticatedaccess": ["curl_get", "aws_cli"],  # open S3 buckets, unauthenticated APIs
+    "privilege_escalation": ["shell_exec", "linux_priv_check"],
+    "container_escape": ["check_capabilities", "check_mounts", "shell_exec"],
+    "mysql_file_write": ["mysql_file_write"],
+    "mysql_udf": ["mysql_query", "mysql_file_write", "shell_exec"],
+    "postgres_rce": ["psql_query", "shell_exec"],
+    "authbypass": ["curl_get", "test_credential", "ssh_exec", "shell_exec",
+                   "redis_cmd", "mysql_query", "psql_query", "mssql_query",
+                   "mssqlclient_query", "oracle_query"],
+    # NOTE: aws_cli removed from authbypass — it requires service+action
+    # params that the systematic pass cannot populate from vuln context
+    "weakauth": ["mssqlclient_query", "mssql_query", "mysql_query",
+                 "psql_query", "redis_cmd", "oracle_query",
+                 "test_credential", "ssh_exec"],
+    "platformdiscovery": ["aws_cli", "curl_get", "aws_sts_query"],
+    # Cloud-native vuln types — systematic pass needs these to
+    # auto-select tools for IAM, federation, SCP, and OIDC/SAML
+    # scenarios that the generic "platformdiscovery" fallback
+    # cannot cover.
+    "cloud_iam": ["aws_sts_query", "aws_cli"],
+    "cloud_federation": ["saml_forge", "aws_cli"],
+    "cloud_token_exchange": ["aws_sts_query", "aws_cli"],
+    "cloud_scp_bypass": ["aws_sts_query", "aws_cli"],
+    "cloud_oidc": ["jwt_forge", "aws_iam_federation"],
+    "cloud_passrole": ["aws_cli", "send_payload"],
+    # Write-class families: the exploit itself is a publish/register/
+    # overwrite, so the mapped tool must be able to express
+    # PUT/POST/PATCH/DELETE (a read-only fallback can never succeed).
+    "dependency_confusion": ["http_method_probe"],
+    "dependency confusion": ["http_method_probe"],
+    "supply_chain": ["http_method_probe"],
+    "supply chain": ["http_method_probe"],
+    "package_poisoning": ["http_method_probe"],
+    "registry_poisoning": ["http_method_probe"],
+    "artifact_poisoning": ["http_method_probe"],
+}
+
+_VULN_FUZZY_MAP: dict[str, list[str]] = {
+    "sqli": ["sqlmap_test"],
+    "xss": ["xss_reflection_test"],
+    "cmdi": ["command_injection_test"],
+    "idor": ["curl_get"],
+    "auth": ["curl_get"],
+    "deserialization": ["send_payload"],
+    "ssrf": ["ssrf_probe"],
+    "xxe": ["send_payload"],
+    "jwt": ["jwt_forge"],
+    "privilege": ["shell_exec", "linux_priv_check"],
+    "escape": ["check_capabilities", "check_mounts", "shell_exec"],
+    # Write-class fuzzy matches, ordered BEFORE the cloud "registry"
+    # entry so "PackageRegistryPoisoning" maps to a write-capable
+    # HTTP tool instead of the container registry helper.
+    "dependency": ["http_method_probe"],
+    "supply": ["http_method_probe"],
+    "poison": ["http_method_probe"],
+    "squat": ["http_method_probe"],
+    "publish": ["http_method_probe"],
+    "package": ["http_method_probe"],
+    # Cloud-native fuzzy matches — catch LLM-generated vuln types
+    # like "CloudFederation", "SCP Bypass Attack", "OIDC Token Abuse"
+    "federation": ["saml_forge", "aws_cli"],
+    "oidc": ["jwt_forge", "aws_cli"],
+    "saml": ["saml_forge", "aws_cli"],
+    "scp": ["aws_sts_query", "aws_cli"],
+    "passrole": ["aws_cli", "send_payload"],
+    "token_exchange": ["aws_sts_query", "aws_cli"],
+    "iam": ["aws_sts_query", "aws_cli"],
+    "registry": ["docker_registry", "kubectl_get_pods", "shell_exec"],
+    "docker_registry": ["docker_registry", "kubectl_get_pods", "shell_exec"],
+}
+
+
+def _systematic_vuln_tool_map() -> dict[str, list[str]]:
+    """Copy of the vuln-type → tool map used by the systematic pass."""
+    return {key: list(value) for key, value in _VULN_TOOL_MAP.items()}
+
+
+def _last_http_status(executed: list[dict] | None) -> int | None:
+    """HTTP status of the most recent executed call that reported one."""
+    for call in reversed(executed or []):
+        status = _http_status_of(str(call.get("stdout", "") or ""))
+        if status is not None:
+            return status
+    return None
 
 
 def _args_fingerprint(args: dict) -> str:
@@ -402,6 +530,110 @@ class ExecutionCoordinator(CoordinatorContext):
         required = list(getattr(spec, "required", None) or [])
         missing = [name for name in required if name not in normalized]
         return (not missing), missing
+
+    def _tool_declared_params(self, tool: str) -> dict:
+        """Declared parameter schema of ``tool`` ({} when unknown)."""
+        for _gw in (self.attack_gateway, self.recon_gateway):
+            try:
+                spec = _gw.get_tool_specs().get(tool)
+            except Exception as exc:
+                log.debug("tool spec lookup failed for %s: %s", tool, exc)
+                continue
+            if spec is not None:
+                return dict(getattr(spec, "parameters", {}) or {})
+        return {}
+
+    def _normalized_tool_args(
+        self, tool: str, params: dict,
+    ) -> tuple[dict, list[str]]:
+        """Gateway-normalized args plus the keys that were dropped.
+
+        Alias source keys (``body``→``data``) are not reported as dropped —
+        their value was applied to the canonical parameter.
+        """
+        raw = dict(params or {})
+        alias_keys: set[str] = set()
+        normalize = None
+        for _gw in (self.attack_gateway, self.recon_gateway):
+            try:
+                if tool not in _gw.get_tool_names():
+                    continue
+                normalize = getattr(_gw, "normalize_params", None)
+                spec = _gw.get_tool_specs().get(tool)
+                if spec is not None:
+                    alias_keys = set(getattr(spec, "aliases", {}) or {})
+                break
+            except Exception as exc:
+                log.debug("param normalization lookup failed for %s: %s", tool, exc)
+        try:
+            normalized = normalize(tool, raw) if callable(normalize) else dict(raw)
+        except Exception as exc:
+            log.debug("param normalization failed for %s: %s", tool, exc)
+            normalized = dict(raw)
+        dropped = [k for k in raw if k not in normalized and k not in alias_keys]
+        return normalized, dropped
+
+    def _route_identifiers(self, params: dict, extra_text: str = "") -> list[str]:
+        """Scalar identifiers this task/target already observed.
+
+        Sources: the task's own params, the sampled responses of the host's
+        DKG endpoints, and the failing call's output. Values are filtered to
+        identifier-looking tokens so a banner or a sentence never becomes a
+        path segment.
+        """
+        identifiers: list[str] = []
+
+        def _add(values: list[str]) -> None:
+            for value in values:
+                if value not in identifiers:
+                    identifiers.append(value)
+
+        def _collect(value: Any) -> None:
+            if isinstance(value, dict):
+                for item in value.values():
+                    _collect(item)
+            elif isinstance(value, (list, tuple)):
+                for item in value:
+                    _collect(item)
+            elif isinstance(value, (str, int, float)) and not isinstance(value, bool):
+                token = str(value)
+                if _IDENTIFIER_RE.match(token) and token not in identifiers:
+                    identifiers.append(token)
+
+        _collect(params or {})
+        _host = str(getattr(self, "target_host", "") or "")
+        try:
+            endpoints = self.dkg.query_nodes("Endpoint")
+        except Exception as exc:
+            log.debug("endpoint lookup failed for route identifiers: %s", exc)
+            endpoints = []
+        for endpoint in endpoints:
+            url = str(endpoint.get("url", "") or "")
+            if _host and _host not in url:
+                continue
+            _add(observed_identifiers(str(endpoint.get("sample_response", "") or "")))
+        _add(observed_identifiers(extra_text))
+        return identifiers[:_ROUTE_VARIANT_MAX_IDENTIFIERS]
+
+    def _record_route_probe(self, url: str, method: str, status: int | None) -> None:
+        """Persist a derived route probe so the planner can see the real shape."""
+        if not url:
+            return
+        try:
+            node_id = f"ep-route-{hashlib.sha1(url.encode()).hexdigest()[:10]}"
+            existing = self.dkg.get_node(node_id) or {}
+            methods = dict(existing.get("methods", {}) or {})
+            if method:
+                methods[str(method).upper()] = int(status or 0)
+            self.dkg.add_node("Endpoint", node_id, {
+                "url": url,
+                "method": str(method or "GET").upper(),
+                "methods": methods,
+                "sample_status": int(status or 0),
+                "discovered_by": "route-variant",
+            })
+        except Exception as exc:
+            log.debug("route probe persistence failed for %s: %s", url, exc)
 
     async def _verify_success_condition(
         self,
@@ -1097,6 +1329,12 @@ class ExecutionCoordinator(CoordinatorContext):
         _executed_calls: list[dict] = []
         _auto_test_negative = False  # track "no evidence" / "no flag"
         _last_result = None
+        # Review cadence: plan_review rewrites the whole plan, so it must be
+        # justified by work that actually ran. This counter is reset whenever
+        # a review (or plan generation) really happens.
+        self._executions_since_review = (
+            int(getattr(self, "_executions_since_review", 0) or 0) + 1
+        )
 
         for tc in task_tool_calls:
             tc_name = tc.get("name", "")
@@ -1553,10 +1791,102 @@ class ExecutionCoordinator(CoordinatorContext):
                 f"[SUCCESS CONDITION NOT MET] {_condition_detail}\n{task_result_text}"
             )
 
+        # ── Deterministic route-variant retry (write intent) ─────────
+        # A wrong path SHAPE (collection route vs detail route) answers
+        # 404/405 even when the verb is right. Retry the SAME method against
+        # neighbour paths derived from identifiers already observed, instead
+        # of spending an LLM round-trip guessing the same thing.
+        if (not task_success
+                and _planned_write_intent(task_tool, task_params)
+                and _last_http_status(_executed_calls) in _ROUTE_VARIANT_STATUSES):
+            _variant_base = str(
+                task_params.get("url", task_params.get("target_url", "")) or ""
+            )
+            _variant_text = " ".join(
+                str(c.get("stdout", "") or "") for c in _executed_calls
+            )
+            _variant_method = _call_method(task_tool, task_params)
+            for _variant_url in route_variants(
+                _variant_base, self._route_identifiers(task_params, _variant_text),
+            ):
+                _variant_args = dict(task_params)
+                if "url" in _variant_args or "target_url" not in _variant_args:
+                    _variant_args["url"] = _variant_url
+                else:
+                    _variant_args["target_url"] = _variant_url
+                try:
+                    _variant_result = await self._call_tool(task_tool, _variant_args)
+                except Exception as exc:
+                    log.warning("route variant probe failed for %s: %s", _variant_url, exc)
+                    continue
+                _variant_stdout = str(getattr(_variant_result, "stdout", "") or "")
+                _variant_status = _http_status_of(_variant_stdout)
+                self.step_count += 1
+                self._task_log_event(
+                    "info", "route_variant_probe", task_id=task.id,
+                    url=_variant_url, method=_variant_method,
+                    status=_variant_status,
+                    success=bool(getattr(_variant_result, "success", False)),
+                )
+                self._record_route_probe(_variant_url, _variant_method, _variant_status)
+                _all_task_stdouts.append(f"[{task_tool}] {_variant_stdout[:600]}")
+                _executed_calls.append({
+                    "name": task_tool,
+                    "args": dict(_variant_args),
+                    "success": bool(getattr(_variant_result, "success", False)),
+                    "stdout": _variant_stdout,
+                    "stderr": getattr(_variant_result, "stderr", "") or "",
+                    "method": _variant_method,
+                })
+                _any_success = _any_success or bool(
+                    getattr(_variant_result, "success", False)
+                )
+                _last_result = _variant_result
+                _variant_flags = self.flag_pattern.findall(_variant_stdout)
+                if _variant_flags:
+                    _v_ok, _v_reason = await self._verify_flag(
+                        _variant_flags[0], _variant_stdout, _variant_args,
+                        getattr(_variant_result, "elapsed_ms", 0),
+                        tool_name=task_tool,
+                    )
+                    if _v_ok:
+                        self._persist_verified_flag(
+                            _variant_flags[0], _variant_url, "route-variant",
+                        )
+                        self.phase = OrchestratorPhase.DONE
+                        execution.flag_result = TaskResult(
+                            success=True, flag=_variant_flags[0],
+                            steps=self.step_count,
+                            tokens_used=self._tokens_used(),
+                            time_elapsed=time.time() - self.start_time,
+                        )
+                        self._verified_flag_result = execution.flag_result
+                        return execution
+                    log.warning("route variant flag rejected: %s", _v_reason)
+                if _condition:
+                    _v_met, _v_detail = await self._verify_success_condition(
+                        _condition, _executed_calls, _any_success,
+                        bool(execution.flag_result),
+                    )
+                    if _v_met:
+                        task_success = _any_success
+                        task_params = _variant_args
+                        task.action = {**(task.action or {}), "params": dict(_variant_args)}
+                        self._task_log_event(
+                            "info", "success_condition", task_id=task.id,
+                            condition=_condition, met=True, detail=_v_detail,
+                            phase="route-variant",
+                        )
+                        break
+            task_result_text = self._summarize_task_result(
+                tc_names, task_success, _all_task_stdouts
+            )
+
         # ── Fix-and-retry: LLM analyzes failures, fixes param errors ──
         _fix_attempts = 0
         _task_tool = task_tool
-        while not task_success and _fix_attempts < 2 and _task_tool:
+        _fix_limit = 3 if _planned_write_intent(task_tool, task_params) else 2
+        while not task_success and _fix_attempts < _fix_limit and _task_tool:
             fix = await self._analyze_and_fix_task(task, task_result_text)
             if not fix:
                 break
@@ -1597,11 +1927,22 @@ class ExecutionCoordinator(CoordinatorContext):
                 )
                 break
 
-            # Merge corrected params into existing ones — the LLM
-            # returns only the fields that need correction, not the
-            # full parameter set. Replacing would drop host/command/etc.
+            # Merge corrected params into existing ones — the LLM returns
+            # only the fields that need correction, not the full parameter
+            # set. Replacing would drop host/command/etc. Each corrected key
+            # is checked against the tool's declared schema first: an
+            # undeclared key must be visible instead of silently shipped (or
+            # silently dropped deeper in the gateway).
+            _corrected, _dropped_params = self._normalized_tool_args(
+                _task_tool, fix.get("corrected_params", {}) or {},
+            )
+            if _dropped_params:
+                log.warning(
+                    "task=%s: ignoring corrected param(s) %s not declared by %s",
+                    task.id, _dropped_params, _task_tool,
+                )
             _merged_params = dict(task_params)
-            _merged_params.update(fix.get("corrected_params", {}) or {})
+            _merged_params.update(_corrected)
             task_action = dict(task.action or {})
             task_action["params"] = _merged_params
             task.action = task_action
@@ -1790,6 +2131,11 @@ class ExecutionCoordinator(CoordinatorContext):
         loop (ParityScheduler + stall review).
         """
         self._plan_review_exhausted = False
+        # Plan-review cadence restarts with each runtime cycle: a review must
+        # be justified by executions, and a repeated empty stall review is not.
+        self._executions_since_review = 0
+        self._stall_review_since_execution = False
+        self._review_done_this_cycle = False
         self._verified_flag_result = None
         if not self._solo_cycle_context_injected:
             self.llm.replace_system_prompt(SYSTEM_PROMPT_ORCHESTRATOR_UNIFIED)
@@ -2296,76 +2642,9 @@ class ExecutionCoordinator(CoordinatorContext):
             return None
 
         # Vuln type → tool mapping (with fuzzy matching)
-        VULN_TOOL_MAP: dict[str, list[str]] = {
-            "sqli": ["sqlmap_test"],
-            "sql": ["sqlmap_test"],
-            "xss": ["xss_reflection_test"],
-            "cmdi": ["command_injection_test"],
-            "command injection": ["command_injection_test"],
-            "ssti": ["send_payload"],
-            "lfi": ["curl_get"],
-            "file upload": ["send_payload"],
-            "idor": ["curl_get"],
-            "idor-url-path": ["curl_get"],
-            "auth": ["curl_get"],
-            "csrf": ["curl_get"],
-            "deserialization": ["send_payload", "shell_exec"],
-            "ssrf": ["ssrf_probe"],
-            "xxe": ["send_payload"],
-            "jwt": ["jwt_forge"],
-            "race condition": ["send_payload", "shell_exec"],
-            "informationdisclosure": ["curl_get"],  # metadata/API endpoints should use curl_get, not send_payload
-            "unauthenticatedaccess": ["curl_get", "aws_cli"],  # open S3 buckets, unauthenticated APIs
-            "privilege_escalation": ["shell_exec", "linux_priv_check"],
-            "container_escape": ["check_capabilities", "check_mounts", "shell_exec"],
-            "mysql_file_write": ["mysql_file_write"],
-            "mysql_udf": ["mysql_query", "mysql_file_write", "shell_exec"],
-            "postgres_rce": ["psql_query", "shell_exec"],
-            "authbypass": ["curl_get", "test_credential", "ssh_exec", "shell_exec",
-                          "redis_cmd", "mysql_query", "psql_query", "mssql_query",
-                          "mssqlclient_query", "oracle_query"],
-            # NOTE: aws_cli removed from authbypass — it requires service+action
-            # params that the systematic pass cannot populate from vuln context
-            "weakauth": ["mssqlclient_query", "mssql_query", "mysql_query",
-                        "psql_query", "redis_cmd", "oracle_query",
-                        "test_credential", "ssh_exec"],
-            "platformdiscovery": ["aws_cli", "curl_get", "aws_sts_query"],
-            # Cloud-native vuln types — systematic pass needs these to
-            # auto-select tools for IAM, federation, SCP, and OIDC/SAML
-            # scenarios that the generic "platformdiscovery" fallback
-            # cannot cover.
-            "cloud_iam": ["aws_sts_query", "aws_cli"],
-            "cloud_federation": ["saml_forge", "aws_cli"],
-            "cloud_token_exchange": ["aws_sts_query", "aws_cli"],
-            "cloud_scp_bypass": ["aws_sts_query", "aws_cli"],
-            "cloud_oidc": ["jwt_forge", "aws_iam_federation"],
-            "cloud_passrole": ["aws_cli", "send_payload"],
-        }
         # Fuzzy match: if a vuln type CONTAINS one of these substrings, it maps
-        FUZZY_MAP: dict[str, list[str]] = {
-            "sqli": ["sqlmap_test"],
-            "xss": ["xss_reflection_test"],
-            "cmdi": ["command_injection_test"],
-            "idor": ["curl_get"],
-            "auth": ["curl_get"],
-            "deserialization": ["send_payload"],
-            "ssrf": ["ssrf_probe"],
-            "xxe": ["send_payload"],
-            "jwt": ["jwt_forge"],
-            "privilege": ["shell_exec", "linux_priv_check"],
-            "escape": ["check_capabilities", "check_mounts", "shell_exec"],
-            # Cloud-native fuzzy matches — catch LLM-generated vuln types
-            # like "CloudFederation", "SCP Bypass Attack", "OIDC Token Abuse"
-            "federation": ["saml_forge", "aws_cli"],
-            "oidc": ["jwt_forge", "aws_cli"],
-            "saml": ["saml_forge", "aws_cli"],
-            "scp": ["aws_sts_query", "aws_cli"],
-            "passrole": ["aws_cli", "send_payload"],
-            "token_exchange": ["aws_sts_query", "aws_cli"],
-            "iam": ["aws_sts_query", "aws_cli"],
-            "registry": ["docker_registry", "kubectl_get_pods", "shell_exec"],
-            "docker_registry": ["docker_registry", "kubectl_get_pods", "shell_exec"],
-        }
+        VULN_TOOL_MAP = _VULN_TOOL_MAP
+        FUZZY_MAP = _VULN_FUZZY_MAP
 
         def _resolve_tools(vt: str) -> list[str]:
             """Resolve tools for a vuln type — exact match first, then fuzzy."""
@@ -2381,8 +2660,7 @@ class ExecutionCoordinator(CoordinatorContext):
             # tools as a fallback so the systematic pass doesn't skip them.
             # These tools cover form-based API exploits, auth bypass, and
             # parameter injection — the most common HTTP-based attack vectors.
-            _FALLBACK_HTTP_TOOLS = ["http_post", "send_payload", "curl_get"]
-            return _FALLBACK_HTTP_TOOLS
+            return list(_FALLBACK_HTTP_TOOLS)
 
         def _detect_proto_from_service(endpoint: str, dkg: DKG) -> set[str] | None:
             """Detect protocol tool set from DKG Service node by port.

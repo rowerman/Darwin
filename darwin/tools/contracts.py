@@ -67,7 +67,10 @@ _ALIASES = {
     "host": ("target",), "hostname": ("host",), "dc_ip": ("target",),
     "username": ("user",), "login": ("user",),
     "pass": ("password",), "passwd": ("password",), "pwd": ("password",),
+    # Body concepts the planner LLM uses interchangeably. ``json`` is a
+    # common shape for the request body and must not be dropped silently.
     "body": ("data",), "post_data": ("data",), "json_body": ("data",),
+    "json": ("data",), "request_body": ("data",),
 }
 
 

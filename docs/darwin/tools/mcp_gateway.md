@@ -45,3 +45,16 @@ shell 模板统一通过 `bash -c` 执行并前置 `set -o pipefail`（无 bash 
 ## 维护提示
 
 未知工具必须失败；不要让编排器绕过网关直接调用外部命令。
+
+## 参数形状与参数丢失可见性
+
+- **别名**：`contracts._ALIASES` 在服务注册边界写入 `ToolSpec.aliases`，
+  规划 LLM 常用的 `body` / `post_data` / `json_body` / `json` /
+  `request_body` 都会落到 `data`（仅当该工具声明了 `data` 时生效）。
+- **丢弃即告警**：别名无法覆盖的未声明参数仍会被丢弃，但会写 WARNING
+  列出被丢的键与已声明键——静默丢参会让“修好参数”的重试实际发出空请求。
+  成功应用的别名源键不计入告警。
+- **缺必填即拒绝**：分发前检查声明中无 `default` 的参数，缺失时直接返回
+  `invalid argument: missing required parameter(s) [...]`，不调用工具。
+  Python 工具的声明默认值由 `contracts._sync_python_defaults()` 从函数签名
+  同步，因此这条规则不会误伤真正可选的参数。
