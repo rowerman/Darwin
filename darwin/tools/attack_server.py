@@ -21,6 +21,42 @@ from typing import Any, Dict
 from darwin.tools.mcp_gateway import MCPGateway, ToolResult
 from darwin.tools.params import headers_to_lines, normalize_headers
 from darwin.tools.paths import resolve_wordlist, tool_path_env
+from darwin.tools.spec import EXECUTOR_SHELL, auto_spec
+
+
+def _parse_ffuf_output(stdout: str) -> Dict[str, Any]:
+    """Parse ffuf result lines into discovered paths.
+
+    ffuf prints ``path [Status: 200, Size: 123, Words: 4, Lines: 1]`` for every
+    match (``-mc`` already restricts which codes are shown) plus a banner and
+    ``:: Progress:`` lines. Without this parser the whole run's discoveries
+    were dropped, so the planner never learned about the routes it had just
+    found.
+    """
+    paths: list[dict] = []
+    seen: set[str] = set()
+    for line in str(stdout or "").split("\n"):
+        line = line.strip()
+        # The banner / progress lines carry no "[Status:" marker, so the
+        # result regex alone decides what is a match.
+        if not line or "Status:" not in line:
+            continue
+        match = re.match(
+            r"^(?P<path>[^\s\[\]]+)\s+\[Status:\s*(?P<code>\d{3})", line,
+        )
+        if not match:
+            continue
+        path = match.group("path")
+        if path.startswith(("http://", "https://")):
+            from urllib.parse import urlparse as _up
+            path = _up(path).path or "/"
+        elif not path.startswith("/"):
+            path = "/" + path
+        if path in seen:
+            continue
+        seen.add(path)
+        paths.append({"path": path, "code": match.group("code")})
+    return {"discovered_paths": paths, "count": len(paths)}
 
 
 def _parse_hydra_output(stdout: str) -> Dict[str, Any]:
@@ -385,15 +421,32 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
         params["wordlist"] = resolved or str(params.get("wordlist", "") or "")
         return params
 
+    _ffuf_desc = (
+        "Fuzz web parameters or paths using ffuf. Returns the discovered "
+        "paths/status codes so new routes enter the world state instead of "
+        "being discarded."
+    )
+    _ffuf_params = {
+        "url": {"type": "string", "description": "Target URL with FUZZ keyword"},
+        "wordlist": {"type": "string", "description": "Wordlist name or absolute path (resolved against the project wordlist directory)", "default": "common.txt"},
+    }
+    _ffuf_spec = auto_spec(
+        name="ffuf_fuzz",
+        description=_ffuf_desc,
+        parameters=_ffuf_params,
+        executor=EXECUTOR_SHELL,
+        command_template="ffuf -u '{url}' -w {wordlist} -mc 200,204,301,302,307,401,403,405 -o /dev/null 2>&1 | head -200",
+    )
+    # 1.1.0: parsed output (discovered_paths) — fuzz results now reach the DKG.
+    _ffuf_spec.version = "1.1.0"
     gateway.register_shell_tool(
         name="ffuf_fuzz",
         command_template="ffuf -u '{url}' -w {wordlist} -mc 200,204,301,302,307,401,403,405 -o /dev/null 2>&1 | head -200",
-        description="Fuzz web parameters or paths using ffuf",
-        parameters={
-            "url": {"type": "string", "description": "Target URL with FUZZ keyword"},
-            "wordlist": {"type": "string", "description": "Wordlist name or absolute path (resolved against the project wordlist directory)", "default": "common.txt"},
-        },
+        description=_ffuf_desc,
+        parameters=_ffuf_params,
+        parser=_parse_ffuf_output,
         prepare_params=_prepare_ffuf,
+        spec=_ffuf_spec,
     )
 
     # ── HTTP request with custom payload ────────────────────────

@@ -40,6 +40,14 @@ _HTML_HREF_RE = re.compile(r'<a\s+[^>]*href=["\']([^"\']+)["\']', re.I)
 _ROUTE_DOC_RE = re.compile(
     r"^\s*(GET|POST|PUT|DELETE|PATCH|OPTIONS|HEAD)\s+(/\S+)", re.M | re.I
 )
+#: Same shape, but not anchored: service manifests embed it inside JSON
+#: string values, e.g. {"endpoint": "POST /workflows {workspace, dataset_ref}"}.
+_ROUTE_DOC_INLINE_RE = re.compile(
+    r"(?<![A-Za-z0-9])(GET|POST|PUT|DELETE|PATCH|OPTIONS|HEAD)\s+(/[A-Za-z0-9._~/{}%:-]*)",
+    re.I,
+)
+#: Field list a manifest attaches to a documented route: {a, b}.
+_ROUTE_BODY_FIELDS_RE = re.compile(r"\{([^{}]{1,200})\}")
 _ROUTE_DESC_RE = re.compile(
     r"(?:endpoint|route|path|url)\s*[:：]\s*(/[\w\-./{}]+)", re.I
 )
@@ -181,6 +189,74 @@ def extract_json_route_fields(
     _walk(obj)
     return _dedupe_candidates(found)
 
+
+def extract_documented_routes(content: str) -> list[dict]:
+    """Routes a self-describing service advertises in its own response.
+
+    Returns ``[{"path", "methods", "params", "source"}]``. JSON manifests
+    embed the route inside a string value (``"endpoint": "POST /workflows
+    {workspace, dataset_ref}"``), which neither a line-anchored regex nor a
+    "value starts with /" walk can see — so the advertised route, its verb and
+    its body field names were previously invisible to the planner.
+    """
+    blob = str(content or "")
+    if not blob.strip():
+        return []
+    _STRINGS: list[str] = []
+    _stripped = blob.strip()
+    _from_json = False
+    if _stripped.startswith(("{", "[")):
+        try:
+            import json as _json
+
+            def _collect(node: Any) -> None:
+                if len(_STRINGS) > 200:
+                    return
+                if isinstance(node, dict):
+                    for item in node.values():
+                        _collect(item)
+                elif isinstance(node, list):
+                    for item in node[:20]:
+                        _collect(item)
+                elif isinstance(node, str):
+                    _STRINGS.append(node)
+
+            _collect(_json.loads(_stripped))
+            _from_json = True
+        except Exception:  # silent-ok: not JSON, fall back to a text scan
+            _STRINGS = []
+    if not _STRINGS:
+        _STRINGS = [blob]
+
+    found: list[dict] = []
+    for text in _STRINGS:
+        for match in _ROUTE_DOC_INLINE_RE.finditer(str(text)):
+            method, path = match.group(1).upper(), match.group(2)
+            if not path or path == "/":
+                continue
+            fields: list[str] = []
+            tail = str(text)[match.end():match.end() + 200]
+            # A field list belongs to the same documented route, so a plain
+            # text blob must not borrow the next line's braces.
+            tail = tail.split("\n", 1)[0]
+            field_match = _ROUTE_BODY_FIELDS_RE.search(tail)
+            if field_match:
+                for raw in field_match.group(1).split(","):
+                    name = raw.strip().strip("'\"<>")
+                    if name and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_.-]{0,40}", name):
+                        if name not in fields:
+                            fields.append(name)
+            entry = {
+                "path": path, "methods": [method], "params": fields,
+                "body_format": "json" if method != "GET" else "",
+                "source": "json-manifest" if _from_json else "route-doc-inline",
+            }
+            if not any(
+                existing["path"] == path and method in existing["methods"]
+                for existing in found
+            ):
+                found.append(entry)
+    return found
 
 def extract_openapi_routes(openapi_content: str) -> list[dict]:
     """Parse an OpenAPI/Swagger JSON document into route descriptors.
@@ -1376,6 +1452,15 @@ class ReconCoordinator(CoordinatorContext):
                 route["source"] = "openapi"
                 candidates.append(route)
         else:
+            # A service that documents its own routes ("POST /workflows
+            # {workspace, dataset_ref}") is the strongest available signal:
+            # both the verb and the body field names come from the target.
+            for route in extract_documented_routes(stdout):
+                p = route["path"]
+                if p in seen_paths:
+                    continue
+                seen_paths.add(p)
+                candidates.append(route)
             for path, source in extract_json_route_fields(stdout, base_url):
                 if path in seen_paths:
                     continue
@@ -1448,6 +1533,12 @@ class ReconCoordinator(CoordinatorContext):
                     "discovered_by": "adaptive-api-probe",
                     "route_source": route.get("source", "json-field"),
                     "allow_methods": ",".join(method_list),
+                    # Verbs the service documented for itself (vs. verbs the
+                    # OPTIONS probe discovered): the plan is not complete
+                    # until each of these has been exercised.
+                    "documented_methods": ",".join(
+                        sorted(route.get("methods") or [])
+                    ),
                     "invoke_signal": invoke_signal,
                     "verified": verified,
                 })
@@ -1560,7 +1651,14 @@ class ReconCoordinator(CoordinatorContext):
                 # this is a programmatic API, not a directory-browsable web app.
                 _sample = response_body(endpoint.get("sample_response", "")).strip()
                 if _sample.startswith("{") or _sample.startswith("["):
-                    log.info("_deep_recon: skipping JSON/API endpoint %s", url)
+                    # A JSON root is not a dead end: self-describing APIs
+                    # advertise their routes (and body fields) in the manifest,
+                    # so route discovery must run before declaring the
+                    # surface exhausted.
+                    log.info("_deep_recon: JSON/API endpoint %s — route discovery", url)
+                    await self._api_route_discovery(
+                        getattr(self, "target_host", "") or "", url, _sample
+                    )
                     await self._probe_collection_children(url, _sample)
                     return
 
@@ -1582,7 +1680,14 @@ class ReconCoordinator(CoordinatorContext):
                     # plain-text branch and no route discovery happens.
                     _pre_body = response_body(_pre_stdout).strip()
                     if _pre_body.startswith("{") or _pre_body.startswith("["):
-                        log.info("_deep_recon: pre-flight JSON/API, skipping gobuster/nikto for %s", url)
+                        log.info(
+                            "_deep_recon: pre-flight JSON/API for %s — "
+                            "running route discovery instead of gobuster/nikto",
+                            url,
+                        )
+                        await self._api_route_discovery(
+                            getattr(self, "target_host", "") or "", url, _pre_body
+                        )
                         await self._probe_collection_children(url, _pre_body)
                         return
                     # Non-HTML response detection: plain-text APIs (IMDS,

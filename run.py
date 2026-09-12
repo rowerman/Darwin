@@ -114,7 +114,9 @@ async def main():
     # ── Recon summary from DKG ────────────────────────────────────
     hosts = orch.dkg.query_nodes("Host")
     services = orch.dkg.query_nodes("Service")
-    endpoints = orch.dkg.query_nodes("Endpoint")
+    # Only routes the target answered for: derived/hypothesized URLs must not
+    # be reported as discovered.
+    endpoints = orch.dkg.verified_endpoints()
     vulns = orch.dkg.query_nodes("Vulnerability")
     flags = orch.dkg.query_nodes("Flag")
 

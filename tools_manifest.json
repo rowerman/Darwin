@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0.0",
-  "generated_at": "2026-09-12T08:03:38+00:00",
+  "generated_at": "2026-09-12T11:15:04+00:00",
   "source": "darwin.tools.manifest",
   "tool_count": 135,
   "tools": [
@@ -1623,8 +1623,8 @@
     },
     {
       "name": "ffuf_fuzz",
-      "version": "1.0.0",
-      "description": "Fuzz web parameters or paths using ffuf",
+      "version": "1.1.0",
+      "description": "Fuzz web parameters or paths using ffuf. Returns the discovered paths/status codes so new routes enter the world state instead of being discarded.",
       "domains": [
         "web"
       ],

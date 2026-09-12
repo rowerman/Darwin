@@ -323,6 +323,12 @@ class Orchestrator:
     def _build_plan_exhaustion_context(self) -> str:
         return self.execution._build_plan_exhaustion_context()
 
+    def _untested_documented_routes(self) -> list:
+        return self.execution._untested_documented_routes()
+
+    def _endpoint_declared_methods(self, url: str) -> set:
+        return self.execution._endpoint_declared_methods(url)
+
     async def _execute_privesc(self, target_url: str) -> str | None:
         return await self.execution._execute_privesc(target_url)
 
@@ -379,8 +385,8 @@ class Orchestrator:
     async def _generate_exploitation_plan(self, target_url: str, cteg_hints: dict | None=None) -> ExploitationPlan:
         return await self.planning._generate_exploitation_plan(target_url, cteg_hints)
 
-    def _guess_tool(self, vuln_type: str) -> str:
-        return self.planning._guess_tool(vuln_type)
+    def _guess_tool(self, vuln_type: str, endpoint: str = "", method: str = "") -> str:
+        return self.planning._guess_tool(vuln_type, endpoint=endpoint, method=method)
 
     @staticmethod
     def _task_from_llm_dict(d: dict) -> Task:

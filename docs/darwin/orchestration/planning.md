@@ -18,6 +18,12 @@
 - `_review_and_update_plan()`：计划评审与更新。
 - `_analyze_and_fix_task()` / `_extract_credentials_from_task()`：失败分析与
   凭据提取。
+- `normalize_success_condition()`：只保留运行时可验证的条件类型
+  （`KNOWN_CONDITION_TYPES`），未知类型显式丢弃并告警。
+- `_guess_tool(vuln_type, endpoint="", method="")`：按请求形状选工具——目标把
+  路由声明为写动词时，读类默认工具不再适用。
+- `_http_alternative_block()`：把能表达非 GET 请求的工具及其参数契约渲染进
+  fix 提示，使"换工具"成为可执行的修复选项。
 - 空漏洞兜底：Analyze 无假设但 DKG 存在 API/POST/JSON 端点时，
   `_collect_api_verification_endpoints()` + `_build_api_verification_tasks()`
   生成有上限的路由验证任务（仅端点确认与响应结构获取，不宣称漏洞；无参数
@@ -57,11 +63,24 @@ LLM 复审仅在“任务失败 / 本任务产生 DKG 增量 / 无 ready 任务�
 ### 复审节律（`_review_skip_reason()`）
 
 复审会重写整份计划，因此必须由“上一版计划被真实执行验证过”来支付：
-每个 runtime cycle 的**第一次**复审始终允许；其后两次复审之间至少要有
-`_MIN_EXECUTIONS_BETWEEN_REVIEWS`（3）个任务执行完（或存在 DKG 增量）。
+每个 runtime cycle 的**第一次**复审始终允许；其后只有满足以下任一条才允许
+再写：出现新证据（`_evidence_since_review`，如新发现的路由/端点）、上一次
+失败类型属于 `_REVIEW_TRIGGERING_FAILURES`（`invalid_argument` /
+`tool_error` / `strategy_failed`，说明计划本身有问题）、或距上次复审已执行
+`_MIN_EXECUTIONS_BETWEEN_REVIEWS`（3）个任务。剩余预算低于
+`_REVIEW_MIN_REMAINING_SECONDS`（120s）时直接跳过复审进入收尾扫描。
 计划确实无任务可执行时允许一次 stall 复审（`task.id == "plan-exhausted"`），
 但“上次复审后零执行”时不再连发。计数由
 `execution._execute_task_with_policies()` 自增、复审调用后清零。
+
+### 计划完成性与裁剪
+
+- 评审提示词包含“已声明但未按声明方法访问过的路由”清单（由
+  `execution._untested_documented_routes()` 计算）；只要清单非空，计划就
+  不算完成。
+- `_cap_pending_tasks()` 的裁剪顺序为：保留覆盖这些路由的任务 →
+  优先保留签名（tool+url）尚未执行过的任务 → 再按依赖数/有无工具排序，
+  同档取**最新**加入的任务（它写于最新证据之上）。
 
 ### 写意图护栏（`_enforce_write_intent()`）
 

@@ -18,6 +18,8 @@
 - `topology_diff()`：比较任务前后的节点/边变化，供 replan 上下文使用。
 - `upsert_attack_path()`：持久化稳定 `path_id` 的 confidence/status/evidence。
 - `attack_path_summary()`：门控 + 按 revision 缓存的攻击路径摘要；仅当图中存在云/K8s 相关节点类型时才计算，同 revision 重复调用不重算。
+- `verified_endpoints()`：只返回目标真实响应过的 Endpoint（`provenance_level="verified"`）。派生/假设路由存在图中但不作为事实参与规划与报告。
+- Endpoint 的 `provenance_level`：`verified`（对该 (url, method) 观测到非 404 响应）/ `derived`（规则或猜测产生，仅观测到 404 或未观测，含 `derived_from`）/ `hypothesized`。未显式给出时由 `endpoint_provenance_level()` 按 `sample_status` 计算，因此一次 404 变体探测不会被记成"已发现路由"。
 - `NODE_TYPES`、`EDGE_TYPES`：图语义目录。
 
 拓扑快照、拓扑上下文和摘要会隐藏 Credential 的 secret/token/password；原始 `query_nodes()`、checkpoint 和执行器专用读取仍保留完整凭据。

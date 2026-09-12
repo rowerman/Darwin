@@ -45,6 +45,13 @@ from darwin.core.schemas import (
 )
 from darwin.core.task import Task, deps_from_task_ids
 from darwin.core.task_graph import TaskGraph, dependency_task_ids
+from darwin.tools.contracts import (
+    HTTP_REQUEST_CAPABILITIES,
+    capability_family,
+    http_tool_can_express,
+    http_tools_for,
+    request_body_kind,
+)
 from darwin.utils.urls import (
     IDENTIFIER_RE as _IDENTIFIER_RE,
     ROUTE_VARIANT_MAX_IDENTIFIERS as _ROUTE_VARIANT_MAX_IDENTIFIERS,
@@ -144,6 +151,17 @@ def _planned_write_intent(tool: str, params: dict | None) -> bool:
     return _call_method(tool, params) in _WRITE_METHODS
 
 
+def _tool_fits_methods(name: str, methods: set[str]) -> bool:
+    """Whether *name* can express one of the verbs the target declared.
+
+    Non-HTTP tools (SQL clients, kubectl, ...) are unaffected — only the HTTP
+    family is policed here.
+    """
+    if name not in HTTP_REQUEST_CAPABILITIES:
+        return True
+    return http_tool_can_express(name, methods, body_kind="json")
+
+
 def _http_status_of(text: str) -> int | None:
     """Extract the HTTP status code from curl/urllib style tool output."""
     match = _HTTP_STATUS_RE.search(str(text or ""))
@@ -157,6 +175,19 @@ def _http_status_of(text: str) -> int | None:
 # when the verb is right; the neighbour paths come from identifiers the task
 # already observed (see darwin.utils.urls).
 _ROUTE_VARIANT_STATUSES = (404, 405)
+
+#: Discovery tools whose parsed output is (path, status) evidence. Their
+#: results are ingested as Endpoint nodes so a fuzz run actually advances the
+#: world state instead of ending as "no new state discovered".
+_ROUTE_DISCOVERY_TOOLS = frozenset({"ffuf_fuzz", "gobuster_dir", "dirb_scan"})
+
+#: Task parameters that describe HOW to send a request (verb, body encoding,
+#: transport switches). Their values are never resource identifiers on the
+#: target, so route derivation must not turn them into path segments.
+_ROUTE_ID_CONTROL_KEYS = frozenset({
+    "method", "body_format", "encode_type", "content_type", "insecure",
+    "follow_redirects", "timeout", "headers", "cookie", "user", "password",
+})
 
 # Tools the systematic pass falls back to for an unmapped vulnerability. The
 # first entry must be able to express a write verb, otherwise a write-class
@@ -579,7 +610,10 @@ class ExecutionCoordinator(CoordinatorContext):
         Sources: the task's own params, the sampled responses of the host's
         DKG endpoints, and the failing call's output. Values are filtered to
         identifier-looking tokens so a banner or a sentence never becomes a
-        path segment.
+        path segment, and the call's own control keys are skipped outright:
+        ``method=POST`` / ``body_format=json`` describe how to send the
+        request, not a resource on the target, and harvesting them is how a
+        route like ``/workflows/POST`` got recorded as discovered.
         """
         identifiers: list[str] = []
 
@@ -588,19 +622,22 @@ class ExecutionCoordinator(CoordinatorContext):
                 if value not in identifiers:
                     identifiers.append(value)
 
-        def _collect(value: Any) -> None:
+        def _collect(key: str, value: Any) -> None:
+            if key in _ROUTE_ID_CONTROL_KEYS:
+                return
             if isinstance(value, dict):
-                for item in value.values():
-                    _collect(item)
+                for sub_key, item in value.items():
+                    _collect(str(sub_key), item)
             elif isinstance(value, (list, tuple)):
                 for item in value:
-                    _collect(item)
+                    _collect(key, item)
             elif isinstance(value, (str, int, float)) and not isinstance(value, bool):
                 token = str(value)
                 if _IDENTIFIER_RE.match(token) and token not in identifiers:
                     identifiers.append(token)
 
-        _collect(params or {})
+        for _key, _value in (params or {}).items():
+            _collect(str(_key), _value)
         _host = str(getattr(self, "target_host", "") or "")
         try:
             endpoints = self.dkg.query_nodes("Endpoint")
@@ -620,20 +657,379 @@ class ExecutionCoordinator(CoordinatorContext):
         if not url:
             return
         try:
-            node_id = f"ep-route-{hashlib.sha1(url.encode()).hexdigest()[:10]}"
-            existing = self.dkg.get_node(node_id) or {}
-            methods = dict(existing.get("methods", {}) or {})
+            _node_id = self._upsert_endpoint(
+                url,
+                create_props={
+                    "method": str(method or "GET").upper(),
+                    "sample_status": int(status or 0),
+                    "discovered_by": "route-probe",
+                    "derived_from": "route-probe",
+                },
+            )
+            if not _node_id:
+                return
+            _node = self.dkg.get_node(_node_id) or {}
+            methods = dict(_node.get("methods", {}) or {})
             if method:
                 methods[str(method).upper()] = int(status or 0)
-            self.dkg.add_node("Endpoint", node_id, {
-                "url": url,
-                "method": str(method or "GET").upper(),
-                "methods": methods,
-                "sample_status": int(status or 0),
-                "discovered_by": "route-variant",
-            })
+            # Record the answer against the route that already exists instead
+            # of forking a parallel node: "which verbs has this route been
+            # exercised with" is one fact, not two.
+            self.dkg.update_node(
+                _node_id,
+                {
+                    "methods": methods,
+                    "provenance_level": (
+                        "derived"
+                        if methods and all(
+                            int(v or 0) in (0, 404) for v in methods.values()
+                        )
+                        else "verified"
+                    ),
+                },
+            )
         except Exception as exc:
             log.debug("route probe persistence failed for %s: %s", url, exc)
+
+    def _upsert_endpoint(
+        self,
+        url: str,
+        create_props: dict | None = None,
+        update_props: dict | None = None,
+    ) -> str:
+        """Create or merge the Endpoint node for *url* (one node per route).
+
+        ``create_props`` apply only when the route is new — re-probing an
+        existing route must not overwrite the status that first proved it
+        exists.
+        """
+        if not url:
+            return ""
+        _base = str(url).rstrip("/")
+        for ep in self.dkg.query_nodes("Endpoint"):
+            if str(ep.get("url", "") or "").rstrip("/") == _base:
+                _node_id = str(ep.get("id", "") or "")
+                _updates = {
+                    k: v for k, v in dict(update_props or {}).items()
+                    if v not in (None, "")
+                }
+                if _node_id and _updates:
+                    self.dkg.update_node(_node_id, _updates)
+                return _node_id
+        _node_id = f"ep-{hashlib.sha1(_base.encode()).hexdigest()[:10]}"
+        self.dkg.add_node("Endpoint", _node_id, {"url": url, **dict(create_props or {})})
+        self._evidence_since_review = True
+        _host = str(getattr(self, "target_host", "") or "")
+        if _host and self.dkg.get_node(f"host-{_host}"):
+            try:
+                self.dkg.add_edge(
+                    f"host-{_host}", _node_id, "host_has_endpoint",
+                    source=str((create_props or {}).get("discovered_by", "")),
+                    evidence=url,
+                )
+            except Exception as exc:
+                log.debug("endpoint edge failed for %s: %s", url, exc)
+        return _node_id
+
+    def _ingest_observed_routes(self, tool: str, params: dict, result: Any) -> None:
+        """Turn a discovery tool's output into world state.
+
+        Directory/route fuzzers already report ``path [Status: N]``; without
+        this the run discards what it just discovered and re-probes the root
+        forever.
+        """
+        parsed = getattr(result, "parsed_output", {}) or {}
+        paths = parsed.get("discovered_paths") or []
+        if not paths:
+            return
+        _base = str((params or {}).get("url", (params or {}).get("target_url", "")) or "")
+        _base = _base.split("FUZZ", 1)[0].rstrip("/")
+        if not _base.startswith(("http://", "https://")):
+            return
+        _added = 0
+        for item in paths[:40]:
+            if not isinstance(item, dict):
+                continue
+            path = str(item.get("path", "") or "")
+            if not path.startswith("/"):
+                continue
+            try:
+                status = int(item.get("code") or 0)
+            except (TypeError, ValueError):
+                status = 0
+            _url = f"{_base}{path}"
+            if not self._upsert_endpoint(
+                _url,
+                create_props={
+                    "method": "GET",
+                    "sample_status": status,
+                    "discovered_by": f"{tool}-result",
+                    "provenance_level": (
+                        "derived" if status in (0, 404) else "verified"
+                    ),
+                },
+            ):
+                continue
+            _added += 1
+        if _added:
+            log.info("[ROUTES] %s: ingested %d discovered path(s)", tool, _added)
+            # A newly observed route is exactly the kind of change a plan
+            # review exists to react to.
+            self._evidence_since_review = True
+            self._task_log_event(
+                "info", "routes_ingested", tool=tool, count=_added,
+            )
+
+    def _untested_documented_routes(self) -> list[tuple[str, str]]:
+        """(url, method) pairs the target documented but nobody exercised.
+
+        The service told us which verb a route wants; until that verb has
+        actually been sent, "no flag found" says nothing about the route. This
+        drives the plan-completeness invariant and protects those tasks from
+        the plan cap.
+        """
+        out: list[tuple[str, str]] = []
+        for ep in self.dkg.query_nodes("Endpoint"):
+            url = str(ep.get("url", "") or "")
+            if not url.startswith(("http://", "https://")):
+                continue
+            declared: set[str] = set()
+            for field in ("method", "allow_methods", "documented_methods"):
+                for raw in str(ep.get(field, "") or "").split(","):
+                    name = raw.strip().upper()
+                    if name:
+                        declared.add(name)
+            exercised = {
+                str(m).upper() for m in (ep.get("methods", {}) or {}).keys()
+            }
+            for method in sorted(declared - {"", "HEAD", "OPTIONS"} - exercised):
+                out.append((url, method))
+        return out
+
+    def _endpoint_declared_methods(self, url: str) -> set[str]:
+        """Verbs the target itself declared for *url* (DKG evidence).
+
+        Sources are the Endpoint node's own ``method`` plus the ``Allow``
+        header recorded as ``allow_methods`` by the API-route probe. This is
+        how a documented ``POST /workflows`` route tells the planner that a
+        read-only tool can never test it.
+        """
+        if not url:
+            return set()
+        methods: set[str] = set()
+        _base = str(url).rstrip("/")
+        for ep in self.dkg.query_nodes("Endpoint"):
+            _ep_url = str(ep.get("url", "") or "").rstrip("/")
+            if not _ep_url or _ep_url != _base:
+                continue
+            if ep.get("method"):
+                methods.add(str(ep["method"]).upper())
+            for _m in str(ep.get("allow_methods", "") or "").split(","):
+                if _m.strip():
+                    methods.add(_m.strip().upper())
+        methods.discard("HEAD")
+        methods.discard("OPTIONS")
+        return methods
+
+    def _endpoint_is_verified(self, url: str) -> bool:
+        """True only when the target itself answered for *url*.
+
+        A URL that exists merely because a rule derived it, or because the
+        planner proposed it, is not ground truth: building further probes on
+        top of it is how a hallucinated path becomes recorded world state.
+        """
+        if not url:
+            return False
+        _base = str(url).rstrip("/")
+        for ep in self.dkg.query_nodes("Endpoint"):
+            if str(ep.get("url", "") or "").rstrip("/") != _base:
+                continue
+            _level = str(ep.get("provenance_level", "") or "")
+            if _level:
+                return _level == "verified"
+            # Legacy node (written before provenance levels): the recorded
+            # status is the best available evidence.
+            _status = ep.get("sample_status")
+            if _status is None:
+                return False
+            try:
+                return int(_status) not in (0, 404)
+            except (TypeError, ValueError):
+                return False
+        return False
+
+    def _method_upgrade_candidate(
+        self, tool: str, params: dict, executed: list[dict],
+    ) -> tuple[str, dict] | None:
+        """Tool + params that can express the verb the target actually wants.
+
+        A 405 with an ``Allow`` header, or an endpoint the target documented
+        as a write route, means the planned *tool* is wrong rather than the
+        hypothesis. Returns ``None`` when the planned tool already covers it
+        (so the retry cannot loop) or when nothing better is registered.
+        """
+        _url = str((params or {}).get("url", (params or {}).get("target_url", "")) or "")
+        if not _url:
+            return None
+        wanted = set(self._endpoint_declared_methods(_url))
+        for call in executed or []:
+            _allow = str(call.get("allow", call.get("Allow", "")) or "")
+            if not _allow:
+                # The Allow header travels inside the response text, not as a
+                # separate field: read it the same way a human would.
+                _m = re.search(r"^\s*Allow:\s*(.+)$", str(call.get("stdout", "") or ""),
+                               re.M | re.I)
+                _allow = _m.group(1) if _m else ""
+            if _allow:
+                wanted |= {m.strip().upper() for m in _allow.split(",") if m.strip()}
+        _last = _last_http_status(executed)
+        if _last in (404, 405):
+            # The route exists but not for the verb we sent: try the other
+            # verbs the endpoint itself advertises.
+            wanted |= self._endpoint_declared_methods(_url)
+            wanted -= {str(_call_method(tool, params)).upper()}
+        wanted.discard("HEAD")
+        wanted.discard("OPTIONS")
+        if not wanted:
+            return None
+        _body_kind = request_body_kind(params)
+        if http_tool_can_express(tool, wanted, _body_kind):
+            return None
+        registered: set[str] = set()
+        for _gw in (self.attack_gateway, self.recon_gateway):
+            try:
+                registered.update(_gw.get_tool_names())
+            except Exception as exc:
+                log.debug("tool registry lookup failed: %s", exc)
+        # The HTTP family is pure-Python, so an empty registry (no gateways
+        # wired, e.g. in a unit test) may fall back to the static table
+        # instead of silently giving up on the repair.
+        _candidates = http_tools_for(
+            wanted, available=registered or None, body_kind=_body_kind,
+        )
+        if not _candidates:
+            return None
+        _new_tool = _candidates[0]
+        _new_params = self._remap_http_params(tool, _new_tool, params, wanted)
+        return _new_tool, _new_params
+
+    @staticmethod
+    def _tool_in_same_capability_family(old_tool: str, new_tool: str) -> bool:
+        """Whether a repair may switch *old_tool* → *new_tool*."""
+        if not old_tool or not new_tool:
+            return False
+        return capability_family(old_tool) == capability_family(new_tool)
+
+    def _remap_http_params(
+        self, old_tool: str, new_tool: str, params: dict, methods: set[str],
+    ) -> dict:
+        """Carry a call's intent across an HTTP-tool substitution.
+
+        The target argument and the body move to the new tool's declared
+        names; the verb follows the endpoint's own declaration (a write verb
+        when it advertises one, otherwise the tool's own default).
+        """
+        _new_params: dict = {}
+        for key, value in dict(params or {}).items():
+            if key in ("url", "target_url"):
+                continue
+            _new_params[key] = value
+        _url = str((params or {}).get("url", (params or {}).get("target_url", "")) or "")
+        _new_params["url"] = _url
+        # Drop parameters the new tool does not declare instead of letting the
+        # gateway refuse the recovered call on an unknown key.
+        _declared: set[str] = set()
+        for _gw in (self.attack_gateway, self.recon_gateway):
+            try:
+                _spec = _gw.get_tool_specs().get(new_tool)
+            except Exception as exc:
+                log.debug("spec lookup failed for %s: %s", new_tool, exc)
+                _spec = None
+            if _spec is not None:
+                _declared = set(getattr(_spec, "parameters", {}) or {})
+                break
+        if _declared:
+            _new_params = {k: v for k, v in _new_params.items() if k in _declared}
+        _write_wanted = sorted(methods & {"POST", "PUT", "PATCH", "DELETE"})
+        if _write_wanted and "method" in (_declared or {"method"}):
+            _new_params["method"] = _write_wanted[0]
+        return _new_params
+
+    async def _recovery_call(
+        self,
+        task: Task,
+        tool: str,
+        params: dict,
+        *,
+        reason: str,
+        event: str,
+        executed_calls: list[dict],
+        all_stdouts: list[str],
+        raw_stdouts: list[str],
+        execution: Any = None,
+    ) -> tuple[Any, str, int | None, bool]:
+        """Run one alternative/repaired call through the normal dispatch path.
+
+        A recovered call is recorded exactly like a planned one (task log,
+        executed-call list, route-probe persistence, flag verification), so a
+        fix-retry, a route variant and a verb upgrade all produce evidence of
+        the same quality instead of a second, thinner execution path.
+
+        Returns ``(result, stdout, http_status, flag_found)``.
+        """
+        try:
+            result = await self._call_tool(tool, params)
+        except Exception as exc:  # noqa: BLE001 - reported as a failed call
+            log.warning("recovery call failed (%s %s): %s", tool, reason, exc)
+            return None, "", None, False
+        stdout = str(getattr(result, "stdout", "") or "")
+        status = _http_status_of(stdout)
+        self.step_count += 1
+        self._task_log_event(
+            "info", event, task_id=task.id, tool=tool, reason=reason,
+            url=str(params.get("url", params.get("target_url", "")) or ""),
+            method=_call_method(tool, params), status=status,
+            success=bool(getattr(result, "success", False)),
+        )
+        executed_calls.append({
+            "name": tool,
+            "args": dict(params),
+            "success": bool(getattr(result, "success", False)),
+            "stdout": stdout,
+            "stderr": getattr(result, "stderr", "") or "",
+            "method": _call_method(tool, params),
+            "params_repaired": list(getattr(result, "params_repaired", []) or []),
+        })
+        all_stdouts.append(f"[{tool}] {stdout[:600]}")
+        raw_stdouts.append(stdout)
+        if status is not None:
+            self._record_route_probe(
+                str(params.get("url", params.get("target_url", "")) or ""),
+                _call_method(tool, params), status,
+            )
+        flags = self.flag_pattern.findall(stdout)
+        if not flags:
+            return result, stdout, status, False
+        _ok, _reason = await self._verify_flag(
+            flags[0], stdout, params,
+            getattr(result, "elapsed_ms", 0), tool_name=tool,
+        )
+        if not _ok:
+            log.warning("recovery flag candidate rejected (%s): %s", reason, _reason)
+            return result, stdout, status, False
+        self._persist_verified_flag(
+            flags[0], str(params.get("url", params.get("target_url", "")) or ""), reason,
+        )
+        self.phase = OrchestratorPhase.DONE
+        if execution is not None:
+            execution.flag_result = TaskResult(
+                success=True, flag=flags[0],
+                steps=self.step_count,
+                tokens_used=self._tokens_used(),
+                time_elapsed=time.time() - self.start_time,
+            )
+            self._verified_flag_result = execution.flag_result
+        return result, stdout, status, True
 
     async def _verify_success_condition(
         self,
@@ -685,11 +1081,14 @@ class ExecutionCoordinator(CoordinatorContext):
             wanted = {int(s) for s in (condition.get("status") or []) if str(s).isdigit()}
             if not wanted:
                 return any_success, "http_status_in without status codes"
-            observed = next(
-                (s for s in (_http_status_of(c.get("stdout", "")) for c in executed)
-                 if s is not None),
-                None,
-            )
+            # Most recent answer wins: after a deterministic verb/tool upgrade
+            # or a fix-retry, the status that matters is the one the repaired
+            # request got, not the 405 that triggered the repair.
+            observed = None
+            for call in reversed(executed or []):
+                observed = _http_status_of(str(call.get("stdout", "") or ""))
+                if observed is not None:
+                    break
             if observed is None:
                 return False, f"no HTTP status in output (expected one of {sorted(wanted)})"
             return observed in wanted, f"HTTP {observed} (expected one of {sorted(wanted)})"
@@ -1663,7 +2062,26 @@ class ExecutionCoordinator(CoordinatorContext):
                 "stdout": getattr(result, "stdout", "") or "",
                 "stderr": getattr(result, "stderr", "") or "",
                 "method": _call_method(tc_name, tc_args),
+                "params_repaired": list(
+                    getattr(result, "params_repaired", []) or []
+                ),
             })
+            # Remember which verb this route actually answered, so a route the
+            # target documented as POST stops counting as "untested" only once
+            # a POST really happened.
+            _call_url = str(
+                (tc_args or {}).get("url", (tc_args or {}).get("target_url", "")) or ""
+            )
+            _call_status = _http_status_of(getattr(result, "stdout", "") or "")
+            if not hasattr(self, "_executed_signatures"):
+                self._executed_signatures: set[tuple[str, str]] = set()
+            self._executed_signatures.add((tc_name, _call_url.rstrip("/")))
+            if tc_name in _ROUTE_DISCOVERY_TOOLS:
+                self._ingest_observed_routes(tc_name, tc_args, result)
+            if _call_url.startswith(("http://", "https://")) and _call_status is not None:
+                self._record_route_probe(
+                    _call_url, _call_method(tc_name, tc_args), _call_status,
+                )
             # Track if automated test found nothing
             rl = (getattr(result, 'stdout', '') or '').lower()
             if "no evidence" in rl or "no flag" in rl:
@@ -1747,8 +2165,11 @@ class ExecutionCoordinator(CoordinatorContext):
             else {}
         )
         if not _condition and _planned_write_intent(task_tool, task_params):
-            _condition = {"type": "tool_success", "tool": task_tool,
-                          "method": _call_method(task_tool, task_params)}
+            # A write is not "done" because the tool exited 0: the server has
+            # to have accepted it. The executor synthesizes the observable
+            # criterion itself instead of trusting a free-text condition.
+            _condition = {"type": "http_status_in",
+                          "status": [200, 201, 202, 204]}
         _condition_detail = ""
         if _condition:
             _cond_met, _condition_detail = await self._verify_success_condition(
@@ -1791,14 +2212,78 @@ class ExecutionCoordinator(CoordinatorContext):
                 f"[SUCCESS CONDITION NOT MET] {_condition_detail}\n{task_result_text}"
             )
 
+        # ── Deterministic verb/tool upgrade ─────────────────────────
+        # A 405 (or a route the target documents as a write) means the TOOL is
+        # wrong, not the hypothesis. Re-issue the same intent with a tool that
+        # can express the required verb, instead of paying an LLM round-trip
+        # to be told "the request used the wrong method".
+        if not task_success and not execution.flag_result:
+            _upgrade = self._method_upgrade_candidate(
+                task_tool, task_params, _executed_calls,
+            )
+            if _upgrade:
+                _up_tool, _up_params = _upgrade
+                log.info(
+                    "[METHOD-UPGRADE] task=%s %s → %s (declared verbs: %s)",
+                    task.id, task_tool, _up_tool,
+                    sorted(self._endpoint_declared_methods(
+                        str(task_params.get(
+                            "url", task_params.get("target_url", "")) or "")
+                    )),
+                )
+                _up_result, _up_stdout, _up_status, _up_flag = (
+                    await self._recovery_call(
+                        task, _up_tool, _up_params,
+                        reason="method-upgrade", event="method_upgrade",
+                        executed_calls=_executed_calls,
+                        all_stdouts=_all_task_stdouts,
+                        raw_stdouts=_raw_task_stdouts,
+                        execution=execution,
+                    )
+                )
+                if _up_flag:
+                    return execution
+                if _up_result is not None:
+                    _last_result = _up_result
+                    _any_success = _any_success or bool(
+                        getattr(_up_result, "success", False)
+                    )
+                    task_tool = _up_tool
+                    task_params = _up_params
+                    task.action = {
+                        **(task.action or {}),
+                        "tool": _up_tool, "params": dict(_up_params),
+                    }
+                    if _condition:
+                        _up_met, _up_detail = await self._verify_success_condition(
+                            _condition, _executed_calls, _any_success, False,
+                        )
+                        task_success = bool(_up_met)
+                        self._task_log_event(
+                            "info", "success_condition", task_id=task.id,
+                            condition=_condition, met=bool(_up_met),
+                            detail=_up_detail, phase="method-upgrade",
+                        )
+                    else:
+                        task_success = _any_success
+            task_result_text = self._summarize_task_result(
+                tc_names, task_success, _all_task_stdouts
+            )
+
         # ── Deterministic route-variant retry (write intent) ─────────
         # A wrong path SHAPE (collection route vs detail route) answers
         # 404/405 even when the verb is right. Retry the SAME method against
         # neighbour paths derived from identifiers already observed, instead
-        # of spending an LLM round-trip guessing the same thing.
+        # of spending an LLM round-trip guessing the same thing. Variants are
+        # only derived from endpoints the target actually answered for: a
+        # hallucinated base URL must never grow into recorded world state.
         if (not task_success
+                and not execution.flag_result
                 and _planned_write_intent(task_tool, task_params)
-                and _last_http_status(_executed_calls) in _ROUTE_VARIANT_STATUSES):
+                and _last_http_status(_executed_calls) in _ROUTE_VARIANT_STATUSES
+                and self._endpoint_is_verified(str(
+                    task_params.get("url", task_params.get("target_url", "")) or ""))
+        ):
             _variant_base = str(
                 task_params.get("url", task_params.get("target_url", "")) or ""
             )
@@ -1814,55 +2299,23 @@ class ExecutionCoordinator(CoordinatorContext):
                     _variant_args["url"] = _variant_url
                 else:
                     _variant_args["target_url"] = _variant_url
-                try:
-                    _variant_result = await self._call_tool(task_tool, _variant_args)
-                except Exception as exc:
-                    log.warning("route variant probe failed for %s: %s", _variant_url, exc)
-                    continue
-                _variant_stdout = str(getattr(_variant_result, "stdout", "") or "")
-                _variant_status = _http_status_of(_variant_stdout)
-                self.step_count += 1
-                self._task_log_event(
-                    "info", "route_variant_probe", task_id=task.id,
-                    url=_variant_url, method=_variant_method,
-                    status=_variant_status,
-                    success=bool(getattr(_variant_result, "success", False)),
+                (_variant_result, _variant_stdout, _variant_status,
+                 _variant_flag) = await self._recovery_call(
+                    task, task_tool, _variant_args,
+                    reason="route-variant", event="route_variant_probe",
+                    executed_calls=_executed_calls,
+                    all_stdouts=_all_task_stdouts,
+                    raw_stdouts=_raw_task_stdouts,
+                    execution=execution,
                 )
-                self._record_route_probe(_variant_url, _variant_method, _variant_status)
-                _all_task_stdouts.append(f"[{task_tool}] {_variant_stdout[:600]}")
-                _executed_calls.append({
-                    "name": task_tool,
-                    "args": dict(_variant_args),
-                    "success": bool(getattr(_variant_result, "success", False)),
-                    "stdout": _variant_stdout,
-                    "stderr": getattr(_variant_result, "stderr", "") or "",
-                    "method": _variant_method,
-                })
+                if _variant_flag:
+                    return execution
+                if _variant_result is None:
+                    continue
+                _last_result = _variant_result
                 _any_success = _any_success or bool(
                     getattr(_variant_result, "success", False)
                 )
-                _last_result = _variant_result
-                _variant_flags = self.flag_pattern.findall(_variant_stdout)
-                if _variant_flags:
-                    _v_ok, _v_reason = await self._verify_flag(
-                        _variant_flags[0], _variant_stdout, _variant_args,
-                        getattr(_variant_result, "elapsed_ms", 0),
-                        tool_name=task_tool,
-                    )
-                    if _v_ok:
-                        self._persist_verified_flag(
-                            _variant_flags[0], _variant_url, "route-variant",
-                        )
-                        self.phase = OrchestratorPhase.DONE
-                        execution.flag_result = TaskResult(
-                            success=True, flag=_variant_flags[0],
-                            steps=self.step_count,
-                            tokens_used=self._tokens_used(),
-                            time_elapsed=time.time() - self.start_time,
-                        )
-                        self._verified_flag_result = execution.flag_result
-                        return execution
-                    log.warning("route variant flag rejected: %s", _v_reason)
                 if _condition:
                     _v_met, _v_detail = await self._verify_success_condition(
                         _condition, _executed_calls, _any_success,
@@ -1933,6 +2386,28 @@ class ExecutionCoordinator(CoordinatorContext):
             # is checked against the tool's declared schema first: an
             # undeclared key must be visible instead of silently shipped (or
             # silently dropped deeper in the gateway).
+            #
+            # The fix may also name a different tool: some failures are not
+            # parameter problems at all ("this route only accepts POST") and
+            # cannot be repaired while the read-only tool stays selected.
+            _fix_tool = str(fix.get("tool", "") or "").strip()
+            _tool_before_fix = _task_tool
+            if _fix_tool and _fix_tool != _task_tool:
+                _family_ok = self._tool_in_same_capability_family(
+                    _task_tool, _fix_tool,
+                )
+                if _family_ok:
+                    log.info(
+                        "task=%s: fix switched tool %s → %s",
+                        task.id, _task_tool, _fix_tool,
+                    )
+                    _task_tool = _fix_tool
+                else:
+                    log.warning(
+                        "task=%s: ignoring fix tool change %s → %s "
+                        "(not the same capability family)",
+                        task.id, _task_tool, _fix_tool,
+                    )
             _corrected, _dropped_params = self._normalized_tool_args(
                 _task_tool, fix.get("corrected_params", {}) or {},
             )
@@ -1941,9 +2416,25 @@ class ExecutionCoordinator(CoordinatorContext):
                     "task=%s: ignoring corrected param(s) %s not declared by %s",
                     task.id, _dropped_params, _task_tool,
                 )
-            _merged_params = dict(task_params)
-            _merged_params.update(_corrected)
+            if _task_tool != _tool_before_fix:
+                # A different tool declares different parameters: the old
+                # tool's keys (e.g. `param`/`payload` for an injector) are
+                # unknown to the new one and would be refused, so rebuild the
+                # call from what the NEW contract accepts.
+                _carried = {**task_params, **_corrected}
+                _merged_params, _dropped_carried = self._normalized_tool_args(
+                    _task_tool, _carried,
+                )
+                if _dropped_carried:
+                    log.info(
+                        "task=%s: dropped %s when moving to %s",
+                        task.id, _dropped_carried, _task_tool,
+                    )
+            else:
+                _merged_params = dict(task_params)
+                _merged_params.update(_corrected)
             task_action = dict(task.action or {})
+            task_action["tool"] = _task_tool
             task_action["params"] = _merged_params
             task.action = task_action
             task_params = _merged_params
@@ -1951,12 +2442,26 @@ class ExecutionCoordinator(CoordinatorContext):
             print(f"  [FIX] {task.id}: {reason[:120]}")
             self.step_count += 1
 
-            retry_result = await self.executor.execute(task)
+            # The retry runs through the same dispatch helper as the planned
+            # call, so a repaired call is recorded with the same evidence
+            # quality (route probes, DKG feedback, flag verification) instead
+            # of a second, thinner execution path.
+            retry_result, retry_stdout, _retry_status, _retry_flag = (
+                await self._recovery_call(
+                    task, _task_tool, _merged_params,
+                    reason="exploit-retry", event="fix_retry",
+                    executed_calls=_executed_calls,
+                    all_stdouts=_all_task_stdouts,
+                    raw_stdouts=_raw_task_stdouts,
+                    execution=execution,
+                )
+            )
+            if _retry_flag:
+                return execution
             _last_result = retry_result
-            retry_stdout = retry_result.stdout or ""
-            retry_stderr = retry_result.stderr or ""
+            retry_stderr = getattr(retry_result, "stderr", "") or ""
 
-            if retry_result.success:
+            if retry_result is not None and retry_result.success:
                 _retry_condition_ok = True
                 if _condition:
                     # The corrected params must still satisfy the task's
@@ -1965,15 +2470,8 @@ class ExecutionCoordinator(CoordinatorContext):
                     _retry_condition_ok, _condition_detail = (
                         await self._verify_success_condition(
                             _condition,
-                            [{
-                                "name": _task_tool,
-                                "args": dict(task_params),
-                                "success": True,
-                                "stdout": retry_stdout,
-                                "stderr": retry_stderr,
-                                "method": _call_method(_task_tool, task_params),
-                            }],
-                            True,
+                            _executed_calls,
+                            _any_success,
                             bool(execution.flag_result),
                         )
                     )
@@ -1993,28 +2491,6 @@ class ExecutionCoordinator(CoordinatorContext):
                         f"[SUCCESS CONDITION NOT MET] {_condition_detail}\n"
                         f"{task_result_text}"
                     )
-                # Check for flag
-                flags = self.flag_pattern.findall(retry_stdout)
-                if flags:
-                    is_valid, reason_flag = await self._verify_flag(
-                        flags[0], retry_stdout, task_params,
-                        retry_result.elapsed_ms,
-                        tool_name=_task_tool,
-                    )
-                    if is_valid:
-                        self._persist_verified_flag(
-                            flags[0], str(task_params.get("url", task_params.get("target_url", ""))),
-                            "exploit-retry",
-                        )
-                        self.phase = OrchestratorPhase.DONE
-                        execution.flag_result = TaskResult(
-                            success=True, flag=flags[0],
-                            steps=self.step_count,
-                            tokens_used=self._tokens_used(),
-                            time_elapsed=time.time() - self.start_time,
-                        )
-                        self._verified_flag_result = execution.flag_result
-                        return execution
             else:
                 task_result_text = (
                     f"Fix attempt {_fix_attempts + 1} failed "
@@ -2047,18 +2523,40 @@ class ExecutionCoordinator(CoordinatorContext):
             )
             _eval2 = await self.evaluator.evaluate(_task_obj, _core_res)
             _repair = self.replanner.local_repair(_task_obj, _eval2)
+            # The failure type is a plan-review trigger signal: a schema/tool
+            # error means the PLAN is wrong, not the hypothesis.
+            self._last_failure_type = (
+                _eval2.failure_type.value if _eval2.failure_type else ""
+            )
+            # A negative verdict is evidence only if the tool received the
+            # arguments the plan reasoned about. When the gateway had to
+            # redirect parameters (alias / substring repair), the call tested
+            # a different request, so the result is inconclusive and the
+            # hypothesis confidence stays untouched.
+            _repaired_evidence = any(
+                c.get("params_repaired") for c in _executed_calls
+            )
+            if _repaired_evidence:
+                log.info(
+                    "[EVIDENCE] task=%s: parameters were repaired before "
+                    "dispatch (%s) — verdict downgraded to inconclusive",
+                    task.id,
+                    sorted({k for c in _executed_calls
+                            for k in (c.get("params_repaired") or [])}),
+                )
             # O2.1: belief feedback — a failed task applies the Evaluator's
             # confidence delta (HYPOTHESIS_REJECTED lowers it, TOOL_ERROR /
             # INVALID_ARGUMENT leave it unchanged) to the matching hypothesis.
             try:
                 self._apply_vulnerability_feedback(
                     task, success=False,
-                    failure_type=(
+                    failure_type=FailureType.INCONCLUSIVE.value if _repaired_evidence else (
                         _eval2.failure_type.value
                         if _eval2.failure_type is not None
                         else None
                     ),
-                    delta=float(_eval2.confidence_delta or 0.0),
+                    delta=0.0 if _repaired_evidence
+                    else float(_eval2.confidence_delta or 0.0),
                 )
                 self._apply_attack_path_feedback(
                     task, success=False,
@@ -2834,6 +3332,26 @@ class ExecutionCoordinator(CoordinatorContext):
             tools = [name for name in tools if _tool_runnable(name)]
             if endpoint.startswith(("http://", "https://")):
                 tools = [name for name in tools if _tool_http_viable(name)]
+
+            # A route the target documents as a write cannot be tested with a
+            # read-only tool: the 405 that comes back says nothing about the
+            # hypothesis. Prefer the tools that can express the declared verbs,
+            # and fall back to them when the mapped list has none.
+            _declared_methods = self._endpoint_declared_methods(endpoint)
+            if _declared_methods:
+                _fitting = [
+                    name for name in tools
+                    if _tool_fits_methods(name, _declared_methods)
+                ]
+                if _fitting:
+                    tools = _fitting
+                else:
+                    tools = [
+                        name for name in http_tools_for(
+                            sorted(_declared_methods), body_kind="json",
+                        )
+                        if _tool_runnable(name) and _tool_http_viable(name)
+                    ]
 
             # ── Privilege escalation: use dedicated exploitation method ──
             # rather than running generic shell_exec + linux_priv_check

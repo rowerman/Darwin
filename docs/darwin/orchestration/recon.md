@@ -14,14 +14,18 @@ Orchestrator 上下文读写状态并调用工具端口。
   GET 探测，并以 `discovered_by="adaptive-web-probe"` 记录。跨域候选被过滤，
   候选数量与递归深度受 `_MAX_ROUTE_CANDIDATES` / `_MAX_ROUTE_DEPTH` 限制。
 - `_api_route_discovery()`：POST/JSON API 路由发现层。解析 OpenAPI/Swagger、
-  JSON 路由/link 字段和纯文本路由文档；对候选路径先发安全的 OPTIONS 探测，
-  记录 Allow/状态码/Content-Type。明确支持 POST 的路径写入
-  `method="POST"`、`body_format="json"`，参数仅来自 schema/示例（无 schema 时
-  不伪造参数）。`/invoke` 类路径仅打 `invoke_signal` 候选标记，不判定漏洞。
+  JSON 路由/link 字段、`extract_documented_routes()`（服务自述清单里的
+  `METHOD /path {字段...}`，含 JSON 字符串值内的形态）与纯文本路由文档；
+  对候选路径先发安全的 OPTIONS 探测，记录 Allow/状态码/Content-Type。明确
+  支持写动词的路径写入 `method`、`body_format`、`documented_methods`（服务
+  自己声明的动词）与 `params`（字段名仅来自清单/schema，不伪造）。
+  `/invoke` 类路径仅打 `invoke_signal` 候选标记，不判定漏洞。
 - `_k8s_cluster_discovery()`：仅在分类为 private cloud/hybrid 后通过 discovery tool port 执行 K8s 只读发现；bootstrap 完成后 `CloudTopologyMapper` 写入扩展资源，并由 `RelationAnalyzer` 建立 canonical 关系。
 - `_deep_recon()`：HTTP 端点深侦察。HTML 主站继续运行 gobuster/nikto/form_extract；
   JSON、纯文本与 API 响应跳过这三类重型工具，改为 JSON 结构解析、路由提取与
-  HTTP 方法验证（复用 `_api_route_discovery`）。
+  HTTP 方法验证（复用 `_api_route_discovery`）。**JSON 根不再直接返回**：
+  自述清单里的路由必须先解析为带方法/字段名的 Endpoint，否则计划会在从未
+  用正确动词访问过声明路由的情况下判定耗尽。
 - `_detect_defenses()`：DPM 防御检测。
 - `_verify_flag()`：DAVE L4 flag 验证与蜜罐拒绝。
 

@@ -61,6 +61,8 @@ NODE_PROPERTY_SCHEMAS: Dict[str, Dict[str, Tuple[str, ...]]] = {
     "Endpoint": {
         "url": ("uri",),
         "params": (),  # DKG layer stores a comma-joined string; typed layer splits
+        # verified | derived | hypothesized — see _endpoint_provenance_level
+        "provenance_level": (),
     },
     "Vulnerability": {
         "parameter": ("param",),
@@ -71,6 +73,30 @@ NODE_PROPERTY_SCHEMAS: Dict[str, Dict[str, Tuple[str, ...]]] = {
 }
 
 _FREE_FORM_NODE_TYPES = {"Host"}
+
+#: Endpoint trust levels. ``verified`` means the target answered for this
+#: (url, method); ``derived`` means the URL only exists because a rule or the
+#: planner proposed it and the only response was 404/405; ``hypothesized``
+#: means it was proposed and never tested. Planners and run summaries must
+#: treat only ``verified`` as discovered fact — otherwise a derived path (or a
+#: hallucinated base URL) becomes world state that later reasoning builds on.
+ENDPOINT_PROVENANCE_LEVELS = ("verified", "derived", "hypothesized")
+
+
+def endpoint_provenance_level(props: Dict[str, Any]) -> str:
+    """Trust level for an Endpoint record (explicit value wins)."""
+    level = str((props or {}).get("provenance_level", "") or "")
+    if level in ENDPOINT_PROVENANCE_LEVELS:
+        return level
+    if (props or {}).get("derived_from"):
+        return "derived"
+    status = (props or {}).get("sample_status")
+    if status is None:
+        return "verified"
+    try:
+        return "derived" if int(status) in (0, 404) else "verified"
+    except (TypeError, ValueError):
+        return "verified"
 
 # Edge types
 EDGE_TYPES = [
@@ -322,6 +348,12 @@ class DKG:
         with self._lock:
             is_new = node_id not in self.graph
             props = self._normalize_properties(node_type, properties or {})
+            if node_type == "Endpoint":
+                # Explicit levels win; otherwise the recorded status decides
+                # whether the target ever answered for this route.
+                props.setdefault(
+                    "provenance_level", endpoint_provenance_level(props),
+                )
             if source or evidence or timestamp:
                 provenance: Dict[str, str] = {}
                 if source:
@@ -450,6 +482,18 @@ class DKG:
                 if not (isinstance(prov, dict) and prov):
                     result["provenance"] = dict(self._UNKNOWN_PROVENANCE)
         return results
+
+    def verified_endpoints(self) -> List[Dict[str, Any]]:
+        """Endpoint nodes the target itself answered for.
+
+        Derived / hypothesized routes are excluded: they exist only because a
+        rule (or the planner) proposed them, and treating them as discovered
+        facts is what turns a guess into world state.
+        """
+        return [
+            ep for ep in self.query_nodes("Endpoint")
+            if str(ep.get("provenance_level", "verified")) == "verified"
+        ]
 
     def update_node(self, node_id: str, properties: Dict[str, Any]) -> bool:
         """Update node properties. Returns True if node exists."""

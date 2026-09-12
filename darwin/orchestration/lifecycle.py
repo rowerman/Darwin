@@ -1051,8 +1051,10 @@ class LifecycleCoordinator(CoordinatorContext):
         if base not in urls_to_check:
             urls_to_check.append(base)
 
-        # Probe all discovered endpoints
-        for ep in self.dkg.query_nodes("Endpoint"):
+        # Probe the endpoints the target actually answered for. A derived or
+        # hypothesized URL only wastes requests (and would let a guess look
+        # like a discovered route in the report).
+        for ep in self.dkg.verified_endpoints():
             eu = ep.get("url", "")
             if eu and eu not in urls_to_check:
                 urls_to_check.append(eu)
@@ -1060,7 +1062,7 @@ class LifecycleCoordinator(CoordinatorContext):
         # Ask LLM to suggest smart flag paths based on context
         svc_list = [f"{s.get('port')}/{s.get('protocol','tcp')} {s.get('version','')}"
                     for s in self.dkg.query_nodes("Service")]
-        ep_list = [e.get("url", "") for e in self.dkg.query_nodes("Endpoint")[:20]]
+        ep_list = [e.get("url", "") for e in self.dkg.verified_endpoints()[:20]]
         # Generic diagnostic endpoints (health/status/metrics/API docs) plus
         # the classic flag locations.  These are protocol-level conventions,
         # not scenario knowledge.

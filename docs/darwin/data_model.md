@@ -20,6 +20,10 @@
 
 输入来自侦察、分析和执行；输出是可序列化的阶段状态和最终结果。
 
+`normalize_dkg_state()` 只把 `dkg.verified_endpoints()`（目标真实响应过的路由）
+写入 `PipelineState.endpoints`：派生/假设路由留在图里供审计，但不作为事实进入
+规划上下文与运行报告。
+
 ## 相关模块
 
 `dkg.py`、`core/contracts.py`、`core/task.py`、`orchestrator.py`。

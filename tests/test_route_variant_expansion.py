@@ -105,6 +105,32 @@ def test_route_identifiers_stay_on_the_target_host():
     assert coord._route_identifiers({}) == []
 
 
+def test_route_identifiers_ignore_control_parameters():
+    """Verbs and encoding switches are not path segments.
+
+    The task's own control keys (``method=POST``, ``body_format=json``) used
+    to be harvested as identifiers, which is how ``/workflows/POST`` — a route
+    that never existed — got recorded as a discovered endpoint.
+    """
+    coord = _coordinator_with_endpoints([])
+    identifiers = coord._route_identifiers({
+        "url": "http://localhost:10640/workflows",
+        "param": "dataset_ref",
+        "payload": "../tenant-b/secret.txt",
+        "method": "POST",
+        "body_format": "json",
+        "encode_type": "url",
+        "content_type": "application/json",
+        "insecure": True,
+        "follow_redirects": False,
+        "timeout": 30,
+    })
+    assert "POST" not in identifiers
+    assert "json" not in identifiers
+    assert "url" not in identifiers
+    assert "dataset_ref" in identifiers
+
+
 def _research_coordinator(endpoints: list[dict], services: list[dict]) -> ResearchCoordinator:
     dkg = type("DKG", (), {
         "query_nodes": lambda self, kind: (

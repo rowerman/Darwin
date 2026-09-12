@@ -14,6 +14,7 @@ from darwin.core.task import Task
 from darwin.orchestration.planning import (
     PlanCoordinator,
     _MIN_EXECUTIONS_BETWEEN_REVIEWS,
+    _REVIEW_MIN_REMAINING_SECONDS,
 )
 
 
@@ -114,3 +115,74 @@ def test_read_task_replacement_is_untouched():
 
     assert reverted == []
     assert task.action["tool"] == "curl_get"
+
+
+# ── Review triggers ──────────────────────────────────────────────────
+
+def test_review_is_skipped_when_the_budget_is_almost_spent():
+    """A late rewrite costs more than it can return."""
+    coord = _coordinator()
+    object.__setattr__(
+        coord, "_orch",
+        type("Orch", (), {"_remaining_budget": lambda self: 30.0})(),
+    )
+    reason = coord._review_skip_reason(_task("t-8", "curl_get", {"url": "x"}))
+    assert "budget" in reason
+
+
+def test_new_evidence_triggers_a_review_before_the_execution_floor():
+    """A freshly discovered route is exactly what a review exists for."""
+    coord = _coordinator()
+    object.__setattr__(
+        coord, "_orch",
+        type("Orch", (), {"_remaining_budget": lambda self: 600.0})(),
+    )
+    coord._review_done_this_cycle = True
+    coord._executions_since_review = 1
+    assert coord._review_skip_reason(_task("t-9", "curl_get", {"url": "x"})) != ""
+    coord._evidence_since_review = True
+    assert coord._review_skip_reason(_task("t-9", "curl_get", {"url": "x"})) == ""
+
+
+def test_plan_wrong_failures_trigger_a_review():
+    coord = _coordinator()
+    object.__setattr__(
+        coord, "_orch",
+        type("Orch", (), {"_remaining_budget": lambda self: 600.0})(),
+    )
+    coord._review_done_this_cycle = True
+    coord._executions_since_review = 1
+    coord._last_failure_type = "invalid_argument"
+    assert coord._review_skip_reason(_task("t-10", "curl_get", {"url": "x"})) == ""
+
+
+# ── Plan cap ─────────────────────────────────────────────────────────
+
+def test_cap_keeps_tasks_that_cover_a_documented_but_untested_route():
+    coord = _coordinator()
+    object.__setattr__(
+        coord, "_orch",
+        type("Orch", (), {
+            "_untested_documented_routes": lambda self: [
+                ("http://h:1/workflows", "POST"),
+            ],
+        })(),
+    )
+    coverage = _task("t-cov", "http_post", {"url": "http://h:1/workflows"})
+    filler = [_task(f"t-{i}", "curl_get", {"url": f"http://h:1/x{i}"})
+              for i in range(30)]
+    kept = coord._cap_pending_tasks([coverage] + filler, max_total=5)
+    assert "t-cov" in {t.id for t in kept}
+
+
+def test_cap_prefers_tasks_that_have_not_already_run():
+    coord = _coordinator()
+    object.__setattr__(
+        coord, "_orch",
+        type("Orch", (), {"_untested_documented_routes": lambda self: []})(),
+    )
+    coord._executed_signatures = {("curl_get", "http://h:1/done")}
+    repeat = _task("t-done", "curl_get", {"url": "http://h:1/done"})
+    fresh = _task("t-new", "curl_get", {"url": "http://h:1/new"})
+    kept = coord._cap_pending_tasks([repeat, fresh], max_total=1)
+    assert [t.id for t in kept] == ["t-new"]

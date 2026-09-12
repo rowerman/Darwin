@@ -14,6 +14,20 @@
 - `_run_with_runtime()`：v2 Runtime 路径（planner/executor/evaluator 适配）。
 - `_execute_privesc()` / `_try_db_default_credentials()` /
   `_systematic_exploit_pass()`：提权与系统化利用。
+- `_recovery_call()`：计划外修复调用（fix 重试 / 路由变体 / 动词升级）的统一
+  派发入口——与主路径写同样的 task 事件、executed-call 记录、路由探测持久化
+  和 flag 验证，避免"第二条更薄的执行路径"。
+- `_method_upgrade_candidate()`：目标用 `405 + Allow` 或自述清单声明了工具
+  无法表达的动词时，返回能表达该动词的工具与重映射后的参数；仅在同一 HTTP
+  能力族内替换，且计划工具本已能表达该动词时不触发（防止自我循环）。
+- `_endpoint_is_verified()` / `_endpoint_declared_methods()` /
+  `_untested_documented_routes()`：世界状态可信度与计划完成性——只有目标真实
+  响应过的路由才算事实；服务自己声明但尚未按该方法访问过的路由必须继续出现在
+  评审提示与裁剪豁免中。
+- `_route_identifiers()` 按参数名排除控制键（`method`/`body_format`/
+  `encode_type`/`content_type`/`insecure`/`follow_redirects`/`timeout` 等），
+  路由变体只在 verified 基址上派生；`_ingest_observed_routes()` 把
+  ffuf/gobuster/dirb 解析出的路径写回 Endpoint（非 404 记 verified）。
 
 ## 相关模块
 
@@ -34,7 +48,9 @@ Evaluator 使用。
 `flag_captured` / `probe`（一次有界 GET 读回副作用）。条件未达成即判
 FAILED，进入既有 fix-retry 并把"未达成的条件 + 实际观测"写入 result_text。
 计划未给条件时：探索类任务维持原语义，写入类任务（POST/PUT/PATCH/DELETE、
-upload 等）自动合成 `tool_success`，避免"计划 PUT、实际 GET 也算成功"。
+upload 等）自动合成 `http_status_in([200,201,202,204])`——工具退出 0 不等于
+服务接受了写操作。计划给的未知条件类型在入库时就被丢弃（见 planning 的
+`normalize_success_condition()`），不会静默退化成"工具成功"。
 任务日志记录 `success_condition` 事件（condition/met/detail）。
 
 ## 身份传播探测

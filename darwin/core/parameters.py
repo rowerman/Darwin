@@ -8,7 +8,9 @@ corrections:
 
     - missing required field  -> pre-execution INVALID_ARGUMENT
       (no tool call is made; the capability falls back to its next tool)
-    - unknown parameter       -> dropped (schema-driven correction)
+    - unknown parameter       -> pre-execution INVALID_ARGUMENT
+      (never dropped: a silently rewritten call must not masquerade as a
+      tested hypothesis)
     - missing optional field  -> filled from the schema's declared default
 
 Legacy direct dispatch (``action["tool"]``) is untouched: the
@@ -113,7 +115,14 @@ class ParameterValidator:
 
 
 class ParameterCorrector:
-    """Schema-driven corrections: drop unknown params, fill declared defaults.
+    """Schema-driven corrections: fill declared defaults.
+
+    Unknown keys are deliberately NOT removed. A dropped argument is a lost
+    intent: the tool would then run against a different request than the one
+    that was planned, and its (negative) result would be read as if the plan
+    had actually been tested. Unknown keys are left in place so
+    :class:`ParameterValidator` reports them and the call becomes a
+    pre-execution INVALID_ARGUMENT instead.
 
     Missing REQUIRED params are left untouched — the validator decides
     whether the task can still proceed after correction.
@@ -123,10 +132,6 @@ class ParameterCorrector:
         """Return (corrected_params, changed)."""
         corrected = dict(params)
         changed = False
-        for key in list(corrected):
-            if key not in schema.properties and key not in schema.required:
-                del corrected[key]
-                changed = True
         for name, meta in schema.properties.items():
             if name not in corrected and isinstance(meta, dict) and "default" in meta:
                 corrected[name] = meta["default"]

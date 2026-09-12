@@ -155,7 +155,7 @@ def test_validator_clean_params_no_issues():
 # ── ParameterCorrector ──────────────────────────────────────────────
 
 
-def test_corrector_drops_unknown_and_fills_default():
+def test_corrector_fills_default_and_keeps_unknown_for_the_validator():
     schema = ToolSchema(
         name="t",
         properties={"url": {"type": "string"}, "timeout": {"type": "integer", "default": 30}},
@@ -165,7 +165,10 @@ def test_corrector_drops_unknown_and_fills_default():
         schema, {"url": "http://x", "bogus": 1}
     )
     assert changed is True
-    assert corrected == {"url": "http://x", "timeout": 30}
+    # Unknown keys survive correction so the validator can reject the call
+    # instead of the tool silently running against a rewritten request.
+    assert corrected == {"url": "http://x", "bogus": 1, "timeout": 30}
+    assert [i.field for i in ParameterValidator().validate(schema, corrected)] == ["bogus"]
 
 
 def test_corrector_no_change_when_valid():
@@ -207,7 +210,7 @@ async def test_pre_execution_invalid_argument_falls_back_to_next_tool():
 
 
 @pytest.mark.asyncio
-async def test_schema_correction_fills_default_and_drops_unknown():
+async def test_schema_correction_fills_default_and_rejects_unknown():
     gw = SchemaGateway(
         {"my_tool": {"url": {"type": "string"}, "timeout": {"type": "integer", "default": 30}}}
     )
@@ -216,9 +219,26 @@ async def test_schema_correction_fills_default_and_drops_unknown():
     res = await ex.execute(
         task_with("custom", params={"url": "http://x", "bogus": "drop-me"})
     )
-    assert gw.calls == [("my_tool", {"url": "http://x", "timeout": 30})]
+    # The unknown key must not be silently removed: the call is rejected
+    # before the tool runs, so a rewritten request can never be mistaken for
+    # a tested hypothesis.
+    assert gw.calls == []
+    assert res.success is False
+    assert "unknown parameter" in res.stderr
+
+
+@pytest.mark.asyncio
+async def test_declared_params_pass_through_unchanged():
+    gw = SchemaGateway(
+        {"my_tool": {"url": {"type": "string"}, "timeout": {"type": "integer", "default": 30}}}
+    )
+    cap = custom_capability("custom", ["my_tool"], [])
+    ex = ToolExecutor(recon_gateway=gw, capability_registry=registry_with(cap))
+    res = await ex.execute(task_with("custom", params={"url": "http://x"}))
+    # A call with no issue is not rewritten: declared defaults stay the
+    # tool's own responsibility.
+    assert gw.calls == [("my_tool", {"url": "http://x"})]
     assert res.success is True
-    assert res.tool == "my_tool"
 
 
 @pytest.mark.asyncio

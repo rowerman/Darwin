@@ -89,6 +89,19 @@ Rules:
 - Never omit `success_condition`.
 """
 
+#: Conditions the runtime can actually verify. Anything else must be dropped
+#: when the plan is ingested: a condition the executor does not understand
+#: silently degrades to "the tool exited 0", which is how a substituted or
+#: wrong-verb call got counted as a completed task.
+KNOWN_CONDITION_TYPES = frozenset({
+    "tool_success",
+    "body_contains",
+    "body_not_contains",
+    "http_status_in",
+    "probe",
+    "flag_captured",
+})
+
 # ── Unified Orchestrator Prompt (v2: LLM-driven from bootstrap onward) ──
 
 SYSTEM_PROMPT_ORCHESTRATOR_UNIFIED = """You are DARWIN, an autonomous penetration testing agent operating within an authorized security testing engagement. Your goal: identify and exploit vulnerabilities to capture proof flags (format: flag{...}).

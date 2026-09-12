@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import html
+import json
 import os
 import stat
 import sys
@@ -102,11 +103,44 @@ async def local_http_target(unused_tcp_port):
             raw = await asyncio.wait_for(reader.read(8192), timeout=2)
             request_line = raw.decode("latin1", errors="replace").splitlines()[0]
             request_target = request_line.split()[1] if len(request_line.split()) > 1 else "/"
+            request_method = request_line.split()[0].upper() if request_line else "GET"
+            request_body = ""
+            if b"\r\n\r\n" in raw:
+                request_body = raw.split(b"\r\n\r\n", 1)[1].decode(
+                    "utf-8", errors="replace")
             parsed = urlsplit(request_target)
             query = parse_qs(parsed.query)
             probe = query.get("q", [""])[0]
+            status, body = 404, "not found"
+            content_type = "text/html"
+            extra_headers = ""
             if parsed.path == "/flag":
                 status, body = 200, FLAG
+            elif parsed.path == "/plane":
+                # Self-describing manifest: advertises a POST route and the
+                # body fields that route expects.
+                status = 200
+                body = json.dumps({
+                    "endpoint": "POST /plane/workflows {workspace, dataset_ref}",
+                    "service": "Local Workflow Plane",
+                })
+                content_type = "application/json"
+            elif parsed.path == "/plane/workflows":
+                extra_headers = "Allow: OPTIONS, POST\r\n"
+                if request_method == "OPTIONS":
+                    status, body = 200, "options ok"
+                elif request_method == "POST":
+                    try:
+                        payload = json.loads(request_body or "{}")
+                    except ValueError:
+                        payload = {}
+                    if {"workspace", "dataset_ref"} <= set(payload):
+                        status, body = 200, json.dumps({"content": FLAG})
+                        content_type = "application/json"
+                    else:
+                        status, body = 400, "missing fields"
+                else:
+                    status, body = 405, "method not allowed"
             elif parsed.path in {"/search", "/"}:
                 if any(token in probe.lower() for token in ("<", ">", "script", "javascript", "onerror")):
                     status, body = 403, "blocked by local waf"
@@ -114,12 +148,13 @@ async def local_http_target(unused_tcp_port):
                     status, body = 200, f"search result: {html.escape(probe)}"
                 else:
                     status, body = 200, "local integration target"
-            else:
-                status, body = 404, "not found"
             payload = body.encode()
+            reason = {200: "OK", 400: "Bad Request", 403: "Forbidden",
+                      404: "Not Found", 405: "Method Not Allowed"}.get(status, "Unknown")
             response = (
-                f"HTTP/1.1 {status} {'OK' if status == 200 else 'Forbidden' if status == 403 else 'Not Found'}\r\n"
-                "Content-Type: text/html\r\n"
+                f"HTTP/1.1 {status} {reason}\r\n"
+                f"Content-Type: {content_type}\r\n"
+                f"{extra_headers}"
                 f"Content-Length: {len(payload)}\r\nConnection: close\r\n\r\n"
             ).encode() + payload
             writer.write(response)
@@ -137,11 +172,8 @@ async def local_http_target(unused_tcp_port):
         await server.wait_closed()
 
 
-@pytest.fixture
-def cli_stub_path(tmp_path, local_http_target, monkeypatch):
+def _install_cli_stubs(tmp_path, monkeypatch, port: int):
     """Install parser-compatible command stubs ahead of the real PATH."""
-
-    port = urlsplit(local_http_target).port
     stub_dir = tmp_path / "bin"
     stub_dir.mkdir()
     runner = stub_dir / "darwin_cli_stub.py"
@@ -215,6 +247,92 @@ def cli_stub_path(tmp_path, local_http_target, monkeypatch):
     return stub_dir
 
 
+@pytest.fixture
+def cli_stub_path(tmp_path, local_http_target, monkeypatch):
+    return _install_cli_stubs(
+        tmp_path, monkeypatch, urlsplit(local_http_target).port,
+    )
+
+
+@pytest.fixture
+def manifest_target():
+    """Threaded HTTP target that documents a POST-only route.
+
+    Threaded on purpose: several HTTP tools call urllib inline on the event
+    loop, so an in-loop asyncio server would deadlock against them.
+    """
+    import threading
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    hits: list[tuple[str, str]] = []
+
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, *args):  # keep the test output quiet
+            return
+
+        def _send(self, status, body, content_type="text/html", allow=""):
+            payload = body.encode()
+            self.send_response(status)
+            self.send_header("Content-Type", content_type)
+            if allow:
+                self.send_header("Allow", allow)
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+
+        def do_GET(self):
+            hits.append(("GET", self.path))
+            if self.path == "/plane":
+                self._send(200, json.dumps({
+                    "endpoint": "POST /plane/workflows {workspace, dataset_ref}",
+                    "service": "Local Workflow Plane",
+                }), "application/json")
+            elif self.path == "/plane/workflows":
+                self._send(405, "method not allowed", allow="OPTIONS, POST")
+            elif self.path == "/":
+                self._send(200, "local manifest target")
+            else:
+                self._send(404, "not found")
+
+        def do_OPTIONS(self):
+            hits.append(("OPTIONS", self.path))
+            if self.path == "/plane/workflows":
+                self._send(200, "options ok", allow="OPTIONS, POST")
+            else:
+                self._send(404, "not found")
+
+        def do_POST(self):
+            length = int(self.headers.get("Content-Length", 0) or 0)
+            body = self.rfile.read(length).decode("utf-8", errors="replace")
+            hits.append(("POST", self.path))
+            if self.path != "/plane/workflows":
+                self._send(404, "not found")
+                return
+            try:
+                payload = json.loads(body or "{}")
+            except ValueError:
+                payload = {}
+            if {"workspace", "dataset_ref"} <= set(payload):
+                self._send(200, json.dumps({"content": FLAG}), "application/json")
+            else:
+                self._send(400, f"missing fields: {sorted(payload)}")
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{server.server_address[1]}", hits
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+@pytest.fixture
+def manifest_cli_stub_path(tmp_path, manifest_target, monkeypatch):
+    base, _hits = manifest_target
+    return _install_cli_stubs(tmp_path, monkeypatch, urlsplit(base).port)
+
+
 @pytest.mark.asyncio
 async def test_public_orchestrator_run_uses_local_target_and_real_gateways(
     tmp_path, monkeypatch, local_http_target, cli_stub_path
@@ -283,6 +401,106 @@ async def test_public_orchestrator_run_uses_local_target_and_real_gateways(
     stub_calls = (cli_stub_path / "calls.log").read_text(encoding="utf-8")
     assert "nmap" in stub_calls
     assert "curl" in stub_calls
+
+
+class ManifestReplayLLM(ReplayLLM):
+    """Plans a READ tool against a POST-only route, then repairs it.
+
+    Models the observed failure shape: the planner reaches for `curl_get`
+    (with a parameter the tool does not even declare), the route answers 405 /
+    rejects the request, and the fix must switch to a tool that can send the
+    documented body.
+    """
+
+    def __init__(self, workflow_url: str):
+        super().__init__(workflow_url)
+        self.workflow_url = workflow_url
+        self.fix_calls = 0
+
+    def generate(self, prompt, system_prompt=None, tools=None, temperature=None,
+                 timeout=180.0, stage=None):
+        stage_text = str(stage or "").lower()
+        if "fix_analysis" in stage_text:
+            self.fix_calls += 1
+            self.calls.append(("generate", stage, prompt, tools))
+            return json.dumps({
+                "fixable": True,
+                "tool": "http_post",
+                "corrected_params": {
+                    "url": self.workflow_url,
+                    "method": "POST",
+                    "data": json.dumps({
+                        "workspace": "tenant-a",
+                        "dataset_ref": "../tenant-b/secret.txt",
+                    }),
+                },
+                "reason": "the route only accepts POST with a JSON body",
+            }), None
+        if "task_execution" in stage_text:
+            self.calls.append(("generate", stage, prompt, tools))
+            return "", [{
+                "name": "curl_get",
+                "arguments": {
+                    "url": self.workflow_url,
+                    "param": "dataset_ref",
+                    "payload": "../tenant-b/secret.txt",
+                },
+                "id": "replay-manifest-1",
+            }]
+        if "plan" in stage_text or "review" in stage_text or not stage_text:
+            self.calls.append(("generate", stage, prompt, tools))
+            return json.dumps([{
+                "id": "local-workflow-read",
+                "instruction": "Read the tenant dataset through the workflow control plane",
+                "tool": "curl_get",
+                "params": {
+                    "url": self.workflow_url,
+                    "param": "dataset_ref",
+                    "payload": "../tenant-b/secret.txt",
+                },
+                "dependent_task_ids": [],
+            }]), None
+        return super().generate(
+            prompt, system_prompt, tools, temperature, timeout, stage,
+        )
+
+
+@pytest.mark.asyncio
+async def test_manifest_route_is_exercised_with_its_documented_method(
+    tmp_path, monkeypatch, manifest_target, manifest_cli_stub_path
+):
+    """End-to-end: a read tool on a POST-only route is repaired, not abandoned."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("darwin.rag.get_rag", lambda: None)
+    base_url, hits = manifest_target
+    workflow_url = f"{base_url}/plane/workflows"
+    from darwin.orchestrator import Orchestrator
+
+    llm = ManifestReplayLLM(workflow_url)
+    orchestrator = Orchestrator(llm_session=llm, time_budget=30, token_budget=2000)
+    monkeypatch.setattr(orchestrator, "_augment_from_dkg", lambda: None)
+    try:
+        result = await orchestrator.run(
+            "Capture the flag from the local workflow plane",
+            base_url,
+            port_range=str(urlsplit(base_url).port),
+        )
+    finally:
+        await orchestrator.probe_client.close()
+
+    assert result.success is True, result.error
+    assert result.flag == FLAG
+    assert ("POST", "/plane/workflows") in hits
+    endpoints = {
+        str(ep.get("url", "")): ep
+        for ep in orchestrator.dkg.query_nodes("Endpoint")
+    }
+    workflow_ep = endpoints.get(workflow_url)
+    assert workflow_ep is not None
+    # The POST the target documented is the one that produced the flag.
+    assert (workflow_ep.get("methods") or {}).get("POST") == 200
+    # No route invented from the request's own verb ever entered world state.
+    assert not [u for u in endpoints if u.rstrip("/").endswith("/POST")]
 
 
 @pytest.mark.asyncio

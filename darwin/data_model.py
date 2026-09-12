@@ -591,8 +591,9 @@ def normalize_dkg_state(dkg: Any) -> PipelineState:
     except Exception:  # silent-ok: best-effort; failure is non-fatal
         pass
 
-    # Endpoints
-    for raw in dkg.query_nodes("Endpoint"):
+    # Endpoints — only routes the target itself answered for. A derived or
+    # hypothesized URL must not reach the planner's world state as a fact.
+    for raw in dkg.verified_endpoints():
         try:
             state.endpoints.append(EndpointInfo.from_dkg(raw))
         except Exception:  # silent-ok: best-effort; failure is non-fatal

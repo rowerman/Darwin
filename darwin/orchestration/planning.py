@@ -40,6 +40,39 @@ _WRITE_DEFAULT_TOOL = "http_method_probe"
 # the previous rewrite has been TESTED by real executions.
 _MIN_EXECUTIONS_BETWEEN_REVIEWS = 3
 
+#: Below this much remaining budget a full plan rewrite costs more than it can
+#: return; the run goes straight to the final sweep instead.
+_REVIEW_MIN_REMAINING_SECONDS = 120.0
+
+#: Failure classes that mean the plan itself is wrong (rather than the
+#: hypothesis): they justify an immediate review without waiting for
+#: ``_MIN_EXECUTIONS_BETWEEN_REVIEWS``.
+_REVIEW_TRIGGERING_FAILURES = frozenset({
+    "invalid_argument", "tool_error", "strategy_failed",
+})
+
+
+def normalize_success_condition(condition: Any) -> dict | None:
+    """Keep only conditions the runtime can actually verify.
+
+    An unrecognised condition used to degrade to "the tool exited 0" inside
+    the executor, which is how a substituted call or a wrong-verb request got
+    counted as a completed task. Dropping it here is explicit and leaves the
+    task judged on real execution facts only.
+    """
+    if not isinstance(condition, dict):
+        return None
+    ctype = str(condition.get("type", "") or "").strip().lower()
+    if not ctype:
+        return None
+    if ctype not in KNOWN_CONDITION_TYPES:
+        log.warning(
+            "dropping unsupported success_condition type %r (known: %s)",
+            ctype, sorted(KNOWN_CONDITION_TYPES),
+        )
+        return None
+    return {**condition, "type": ctype}
+
 
 def _pick_http_tool(
     tool_specs: dict, declared_params: dict | None = None,
@@ -105,6 +138,11 @@ from darwin.dpm import DefensePerceptionModule, DefenseStateVector
 from darwin.dave import DAVE, ExploitAttempt, parse_tool_stdout
 from darwin.tools.mcp_client import MCPClientPool, load_mcp_config
 from darwin.tools.mcp_gateway import ToolResult
+from darwin.tools.contracts import (
+    http_tool_can_express,
+    http_tools_for,
+    request_body_kind,
+)
 from darwin.tools.recon_server import create_recon_gateway, parse_response
 from darwin.tools.attack_server import create_attack_gateway
 from darwin.tools.availability import is_available
@@ -136,6 +174,7 @@ from darwin.prompts.orchestrator import (
     SYSTEM_PROMPT_BYPASS,
     PLANNER_TASKS_SCHEMA_EXAMPLE,
     SUCCESS_CONDITION_GUIDE,
+    KNOWN_CONDITION_TYPES,
 )
 from darwin.prompts.planner import SYSTEM_PROMPT_PLANNER
 from darwin.prompts.evaluator import SYSTEM_PROMPT_EVALUATOR
@@ -1497,7 +1536,7 @@ class PlanCoordinator(CoordinatorContext):
         for _v in self.vulnerabilities:
             if _v.suggested_tool and _v.suggested_tool not in _candidate_tools:
                 _candidate_tools.append(_v.suggested_tool)
-            _gt = self._guess_tool(_v.vuln_type)
+            _gt = self._guess_tool(_v.vuln_type, endpoint=_v.endpoint or "")
             if _gt and _gt not in _candidate_tools:
                 _candidate_tools.append(_gt)
         _candidate_tools_section = (
@@ -1693,9 +1732,8 @@ Output ONLY valid JSON array (3-20 tasks depending on complexity. More tasks != 
                         status=TaskStatus.READY,
                         source=t.source,
                         vuln_type=t.vuln_type,
-                        success_condition=(
-                            dict(t.success_condition)
-                            if isinstance(t.success_condition, dict) else None
+                        success_condition=normalize_success_condition(
+                            t.success_condition
                         ),
                     )
                     for t in _plan_model
@@ -1722,7 +1760,14 @@ Output ONLY valid JSON array (3-20 tasks depending on complexity. More tasks != 
                         t.action["tool"] = matches[0]
                     else:
                         log.warning("Plan: unknown tool '%s' — removing from plan", tool)
-                        t.action["tool"] = self._guess_tool(t.vuln_type)
+                        t.action["tool"] = self._guess_tool(
+                            t.vuln_type,
+                            endpoint=str(
+                                (t.action.get("params") or {}).get(
+                                    "url", (t.action.get("params") or {}).get(
+                                        "target_url", ""))
+                            ),
+                        )
             plan.tasks = tasks
         except Exception as e:
             log.warning("Plan generation JSON parse failed: %s — using fallback", e)
@@ -1753,7 +1798,9 @@ Output ONLY valid JSON array (3-20 tasks depending on complexity. More tasks != 
                         rationale=v.evidence[:100] if v.evidence else f"Hypothesized {v.vuln_type}",
                         evidence=list(v.research_techniques),
                         action={
-                            "tool": v.suggested_tool or self._guess_tool(v.vuln_type),
+                            "tool": v.suggested_tool or self._guess_tool(
+                                v.vuln_type, endpoint=v.endpoint or "",
+                            ),
                             "target": v.endpoint,
                             "params": params,
                         },
@@ -1917,8 +1964,35 @@ Output ONLY valid JSON array (3-20 tasks depending on complexity. More tasks != 
                 ))
         return tasks
 
-    def _guess_tool(self, vuln_type: str) -> str:
-        """Map vuln type to a default tool when no suggested_tool is available."""
+    def _guess_tool(self, vuln_type: str, endpoint: str = "",
+                    method: str = "") -> str:
+        """Map a vuln type to a default tool when no suggested_tool is given.
+
+        A read-only default is only valid when the request itself can be a
+        read. When the target documents the route as a write (or the caller
+        already knows the required verb), a tool that cannot express it would
+        only ever produce a 405 that reads like "the hypothesis was wrong".
+        """
+        vt = vuln_type.lower()
+        _declared = {str(m).strip().upper() for m in str(method or "").split(",") if m.strip()}
+        if not _declared and endpoint:
+            try:
+                _declared = self._endpoint_declared_methods(str(endpoint))
+            except Exception as exc:
+                log.debug("declared-method lookup failed for %s: %s", endpoint, exc)
+        if _declared:
+            _capable = http_tools_for(sorted(_declared), body_kind="json")
+            _read_only_default = self._read_only_default_tool(vt)
+            if _capable and (
+                not _read_only_default
+                or not http_tool_can_express(_read_only_default, _declared)
+            ):
+                return _capable[0]
+        return self._read_only_default_tool(vt)
+
+    @staticmethod
+    def _read_only_default_tool(vuln_type: str) -> str:
+        """Read-class tool for a vuln type (the pre-existing mapping)."""
         vt = vuln_type.lower()
         if "sql" in vt: return "sqlmap_test"
         if "xss" in vt: return "xss_reflection_test"
@@ -1930,6 +2004,36 @@ Output ONLY valid JSON array (3-20 tasks depending on complexity. More tasks != 
         if "idor" in vt: return "curl_get"
         if "ssrf" in vt: return "curl_get"
         return "curl_get"
+
+    def _http_alternative_block(self, tool: str) -> str:
+        """Prompt block listing HTTP tools the fix may switch to.
+
+        A method mismatch is the failure class where parameter repair cannot
+        help: the current tool cannot send the verb the target asks for. The
+        fix LLM can only name a valid alternative if it is shown the tools
+        (and their parameter contracts) that can express a non-GET request.
+        """
+        _specs: dict = {}
+        for _gw in (self.attack_gateway, self.recon_gateway):
+            try:
+                _specs.update(_gw.get_tool_specs())
+            except Exception as exc:
+                log.debug("spec lookup failed: %s", exc)
+        _lines: list[str] = []
+        for name in http_tools_for(["POST"], available=_specs):
+            if name == tool:
+                continue
+            spec = _specs.get(name)
+            if spec is not None and not is_available(spec):
+                continue
+            _lines.append(f"  - {name}:")
+            _lines.append(f"    {name}{self._render_tool_params(name)}")
+        if not _lines:
+            return ""
+        return (
+            "\nAllowed tool alternatives (use exactly these names):\n"
+            + "\n".join(_lines) + "\n"
+        )
 
     def _render_tool_params(self, tool: str) -> str:
         """Declared parameter contract of ``tool`` for the fix-analysis prompt.
@@ -2016,9 +2120,8 @@ Output ONLY valid JSON array (3-20 tasks depending on complexity. More tasks != 
             status=status,
             source=str(d.get("source", "") or ""),
             vuln_type=str(d.get("vuln_type", "") or ""),
-            success_condition=(
-                dict(d["success_condition"])
-                if isinstance(d.get("success_condition"), dict) else None
+            success_condition=normalize_success_condition(
+                d.get("success_condition")
             ),
         )
 
@@ -2620,10 +2723,15 @@ Tool output:
 {output_trunc}
 {timeout_hint}
 {rag_hint}
+{self._http_alternative_block(tool)}
 Classify:
 - "fixable" if the tool was called with wrong/malformed parameters
   (e.g. wrong command syntax, non-existent file path, missing required
-  args, command would cause an interactive prompt)
+  args, command would cause an interactive prompt). A failure that says the
+  request used the wrong HTTP method (405 + Allow header, or a route that
+  only accepts a verb this tool cannot send) is ALSO fixable: set "tool" to
+  one of the alternatives above that can express that verb, and put its
+  parameters in corrected_params.
 - "partial_success" if the tool connected and authenticated successfully
   but a sub-command within the tool failed (e.g. MSSQL login OK but
   xp_cmdshell command not found). Credentials are valid — store them.
@@ -2636,7 +2744,9 @@ If partial_success, include credentials: {{"username":...}}.
 Otherwise not_fixable.
 
 Output ONLY valid JSON:
-{{"fixable": true/false, "corrected_params": {{...}}, "partial_success": true/false, "credentials": {{...}}, "reason": "..."}}"""
+{{"fixable": true/false, "tool": "name of the tool to use (optional; only when
+the current tool cannot express the required request)", "corrected_params":
+{{...}}, "partial_success": true/false, "credentials": {{...}}, "reason": "..."}}"""
 
         try:
             with self._llm_isolated():
@@ -2652,8 +2762,18 @@ Output ONLY valid JSON:
             if result.get("fixable") and result.get("corrected_params"):
                 return {
                     "fixable": True,
+                    "tool": str(result.get("tool", "") or ""),
                     "corrected_params": result["corrected_params"],
                     "reason": result.get("reason", ""),
+                }
+            if result.get("fixable") and result.get("tool"):
+                # Tool-only repair: the verb/method is wrong, the parameters
+                # carry over.
+                return {
+                    "fixable": True,
+                    "tool": str(result["tool"]),
+                    "corrected_params": result.get("corrected_params") or {},
+                    "reason": result.get("reason", "switch tool"),
                 }
             if result.get("partial_success"):
                 return {
@@ -2891,11 +3011,15 @@ Output ONLY valid JSON:
                            max_new_this_cycle: int = 8) -> list[Task]:
         """Trim lowest-quality pending tasks when plan exceeds *max_total*.
 
-        Quality heuristic (in priority order):
-        1. Tasks WITH a tool sort before tasks without (higher quality)
-        2. Tasks with fewer dependencies sort first
-        3. After sorting, keep at most *max_total* total tasks; excess
-           pending tasks are trimmed (done/failed are always preserved).
+        Triaged in this order (highest value first):
+        1. Tasks that exercise a route the service documented but nobody has
+           tested yet — dropping one of these ends the run with the advertised
+           surface unexplored.
+        2. Tasks whose (tool, endpoint, method, params) has not already run:
+           the framework cannot learn anything from re-running a signature.
+        3. Tasks WITH a tool sort before tasks without; fewer dependencies
+           first; ties break in favour of the newest plan-review task, which
+           is the one written against the latest evidence.
 
         Returns the (possibly trimmed) task list.
         """
@@ -2915,11 +3039,58 @@ Output ONLY valid JSON:
         if len(_pending) <= _keep_pending:
             return tasks
 
+        # Routes the target documented but nobody has exercised yet: a task
+        # covering one of them must survive the cap.
+        try:
+            _required_routes = set(self._untested_documented_routes())
+        except Exception as exc:
+            log.debug("documented-route lookup failed for cap: %s", exc)
+            _required_routes = set()
+        # Signatures already exercised: the framework learns nothing from a
+        # task that would repeat one.
+        _run_signatures = set(getattr(self, "_executed_signatures", set()) or set())
+
+        def _task_url(t) -> str:
+            _p = (t.action or {}).get("params", {}) or {}
+            return str(_p.get("url", _p.get("target_url", "")) or "").rstrip("/")
+
+        def _covers_documented_route(t) -> bool:
+            if not _required_routes:
+                return False
+            _tool = str((t.action or {}).get("tool", "") or "")
+            _url = _task_url(t)
+            if not _url:
+                return False
+            _methods = {m for u, m in _required_routes if u.rstrip("/") == _url}
+            if not _methods:
+                return False
+            _body_kind = request_body_kind((t.action or {}).get("params", {}) or {})
+            if _tool and not http_tool_can_express(_tool, _methods, _body_kind):
+                return False
+            return True
+
+        def _repeats_executed(t) -> bool:
+            _tool = str((t.action or {}).get("tool", "") or "")
+            if not _tool or not _run_signatures:
+                return False
+            return (_tool, _task_url(t)) in _run_signatures
+
+        _order = {t.id: index for index, t in enumerate(_pending)}
+
         def _quality_key(t):
             deps = len(dependency_task_ids(t))
             has_tool = 1 if (t.action or {}).get("tool", "") else 0
-            # -has_tool: tasks WITH tool (key=-1) sort BEFORE tasks without (key=0)
-            return (deps, -has_tool)
+            # Lower key sorts first (kept). Coverage tasks first, then tasks
+            # that add new information, then the cheaper/shorter ones. The
+            # last component keeps the NEWEST plan-review task on ties: it was
+            # written against the latest evidence.
+            return (
+                0 if _covers_documented_route(t) else 1,
+                1 if _repeats_executed(t) else 0,
+                deps,
+                -has_tool,
+                -_order.get(t.id, 0),
+            )
 
         _pending.sort(key=_quality_key)
         _to_remove = set(t.id for t in _pending[_keep_pending:])
@@ -2981,16 +3152,33 @@ Output ONLY valid JSON:
     def _review_skip_reason(self, task: Task, force: bool = False) -> str:
         """Why the plan review should be skipped now ("" = run it).
 
-        A review regenerates the whole task list, so it must be paid for by
-        the executions that TESTED the previous rewrite. The first review of
-        a cycle is always allowed; after that the plan needs
-        ``_MIN_EXECUTIONS_BETWEEN_REVIEWS`` executions before another one.
+        A review regenerates the whole task list, so it is worth its cost only
+        when something changed: new evidence (a discovered route, credential
+        or service), or a failure that says the PLAN is wrong rather than the
+        hypothesis. Otherwise the plan needs
+        ``_MIN_EXECUTIONS_BETWEEN_REVIEWS`` executions before another rewrite.
         A stall review (nothing left to execute) is unavoidable, but a second
-        one with zero executions in between is not.
+        one with zero executions in between is not. Late in the run a rewrite
+        costs more than it can return, so it is skipped outright.
         """
         if force:
             return ""
+        try:
+            _remaining = float(self._remaining_budget())
+        except Exception:
+            _remaining = float("inf")
+        if _remaining < _REVIEW_MIN_REMAINING_SECONDS:
+            return (
+                f"Skipping plan review: only {_remaining:.0f}s of budget left "
+                f"(minimum {_REVIEW_MIN_REMAINING_SECONDS:.0f}s)"
+            )
         if not getattr(self, "_review_done_this_cycle", False):
+            return ""
+        if getattr(self, "_evidence_since_review", False):
+            return ""
+        if str(getattr(self, "_last_failure_type", "") or "") in (
+            _REVIEW_TRIGGERING_FAILURES
+        ):
             return ""
         executions = int(getattr(self, "_executions_since_review", 0) or 0)
         if executions >= _MIN_EXECUTIONS_BETWEEN_REVIEWS:
@@ -3371,6 +3559,29 @@ Output ONLY valid JSON:
                 log.debug("swallowed exception: %s", exc, exc_info=True)
         _review_tool_card = render_tool_contract_card(_review_tool_defs)
 
+        # Plan completeness: a route the service documented itself is not
+        # "covered" until that verb has actually been sent. Without this list
+        # the review happily ends a run that never POSTed the one route the
+        # target advertised.
+        _documented_route_block = ""
+        try:
+            _pending_routes = self._untested_documented_routes()
+        except Exception as exc:
+            log.debug("documented-route lookup failed: %s", exc)
+            _pending_routes = []
+        if _pending_routes:
+            _route_lines = "\n".join(
+                f"  - {method} {url}" for url, method in _pending_routes[:8]
+            )
+            _documented_route_block = (
+                "## Documented Routes Not Yet Exercised\n"
+                f"{_route_lines}\n"
+                "The service itself advertised these routes/methods. The plan is "
+                "NOT complete while any of them is missing: include (or keep) a "
+                "task that sends each one with its documented method and body, "
+                "using a tool whose contract can express that method.\n\n"
+            )
+
         prompt = (
             f"Just completed: {task.instruction}\n"
             f"Tool: {_task_tool}\n"
@@ -3409,6 +3620,7 @@ Output ONLY valid JSON:
             f"{'- This task FAILED — generate alternative approaches using different tools, parameters, or endpoints. Do NOT retry the same approach.' if not success else ''}\n"
             f"- If the plan has >40 tasks, aggressively CULL low-value/redundant pending "
             f"tasks. Prefer 10-20 high-quality exploitation tasks over 50+ probe tasks.\n\n"
+            f"{_documented_route_block}"
             f"Output the COMPLETE updated task list as a JSON array. "
             f"Each task object MUST contain ONLY these keys: id, dependent_task_ids, "
             f"instruction, tool, params, success_condition, reason, priority. Do NOT "
@@ -3437,6 +3649,7 @@ Output ONLY valid JSON:
             self._review_done_this_cycle = True
             self._executions_since_review = 0
             self._stall_review_since_execution = False
+            self._evidence_since_review = False
             if _review_model is None:
                 new_tasks = self._extract_json_array(content) or []
             else:

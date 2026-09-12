@@ -1,7 +1,45 @@
 """Tests for Dynamic Knowledge Graph operations."""
 
 import pytest
-from darwin.dkg import DKG, NODE_TYPES, EDGE_TYPES
+from darwin.dkg import (
+    DKG,
+    EDGE_TYPES,
+    NODE_TYPES,
+    endpoint_provenance_level,
+)
+
+
+class TestEndpointProvenance:
+    """A route is only a fact once the target answered for it."""
+
+    def test_observed_non_404_is_verified(self):
+        assert endpoint_provenance_level({"sample_status": 200}) == "verified"
+        assert endpoint_provenance_level({"sample_status": 405}) == "verified"
+
+    def test_404_only_route_is_derived(self):
+        assert endpoint_provenance_level({"sample_status": 404}) == "derived"
+        assert endpoint_provenance_level({"sample_status": 0}) == "derived"
+
+    def test_explicit_level_wins(self):
+        assert endpoint_provenance_level(
+            {"sample_status": 200, "provenance_level": "hypothesized"}
+        ) == "hypothesized"
+
+    def test_derived_from_marks_the_node(self):
+        assert endpoint_provenance_level({"derived_from": "route-variant"}) == "derived"
+
+    def test_add_node_computes_the_level_and_verified_endpoints_filters(self):
+        dkg = DKG()
+        dkg.add_node("Endpoint", "ep-live", {
+            "url": "http://h/workflows", "sample_status": 405,
+        })
+        dkg.add_node("Endpoint", "ep-ghost", {
+            "url": "http://h/execute/POST", "sample_status": 404,
+            "derived_from": "route-probe",
+        })
+        assert dkg.get_node("ep-live")["provenance_level"] == "verified"
+        assert dkg.get_node("ep-ghost")["provenance_level"] == "derived"
+        assert [e["id"] for e in dkg.verified_endpoints()] == ["ep-live"]
 
 
 class TestDKGNodeOperations:

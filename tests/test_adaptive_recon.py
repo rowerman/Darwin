@@ -16,6 +16,7 @@ from darwin.orchestrator import Orchestrator
 from darwin.orchestration.recon import (
     _MAX_ROUTE_CANDIDATES,
     _same_origin_candidate,
+    extract_documented_routes,
     extract_json_route_fields,
     extract_openapi_routes,
     extract_route_candidates,
@@ -26,6 +27,33 @@ from darwin.tools.recon_server import parse_response
 
 
 # ── Pure extraction helpers ───────────────────────────────────────────
+
+class TestDocumentedRouteExtraction:
+    """A self-describing service states its own routes and body fields."""
+
+    def test_json_manifest_route_is_extracted_with_its_verb_and_fields(self):
+        manifest = json.dumps({
+            "endpoint": "POST /workflows {workspace, dataset_ref}",
+            "service": "Data Workflow Control Plane",
+        })
+        routes = extract_documented_routes(manifest)
+        assert routes and routes[0]["path"] == "/workflows"
+        assert routes[0]["methods"] == ["POST"]
+        assert routes[0]["params"] == ["workspace", "dataset_ref"]
+        assert routes[0]["source"] == "json-manifest"
+
+    def test_manifest_without_routes_yields_nothing(self):
+        assert extract_documented_routes(json.dumps({
+            "note": "functions execute with the platform default service account",
+            "firewall": "source-IP allowlist",
+        })) == []
+
+    def test_plain_text_route_doc_does_not_borrow_the_next_lines_fields(self):
+        routes = extract_documented_routes("GET /api/users\nPOST /api/users {name, email}\n")
+        by_method = {r["methods"][0]: r for r in routes}
+        assert by_method["GET"]["params"] == []
+        assert by_method["POST"]["params"] == ["name", "email"]
+
 
 class TestCandidateExtraction:
     def test_html_forms_are_route_candidates(self):

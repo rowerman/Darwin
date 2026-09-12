@@ -9,6 +9,7 @@ spec is the single source consumed by discovery, filtering and the manifest.
 from __future__ import annotations
 
 import inspect
+import json
 import os
 import shlex
 from typing import Any
@@ -119,6 +120,110 @@ def _capability_for(name: str, domain: str) -> str:
     if name.endswith(("_generate", "_forge")):
         return "payload_generate"
     return "web_exploit_send"
+
+
+# ── HTTP request-shape capabilities ─────────────────────────────────
+#
+# Which verbs and body shapes each HTTP tool can express. A tool that cannot
+# express the planned verb must never be selected for that request: pointing a
+# read-only tool at a write-only route only produces a 405 that then reads like
+# "the hypothesis was wrong". Body kinds: "none" | "raw" | "json".
+HTTP_REQUEST_CAPABILITIES: dict[str, tuple[frozenset[str] | None, frozenset[str]]] = {
+    "http_post": (
+        frozenset({"POST", "PUT", "PATCH", "DELETE"}),
+        frozenset({"none", "raw", "json"}),
+    ),
+    "http_method_probe": (None, frozenset({"none", "raw", "json"})),
+    "send_payload": (
+        frozenset({"GET", "POST", "PUT", "PATCH", "DELETE"}),
+        frozenset({"none", "raw", "json"}),
+    ),
+    "curl_get": (frozenset({"GET"}), frozenset({"none"})),
+}
+
+_WRITE_VERBS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
+
+#: Preference orders inside the HTTP family. A read is cheapest with the
+#: dedicated fetch tool; a write is safest with the purpose-built write tool.
+_READ_FAMILY_ORDER = ("curl_get", "http_method_probe", "send_payload", "http_post")
+_WRITE_FAMILY_ORDER = ("http_post", "http_method_probe", "send_payload", "curl_get")
+
+_BODY_KEYS = ("data", "payload", "body", "json")
+
+
+def _family_order(methods: Any) -> tuple[str, ...]:
+    wanted = {str(m).upper() for m in (methods or []) if m}
+    if wanted & _WRITE_VERBS:
+        return _WRITE_FAMILY_ORDER
+    return _READ_FAMILY_ORDER
+
+
+def http_tool_can_express(name: str, methods: Any, body_kind: str = "none") -> bool:
+    """True when *name* can send one of *methods* carrying *body_kind*."""
+    capability = HTTP_REQUEST_CAPABILITIES.get(name)
+    if capability is None:
+        return False
+    allowed_methods, body_kinds = capability
+    wanted = {str(m).upper() for m in (methods or []) if m}
+    if not wanted or body_kind not in body_kinds:
+        return False
+    if allowed_methods is None:
+        return True
+    return bool(wanted & allowed_methods)
+
+
+def http_tools_for(
+    methods: Any, available: Any = None, body_kind: str = "none",
+) -> list[str]:
+    """HTTP tools that can express *methods* with *body_kind*, best first.
+
+    ``available`` limits the result to the tools actually registered on this
+    host (binary-backed tools may be missing); ``None`` means "assume all".
+    """
+    order = list(_family_order(methods))
+    if available is not None:
+        registered = {str(n) for n in available}
+        order = [n for n in order if n in registered]
+        order += sorted(
+            n for n in registered
+            if n not in order and n in HTTP_REQUEST_CAPABILITIES
+        )
+    return [n for n in order if http_tool_can_express(n, methods, body_kind)]
+
+
+def request_body_kind(params: dict | None, body_keys: tuple[str, ...] = _BODY_KEYS) -> str:
+    """Body shape a call carries: ``none`` | ``raw`` | ``json``."""
+    for key in body_keys:
+        if key not in (params or {}):
+            continue
+        value = params.get(key)
+        if value in (None, "", {}, []):
+            continue
+        if isinstance(value, (dict, list)):
+            return "json"
+        text = str(value).strip()
+        if text.startswith(("{", "[")):
+            try:
+                json.loads(text)
+                return "json"
+            except ValueError:  # silent-ok: not JSON, so the body is raw text
+                pass
+        return "raw"
+    return "none"
+
+
+def capability_family(name: str) -> str:
+    """Coarse execution family a tool belongs to.
+
+    Used to police tool substitution: a repair may switch tools inside one
+    family (all HTTP request senders, all SQL clients, ...) but must never
+    silently turn a read into an unrelated subsystem's call.
+    """
+    if name in HTTP_REQUEST_CAPABILITIES:
+        return "http_request"
+    if name in _CAPABILITY_BY_NAME:
+        return _CAPABILITY_BY_NAME[name]
+    return _capability_for(name, "")
 
 
 def _sync_python_defaults(entry: Any, parameters: dict[str, dict]) -> dict[str, dict]:

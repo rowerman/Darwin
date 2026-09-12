@@ -21,7 +21,10 @@ Planner 发现工具、Executor 执行工具的攻击域注册层。
   `Key: v|Key2: v2` 或换行分隔，用于 header 驱动的鉴权（如 `X-Api-Key`）。
 - `ffuf_fuzz`：`normalize_fuzz_url()` 在 URL 缺少 `FUZZ` 时自动补 `/FUZZ`
   （ffuf 缺占位符时会打印错误却仍以 0 退出）；字典默认走逻辑名，
-  运行时由 `tools/paths.resolve_wordlist()` 解析。
+  运行时由 `tools/paths.resolve_wordlist()` 解析。输出经
+  `_parse_ffuf_output()` 解析为 `discovered_paths`（`path` + `code`），由
+  `execution._ingest_observed_routes()` 写回 Endpoint 世界状态——此前没有
+  解析器，整轮 fuzz 结果被丢弃并记为"无新状态"。spec 1.1.0。
 
 ## 相关模块
 

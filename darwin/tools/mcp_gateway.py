@@ -121,6 +121,11 @@ class ToolResult:
     exit_code: int
     elapsed_ms: float
     parsed_output: Dict[str, Any] = field(default_factory=dict)
+    #: Parameter keys the gateway redirected to a declared parameter before
+    #: dispatch (alias / substring correction). A non-empty list means the
+    #: call did not receive the exact arguments the caller planned, so a
+    #: negative verdict drawn from it is not trustworthy evidence.
+    params_repaired: List[str] = field(default_factory=list)
 
 
 class MCPGateway:
@@ -498,9 +503,9 @@ class MCPGateway:
             parameters=parameters, domain=domain, spec=tool_spec,
         )
 
-    def _normalize_params(
+    def _normalize_params_report(
         self, name: str, params: Dict[str, Any], entry: "_ToolEntry",
-    ) -> Dict[str, Any]:
+    ) -> tuple[Dict[str, Any], list[str], list[str]]:
         """Normalize LLM-provided parameters to match tool-declared names.
 
         Applies four phases:
@@ -508,6 +513,14 @@ class MCPGateway:
           2. 'anonymous' flag → empty credentials
           3. Substring fuzzy matching for close-but-not-exact names
           4. Drop params not in the tool's declared schema
+
+        Returns ``(params, unknown, repaired)``. ``unknown`` lists keys the
+        tool does not declare — the dispatch path refuses such a call, because
+        a dropped argument is a lost intent that would otherwise surface as a
+        false-negative result. ``repaired`` lists keys whose value the
+        framework redirected to a declared parameter (alias or substring
+        match): the call still carries the intent, but the caller must know
+        the arguments it planned were not the arguments the tool received.
 
         Aliases are only applied when the canonical name exists in the tool's
         parameters schema — this prevents false matches like command→query on
@@ -524,6 +537,7 @@ class MCPGateway:
         alias_table.update(_PARAM_ALIASES)
         alias_table.update(spec_aliases)  # spec aliases take precedence
         applied_aliases: set[str] = set()
+        repaired_keys: set[str] = set()
         for alias, canonical_list in alias_table.items():
             if alias not in normalized:
                 continue
@@ -540,6 +554,7 @@ class MCPGateway:
                         val = f"{val}:{normalized['port']}"
                     normalized[canonical] = val
                     applied_aliases.add(alias)
+                    repaired_keys.add(alias)
                     break  # only apply the first matching canonical
 
         # Phase 2: handle 'anonymous' flag — set empty credentials
@@ -578,31 +593,36 @@ class MCPGateway:
                     ]
                 if len(candidates) == 1:
                     normalized[declared_param] = normalized[candidates[0]]
+                    repaired_keys.add(candidates[0])
 
-        # Phase 4: drop params not in the tool's declared schema.
-        # This prevents "unexpected keyword argument" errors in Python
-        # function tools and Template format errors in shell tools.
-        # Keep alias-source keys as well — they'll be dropped later if
-        # the template doesn't need them (shell path) or ignored via
-        # the strip below.
+        # Phase 4: separate params the tool declares from the ones it does
+        # not. Unknown keys are reported instead of silently dropped: the
+        # dispatch path turns them into INVALID_ARGUMENT so the caller can
+        # repair the call instead of banking a meaningless result.
         _unknown = [
             k for k in normalized
             if k not in tool_params and k not in applied_aliases
         ]
-        if _unknown:
-            # A silently dropped parameter is a lost intent: log it so the
-            # fix loop (and the operator) can see why a call ignored an
-            # argument instead of failing invisibly inside the tool.
-            log.warning(
-                "tool '%s': dropping undeclared parameter(s) %s "
-                "(declared: %s)",
-                name, sorted(_unknown), sorted(tool_params),
-            )
         normalized = {
             k: v for k, v in normalized.items()
             if k in tool_params
         }
 
+        _repaired = sorted(k for k in repaired_keys if k not in normalized)
+        return normalized, sorted(_unknown), _repaired
+
+    def _normalize_params(
+        self, name: str, params: Dict[str, Any], entry: "_ToolEntry",
+    ) -> Dict[str, Any]:
+        """Preview form of :meth:`_normalize_params_report` (params only)."""
+        normalized, _unknown, _repaired = self._normalize_params_report(
+            name, params, entry
+        )
+        if _unknown:
+            log.warning(
+                "tool '%s': undeclared parameter(s) %s (declared: %s)",
+                name, _unknown, sorted(entry.parameters or {}),
+            )
         return normalized
 
     async def call(self, name: str, params: Dict[str, Any]) -> ToolResult:
@@ -617,29 +637,37 @@ class MCPGateway:
         # Normalize LLM-provided parameters before dispatch.
         # This single call site covers BOTH register() Python functions
         # AND register_shell_tool() shell commands.
-        params = self._normalize_params(name, params, entry)
+        params, _unknown, _repaired = self._normalize_params_report(
+            name, params, entry
+        )
 
-        # Refuse a call whose declared required parameters are absent: the
-        # tool can only fail, and doing it here turns an opaque runtime error
-        # ("TypeError: missing 1 required positional argument") into an
-        # actionable INVALID_ARGUMENT the fix loop can repair.
+        # Refuse a call whose declared parameters are not satisfied:
+        #   - unknown keys: the framework will not silently drop an argument
+        #     the plan intended to use, because the tool would then run against
+        #     a different request than the one the plan reasoned about.
+        #   - missing required: doing it here turns an opaque runtime error
+        #     ("TypeError: missing 1 required positional argument") into an
+        #     actionable INVALID_ARGUMENT the fix loop can repair.
         _missing = [
             _param for _param, _schema in (entry.parameters or {}).items()
             if isinstance(_schema, dict) and "default" not in _schema
             and _param not in params
         ]
-        if _missing:
-            log.warning(
-                "tool '%s': refusing call, missing required parameter(s) %s",
-                name, _missing,
-            )
+        if _missing or _unknown:
+            _details: list[str] = []
+            if _missing:
+                _details.append(f"missing required parameter(s) {_missing}")
+            if _unknown:
+                _details.append(
+                    f"unknown parameter(s) {_unknown} (declared: "
+                    f"{sorted(entry.parameters or {})})"
+                )
+            _reason = "; ".join(_details)
+            log.warning("tool '%s': refusing call — %s", name, _reason)
             return ToolResult(
                 tool_name=name, success=False, stdout="",
-                stderr=(
-                    f"invalid argument: missing required parameter(s) "
-                    f"{_missing} for tool '{name}'"
-                ),
-                exit_code=1, elapsed_ms=0,
+                stderr=f"invalid argument: {_reason} for tool '{name}'",
+                exit_code=2, elapsed_ms=0,
             )
 
         try:
@@ -652,6 +680,8 @@ class MCPGateway:
                     tool_name=name, success=True, stdout=str(result) if result is not None else "",
                     stderr="", exit_code=0, elapsed_ms=0,
                 )
+            if _repaired:
+                result.params_repaired = list(_repaired)
             self._execution_log.append(result)
             return result
         except Exception as e:

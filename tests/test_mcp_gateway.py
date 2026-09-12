@@ -421,9 +421,11 @@ class TestCallWithNormalization:
         assert "admin" in result.stdout
 
     @pytest.mark.asyncio
-    async def test_call_extra_params_dropped(self):
+    async def test_call_extra_params_refused(self):
         gw = MCPGateway()
+        calls = []
         def _sync(host):
+            calls.append(host)
             return ToolResult("x", True, f"host={host}", "", 0, 0)
         gw.register(
             name="sync_tool",
@@ -431,9 +433,14 @@ class TestCallWithNormalization:
             description="test",
             parameters={"host": {"type": "string"}},
         )
-        # LLM adds extra params that the tool doesn't need
+        # An undeclared parameter is a lost intent, not junk: the call is
+        # refused so the tool never runs against a rewritten request.
         result = await gw.call("sync_tool", {"host": "x", "unused": "junk"})
-        assert result.success
+        assert calls == []
+        assert result.success is False
+        assert result.exit_code == 2
+        assert "unknown parameter" in result.stderr
+        assert "unused" in result.stderr
 
     @pytest.mark.asyncio
     async def test_call_unknown_tool_returns_error(self):

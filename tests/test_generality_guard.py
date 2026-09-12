@@ -18,6 +18,7 @@ from darwin.orchestration.execution import (
 )
 from darwin.orchestration.planning import PlanCoordinator
 from darwin.tools.attack_server import create_attack_gateway
+from darwin.tools.contracts import http_tool_can_express
 from darwin.tools.recon_server import create_recon_gateway
 
 
@@ -72,11 +73,16 @@ def test_no_concrete_flag_value_is_embedded():
 
 
 def _method_capable_tools() -> set[str]:
+    """Tools that can carry a non-GET request body.
+
+    "Declares a ``method`` parameter" is too weak a proxy: a tool that accepts
+    a verb but cannot carry the body still cannot test a JSON API route. The
+    criterion is the declared request-shape capability.
+    """
     tools: set[str] = set()
-    for gateway in (create_attack_gateway(), create_recon_gateway()):
-        for name, spec in gateway.get_tool_specs().items():
-            if "method" in (spec.parameters or {}):
-                tools.add(name)
+    for name in ("http_post", "http_method_probe", "send_payload"):
+        if http_tool_can_express(name, ["POST"], "json"):
+            tools.add(name)
     return tools
 
 
@@ -106,3 +112,7 @@ def test_vulnerability_type_guessing_splits_read_and_write():
     assert coord._guess_tool("dependency_confusion") in _method_capable_tools()
     assert coord._guess_tool("SQLi") == "sqlmap_test"
     assert coord._guess_tool("IDOR") == "curl_get"
+    # A route the target documents as a write must never be planned with a
+    # read-only tool: that only produces a 405 that reads like "not vulnerable".
+    for vuln_type in ("IDOR", "LFI", "AuthBypass"):
+        assert coord._guess_tool(vuln_type, method="POST") in _method_capable_tools()
