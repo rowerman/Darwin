@@ -1,0 +1,132 @@
+[
+  {
+    "id": "cap-db-unauthorized-service-access",
+    "title": "数据库/缓存服务未授权访问导致数据读取",
+    "capability": "db_unauth_access",
+    "domains": ["db", "network"],
+    "requires_environment": [],
+    "applies_when": [
+      "数据库或缓存端口对目标网络开放",
+      "服务未启用鉴权或使用默认凭据"
+    ],
+    "signals": [
+      "无凭据即可建立会话并执行只读命令",
+      "默认口令可登录",
+      "可枚举库/集合/键空间"
+    ],
+    "technique_class": ["服务指纹识别", "无凭据/默认凭据连接", "数据枚举与读取"],
+    "verification": "无凭据或默认凭据连接后枚举并读取一条敏感数据，确认数据可访问",
+    "failure_boundary": ["服务启用强鉴权并限制来源", "仅监听本地且网络隔离"],
+    "tools": ["mongodb_query", "redis_cmd", "psql_query", "mysql_query"],
+    "aliases": {
+      "zh": ["未授权访问", "默认口令", "数据读取"],
+      "en": ["unauthorized database access", "default credentials", "unauthenticated redis", "open mongodb"]
+    },
+    "confidence": 0.8,
+    "derived_from": "benchmark scenarios: mongodb-unauth, redis-unauth, postgres-weak-auth, mysql-udf-direct"
+  },
+  {
+    "id": "cap-db-nosql-operator-injection",
+    "title": "NoSQL 操作符注入绕过认证或越权查询",
+    "capability": "nosql_injection",
+    "domains": ["db", "web"],
+    "requires_environment": [],
+    "applies_when": [
+      "应用把 JSON/表单输入直接传入 NoSQL 查询",
+      "查询未强制类型，允许操作符对象进入比较条件"
+    ],
+    "signals": [
+      "$ne/$gt/$regex 等操作符改变查询结果",
+      "认证接口在密码为对象时返回成功",
+      "响应差异可推断字段存在性"
+    ],
+    "technique_class": ["输入类型混淆", "操作符注入", "条件推断与数据提取"],
+    "verification": "提交含操作符的最小请求，确认绕过认证或返回本不该可见的数据",
+    "failure_boundary": ["输入强制类型且查询白名单字段", "认证逻辑与存储查询解耦"],
+    "tools": ["curl_get", "http_post", "nosql_inject", "mongodb_query"],
+    "aliases": {
+      "zh": ["NoSQL 注入", "操作符注入", "认证绕过"],
+      "en": ["NoSQL injection", "MongoDB operator injection", "$ne bypass", "auth bypass"]
+    },
+    "confidence": 0.8,
+    "derived_from": "benchmark scenarios: mongodb-nosqli"
+  },
+  {
+    "id": "cap-db-script-and-view-execution",
+    "title": "数据库脚本/视图引擎执行导致命令执行",
+    "capability": "db_script_exec",
+    "domains": ["db"],
+    "requires_environment": [],
+    "applies_when": [
+      "数据库开放脚本引擎或原生视图能力（Painless、Erlang view、PL 语言）",
+      "当前会话可创建或调用脚本对象"
+    ],
+    "signals": [
+      "脚本查询接口接受用户脚本",
+      "原生视图/函数可被创建",
+      "执行结果返回命令输出或宿主信息"
+    ],
+    "technique_class": ["脚本接口识别", "受控脚本提交", "命令执行结果回读"],
+    "verification": "提交最小脚本并通过查询触发，确认服务器端执行并返回可识别输出",
+    "failure_boundary": ["脚本引擎禁用或强沙箱", "对象创建需要更高权限且被审计"],
+    "tools": ["elasticsearch_query", "couchdb_query", "curl_get"],
+    "aliases": {
+      "zh": ["脚本注入", "原生视图", "数据库 RCE"],
+      "en": ["Elasticsearch script injection", "CouchDB native view RCE", "database script execution"]
+    },
+    "confidence": 0.7,
+    "derived_from": "benchmark scenarios: elasticsearch-script, couchdb-rce"
+  },
+  {
+    "id": "cap-db-linked-server-lateral",
+    "title": "数据库链式/联邦查询横向到其它实例",
+    "capability": "db_lateral_movement",
+    "domains": ["db"],
+    "requires_environment": [],
+    "applies_when": [
+      "数据库配置了链接服务器、外部数据包装器或远程查询",
+      "当前账号可在远程实例上执行查询或过程"
+    ],
+    "signals": [
+      "可枚举链接服务器与远程凭据映射",
+      "OPENQUERY/外部表返回远程结果",
+      "远程实例可执行扩展命令"
+    ],
+    "technique_class": ["链接对象枚举", "远程查询执行", "远端扩展利用"],
+    "verification": "通过链接对象在远端实例执行最小查询，确认返回远端数据或命令输出",
+    "failure_boundary": ["链接服务器被移除或凭据最小化", "远程执行权限受限并审计"],
+    "tools": ["mssqlclient_query", "mssql_query"],
+    "aliases": {
+      "zh": ["链接服务器", "数据库横向", "联邦查询"],
+      "en": ["linked server", "OPENQUERY lateral movement", "federated query abuse"]
+    },
+    "confidence": 0.7,
+    "derived_from": "benchmark scenarios: mssql-linked-server"
+  },
+  {
+    "id": "cap-db-listener-poisoning",
+    "title": "数据库监听器欺骗实现中间人与凭据截获",
+    "capability": "network_mitm",
+    "domains": ["db", "network"],
+    "requires_environment": [],
+    "applies_when": [
+      "客户端通过无认证的监听器/名称解析定位数据库",
+      "监听注册或名称解析可被干扰"
+    ],
+    "signals": [
+      "监听器接受非授权注册",
+      "客户端连接被引导到受控地址",
+      "捕获到认证哈希或可复用凭据"
+    ],
+    "technique_class": ["监听器协议分析", "注册/解析干扰", "凭据截获与转发"],
+    "verification": "干扰监听注册后引导客户端连接受控端，确认捕获到认证材料",
+    "failure_boundary": ["监听器强制认证与加密", "客户端校验服务端身份"],
+    "tools": ["oracle_tns_poison", "shell_exec", "curl_get"],
+    "aliases": {
+      "zh": ["监听器欺骗", "中间人", "凭据截获"],
+      "en": ["TNS poisoning", "listener MITM", "credential interception"]
+    },
+    "confidence": 0.55,
+    "derived_from": "benchmark scenarios: oracle-tns"
+  }
+]

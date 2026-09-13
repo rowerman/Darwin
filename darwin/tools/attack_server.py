@@ -1478,67 +1478,45 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
         timeout=30,
     )
 
-    # ── Knowledge search (DarwinRAG + keyword fallback) ──────────
-    async def knowledge_search(query: str, category: str = "") -> ToolResult:
-        """Search penetration testing knowledge base for exploit patterns.
+    # ── Knowledge search (DarwinRAG hybrid retrieval) ────────────
+    async def knowledge_search(query: str, domain: str = "",
+                               environment: str = "") -> ToolResult:
+        """Search the knowledge base for transferable techniques.
 
-        Category filter is IGNORED for the primary search — it causes false
-        negatives when knowledge entries use different category tags than the
-        LLM expects. The LLM-provided category is only used if the initial
-        unfiltered search returns >10 results, as a precision refinement pass.
+        Retrieval is hybrid (dense + BM25), then reranked by a cross-encoder and
+        gated: at most ``rag.max_results`` (default 3) entries are returned, and
+        an empty result means the corpus has nothing that fits the target
+        environment. Knowledge about an unrelated environment family (for
+        example Kubernetes control-plane techniques on a public-cloud target) is
+        filtered out rather than offered as a suggestion.
 
         Returns results in the unified research-evidence JSON envelope
         (schema darwin.research_evidence.v1) shared with web search.
         """
         try:
-            from darwin.search_evidence import (
-                empty_evidence,
-                format_rag_evidence,
-            )
-            from darwin.rag import get_rag
+            import re
+
+            from darwin.rag import get_environment, get_rag
+            from darwin.rag_query import active_domains
+            from darwin.search_evidence import empty_evidence, format_rag_evidence
+
             rag = get_rag()
-            # Phase 2: two-stage retrieval first (routes to the taxonomy
-            # subtree, then ranks inside it); falls back to flat search when
-            # the taxonomy is unavailable or no leaf routes.
-            results = rag.search_hierarchical(query, top_k=5, min_keyword_overlap=0.2)
-            # Only apply category filter if first pass is too noisy
-            if len(results) > 10 and category:
-                results = rag.search(query, top_k=5, category=category, min_keyword_overlap=0.2)
-
+            resolved_environment = environment or get_environment()
+            domains = [d for d in re.split(r"[,\s]+", domain or "") if d] or active_domains([query])
+            results = rag.retrieve(
+                query, environment=resolved_environment, domains=domains
+            )
+            retrieval = {
+                "backend": rag.backend,
+                "environment": resolved_environment or "unknown",
+                "domains": domains,
+                "max_results": rag._config.max_results,
+            }
             if not results:
-                try:
-                    from darwin.knowledge_base import KnowledgeBase
-                    kb = KnowledgeBase()
-                    kb_entries = kb.search(query, category="", top_k=5)
-                    if kb_entries:
-                        output = format_rag_evidence(
-                            query,
-                            [
-                                {
-                                    "id": f"kb-{i}",
-                                    "title": e.title,
-                                    "description": e.description,
-                                    "category": e.category,
-                                    "subcategory": e.subcategory,
-                                    "techniques": list(e.techniques)[:5],
-                                    "score": None,
-                                    "source": f"knowledge:{e.category}/{e.subcategory}",
-                                    "path": [e.category, e.subcategory],
-                                    "confidence": getattr(e, "confidence", None),
-                                    "mitre_attack": e.mitre_attack,
-                                }
-                                for i, e in enumerate(kb_entries, 1)
-                            ],
-                        )
-                        return ToolResult(tool_name="knowledge_search", success=True,
-                            stdout=output, stderr="", exit_code=0, elapsed_ms=0)
-                except ImportError as exc:
-                    log.debug("swallowed exception: %s", exc, exc_info=True)
                 return ToolResult(tool_name="knowledge_search", success=True,
-                    stdout=empty_evidence("rag", query),
+                    stdout=format_rag_evidence(query, [], retrieval),
                     stderr="", exit_code=0, elapsed_ms=0)
-
-            output = format_rag_evidence(query, results)
+            output = format_rag_evidence(query, results, retrieval)
             return ToolResult(tool_name="knowledge_search", success=True,
                 stdout=output, stderr="", exit_code=0, elapsed_ms=0)
         except Exception as e:
@@ -1548,10 +1526,13 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
     gateway.register(
         name="knowledge_search",
         func=knowledge_search,
-        description="Research tool — search the knowledge base for known vulnerabilities, exploitation techniques, and configuration weaknesses for a specific technology, service version, or vulnerability type. Call this BEFORE running exploit tools to identify the correct approach. Example queries: 'SQL injection MariaDB', 'JWT token bypass', 'Flask SSTI exploitation'",
+        description="Research tool — search the knowledge base for transferable exploitation techniques that match the target fingerprint (service, version, vulnerability class) and its environment. Returns at most 3 gated candidates; an empty result means the corpus has no technique that fits this target environment, so proceed from reconnaissance instead of forcing a match. Example queries: 'SQL injection MariaDB encoding bypass', 'JWT claim validation bypass', 'cross-tenant predictable resource id'",
         parameters={
             "query": {"type": "string", "description": "Natural language query (e.g. 'IDOR in FastAPI')"},
-            "category": {"type": "string", "description": "Optional filter: IDOR, SQLI, AUTH, RECON"},
+            "domain": {"type": "string",
+                       "description": "Optional domain hint: web, cloud, k8s, container, db, ad, network"},
+            "environment": {"type": "string",
+                            "description": "Optional environment hint: public_cloud, private_cloud, hybrid, web_db"},
         },
     )
 

@@ -1,0 +1,50 @@
+{
+  "metrics": {
+    "queries": 101,
+    "scenario_queries": 88,
+    "negative_queries": 13,
+    "recall_at_1": 0.2614,
+    "recall_at_3": 0.4545,
+    "mrr": 0.3523,
+    "negative_empty_rate": 1.0,
+    "avg_returned": 1.32,
+    "avg_injected_chars": 712.2,
+    "leak_violations": 0,
+    "environment_violations": 0,
+    "backend": "hybrid",
+    "embedder": "st:/home/kali/Desktop/llm-agent/Darwin/models/paraphrase-multilingual-MiniLM-L12-v2",
+    "reranker": "ce:/home/kali/Desktop/llm-agent/Darwin/models/mmarco-mMiniLMv2-L12-H384-v1",
+    "corpus_entries": 8231,
+    "corpus_counts": {
+      "by_domain": {
+        "ad": 141,
+        "cloud": 67,
+        "container": 26,
+        "db": 25,
+        "k8s": 86,
+        "network": 112,
+        "web": 7774
+      },
+      "by_source_kind": {
+        "ad_json": 23,
+        "article": 647,
+        "attck_md": 20,
+        "case_md": 6,
+        "cis_md": 26,
+        "cloud_json": 71,
+        "cloudformation_json": 3,
+        "curated": 45,
+        "hacktricks": 188,
+        "network_json": 41,
+        "nuclei_template": 6975,
+        "oscp_notes": 63,
+        "pat_notes": 76,
+        "remediation_md": 15,
+        "web_json": 32
+      },
+      "curated": 45,
+      "total": 8231
+    }
+  },
+  "source": "/home/kali/Desktop/llm-agent/Darwin/knowledge/eval/runtime_queries.json"
+}

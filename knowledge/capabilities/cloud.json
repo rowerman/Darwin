@@ -1,0 +1,909 @@
+[
+  {
+    "id": "cap-cloud-predictable-id-ownership-check",
+    "title": "可预测资源 ID + 属主校验缺失导致跨租户访问",
+    "capability": "cloud_cross_tenant_object_access",
+    "domains": [
+      "cloud"
+    ],
+    "requires_environment": [
+      "public_cloud",
+      "hybrid"
+    ],
+    "applies_when": [
+      "控制面资源以可预测 ID/名称寻址（卷 ID、forwardingId、workspace 路径、bucket 名）",
+      "API 只校验调用者身份是否合法，不比对资源属主与调用者租户"
+    ],
+    "signals": [
+      "自身租户资源正常，替换为同构 ID 后返回他租户数据",
+      "响应内容随 tenant/workspace 参数变化",
+      "错误信息泄露其它租户资源是否存在"
+    ],
+    "technique_class": [
+      "资源 ID 枚举与替换",
+      "属主校验缺失利用",
+      "跨租户对象读取"
+    ],
+    "verification": "用自身租户 ID 与同构邻租户 ID 各请求一次，比较状态码与响应体归属，确认返回数据确属邻租户",
+    "failure_boundary": [
+      "服务端按调用者租户强校验资源属主",
+      "资源 ID 为不可预测随机值且无泄露渠道"
+    ],
+    "tools": [
+      "curl_get",
+      "http_post"
+    ],
+    "aliases": {
+      "zh": [
+        "越权访问",
+        "跨租户读取",
+        "IDOR"
+      ],
+      "en": [
+        "cross-tenant object access",
+        "predictable resource id",
+        "missing ownership check",
+        "IDOR"
+      ]
+    },
+    "confidence": 0.7,
+    "derived_from": "benchmark scenarios: attachme-volume, cosmiss-notebook, dataform-pt, lowcode-secrets"
+  },
+  {
+    "id": "cap-cloud-tenant-claim-not-bound",
+    "title": "身份令牌 tenant/actor claim 未与目标资源绑定",
+    "capability": "cloud_identity_binding_bypass",
+    "domains": [
+      "cloud"
+    ],
+    "requires_environment": [
+      "public_cloud",
+      "hybrid"
+    ],
+    "applies_when": [
+      "服务使用签名令牌（JWT/SAML/actor token）鉴权",
+      "鉴权只验签名，不比对 token 声明的租户/主体与目标资源归属"
+    ],
+    "signals": [
+      "用自己的租户签发的合法 token 访问他租户路径返回 200",
+      "audience/issuer/tenant claim 存在于 token 但服务端未使用",
+      "同一 token 在两个租户端点上表现一致"
+    ],
+    "technique_class": [
+      "合法令牌跨租户复用",
+      "claim 绑定缺失验证",
+      "SAML/OIDC 断言重放"
+    ],
+    "verification": "在自身租户获取合法令牌后请求邻租户资源，若返回对方数据即可确认 claim 未绑定",
+    "failure_boundary": [
+      "服务端校验 token 的 tenant/audience/subject 与目标一致",
+      "断言仅有短时有效且绑定单一资源"
+    ],
+    "tools": [
+      "curl_get",
+      "http_post"
+    ],
+    "aliases": {
+      "zh": [
+        "令牌复用",
+        "租户绑定缺失",
+        "身份错配"
+      ],
+      "en": [
+        "actor token",
+        "tenant claim binding",
+        "assertion replay",
+        "identity confusion"
+      ]
+    },
+    "confidence": 0.7,
+    "derived_from": "benchmark scenarios: actor-token, oidc-federation, golden-saml"
+  },
+  {
+    "id": "cap-cloud-overpermissive-trust-policy",
+    "title": "信任策略过宽（Principal 通配）导致跨账号角色接管",
+    "capability": "cloud_iam_assume",
+    "domains": [
+      "cloud"
+    ],
+    "requires_environment": [
+      "public_cloud",
+      "hybrid"
+    ],
+    "applies_when": [
+      "存在可读的 IAM 信任策略/角色 ARN 发现面",
+      "信任策略主体为通配或包含当前可用身份"
+    ],
+    "signals": [
+      "角色信任策略中出现 Principal:* 或宽泛账号",
+      "AssumeRole 对当前凭据返回成功",
+      "返回的临时凭据可访问原身份无权限的资源"
+    ],
+    "technique_class": [
+      "角色枚举",
+      "AssumeRole 提权",
+      "跨账号资源访问"
+    ],
+    "verification": "枚举角色与信任策略后尝试 AssumeRole，确认可获取临时凭据并访问目标资源",
+    "failure_boundary": [
+      "信任策略限定具体主体与外部 ID 条件",
+      "目标角色附加了会话策略限制"
+    ],
+    "tools": [
+      "aws_sts_query",
+      "aws_cli",
+      "curl_get"
+    ],
+    "aliases": {
+      "zh": [
+        "信任策略",
+        "跨账号接管",
+        "角色扮演"
+      ],
+      "en": [
+        "assume role",
+        "trust policy wildcard",
+        "cross-account takeover",
+        "role chaining"
+      ]
+    },
+    "confidence": 0.65,
+    "derived_from": "benchmark scenarios: cross-account-trust"
+  },
+  {
+    "id": "cap-cloud-unlogged-enumeration-oracle",
+    "title": "未审计查询/错误 oracle 静默枚举控制面资源",
+    "capability": "cloud_stealth_enumeration",
+    "domains": [
+      "cloud"
+    ],
+    "requires_environment": [
+      "public_cloud",
+      "hybrid"
+    ],
+    "applies_when": [
+      "存在资源搜索/清单类只读 API 或带差异化错误响应的接口",
+      "该 API 不在审计日志覆盖范围内"
+    ],
+    "signals": [
+      "资源搜索 API 返回大量未授权可见清单",
+      "AccessDenied 与 NoSuchEntity 响应差异可区分标识是否存在",
+      "调用后审计日志无对应事件"
+    ],
+    "technique_class": [
+      "只读清单枚举",
+      "错误差异 oracle",
+      "审计盲区利用"
+    ],
+    "verification": "调用搜索/枚举接口并比对不同标识的响应差异，同时检查审计日志是否缺少事件",
+    "failure_boundary": [
+      "枚举接口纳入审计并限流",
+      "错误响应统一化不泄露存在性"
+    ],
+    "tools": [
+      "curl_get",
+      "aws_cli"
+    ],
+    "aliases": {
+      "zh": [
+        "静默枚举",
+        "审计盲区",
+        "无日志接口"
+      ],
+      "en": [
+        "unlogged enumeration",
+        "error oracle",
+        "audit blind spot",
+        "resource explorer"
+      ]
+    },
+    "confidence": 0.6,
+    "derived_from": "benchmark scenarios: iam-enum-oracle, resource-explorer, beta-endpoint"
+  },
+  {
+    "id": "cap-cloud-nonprod-endpoint-policy-gap",
+    "title": "非生产/旧版 API 端点绕过策略与审计",
+    "capability": "cloud_api_version_bypass",
+    "domains": [
+      "cloud"
+    ],
+    "requires_environment": [
+      "public_cloud",
+      "hybrid"
+    ],
+    "applies_when": [
+      "同一控制面存在多版本端点（beta/legacy/preview）",
+      "策略（SCP/权限边界）只在部分版本上生效"
+    ],
+    "signals": [
+      "生产端点拒绝写入，beta 端点成功",
+      "旧版 API 版本不受策略限制",
+      "非生产端点操作未产生审计事件"
+    ],
+    "technique_class": [
+      "API 版本枚举",
+      "策略生效面差异利用",
+      "非生产端点写入"
+    ],
+    "verification": "对同一操作分别请求生产与 beta/旧版端点，比较策略结果与审计记录差异",
+    "failure_boundary": [
+      "策略在所有 API 版本统一执行",
+      "非生产端点已下线或需要额外审批"
+    ],
+    "tools": [
+      "curl_get",
+      "http_post",
+      "aws_cli"
+    ],
+    "aliases": {
+      "zh": [
+        "API 版本绕过",
+        "beta 端点",
+        "策略盲区"
+      ],
+      "en": [
+        "non-production endpoint",
+        "api version bypass",
+        "scp bypass",
+        "preview api"
+      ]
+    },
+    "confidence": 0.6,
+    "derived_from": "benchmark scenarios: beta-endpoint, scp-bypass"
+  },
+  {
+    "id": "cap-cloud-shared-runtime-injection",
+    "title": "共享运行时/托管执行器注入导致跨租户执行",
+    "capability": "cloud_shared_runtime_injection",
+    "domains": [
+      "cloud"
+    ],
+    "requires_environment": [
+      "public_cloud",
+      "hybrid"
+    ],
+    "applies_when": [
+      "托管服务用共享运行时执行用户提交的作业（数据集成、构建、笔记本任务）",
+      "作业参数可影响命令、驱动或解释器行为"
+    ],
+    "signals": [
+      "作业参数直接进入驱动/命令串（LOGIN_URL、数据集引用、构建指令）",
+      "构造的参数使请求落到共享执行器",
+      "执行结果反映宿主或其它租户环境"
+    ],
+    "technique_class": [
+      "驱动/连接串注入",
+      "共享执行器跨租户执行",
+      "作业参数注入"
+    ],
+    "verification": "向共享运行时提交带注入参数的最小作业，观察返回内容是否来自宿主或其它租户工作区",
+    "failure_boundary": [
+      "作业参数被强类型校验并隔离",
+      "每个租户使用独立运行时"
+    ],
+    "tools": [
+      "curl_get",
+      "http_post",
+      "shell_exec"
+    ],
+    "aliases": {
+      "zh": [
+        "共享运行时",
+        "作业注入",
+        "跨租户执行"
+      ],
+      "en": [
+        "shared runtime injection",
+        "connection string injection",
+        "managed pipeline execution"
+      ]
+    },
+    "confidence": 0.6,
+    "derived_from": "benchmark scenarios: synlapse-ir, dataform-pt, composer-depconf"
+  },
+  {
+    "id": "cap-cloud-metadata-service-credential-theft",
+    "title": "SSRF/网络中间人获取元数据服务凭据",
+    "capability": "cloud_credential_theft",
+    "domains": [
+      "cloud"
+    ],
+    "requires_environment": [
+      "public_cloud",
+      "hybrid"
+    ],
+    "applies_when": [
+      "目标工作负载可由外部或邻近位置发起出站请求",
+      "云元数据服务可达且未强制要求会话令牌"
+    ],
+    "signals": [
+      "URL 获取类功能可请求内部地址",
+      "元数据端点返回实例角色与临时凭据",
+      "节点网络中存在可嗅探的元数据流量"
+    ],
+    "technique_class": [
+      "SSRF 到元数据端点",
+      "明文元数据流量嗅探",
+      "临时凭据提取"
+    ],
+    "verification": "经 SSRF 或中间人取得元数据响应，确认返回的临时凭据可用于云 API 调用",
+    "failure_boundary": [
+      "元数据服务强制令牌并限制跳数",
+      "出站流量被网络策略限制"
+    ],
+    "tools": [
+      "curl_get",
+      "send_payload",
+      "shell_exec"
+    ],
+    "aliases": {
+      "zh": [
+        "元数据服务",
+        "SSRF 取凭据",
+        "实例角色"
+      ],
+      "en": [
+        "IMDS",
+        "metadata service",
+        "SSRF credential theft",
+        "instance role"
+      ]
+    },
+    "confidence": 0.75,
+    "derived_from": "benchmark scenarios: ssrf-to-imds, cap-netraw-metadata"
+  },
+  {
+    "id": "cap-cloud-serverless-injection-role-escalation",
+    "title": "无服务器函数注入 + 执行角色 PassRole 提权",
+    "capability": "cloud_iam_assume",
+    "domains": [
+      "cloud"
+    ],
+    "requires_environment": [
+      "public_cloud",
+      "hybrid"
+    ],
+    "applies_when": [
+      "存在可调用的函数/作业类无服务器入口且输入进入命令或代码",
+      "当前身份具备创建或更新函数、传递执行角色的权限"
+    ],
+    "signals": [
+      "函数入参可影响命令执行结果",
+      "响应暴露执行角色名或权限错误信息",
+      "创建的临时函数可读取原身份不可见的数据"
+    ],
+    "technique_class": [
+      "函数代码/命令注入",
+      "PassRole 提权",
+      "临时函数落地"
+    ],
+    "verification": "注入口令或代码并以目标执行角色运行，确认返回结果来自更高权限身份",
+    "failure_boundary": [
+      "函数输入被严格校验",
+      "当前身份无 PassRole/函数管理权限"
+    ],
+    "tools": [
+      "curl_get",
+      "http_post",
+      "aws_cli"
+    ],
+    "aliases": {
+      "zh": [
+        "无服务器注入",
+        "执行角色提权",
+        "函数注入"
+      ],
+      "en": [
+        "lambda injection",
+        "PassRole escalation",
+        "serverless function abuse"
+      ]
+    },
+    "confidence": 0.6,
+    "derived_from": "benchmark scenarios: lambda-passrole"
+  },
+  {
+    "id": "cap-cloud-overscoped-default-identity",
+    "title": "默认/托管身份权限过大被用作提权路径",
+    "capability": "cloud_iam_assume",
+    "domains": [
+      "cloud"
+    ],
+    "requires_environment": [
+      "public_cloud",
+      "hybrid"
+    ],
+    "applies_when": [
+      "服务使用默认服务账号或自动授予的托管身份运行",
+      "该默认身份被授予跨服务或项目级权限"
+    ],
+    "signals": [
+      "默认身份可列出或读取超出本服务的资源",
+      "错误信息显示多个服务共享同一身份",
+      "通过默认身份可调用控制面写操作"
+    ],
+    "technique_class": [
+      "默认身份权限枚举",
+      "跨服务权限利用",
+      "托管身份接管"
+    ],
+    "verification": "以默认身份调用其不应具备的 API，确认调用成功并返回保护资源",
+    "failure_boundary": [
+      "默认身份被最小权限约束",
+      "调用需要额外审批或条件上下文"
+    ],
+    "tools": [
+      "curl_get",
+      "aws_cli",
+      "gcloud_cli"
+    ],
+    "aliases": {
+      "zh": [
+        "默认服务账号",
+        "托管身份",
+        "越权调用"
+      ],
+      "en": [
+        "default service account",
+        "managed identity",
+        "over-scoped identity"
+      ]
+    },
+    "confidence": 0.6,
+    "derived_from": "benchmark scenarios: serverless-sa"
+  },
+  {
+    "id": "cap-cloud-supply-chain-artifact-overwrite",
+    "title": "构建/镜像供应链覆盖受信构件",
+    "capability": "cloud_supply_chain",
+    "domains": [
+      "cloud",
+      "container"
+    ],
+    "requires_environment": [
+      "public_cloud",
+      "hybrid"
+    ],
+    "applies_when": [
+      "构建服务或内部镜像仓库对提交者鉴权不足",
+      "下游以可变标签或私有命名空间拉取构件"
+    ],
+    "signals": [
+      "可向内部仓库推送或覆盖镜像标签",
+      "构建作业可修改被信任的基线镜像",
+      "下游租户拉取到篡改后的构件"
+    ],
+    "technique_class": [
+      "镜像标签覆盖",
+      "构建作业注入",
+      "依赖/命名空间混淆"
+    ],
+    "verification": "推送受控构件后触发下游拉取，确认执行流落到受控内容并产生可观测效果",
+    "failure_boundary": [
+      "构件需签名校验且标签不可变",
+      "仓库写入需要独立凭据"
+    ],
+    "tools": [
+      "shell_exec",
+      "docker_registry",
+      "http_post"
+    ],
+    "aliases": {
+      "zh": [
+        "供应链投毒",
+        "镜像覆盖",
+        "依赖混淆"
+      ],
+      "en": [
+        "supply chain poisoning",
+        "image tag overwrite",
+        "dependency confusion",
+        "registry poisoning"
+      ]
+    },
+    "confidence": 0.6,
+    "derived_from": "benchmark scenarios: buildfleet-registry, composer-depconf"
+  },
+  {
+    "id": "cap-cloud-cicd-pipeline-poisoning",
+    "title": "CI/CD 管道配置投毒窃取运行器凭据",
+    "capability": "cloud_cicd_abuse",
+    "domains": [
+      "cloud"
+    ],
+    "requires_environment": [
+      "public_cloud",
+      "hybrid"
+    ],
+    "applies_when": [
+      "存在可触发或可提交配置的 CI/CD 管道",
+      "运行器环境注入长期凭据或可访问敏感仓库"
+    ],
+    "signals": [
+      "管道配置或构建脚本可被低权限身份修改",
+      "构建日志或产物包含环境变量与凭据",
+      "运行器可执行任意命令"
+    ],
+    "technique_class": [
+      "管道配置注入",
+      "构建脚本执行",
+      "运行器凭据外泄"
+    ],
+    "verification": "提交最小化管道变更并触发构建，确认可读到运行器注入的凭据或受保护数据",
+    "failure_boundary": [
+      "管道配置需评审且运行器使用短时凭据",
+      "构建环境禁止外联"
+    ],
+    "tools": [
+      "shell_exec",
+      "http_post"
+    ],
+    "aliases": {
+      "zh": [
+        "管道投毒",
+        "CI/CD 注入",
+        "运行器凭据"
+      ],
+      "en": [
+        "CI/CD poisoning",
+        "pipeline injection",
+        "runner credential theft"
+      ]
+    },
+    "confidence": 0.6,
+    "derived_from": "benchmark scenarios: ci-poisoning"
+  },
+  {
+    "id": "cap-cloud-automation-persistence",
+    "title": "托管自动化/运行手册持久化后门",
+    "capability": "cloud_persistence",
+    "domains": [
+      "cloud"
+    ],
+    "requires_environment": [
+      "public_cloud",
+      "hybrid"
+    ],
+    "applies_when": [
+      "控制面提供自动化脚本、运行手册或定时作业创建能力",
+      "创建者可使用高权限角色执行这些作业"
+    ],
+    "signals": [
+      "可创建或修改自动化脚本与调度",
+      "作业以高权限身份运行",
+      "执行结果可外带数据或维持访问"
+    ],
+    "technique_class": [
+      "自动化脚本植入",
+      "定时作业持久化",
+      "凭据轮换规避"
+    ],
+    "verification": "创建最小自动化作业并以高权限身份触发，确认能够稳定执行并保留访问路径",
+    "failure_boundary": [
+      "自动化创建受审批与扫描限制",
+      "作业身份最小权限且凭据短时"
+    ],
+    "tools": [
+      "aws_cli",
+      "curl_get"
+    ],
+    "aliases": {
+      "zh": [
+        "持久化",
+        "运行手册后门",
+        "定时作业"
+      ],
+      "en": [
+        "automation runbook persistence",
+        "scheduled job backdoor",
+        "cloud persistence"
+      ]
+    },
+    "confidence": 0.55,
+    "derived_from": "benchmark scenarios: persistence-as-a-service"
+  },
+  {
+    "id": "cap-cloud-managed-runtime-deserialization",
+    "title": "托管运行时反序列化导致宿主代码执行",
+    "capability": "cloud_deserialization",
+    "domains": [
+      "cloud"
+    ],
+    "requires_environment": [
+      "public_cloud",
+      "hybrid"
+    ],
+    "applies_when": [
+      "托管服务加载用户提交的序列化模型/对象（pickle、joblib、自定义格式）",
+      "加载发生在服务进程或推理容器内"
+    ],
+    "signals": [
+      "上传的模型文件被服务端直接反序列化",
+      "加载后返回命令执行结果或环境信息",
+      "推理容器可访问节点元数据"
+    ],
+    "technique_class": [
+      "序列化对象构造",
+      "推理期代码执行",
+      "节点身份延续"
+    ],
+    "verification": "提交受控序列化模型并触发加载，确认在服务端执行并返回可识别输出",
+    "failure_boundary": [
+      "模型以安全格式加载或沙箱内反序列化",
+      "推理环境无节点凭据"
+    ],
+    "tools": [
+      "http_post",
+      "shell_exec"
+    ],
+    "aliases": {
+      "zh": [
+        "反序列化",
+        "模型即代码",
+        "pickle 执行"
+      ],
+      "en": [
+        "pickle deserialization",
+        "model-as-code",
+        "managed runtime RCE"
+      ]
+    },
+    "confidence": 0.6,
+    "derived_from": "benchmark scenarios: pickle-model"
+  },
+  {
+    "id": "cap-cloud-managed-database-engine-abuse",
+    "title": "托管数据库引擎特性滥用读取宿主文件",
+    "capability": "cloud_managed_db_abuse",
+    "domains": [
+      "cloud",
+      "db"
+    ],
+    "requires_environment": [
+      "public_cloud",
+      "hybrid"
+    ],
+    "applies_when": [
+      "托管数据库允许扩展、外部表、索引表达式等引擎特性",
+      "引擎特性以供应商角色或宿主权限执行"
+    ],
+    "signals": [
+      "可创建扩展/索引/外部表对象",
+      "对象创建后由更高权限角色执行",
+      "返回结果包含宿主机路径内容"
+    ],
+    "technique_class": [
+      "引擎扩展创建",
+      "索引表达式执行",
+      "宿主文件读取"
+    ],
+    "verification": "创建最小引擎对象并触发执行，确认在供应商/宿主角色下执行且可读取宿主内容",
+    "failure_boundary": [
+      "托管引擎禁用该扩展或限制扩展角色",
+      "对象创建需要更高权限审批"
+    ],
+    "tools": [
+      "psql_query",
+      "mysql_query",
+      "curl_get"
+    ],
+    "aliases": {
+      "zh": [
+        "托管数据库",
+        "引擎扩展",
+        "宿主文件读取"
+      ],
+      "en": [
+        "managed database abuse",
+        "extension RCE",
+        "log_fdw",
+        "index expression execution"
+      ]
+    },
+    "confidence": 0.55,
+    "derived_from": "benchmark scenarios: cloudsql-index-rce, rds-logfdw"
+  },
+  {
+    "id": "cap-cloud-network-path-trust-gap",
+    "title": "内部网络路径与证书校验缺陷绕过边界",
+    "capability": "cloud_network_trust_bypass",
+    "domains": [
+      "cloud",
+      "network"
+    ],
+    "requires_environment": [
+      "public_cloud",
+      "hybrid"
+    ],
+    "applies_when": [
+      "访问控制依赖源 IP、共享出口或内部子网信任",
+      "对端证书校验使用宽泛匹配（CN 正则/未校验链）"
+    ],
+    "signals": [
+      "白名单仅校验源地址段或服务标签",
+      "共享出口 NAT 落入受信地址段",
+      "自签证书被接受或 CN 正则匹配被绕过"
+    ],
+    "technique_class": [
+      "源地址信任绕过",
+      "共享出口复用",
+      "证书校验绕过"
+    ],
+    "verification": "通过受信地址路径或构造证书发起请求，确认返回原本仅对内部可见的响应",
+    "failure_boundary": [
+      "访问控制基于强身份而非地址",
+      "证书链与 CN 严格校验"
+    ],
+    "tools": [
+      "curl_get",
+      "http_post",
+      "shell_exec"
+    ],
+    "aliases": {
+      "zh": [
+        "源 IP 白名单",
+        "共享出口",
+        "证书校验"
+      ],
+      "en": [
+        "source IP allowlist bypass",
+        "shared NAT egress",
+        "certificate CN bypass",
+        "internal subnet trust"
+      ]
+    },
+    "confidence": 0.6,
+    "derived_from": "benchmark scenarios: shared-nat, extrareplica-repl, wireserver-bootstrap"
+  },
+  {
+    "id": "cap-cloud-vendor-agent-auth-bypass",
+    "title": "供应商代理/中间件管理通道无鉴权",
+    "capability": "cloud_agent_abuse",
+    "domains": [
+      "cloud",
+      "network"
+    ],
+    "requires_environment": [
+      "public_cloud",
+      "hybrid"
+    ],
+    "applies_when": [
+      "主机上运行云供应商管理代理并暴露本地或网络管理端点",
+      "该通道未鉴权或鉴权实现有缺陷"
+    ],
+    "signals": [
+      "代理端口开放且响应结构化管理 API",
+      "未携带凭据即可调用管理方法",
+      "调用返回命令执行或配置读取结果"
+    ],
+    "technique_class": [
+      "代理管理通道探测",
+      "无鉴权调用",
+      "命令执行"
+    ],
+    "verification": "调用代理管理端点确认在无凭据情况下执行并返回可识别结果",
+    "failure_boundary": [
+      "代理升级并强制鉴权",
+      "管理通道仅本地且受防火墙限制"
+    ],
+    "tools": [
+      "curl_get",
+      "shell_exec",
+      "send_payload"
+    ],
+    "aliases": {
+      "zh": [
+        "供应商代理",
+        "无鉴权管理通道",
+        "中间件提权"
+      ],
+      "en": [
+        "vendor agent",
+        "unauthenticated management channel",
+        "OMIGOD",
+        "agent auth bypass"
+      ]
+    },
+    "confidence": 0.55,
+    "derived_from": "benchmark scenarios: omigod-agent"
+  },
+  {
+    "id": "cap-cloud-notebook-boundary-escape",
+    "title": "托管笔记本/交互式环境执行边界逃逸",
+    "capability": "cloud_notebook_escape",
+    "domains": [
+      "cloud"
+    ],
+    "requires_environment": [
+      "public_cloud",
+      "hybrid"
+    ],
+    "applies_when": [
+      "托管笔记本或交互式运行环境允许执行用户代码",
+      "环境内挂载了服务账号令牌或宿主机凭据"
+    ],
+    "signals": [
+      "受限 shell 可被绕过或直接可用",
+      "容器内存在可读的令牌文件挂载",
+      "越界请求返回其它租户或宿主数据"
+    ],
+    "technique_class": [
+      "执行边界绕过",
+      "令牌文件读取",
+      "挂载信息利用"
+    ],
+    "verification": "在笔记本内构造越界访问并读取令牌，确认令牌可用于 Kubernetes/云 API",
+    "failure_boundary": [
+      "笔记本运行于无挂载的沙箱且无令牌",
+      "出口流量与令牌均受限"
+    ],
+    "tools": [
+      "shell_exec",
+      "curl_get"
+    ],
+    "aliases": {
+      "zh": [
+        "笔记本逃逸",
+        "交互式环境",
+        "令牌窃取"
+      ],
+      "en": [
+        "notebook escape",
+        "interactive runtime breakout",
+        "service account token theft"
+      ]
+    },
+    "confidence": 0.6,
+    "derived_from": "benchmark scenarios: notebook-escape, cosmiss-notebook"
+  },
+  {
+    "id": "cap-cloud-iac-template-injection",
+    "title": "IaC 模板插值注入解析受保护参数",
+    "capability": "cloud_template_injection",
+    "domains": [
+      "cloud"
+    ],
+    "requires_environment": [
+      "public_cloud",
+      "hybrid"
+    ],
+    "applies_when": [
+      "控制面接受用户提供的模板并做插值/解析（Fn::Sub、参数替换、变量展开）",
+      "解析结果可解析到其它参数或密钥存储"
+    ],
+    "signals": [
+      "提交的模板表达式被解析而未拒绝",
+      "返回值包含未授权的参数或密钥",
+      "错误信息暴露参数命名空间"
+    ],
+    "technique_class": [
+      "模板插值注入",
+      "参数命名空间枚举",
+      "密钥存储读取"
+    ],
+    "verification": "提交带插值表达式的最小模板，确认返回目标参数内容",
+    "failure_boundary": [
+      "模板校验禁止跨作用域引用",
+      "参数以密文形式且无解析权限"
+    ],
+    "tools": [
+      "curl_get",
+      "http_post",
+      "aws_cli"
+    ],
+    "aliases": {
+      "zh": [
+        "模板注入",
+        "IaC 插值",
+        "参数泄露"
+      ],
+      "en": [
+        "CloudFormation Fn::Sub injection",
+        "IaC template injection",
+        "SSM parameter disclosure"
+      ]
+    },
+    "confidence": 0.6,
+    "derived_from": "benchmark scenarios: cf-injection"
+  }
+]

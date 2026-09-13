@@ -19,7 +19,7 @@
 
 ## 相关模块
 
-`rag.py`、`knowledge_base.py`、`prompts/research.py`、`orchestrator.py`。
+`rag.py`、`rag_corpus.py`、`prompts/research.py`、`orchestrator.py`。
 
 ## 阅读建议
 
@@ -28,4 +28,3 @@
 ## 维护提示
 
 输出格式变化会影响 LLM 解析和证据引用，保持来源信息可追溯。
-

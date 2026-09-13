@@ -13,7 +13,12 @@ DARWIN（Defense-Aware Adaptive Penetration Testing Agent Framework）是一个 
 - **DPM 防御感知**：WAF/Cloak/Honey/Trap 检测，三级级联：规则 → 签名 → LLM 分类器。
 - **DAVE 四级验证**：L1 HTTP 响应、L2 Playwright 浏览器、L3 防御完整性、L4 影响确认（flag 提取 + 蜜罐拒绝）。
 - **CTEG 跨任务经验**：跨挑战积累的动态利用/绕过模式，按半衰期衰减，持久化到 `cteg_state.json`。
-- **DarwinRAG 静态知识**：约 8200 条精选条目，覆盖 web / windows_ad / cloud / network 四域；SentenceTransformer `all-MiniLM-L6-v2`（384 维）+ Faiss IndexFlatIP，TfidfVectorizer 回退；`search_hierarchical()` 先按 taxonomy 路由、再在子树内打分。
+- **DarwinRAG 混合检索**：全部知识（含存量 CVE/Nuclei/笔记）由 `tools/build_rag_corpus.py`
+  统一转换为 `knowledge/corpus/*.jsonl`（`darwin.rag.entry.v1`），运行时只读该产物。
+  检索为双通道：多语言 embedding（`paraphrase-multilingual-MiniLM-L12-v2`）+ Faiss 内积，
+  与 BM25 文本通道各自召回，RRF 融合后按 `requires_environment` 硬过滤（公有云场景丢弃
+  k8s 知识）、域降权，再用 cross-encoder（`mmarco-mMiniLMv2-L12-H384-v1`）重排并过闸门，
+  最多注入 3 条，可返回空（宁缺毋滥）。权重放在 gitignore 的 `models/` 下。
 - **LangGraph 集成**：ReAct 循环（observe → plan → act → evaluate）带 checkpointing。
 
 ## 2. 项目主要结构
@@ -34,7 +39,9 @@ darwin/
   rag.py                   静态知识检索（Faiss + SentenceTransformer）
   cloud_topology.py        CTAGE：K8s 集群拓扑与 IAM 信任关系自动发现
   cloud_attack_path.py     AttackPath：攻击路径 BFS 推理
-  knowledge_base.py        知识库加载与查询
+  rag_corpus.py            统一语料 schema / legacy 转换 / lint
+  rag_embedder.py          embedding 与 cross-encoder 重排后端
+  rag_query.py             运行期指纹 → 检索查询 / 环境 / 域
   search_evidence.py       证据检索
   tools/
     mcp_gateway.py         工具注册表 + 统一调用（ToolResult）
@@ -80,7 +87,11 @@ Orchestrator.run()（委托 LifecycleCoordinator，各阶段由 orchestration/ �
 ### 对 Codex 的开发工作流
 
 - 修改工具：先读 `tools_manifest.json` 中该工具的 `ToolSpec` → 改注册（`attack_server.py` / `recon_server.py`）→ 重新生成 manifest 并 `--check` → 补/改测试。
-- 修改知识库：`tools/ingest_*` 入库 → `tools/build_taxonomy.py` 重建 → `python -m tools.audit_coverage` 校验引用 → 补测试。
+- 修改知识库：写 `knowledge/capabilities/*.json`（新条目）或补 `knowledge/**` 存量 →
+  `python -m tools.build_rag_corpus`（可用 `--check` 校验）→
+  `python -m tools.build_rag_index --rebuild`（首次嵌入约 10 分钟，向量缓存按语料 hash 失效）→
+  `python -m tools.eval_knowledge_retrieval` 对比 `knowledge/eval/baseline.json` →
+  `python -m tools.audit_coverage` 校验 taxonomy 引用 → 补测试。
 - 修改核心循环：对应 `tests/test_core_*.py` 或 `tests/test_runtime_path.py`，并跑 `pytest tests/ -m acceptance -v`。
 - 修改编排阶段逻辑（`darwin/orchestration/*.py`）：先读 `docs/darwin/orchestration/README.md` 与对应 Coordinator 文档；Coordinator 内 `self.<attr>`/`self.<method>` 经共享上下文转发、工具调用必须走 `self._call_tool()` 端口；改后跑全量 `pytest tests/ -v`。
 - 任何改动完成前：全量 `pytest tests/ -v` 必须通过。

@@ -1,0 +1,537 @@
+[
+  {
+    "id": "cap-web-object-authz-idor",
+    "title": "对象级授权缺失导致 IDOR/越权读写",
+    "capability": "web_idor",
+    "domains": [
+      "web"
+    ],
+    "requires_environment": [],
+    "applies_when": [
+      "接口以对象标识（数字 ID、slug、UUID、GraphQL node）寻址用户资源",
+      "服务端只校验登录态，不校验对象归属"
+    ],
+    "signals": [
+      "替换对象标识后返回他人数据或 200",
+      "列表接口与详情接口权限不一致",
+      "GraphQL introspection 暴露按 ID 取对象的查询"
+    ],
+    "technique_class": [
+      "标识枚举与替换",
+      "状态变更型越权",
+      "GraphQL introspection 后定向查询"
+    ],
+    "verification": "用两个账号的对象标识交叉请求，确认返回对方数据或写入生效",
+    "failure_boundary": [
+      "服务端按会话身份校验对象归属",
+      "标识为不可预测且无泄露渠道"
+    ],
+    "tools": [
+      "curl_get",
+      "http_post",
+      "send_payload"
+    ],
+    "aliases": {
+      "zh": [
+        "越权访问",
+        "水平越权",
+        "对象级授权"
+      ],
+      "en": [
+        "IDOR",
+        "broken object level authorization",
+        "GraphQL IDOR",
+        "horizontal privilege escalation"
+      ]
+    },
+    "confidence": 0.8,
+    "derived_from": "benchmark scenarios: graphql-idor"
+  },
+  {
+    "id": "cap-web-jwt-claim-trust",
+    "title": "JWT 校验缺陷（alg 混淆/claim 未绑定）导致鉴权绕过",
+    "capability": "web_auth_bypass",
+    "domains": [
+      "web"
+    ],
+    "requires_environment": [],
+    "applies_when": [
+      "接口以 JWT 作为会话或权限凭据",
+      "服务端未严格约束算法、密钥或关键 claim"
+    ],
+    "signals": [
+      "alg:none 或弱算法令牌被接受",
+      "篡改 sub/role/iss 后请求仍成功",
+      "不同密钥签发的令牌互认"
+    ],
+    "technique_class": [
+      "JWT 结构解析",
+      "算法与签名绕过",
+      "claim 篡改提权"
+    ],
+    "verification": "构造 alg:none 或篡改 claim 的令牌请求受保护接口，确认返回特权数据",
+    "failure_boundary": [
+      "服务端固定算法并强校验签名与 claim",
+      "令牌短时且绑定会话指纹"
+    ],
+    "tools": [
+      "curl_get",
+      "http_post",
+      "send_payload"
+    ],
+    "aliases": {
+      "zh": [
+        "JWT 绕过",
+        "算法混淆",
+        "令牌伪造"
+      ],
+      "en": [
+        "JWT alg none",
+        "jwt claim tampering",
+        "token forgery",
+        "authentication bypass"
+      ]
+    },
+    "confidence": 0.75,
+    "derived_from": "benchmark scenarios: jwt-alg-none, wordpress-jwt-copypress"
+  },
+  {
+    "id": "cap-web-sqli-encoding-bypass",
+    "title": "SQL 注入：编码/字符集绕过校验后注入",
+    "capability": "sql_query",
+    "domains": [
+      "web",
+      "db"
+    ],
+    "requires_environment": [],
+    "applies_when": [
+      "应用把用户输入拼进 SQL 语句",
+      "存在输入过滤但对编码、字符集或多字节序列处理不当"
+    ],
+    "signals": [
+      "单引号或编码序列使响应报错/行为改变",
+      "布尔或时间盲注使响应时间可控",
+      "查询结果可经 UNION 或报错回显"
+    ],
+    "technique_class": [
+      "注入点探测",
+      "编码/字符集绕过过滤",
+      "报错与盲注数据提取"
+    ],
+    "verification": "以最小 payload 触发差异化响应（报错/时间/数据），确认可控 SQL 求值",
+    "failure_boundary": [
+      "参数化查询阻断拼接",
+      "过滤覆盖所有编码路径且后端强类型"
+    ],
+    "tools": [
+      "curl_get",
+      "http_post",
+      "sqlmap_test",
+      "send_payload"
+    ],
+    "aliases": {
+      "zh": [
+        "SQL 注入",
+        "编码绕过",
+        "盲注"
+      ],
+      "en": [
+        "SQL injection",
+        "encoding bypass",
+        "blind SQLi",
+        "PostgreSQL injection"
+      ]
+    },
+    "confidence": 0.8,
+    "derived_from": "benchmark scenarios: postgres-sqli"
+  },
+  {
+    "id": "cap-web-ssti-template-render",
+    "title": "服务端模板注入（SSTI）导致表达式求值/命令执行",
+    "capability": "web_exploit_send",
+    "domains": [
+      "web"
+    ],
+    "requires_environment": [],
+    "applies_when": [
+      "用户输入进入服务端模板渲染（Jinja2/Twig/Smarty/Velocity 等）",
+      "模板引擎未沙箱化或对象可达"
+    ],
+    "signals": [
+      "算术表达式在响应中被求值",
+      "模板语法错误泄露引擎类型",
+      "对象属性链可访问模块与命令执行函数"
+    ],
+    "technique_class": [
+      "模板表达式探测",
+      "引擎指纹识别",
+      "对象链构造到命令执行"
+    ],
+    "verification": "提交最小模板表达式并确认被求值，再构造读文件或执行命令的最小链",
+    "failure_boundary": [
+      "输入被转义或模板沙箱限制",
+      "渲染上下文不暴露危险对象"
+    ],
+    "tools": [
+      "curl_get",
+      "http_post",
+      "ssti_inject",
+      "send_payload"
+    ],
+    "aliases": {
+      "zh": [
+        "模板注入",
+        "SSTI",
+        "表达式注入"
+      ],
+      "en": [
+        "SSTI",
+        "server-side template injection",
+        "Jinja2 injection",
+        "template engine RCE"
+      ]
+    },
+    "confidence": 0.8,
+    "derived_from": "benchmark scenarios: ssti-jinja2"
+  },
+  {
+    "id": "cap-web-deserialization-rce",
+    "title": "不安全的反序列化导致对象注入与代码执行",
+    "capability": "web_exploit_send",
+    "domains": [
+      "web"
+    ],
+    "requires_environment": [],
+    "applies_when": [
+      "应用反序列化来自用户的数据（PHP session/对象、Java 会话或序列化流）",
+      "反序列化发生在特权上下文且 gadget 链可用"
+    ],
+    "signals": [
+      "Cookie/参数携带 base64 或序列化特征字符串",
+      "篡改序列化内容后行为或身份变化",
+      "错误信息泄露类名或反序列化调用"
+    ],
+    "technique_class": [
+      "序列化格式识别",
+      "对象属性篡改",
+      "gadget 链构造"
+    ],
+    "verification": "提交受控序列化对象，确认可控属性生效（如绕过鉴权）并可延伸至代码执行",
+    "failure_boundary": [
+      "仅反序列化签名或白名单类型",
+      "对象构造不触发危险魔术方法"
+    ],
+    "tools": [
+      "curl_get",
+      "http_post",
+      "php_serialize_generate",
+      "send_payload"
+    ],
+    "aliases": {
+      "zh": [
+        "反序列化",
+        "对象注入",
+        "PHP 反序列化"
+      ],
+      "en": [
+        "PHP deserialization",
+        "Java deserialization",
+        "insecure deserialization",
+        "object injection"
+      ]
+    },
+    "confidence": 0.75,
+    "derived_from": "benchmark scenarios: php-deserialization, tomcat-deserialization"
+  },
+  {
+    "id": "cap-web-unrestricted-file-upload",
+    "title": "文件上传校验不足导致 Web Shell 落地",
+    "capability": "web_exploit_send",
+    "domains": [
+      "web"
+    ],
+    "requires_environment": [],
+    "applies_when": [
+      "存在文件上传接口（插件端点、multipart、WebDAV PUT）",
+      "扩展名/内容类型校验可绕过且上传目录可被解释执行"
+    ],
+    "signals": [
+      "上传后返回可访问路径",
+      "改名/双扩展名/内容混淆后上传成功",
+      "上传目录返回脚本执行结果"
+    ],
+    "technique_class": [
+      "上传接口探测",
+      "校验绕过（扩展名/类型/竞态）",
+      "Web Shell 落地执行"
+    ],
+    "verification": "上传最小脚本并通过 HTTP 请求触发，确认响应中出现受控输出",
+    "failure_boundary": [
+      "上传目录禁止执行并做内容重命名",
+      "校验在服务端严格白名单"
+    ],
+    "tools": [
+      "curl_get",
+      "http_post",
+      "send_payload"
+    ],
+    "aliases": {
+      "zh": [
+        "文件上传",
+        "Web Shell",
+        "上传绕过"
+      ],
+      "en": [
+        "unrestricted file upload",
+        "webshell upload",
+        "multipart bypass",
+        "race condition upload"
+      ]
+    },
+    "confidence": 0.8,
+    "derived_from": "benchmark scenarios: wordpress-simple-file-list, wordpress-wpbookit, tomcat-race-condition"
+  },
+  {
+    "id": "cap-web-lfi-to-execution",
+    "title": "本地文件包含结合日志/会话投毒转为代码执行",
+    "capability": "web_exploit_send",
+    "domains": [
+      "web"
+    ],
+    "requires_environment": [],
+    "applies_when": [
+      "路径/文件名参数进入文件包含或读取函数",
+      "可写入的日志、会话或临时文件路径可控且会被包含"
+    ],
+    "signals": [
+      "参数改动导致读取到目标文件内容",
+      "路径穿越序列未被过滤",
+      "响应出现包含文件中的受控输出"
+    ],
+    "technique_class": [
+      "路径参数探测",
+      "包含路径构造",
+      "日志/会话投毒到执行"
+    ],
+    "verification": "先读取一个可判定文件确认包含生效，再投毒可控文件并确认代码执行",
+    "failure_boundary": [
+      "包含路径白名单且禁止穿越",
+      "可控文件不可被包含或已过滤"
+    ],
+    "tools": [
+      "curl_get",
+      "http_post",
+      "send_payload"
+    ],
+    "aliases": {
+      "zh": [
+        "文件包含",
+        "LFI",
+        "日志投毒"
+      ],
+      "en": [
+        "LFI",
+        "local file inclusion",
+        "log poisoning",
+        "path traversal to RCE"
+      ]
+    },
+    "confidence": 0.75,
+    "derived_from": "benchmark scenarios: wordpress-jupiterx-lfi"
+  },
+  {
+    "id": "cap-web-ssrf-internal-reach",
+    "title": "SSRF 绕过过滤访问内部/回环服务",
+    "capability": "web_ssrf",
+    "domains": [
+      "web",
+      "cloud"
+    ],
+    "requires_environment": [],
+    "applies_when": [
+      "存在 URL/回调/导入类功能由服务端发起请求",
+      "过滤对回环、内网地址或重定向处理不完整"
+    ],
+    "signals": [
+      "http(s) 参数使服务端请求可控地址",
+      "重定向或编码（十进制/短网址/DNS）绕过过滤",
+      "响应体或错误信息反映内部服务内容"
+    ],
+    "technique_class": [
+      "SSRF 入口探测",
+      "地址过滤绕过",
+      "内部服务内容回读"
+    ],
+    "verification": "以本地回环或内网地址请求内部服务，确认响应能回读到内部内容或元数据",
+    "failure_boundary": [
+      "出站请求白名单且禁止内网地址",
+      "响应内容不回显"
+    ],
+    "tools": [
+      "curl_get",
+      "http_post",
+      "send_payload"
+    ],
+    "aliases": {
+      "zh": [
+        "SSRF",
+        "内网探测",
+        "回环访问"
+      ],
+      "en": [
+        "SSRF",
+        "server-side request forgery",
+        "localhost bypass",
+        "internal service access"
+      ]
+    },
+    "confidence": 0.8,
+    "derived_from": "benchmark scenarios: ssrf-internal, ssrf-localhost"
+  },
+  {
+    "id": "cap-web-xxe-entity-disclosure",
+    "title": "XML 外部实体注入读取文件或发起服务端请求",
+    "capability": "web_exploit_send",
+    "domains": [
+      "web"
+    ],
+    "requires_environment": [],
+    "applies_when": [
+      "接口解析用户提交的 XML/SVG/DOCX 等文档",
+      "解析器启用外部实体或未禁用 DTD"
+    ],
+    "signals": [
+      "XML 解析错误回显实体定义",
+      "响应回显文件内容或外部请求结果",
+      "SVG/文档上传后服务端解析触发实体"
+    ],
+    "technique_class": [
+      "XML 解析面识别",
+      "外部实体定义",
+      "文件读取/OOB 回传"
+    ],
+    "verification": "提交带外部实体的最小文档，确认文件内容回显或外部请求被接收",
+    "failure_boundary": [
+      "解析器禁用 DTD 与外部实体",
+      "解析在无网络与无文件访问的沙箱"
+    ],
+    "tools": [
+      "curl_get",
+      "http_post",
+      "send_payload"
+    ],
+    "aliases": {
+      "zh": [
+        "XXE",
+        "外部实体",
+        "SVG 上传"
+      ],
+      "en": [
+        "XXE",
+        "XML external entity",
+        "SVG XXE",
+        "DTD injection"
+      ]
+    },
+    "confidence": 0.8,
+    "derived_from": "benchmark scenarios: xxe-basic, xxe-svg"
+  },
+  {
+    "id": "cap-web-stored-xss-session-theft",
+    "title": "存储型 XSS 窃取会话或触发特权操作",
+    "capability": "web_exploit_send",
+    "domains": [
+      "web"
+    ],
+    "requires_environment": [],
+    "applies_when": [
+      "用户输入被持久化并在其他会话中未转义渲染",
+      "受害者会话可访问敏感数据或特权操作"
+    ],
+    "signals": [
+      "提交后被存储并在页面原样渲染",
+      "编码/过滤可被标签属性或事件绕过",
+      "脚本在管理会话中执行"
+    ],
+    "technique_class": [
+      "持久化输入点定位",
+      "渲染上下文逃逸",
+      "会话/令牌窃取或特权动作"
+    ],
+    "verification": "注入最小可判定脚本并在目标上下文触发，确认脚本执行（或回调被接收）",
+    "failure_boundary": [
+      "输出编码与 CSP 阻断执行",
+      "渲染在无脚本上下文中"
+    ],
+    "tools": [
+      "curl_get",
+      "http_post",
+      "send_payload"
+    ],
+    "aliases": {
+      "zh": [
+        "存储型 XSS",
+        "会话窃取",
+        "脚本注入"
+      ],
+      "en": [
+        "stored XSS",
+        "session theft",
+        "persistent XSS",
+        "CSP bypass"
+      ]
+    },
+    "confidence": 0.7,
+    "derived_from": "benchmark scenarios: xss-stored"
+  },
+  {
+    "id": "cap-web-database-extension-exec",
+    "title": "数据库扩展/内置过程滥用获得命令执行",
+    "capability": "sql_query",
+    "domains": [
+      "web",
+      "db"
+    ],
+    "requires_environment": [],
+    "applies_when": [
+      "已获得可用的数据库会话（弱口令、注入或未授权）",
+      "数据库允许 xp_cmdshell、COPY PROGRAM、UDF 等扩展执行能力"
+    ],
+    "signals": [
+      "当前账号具备 sysadmin/超管权限",
+      "可创建函数或启用高级选项",
+      "命令执行结果可经查询回读"
+    ],
+    "technique_class": [
+      "权限与版本确认",
+      "扩展/内置命令通道启用",
+      "命令结果回读"
+    ],
+    "verification": "通过数据库原生机制执行最小命令，确认结果可回读",
+    "failure_boundary": [
+      "账号被限制且扩展功能禁用",
+      "数据库运行在无外联与严格权限沙箱"
+    ],
+    "tools": [
+      "mssqlclient_query",
+      "mysql_query",
+      "psql_query",
+      "mysql_file_write"
+    ],
+    "aliases": {
+      "zh": [
+        "数据库提权",
+        "UDF",
+        "xp_cmdshell"
+      ],
+      "en": [
+        "MySQL UDF",
+        "xp_cmdshell",
+        "COPY PROGRAM",
+        "database command execution"
+      ]
+    },
+    "confidence": 0.75,
+    "derived_from": "benchmark scenarios: mssql-xp-cmdshell, mysql-udf"
+  }
+]

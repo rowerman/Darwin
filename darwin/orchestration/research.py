@@ -934,10 +934,11 @@ class ResearchCoordinator(CoordinatorContext):
                 if port in _NON_HTTP_RAG_PORTS:
                     try:
                         svc_name = version or f"port {port}"
+                        from darwin.rag_query import environment_from_dkg
                         rag_result = await self._call_tool(
                             "knowledge_search",
                             {"query": f"{svc_name} exploitation unauthorized access weak credentials",
-                             "category": ""},
+                             "environment": environment_from_dkg(self.dkg)},
                         )
                         if rag_result and getattr(rag_result, 'success', False):
                             rag_text = (rag_result.stdout or rag_result.stderr or "")[:800]
@@ -1170,9 +1171,11 @@ class ResearchCoordinator(CoordinatorContext):
 
         # knowledge_search (RAG)
         try:
+            from darwin.rag_query import environment_from_dkg
             _tasks["rag"] = asyncio.create_task(
                 self._call_tool("knowledge_search",
-                    {"query": _queries["rag"], "category": ""}))
+                    {"query": _queries["rag"],
+                     "environment": environment_from_dkg(self.dkg)}))
         except Exception as exc:
             log.debug("swallowed exception: %s", exc, exc_info=True)
 

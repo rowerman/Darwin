@@ -1125,296 +1125,79 @@ class PlanCoordinator(CoordinatorContext):
                     _kf = json.dumps(_kf, ensure_ascii=False)
                 phase_summary += f"- {s.get('phase','')}: {str(_kf)[:300]}\n"
 
-        # ── RAG knowledge injection ────────────────────────────────
-        # Search RAG for attack patterns matching discovered services.
-        # This gives the LLM concrete exploitation steps instead of
-        # relying solely on technique names from the research phase.
+        # ── RAG knowledge injection (hybrid retrieval, gated) ───────
+        # Retrieval is hybrid (dense + BM25) then cross-encoder reranked and
+        # gated: it returns at most rag.max_results candidates that fit the
+        # target environment, or nothing at all. Environment-incompatible
+        # knowledge (Kubernetes techniques on a public-cloud target) is filtered
+        # out instead of being offered as a suggestion.
         rag_context = ""
-        probed_rag_endpoints: list[str] = []
         try:
             from darwin.rag import get_rag
+            from darwin.rag_query import (
+                build_capability_query,
+                domains_from_dkg,
+                environment_from_dkg,
+            )
             rag = get_rag()
             if rag and rag.loaded:
-                # Build search query: service banners + app type + vuln types.
-                # Service version alone (e.g. "Apache httpd 2.4.62") skews
-                # results toward generic server exploits instead of the CMS
-                # actually running on top.  Include application understanding
-                # from the analyze phase (e.g. "WordPress 6.7.2").
-                svc_terms = []
-                for s in state.services[:3]:
-                    if s.version:
-                        # Keep just the server name, not the full version banner
-                        ver = s.version.split("(")[0].strip()  # "Apache httpd 2.4.62"
-                        svc_terms.append(ver[:40])
-                    elif s.banner:
-                        svc_terms.append(s.banner[:40])
-                # Pull app-level context from analysis notes
-                app_terms = []
-                for note in state.analysis_notes:
-                    # Extract CMS / framework names
-                    for kw in ["WordPress", "Drupal", "Joomla", "Tomcat", "Jenkins",
-                               "Django", "Laravel", "Rails", "PHP", "ASP.NET",
-                               "Confluence", "GitLab", "Magento", "PrestaShop"]:
-                        if kw.lower() in note.lower() and kw not in app_terms:
-                            app_terms.append(kw)
-                vuln_terms = list({v.vuln_type for v in self.vulnerabilities[:4]})
-                query = " ".join(app_terms + svc_terms + vuln_terms)
-                if query.strip():
-                    # Two-pass search: (1) precise query, (2) broad app-level
-                    # plugin/exploit search to catch what the precise query misses
-                    results = rag.search(query, top_k=5, min_keyword_overlap=0.2)
-                    if app_terms:
-                        _app_str = " ".join(app_terms)
-                        # Multiple query angles to catch different exploit
-                        # patterns.  A single broad query ("plugin exploit")
-                        # often misses entries that match specific technique
-                        # descriptions (e.g. "unrestricted file upload").
-                        _broad_queries = [
-                            _app_str + " plugin exploit vulnerability",
-                            _app_str + " unauthenticated file upload RCE",
-                            _app_str + " arbitrary file upload vulnerability",
-                            _app_str + " unrestricted file upload exploit",
-                        ]
-                        _broad_results: list[dict] = []
-                        for _bq in _broad_queries:
-                            try:
-                                _br = rag.search(_bq, top_k=5, min_keyword_overlap=0.2)
-                                _broad_results.extend(_br)
-                            except Exception as exc:
-                                log.debug("swallowed exception: %s", exc, exc_info=True)
-                        # Merge: deduplicate by title, keep highest-score copy
-                        seen_titles: set[str] = set()
-                        merged: list[dict] = []
-                        for r in results + _broad_results:
-                            t = (r.get("title") or "").strip().lower()
-                            if t and t not in seen_titles:
-                                seen_titles.add(t)
-                                merged.append(r)
-                        merged.sort(key=lambda r: r.get("score", 0), reverse=True)
-                        results = merged[:10]
-
-                    # ── Cloud Platform Discovery enrichment ──────────
-                    # When _cloud_discovery_hint() detected a cloud platform
-                    # (AWS-compatible, K8s API), search RAG for privilege
-                    # escalation and service discovery patterns beyond the
-                    # initial service (S3 → IAM, STS, Lambda; K8s → RBAC).
-                    _pd_vulns = [
-                        v for v in self.dkg.query_nodes("Vulnerability")
-                        if v.get("vuln_type") == "PlatformDiscovery"
-                    ]
-                    # Also detect cloud platforms from DKG Service nodes even if
-                    # no PlatformDiscovery vuln was explicitly created. Cloud
-                    # service banners (IMDS, S3, STS) are reliable signals.
-                    if not _pd_vulns:
-                        _cloud_svc_sigs = any(
-                            cs in str(s).lower()
-                            for cs in ("imds", "ec2 metadata", "s3-compatible",
-                                       "aws sts", "lambda", "amazon ec2")
-                            for s in self.dkg.query_nodes("Service")
-                        )
-                        if _cloud_svc_sigs:
-                            _pd_vulns = [{"evidence": "cloud-service-banner-detected"}]
-                    if _pd_vulns:
-                        _pd_evidence = (_pd_vulns[0].get("evidence", "") or "").lower()
-                        _platform_queries: list[str] = []
-                        if "aws" in _pd_evidence or "s3" in _pd_evidence or "cloud-service" in _pd_evidence:
-                            _platform_queries = [
-                                "AWS IAM privilege escalation enumeration techniques",
-                                "AWS cloud service discovery STS Lambda after S3 access",
-                            ]
-                        elif "kubernetes" in _pd_evidence or "k8s" in _pd_evidence:
-                            _platform_queries = [
-                                "Kubernetes RBAC enumeration privilege escalation",
-                                "K8s API resource discovery after initial access",
-                            ]
-                        else:
-                            # Generic cloud platform — search broadly
-                            _platform_queries = [
-                                "cloud platform service enumeration privilege escalation",
-                            ]
-                        _cloud_merged: list[dict] = []
-                        _cloud_seen: set[str] = set()
-                        for _pq in _platform_queries:
-                            try:
-                                _cr = rag.search(_pq, top_k=4, min_keyword_overlap=0.1)
-                                for _r in _cr:
-                                    _rt = (_r.get("title") or "").strip().lower()
-                                    if _rt and _rt not in _cloud_seen:
-                                        _cloud_seen.add(_rt)
-                                        _cloud_merged.append(_r)
-                            except Exception as exc:
-                                log.debug("swallowed exception: %s", exc, exc_info=True)
-                        if _cloud_merged:
-                            # Merge cloud results with existing RAG results:
-                            # cloud-specific knowledge about privilege
-                            # escalation and multi-service exploration
-                            # should appear alongside service-specific
-                            # exploitation techniques.
-                            _existing_titles = {
-                                (r.get("title") or "").strip().lower()
-                                for r in results
-                            }
-                            for _cr in _cloud_merged:
-                                _crt = (_cr.get("title") or "").strip().lower()
-                                if _crt and _crt not in _existing_titles:
-                                    results.append(_cr)
-                                    _existing_titles.add(_crt)
-                            log.info(
-                                "Cloud Platform RAG: %d results for platform %s",
-                                len(_cloud_merged),
-                                "AWS" if "aws" in _pd_evidence else
-                                "K8s" if "kubernetes" in _pd_evidence else "generic",
-                            )
-
-                    if results:
-                        # ── Probe RAG-suggested endpoints ─────────────────
-                        # RAG technique entries often contain concrete paths
-                        # (e.g. POST /wp-content/plugins/x/ee-upload-engine.php).
-                        # Probe them proactively — if the endpoint exists,
-                        # the LLM can plan exploitation directly.
-                        _probe_paths: set[str] = set()
-                        _path_re = re.compile(
-                            r'(?:GET|POST|PUT|DELETE)\s+(/\S+)',
-                            re.IGNORECASE,
-                        )
-                        _known_urls = {e.get("url", "") for e in self.dkg.query_nodes("Endpoint")}
-                        # Derive the real HTTP base from discovered endpoints,
-                        # not from target_url (which may lack a port, e.g.
-                        # "http://localhost" vs the real "http://localhost:10103").
-                        _base = target_url.rstrip("/")
-                        _http_eps = [e.get("url", "") for e in self.dkg.query_nodes("Endpoint")
-                                     if e.get("url", "").startswith("http")]
-                        if _http_eps:
-                            from urllib.parse import urlparse as _up
-                            _parsed = _up(_http_eps[0])
-                            _base = f"{_parsed.scheme}://{_parsed.netloc}"
-                        for r in results:
-                            for tech in r.get("techniques", []) or []:
-                                for m in _path_re.finditer(str(tech)):
-                                    path = m.group(1)
-                                    # Skip placeholders like /{{path}} or /{{endpoint}}
-                                    if "{{" in path or "}}" in path:
-                                        continue
-                                    if path not in _probe_paths:
-                                        _probe_paths.add(path)
-
-                        # Collect session cookies for authenticated probing
-                        _cookies = ""
-                        if self.client._session and self.client._session.cookie_jar:
-                            jar = list(self.client._session.cookie_jar)
-                            if jar:
-                                _cookies = "; ".join(f"{c.key}={c.value}" for c in jar)
-
-                        _probed: list[dict] = []
-                        for path in list(_probe_paths)[:8]:
-                            ep_url = f"{_base}{path}"
-                            if ep_url in _known_urls:
-                                continue
-                            _known_urls.add(ep_url)
-                            try:
-                                curl_args: dict = {
-                                    "url": ep_url, "follow_redirects": True,
-                                    "insecure": True if "https" in _base else False,
-                                }
-                                if _cookies:
-                                    curl_args["headers"] = f"Cookie: {_cookies}"
-                                rp = await self._call_tool("curl_get", curl_args)
-                                if rp.success:
-                                    out = getattr(rp, "stdout", "") or ""
-                                    st = 200
-                                    fl = (out or "").split("\n")[0] if out else ""
-                                    if fl.startswith("HTTP/"):
-                                        pts = fl.split()
-                                        if len(pts) >= 2 and pts[1].isdigit():
-                                            st = int(pts[1])
-                                    # 405 Method Not Allowed means the endpoint exists
-                                    # but doesn't accept GET (likely POST-only)
-                                    _probed.append({
-                                        "url": ep_url, "status": st,
-                                        "size": len(out),
-                                    })
-                            except Exception as exc:
-                                log.debug("swallowed exception: %s", exc, exc_info=True)
-
-                        if _probed:
-                            # Endpoint exists if status is not 404 (includes 200, 403,
-                            # 405, 500 — all indicate something is there).
-                            _found = [p for p in _probed if p["status"] not in (404, 0)]
-                            for p in _found:
-                                label = p["url"].replace(_base, "").replace("/", "-")[:50]
-                                self.dkg.add_node("Endpoint", f"ep-rag-{label}", {
-                                    "url": p["url"], "method": "GET", "params": "",
-                                    "sample_status": p["status"],
-                                    "sample_response": f"HTTP {p['status']} ({p['size']} bytes)",
-                                    "discovered_by": "rag-endpoint-probe",
-                                })
-                            # Build a concise summary for the plan prompt
-                            _probed_lines = [
-                                f"- {p['url']} → HTTP {p['status']} ({p['size']} bytes)"
-                                for p in _probed[:8]
-                            ]
-                            probed_rag_endpoints = _probed_lines
-                            log.info("RAG endpoint probe: %d/%d paths exist on target",
-                                     len(_found), len(_probed))
-
-                        lines = ["\n## Attack Pattern Knowledge (from RAG)\n"]
-                        for r in results[:4]:
-                            title = r.get("title", "") or ""
-                            desc = (r.get("description", "") or "")
-                            techniques = r.get("techniques", []) or []
-                            # Techniques carry the concrete steps (endpoint,
-                            # header, verb); render them verbatim and treat the
-                            # description as secondary context so truncation
-                            # cannot drop an actionable step.
-                            tech_str = (
-                                " Steps: " + "; ".join(str(t) for t in techniques[:3])
-                            ) if techniques else ""
-                            snippet = (desc[:250] + "...") if len(desc) > 250 else desc
-                            lines.append(f"- **{title}**:{tech_str}")
-                            if snippet:
-                                lines.append(f"  Context: {snippet}")
-                            lines.append("")
-                        lines.append("**CRITICAL: RAG results above contain proven attack techniques "
-                                     "and credential combinations for the detected services. "
-                                     "When the service name/type matches your target, the techniques "
-                                     "and specific credentials listed MUST be used in your tasks. "
-                                     "Only discard entries whose software/service type clearly does "
-                                     "not match the target (e.g., MySQL techniques for a PostgreSQL target).")
-
-                        # Extract concrete payload patterns from RAG results
-                        _rag_payloads: list[str] = []
-                        for r in results[:4]:
-                            for tech in (r.get("techniques", []) or []):
-                                tech_str = str(tech)
-                                # Match payload-like patterns: ${...}, Fn::..., {{...}}
-                                if (re.search(r'\$\{[^}]+\}', tech_str)
-                                        or 'Fn::' in tech_str
-                                        or '{{' in tech_str):
-                                    _rag_payloads.append(tech_str[:200])
-                            # Also check description for payload patterns
-                            desc = r.get("description", "") or ""
-                            if re.search(r'\$\{[^}]+\}', desc):
-                                _rag_payloads.append(desc[:200])
-                        if _rag_payloads:
-                            _deduped = list(dict.fromkeys(_rag_payloads))  # preserve order, remove dups
-                            lines.append("")
-                            lines.append("**Extracted Payloads (use verbatim in tasks):**")
-                            for _p in _deduped[:5]:
-                                lines.append(f"  - `{_p}`")
-
-                        rag_context = "\n".join(lines)
+                query = build_capability_query(
+                    services=state.services[:4],
+                    vulns=self.vulnerabilities[:4],
+                    observations=[str(n)[:160] for n in state.analysis_notes[-3:]],
+                )
+                environment = environment_from_dkg(self.dkg)
+                domains = domains_from_dkg(self.dkg)
+                results = rag.retrieve(query, environment=environment, domains=domains)
+                if results:
+                    lines = ["\n## Candidate Techniques (RAG, unverified)\n"]
+                    for r in results:
+                        tags = "/".join(r.get("domains") or [])
+                        requires = "/".join(r.get("requires_environment") or [])
+                        header = f"- **{r.get('title', '')}** [{tags}]"
+                        if requires:
+                            header += f" (environment: {requires})"
+                        lines.append(header)
+                        if r.get("applies_when"):
+                            lines.append("  Applies when: " + "; ".join(
+                                str(x) for x in r["applies_when"][:3]))
+                        if r.get("technique_class"):
+                            lines.append("  Technique class: " + "; ".join(
+                                str(x) for x in r["technique_class"][:3]))
+                        if r.get("signals"):
+                            lines.append("  Look for: " + "; ".join(
+                                str(x) for x in r["signals"][:2]))
+                        if r.get("verification"):
+                            lines.append("  Verify by: " + str(r["verification"])[:200])
+                        if r.get("failure_boundary"):
+                            lines.append("  Not applicable if: " + "; ".join(
+                                str(x) for x in r["failure_boundary"][:2]))
+                        lines.append("")
+                    lines.append(
+                        "These are candidate technique classes, not target-verified "
+                        "evidence. Adapt each one to what the target actually returns; "
+                        "discard any entry whose applies-when/not-applicable condition does "
+                        "not match the observed fingerprint, and never treat a candidate as "
+                        "proof that the target is vulnerable."
+                    )
+                    rag_context = "\n".join(lines)
+                    log.info(
+                        "Plan RAG: %d candidate(s) env=%r domains=%s query=%r",
+                        len(results), environment or "unknown", domains, query[:120],
+                    )
         except Exception as exc:
             # This block feeds the plan prompt: swallowing it silently hid a
             # NameError for weeks and left every plan without RAG knowledge.
             log.warning("Plan RAG injection failed: %s", exc, exc_info=True)
 
-        # If RAG returned nothing, provide a clear fallback so the prompt
-        # doesn't have a blank "Attack Pattern Knowledge" section.
+        # If retrieval returned nothing, say so explicitly: the planner must then
+        # rely on reconnaissance evidence instead of on unrelated knowledge.
         if not rag_context:
-            rag_context = ("\n## Attack Pattern Knowledge\n"
-                           "No stored attack patterns matched the target's "
-                           "technology stack. Use general exploitation knowledge "
-                           "and web search for technique guidance.\n")
+            rag_context = ("\n## Candidate Techniques (RAG, unverified)\n"
+                           "No stored technique fits this target fingerprint and "
+                           "environment. Plan from the reconnaissance evidence and "
+                           "general reasoning; do not assume a known exploitation path "
+                           "exists.\n")
 
         # ── Artifact → Tool Bridge ──────────────────────────────────
         # Scan DKG for discovered artifacts (AWS credentials, private
@@ -1590,22 +1373,21 @@ class PlanCoordinator(CoordinatorContext):
 ## Synthesizing Knowledge into Attack Tasks
 You have received multiple intelligence sources above:
 - Vulnerability hypotheses from the analysis phase
-- Attack pattern knowledge (if RAG results matched your target's technology stack)
+- Candidate technique classes (RAG) that matched the target fingerprint and environment
 - Service version information from reconnaissance
 
 Your job: COMBINE these sources when designing each task.
-**CRITICAL — Unfamiliar Services/Technologies:** If you are not 100% certain how to exploit a
-discovered service or technology, mine the RAG/attack-pattern knowledge and vulnerability
-evidence above for concrete exploitation techniques before writing tasks for it. Do NOT
-assume — services like Oracle TNS, CouchDB, Elasticsearch, Redis, and MongoDB each have
-protocol-specific exploitation methods that differ from generic HTTP exploitation.
-**CRITICAL for WeakAuth/default credentials:** When RAG results contain specific credential
-combinations (username:password pairs), you MUST include EVERY listed combination in your
-batch credential test. Do NOT rely on your own memory of "common passwords" — the RAG
-entries are the authoritative source for service-specific defaults.
-- When an attack pattern matches a discovered service: use the pattern's technique as the task's approach. The RAG result title and techniques field tell you exactly what to do.
-- **Payload injection**: If a vulnerability lists "Payloads:" in its summary or the Attack Pattern Knowledge section contains "Extracted Payloads", those are proven exploitation strings validated against the target's technology. Include them verbatim in the corresponding task's params["data"] or params["payload"]. Do NOT modify or truncate them.
-- When patterns do NOT match: rely on general vulnerability exploitation principles for that vulnerability type.
+**Unfamiliar services/technologies:** When you are not certain how to exploit a discovered
+service, use the candidate technique classes above as *hypotheses about the technique class*
+(protocol shape, applicability conditions, verification method) — then build the concrete
+request from what the target actually returns. Do NOT assume the candidate list proves the
+target is vulnerable, and do NOT copy payload strings from it: entries describe technique
+classes only.
+**Weak/default credentials:** The candidate entries list verification methods, not credential
+lists. Build the credential batch from the target's own hints (login banners, docs endpoints,
+error messages) and general defaults.
+- When a candidate fits the observed fingerprint: use its technique class + verification method as the task's approach.
+- When no candidate fits (RAG returned nothing): rely on the vulnerability evidence above and general exploitation principles for that vulnerability type.
 - Service versions are primary signals: an outdated service with known weaknesses should generate high-priority exploitation tasks targeting those specific weaknesses.
 - If the analyze phase produced attack_paths, translate each path into a chain of tasks with dependent_task_ids reflecting the path's step ordering. A 4-step path becomes 4 tasks where each depends on the previous one.
 - Tasks targeting DIFFERENT services or vulnerabilities with no shared prerequisites should have empty dependent_task_ids so they can execute in parallel.
@@ -1620,8 +1402,6 @@ entries are the authoritative source for service-specific defaults.
 ## Tool Contract Card (use these EXACT tool names and parameters)
 {_tool_card}
 {_candidate_tools_section}
-
-{chr(10).join(['## RAG-Endpoint Probe Results (verified — these ENDPOINTS EXIST on the target):'] + probed_rag_endpoints) if probed_rag_endpoints else ''}
 
 ## Task
 Generate a plan as a JSON array of EXPLOIT tasks. Reconnaissance and research
@@ -2679,17 +2459,29 @@ Output ONLY valid JSON array (3-20 tasks depending on complexity. More tasks != 
             if svc_name:
                 try:
                     from darwin.rag import get_rag
+                    from darwin.rag_query import (
+                        build_capability_query,
+                        domains_from_dkg,
+                        environment_from_dkg,
+                    )
                     rag = get_rag()
-                    rag_results = rag.search(f"{svc_name} exploitation authentication bypass techniques", top_k=3, category="", min_keyword_overlap=0.1)
+                    rag_results = rag.retrieve(
+                        build_capability_query(
+                            extra_terms=[f"{svc_name} exploitation authentication bypass"],
+                        ),
+                        environment=environment_from_dkg(self.dkg),
+                        domains=domains_from_dkg(self.dkg),
+                    )
                     if rag_results:
                         rag_text = "\n".join(
-                            f"- {r.get('title','')}: {r.get('description','')[:200]}"
+                            f"- {r.get('title','')}: "
+                            + "; ".join(str(t) for t in (r.get("technique_class") or [])[:2])
                             for r in rag_results[:3]
                         )
                         rag_hint = (
                             f"\n\n[META-COGNITION] The tool failure suggests unfamiliarity with {svc_name}. "
-                            f"RAG knowledge about {svc_name} exploitation:\n{rag_text}\n"
-                            f"Based on this knowledge, re-evaluate whether the task can be fixed "
+                            f"Candidate technique classes for {svc_name}:\n{rag_text}\n"
+                            f"Based on these candidates, re-evaluate whether the task can be fixed "
                             f"by using the correct tool/protocol for {svc_name}."
                         )
                 except Exception as exc:

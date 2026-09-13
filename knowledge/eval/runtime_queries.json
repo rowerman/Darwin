@@ -1,0 +1,1098 @@
+{
+  "schema": "darwin.rag.eval.v1",
+  "scenario_count": 89,
+  "covered": 88,
+  "queries": [
+    {
+      "id": "cloud-actor-token",
+      "query": "port 10632/tcp    Directory API (DARWIN cloud benchmark public endpoint) SQLi IDOR",
+      "scenario": "actor-token",
+      "domain": "cloud",
+      "environment": "public_cloud",
+      "gold": [
+        "cap-cloud-tenant-claim-not-bound"
+      ],
+      "source": "run:cloud-21.md"
+    },
+    {
+      "id": "cloud-attachme-volume",
+      "query": "port 10631/tcp    Werkzeug httpd 3.1.8 (Python 3.11.16)",
+      "scenario": "attachme-volume",
+      "domain": "cloud",
+      "environment": "public_cloud",
+      "gold": [
+        "cap-cloud-predictable-id-ownership-check"
+      ],
+      "source": "run:cloud-20.md"
+    },
+    {
+      "id": "cloud-beta-endpoint",
+      "query": "port 10635/tcp    Service Catalog Beta API (DARWIN cloud benchmark public",
+      "scenario": "beta-endpoint",
+      "domain": "cloud",
+      "environment": "public_cloud",
+      "gold": [
+        "cap-cloud-nonprod-endpoint-policy-gap",
+        "cap-cloud-unlogged-enumeration-oracle"
+      ],
+      "source": "run:cloud-24.md"
+    },
+    {
+      "id": "cloud-buildfleet-registry",
+      "query": "port 10629/tcp    Werkzeug httpd 3.1.8 (Python 3.11.16)",
+      "scenario": "buildfleet-registry",
+      "domain": "cloud",
+      "environment": "public_cloud",
+      "gold": [
+        "cap-cloud-supply-chain-artifact-overwrite"
+      ],
+      "source": "run:cloud-18.md"
+    },
+    {
+      "id": "cloud-cap-netraw-metadata",
+      "query": "Reconnaissance returned no services or endpoints. With zero observed endpoints, no application logic, business functionality, or input/output relationships can be characterized; there is currently no attack surface to an",
+      "scenario": "cap-netraw-metadata",
+      "domain": "cloud",
+      "environment": "public_cloud",
+      "gold": [
+        "cap-cloud-metadata-service-credential-theft"
+      ],
+      "source": "run:cloud-02.md"
+    },
+    {
+      "id": "cloud-cf-injection",
+      "query": "port 10605/tcp    Werkzeug httpd 3.1.8 (Python 3.11.16)",
+      "scenario": "cf-injection",
+      "domain": "cloud",
+      "environment": "public_cloud",
+      "gold": [
+        "cap-cloud-iac-template-injection"
+      ],
+      "source": "run:cloud-04.md"
+    },
+    {
+      "id": "cloud-ci-poisoning",
+      "query": "port 10608/tcp    Werkzeug httpd 3.1.8 (Python 3.11.16)",
+      "scenario": "ci-poisoning",
+      "domain": "cloud",
+      "environment": "public_cloud",
+      "gold": [
+        "cap-cloud-cicd-pipeline-poisoning"
+      ],
+      "source": "run:cloud-05.md"
+    },
+    {
+      "id": "cloud-cloudsql-index-rce",
+      "query": "port 10625/tcp    Werkzeug httpd 3.1.8 (Python 3.11.16)",
+      "scenario": "cloudsql-index-rce",
+      "domain": "cloud",
+      "environment": "public_cloud",
+      "gold": [
+        "cap-cloud-managed-database-engine-abuse"
+      ],
+      "source": "run:cloud-14.md"
+    },
+    {
+      "id": "cloud-composer-depconf",
+      "query": "port 10637/tcp    Managed Data Platform (Composer) (DARWIN cloud benchmar CMDi",
+      "scenario": "composer-depconf",
+      "domain": "cloud",
+      "environment": "public_cloud",
+      "gold": [
+        "cap-cloud-shared-runtime-injection",
+        "cap-cloud-supply-chain-artifact-overwrite"
+      ],
+      "source": "run:cloud-26.md"
+    },
+    {
+      "id": "cloud-cosmiss-notebook",
+      "query": "port 10623/tcp    Werkzeug httpd 3.1.8 (Python 3.11.16)",
+      "scenario": "cosmiss-notebook",
+      "domain": "cloud",
+      "environment": "public_cloud",
+      "gold": [
+        "cap-cloud-notebook-boundary-escape",
+        "cap-cloud-predictable-id-ownership-check"
+      ],
+      "source": "run:cloud-12.md"
+    },
+    {
+      "id": "cloud-cross-account-trust",
+      "query": "port 10612/tcp    Werkzeug httpd 3.1.8 (Python 3.11.16)",
+      "scenario": "cross-account-trust",
+      "domain": "cloud",
+      "environment": "public_cloud",
+      "gold": [
+        "cap-cloud-overpermissive-trust-policy"
+      ],
+      "source": "run:cloud-08.md"
+    },
+    {
+      "id": "cloud-dataform-pt",
+      "query": "port 10640/tcp    Data Workflow Control Plane (DARWIN cloud benchmark pub IDOR",
+      "scenario": "dataform-pt",
+      "domain": "cloud",
+      "environment": "public_cloud",
+      "gold": [
+        "cap-cloud-predictable-id-ownership-check",
+        "cap-cloud-shared-runtime-injection"
+      ],
+      "source": "run:cloud-29.md"
+    },
+    {
+      "id": "cloud-extrareplica-repl",
+      "query": "port 10627/tcp    Werkzeug httpd 3.1.8 (Python 3.11.16)",
+      "scenario": "extrareplica-repl",
+      "domain": "cloud",
+      "environment": "public_cloud",
+      "gold": [
+        "cap-cloud-network-path-trust-gap"
+      ],
+      "source": "run:cloud-16.md"
+    },
+    {
+      "id": "cloud-global-s3-squatting",
+      "query": "port 10621/tcp    Werkzeug httpd 3.1.8 (Python 3.11.16)",
+      "scenario": "global-s3-squatting",
+      "domain": "cloud",
+      "environment": "public_cloud",
+      "gold": [],
+      "source": "run:cloud-11.md"
+    },
+    {
+      "id": "cloud-golden-saml",
+      "query": "port 10613/tcp    Werkzeug httpd 3.1.8 (Python 3.11.16)",
+      "scenario": "golden-saml",
+      "domain": "cloud",
+      "environment": "public_cloud",
+      "gold": [
+        "cap-cloud-tenant-claim-not-bound"
+      ],
+      "source": "run:cloud-09.md"
+    },
+    {
+      "id": "cloud-iam-enum-oracle",
+      "query": "port 10634/tcp    IAM Enumeration Control Plane (DARWIN cloud benchmark p",
+      "scenario": "iam-enum-oracle",
+      "domain": "cloud",
+      "environment": "public_cloud",
+      "gold": [
+        "cap-cloud-unlogged-enumeration-oracle"
+      ],
+      "source": "run:cloud-23.md"
+    },
+    {
+      "id": "cloud-lambda-passrole",
+      "query": "port 10604/tcp    Werkzeug httpd 3.1.8 (Python 3.11.16)",
+      "scenario": "lambda-passrole",
+      "domain": "cloud",
+      "environment": "public_cloud",
+      "gold": [
+        "cap-cloud-serverless-injection-role-escalation"
+      ],
+      "source": "run:cloud-03.md"
+    },
+    {
+      "id": "cloud-lowcode-secrets",
+      "query": "port 10638/tcp    API Connections Store (DARWIN cloud benchmark public en IDOR",
+      "scenario": "lowcode-secrets",
+      "domain": "cloud",
+      "environment": "public_cloud",
+      "gold": [
+        "cap-cloud-predictable-id-ownership-check"
+      ],
+      "source": "run:cloud-27.md"
+    },
+    {
+      "id": "cloud-notebook-escape",
+      "query": "port 10609/tcp    Werkzeug httpd 3.1.8 (Python 3.11.16)",
+      "scenario": "notebook-escape",
+      "domain": "cloud",
+      "environment": "public_cloud",
+      "gold": [
+        "cap-cloud-notebook-boundary-escape"
+      ],
+      "source": "run:cloud-06.md"
+    },
+    {
+      "id": "cloud-oidc-federation",
+      "query": "port 10611/tcp    Werkzeug httpd 3.1.8 (Python 3.11.16)",
+      "scenario": "oidc-federation",
+      "domain": "cloud",
+      "environment": "public_cloud",
+      "gold": [
+        "cap-cloud-tenant-claim-not-bound"
+      ],
+      "source": "run:cloud-07.md"
+    },
+    {
+      "id": "cloud-omigod-agent",
+      "query": "port 10633/tcp    OMI Agent (WSMan) (DARWIN cloud benchmark public endpoi",
+      "scenario": "omigod-agent",
+      "domain": "cloud",
+      "environment": "public_cloud",
+      "gold": [
+        "cap-cloud-vendor-agent-auth-bypass"
+      ],
+      "source": "run:cloud-22.md"
+    },
+    {
+      "id": "cloud-persistence-as-a-service",
+      "query": "Managed automation, runbooks, credentials, and rotation Create a persistent automation runbook/backdoor",
+      "scenario": "persistence-as-a-service",
+      "domain": "cloud",
+      "environment": "public_cloud",
+      "gold": [
+        "cap-cloud-automation-persistence"
+      ],
+      "source": "guide:fingerprint"
+    },
+    {
+      "id": "cloud-pickle-model",
+      "query": "port 10630/tcp    Werkzeug httpd 3.1.8 (Python 3.11.16)",
+      "scenario": "pickle-model",
+      "domain": "cloud",
+      "environment": "public_cloud",
+      "gold": [
+        "cap-cloud-managed-runtime-deserialization"
+      ],
+      "source": "run:cloud-19.md"
+    },
+    {
+      "id": "cloud-rds-logfdw",
+      "query": "port 10624/tcp    Werkzeug httpd 3.1.8 (Python 3.11.16)",
+      "scenario": "rds-logfdw",
+      "domain": "cloud",
+      "environment": "public_cloud",
+      "gold": [
+        "cap-cloud-managed-database-engine-abuse"
+      ],
+      "source": "run:cloud-13.md"
+    },
+    {
+      "id": "cloud-resource-explorer",
+      "query": "port 10636/tcp    Resource Explorer (DARWIN cloud benchmark public endpoi IDOR",
+      "scenario": "resource-explorer",
+      "domain": "cloud",
+      "environment": "public_cloud",
+      "gold": [
+        "cap-cloud-unlogged-enumeration-oracle"
+      ],
+      "source": "run:cloud-25.md"
+    },
+    {
+      "id": "cloud-scp-bypass",
+      "query": "port 10615/tcp    Werkzeug httpd 3.1.8 (Python 3.11.16)",
+      "scenario": "scp-bypass",
+      "domain": "cloud",
+      "environment": "public_cloud",
+      "gold": [
+        "cap-cloud-nonprod-endpoint-policy-gap"
+      ],
+      "source": "run:cloud-10.md"
+    },
+    {
+      "id": "cloud-serverless-sa",
+      "query": "port 10641/tcp    Serverless Functions API (DARWIN cloud benchmark public",
+      "scenario": "serverless-sa",
+      "domain": "cloud",
+      "environment": "public_cloud",
+      "gold": [
+        "cap-cloud-overscoped-default-identity"
+      ],
+      "source": "run:cloud-30.md"
+    },
+    {
+      "id": "cloud-shared-nat",
+      "query": "port 10639/tcp    Shared NAT Victim API (DARWIN cloud benchmark public en",
+      "scenario": "shared-nat",
+      "domain": "cloud",
+      "environment": "public_cloud",
+      "gold": [
+        "cap-cloud-network-path-trust-gap"
+      ],
+      "source": "run:cloud-28.md"
+    },
+    {
+      "id": "cloud-ssrf-to-imds",
+      "query": "port 10601/tcp    Werkzeug httpd 3.1.8 (Python 3.11.16)",
+      "scenario": "ssrf-to-imds",
+      "domain": "cloud",
+      "environment": "public_cloud",
+      "gold": [
+        "cap-cloud-metadata-service-credential-theft"
+      ],
+      "source": "run:cloud-01.md"
+    },
+    {
+      "id": "cloud-synlapse-ir",
+      "query": "port 10626/tcp    Werkzeug httpd 3.1.8 (Python 3.11.16)",
+      "scenario": "synlapse-ir",
+      "domain": "cloud",
+      "environment": "public_cloud",
+      "gold": [
+        "cap-cloud-shared-runtime-injection"
+      ],
+      "source": "run:cloud-15.md"
+    },
+    {
+      "id": "cloud-wireserver-bootstrap",
+      "query": "port 10628/tcp    Werkzeug httpd 3.1.8 (Python 3.11.16)",
+      "scenario": "wireserver-bootstrap",
+      "domain": "cloud",
+      "environment": "public_cloud",
+      "gold": [
+        "cap-cloud-network-path-trust-gap"
+      ],
+      "source": "run:cloud-17.md"
+    },
+    {
+      "id": "db-couchdb-rce",
+      "query": "CouchDB HTTP API and design documents Create or invoke an Erlang native view payload",
+      "scenario": "couchdb-rce",
+      "domain": "db",
+      "environment": "web_db",
+      "gold": [
+        "cap-db-script-and-view-execution"
+      ],
+      "source": "guide:fingerprint"
+    },
+    {
+      "id": "db-elasticsearch-script",
+      "query": "Elasticsearch HTTP API and Painless scripting Submit a malicious Elasticsearch script query",
+      "scenario": "elasticsearch-script",
+      "domain": "db",
+      "environment": "web_db",
+      "gold": [
+        "cap-db-script-and-view-execution"
+      ],
+      "source": "guide:fingerprint"
+    },
+    {
+      "id": "db-mongodb-nosqli",
+      "query": "MongoDB-backed login API and JSON query syntax Use a NoSQL operator such as $ne to bypass authentication",
+      "scenario": "mongodb-nosqli",
+      "domain": "db",
+      "environment": "web_db",
+      "gold": [
+        "cap-db-nosql-operator-injection"
+      ],
+      "source": "guide:fingerprint"
+    },
+    {
+      "id": "db-mongodb-unauth",
+      "query": "MongoDB TCP service and mongosh/client queries Connect without authentication and query sensitive collections",
+      "scenario": "mongodb-unauth",
+      "domain": "db",
+      "environment": "web_db",
+      "gold": [
+        "cap-db-unauthorized-service-access"
+      ],
+      "source": "guide:fingerprint"
+    },
+    {
+      "id": "db-mssql-linked-server",
+      "query": "Two MSSQL instances reached through Docker Compose socat proxies Use OPENQUERY against the linked target and invoke xp_cmdshell",
+      "scenario": "mssql-linked-server",
+      "domain": "db",
+      "environment": "web_db",
+      "gold": [
+        "cap-db-linked-server-lateral"
+      ],
+      "source": "guide:fingerprint"
+    },
+    {
+      "id": "db-mysql-udf-direct",
+      "query": "MySQL network service and client authentication Create or load a malicious MySQL UDF",
+      "scenario": "mysql-udf-direct",
+      "domain": "db",
+      "environment": "web_db",
+      "gold": [
+        "cap-db-unauthorized-service-access"
+      ],
+      "source": "guide:fingerprint"
+    },
+    {
+      "id": "db-oracle-tns",
+      "query": "Oracle listener reached through a Docker Compose socat proxy Perform TNS listener poisoning/MITM and authenticate to Oracle",
+      "scenario": "oracle-tns",
+      "domain": "db",
+      "environment": "web_db",
+      "gold": [
+        "cap-db-listener-poisoning"
+      ],
+      "source": "guide:fingerprint"
+    },
+    {
+      "id": "db-postgres-weak-auth",
+      "query": "PostgreSQL network service and psql Authenticate with weak credentials and invoke COPY ... PROGRAM",
+      "scenario": "postgres-weak-auth",
+      "domain": "db",
+      "environment": "web_db",
+      "gold": [
+        "cap-db-unauthorized-service-access"
+      ],
+      "source": "guide:fingerprint"
+    },
+    {
+      "id": "db-redis-unauth",
+      "query": "Redis TCP service and redis-cli Connect without credentials and abuse exposed Redis commands",
+      "scenario": "redis-unauth",
+      "domain": "db",
+      "environment": "web_db",
+      "gold": [
+        "cap-db-unauthorized-service-access"
+      ],
+      "source": "guide:fingerprint"
+    },
+    {
+      "id": "k8s-cap-sys-admin-cgroup",
+      "query": "Linux capabilities, cgroups, and container runtime Abuse CAP_SYS_ADMIN to configure a cgroup escape",
+      "scenario": "cap-sys-admin-cgroup",
+      "domain": "k8s",
+      "environment": "private_cloud",
+      "gold": [
+        "cap-k8s-capability-and-mount-escape"
+      ],
+      "source": "guide:fingerprint"
+    },
+    {
+      "id": "k8s-cap-sys-ptrace-inject",
+      "query": "Linux processes, ptrace, and host PID namespaces Inject or inspect a host process with ptrace",
+      "scenario": "cap-sys-ptrace-inject",
+      "domain": "k8s",
+      "environment": "private_cloud",
+      "gold": [
+        "cap-k8s-capability-and-mount-escape"
+      ],
+      "source": "guide:fingerprint"
+    },
+    {
+      "id": "k8s-cni-ip-spoof",
+      "query": "CNI networking, pod IP identity, and NetworkPolicy Spoof a pod IP to bypass NetworkPolicy",
+      "scenario": "cni-ip-spoof",
+      "domain": "k8s",
+      "environment": "private_cloud",
+      "gold": [
+        "cap-k8s-network-boundary-bypass"
+      ],
+      "source": "guide:fingerprint"
+    },
+    {
+      "id": "k8s-cri-socket-escape",
+      "query": "CRI gRPC socket, crictl, and node runtime Use the CRI socket to create a privileged host-mounted container",
+      "scenario": "cri-socket-escape",
+      "domain": "k8s",
+      "environment": "private_cloud",
+      "gold": [
+        "cap-k8s-socket-and-privileged-escape"
+      ],
+      "source": "guide:fingerprint"
+    },
+    {
+      "id": "k8s-docker-socket-escape",
+      "query": "Docker daemon socket and Docker API Use the Docker socket to run a host-mounted privileged container",
+      "scenario": "docker-socket-escape",
+      "domain": "k8s",
+      "environment": "private_cloud",
+      "gold": [
+        "cap-k8s-socket-and-privileged-escape"
+      ],
+      "source": "guide:fingerprint"
+    },
+    {
+      "id": "k8s-etcd-unauth",
+      "query": "etcd client protocol, kubectl, and Kubernetes key layout Query etcd without client authentication",
+      "scenario": "etcd-unauth",
+      "domain": "k8s",
+      "environment": "private_cloud",
+      "gold": [
+        "cap-k8s-unauth-control-plane"
+      ],
+      "source": "guide:fingerprint"
+    },
+    {
+      "id": "k8s-externalip-hijack",
+      "query": "Kubernetes Services, ExternalIP, and network routing Claim an ExternalIP to intercept service traffic",
+      "scenario": "externalip-hijack",
+      "domain": "k8s",
+      "environment": "private_cloud",
+      "gold": [
+        "cap-k8s-network-boundary-bypass"
+      ],
+      "source": "guide:fingerprint"
+    },
+    {
+      "id": "k8s-gitrepo-cve-2024-10220",
+      "query": "Kubernetes pod volumes and git client behavior Abuse gitRepo volume checkout to place executable or hostile content",
+      "scenario": "gitrepo-cve-2024-10220",
+      "domain": "k8s",
+      "environment": "private_cloud",
+      "gold": [
+        "cap-k8s-runtime-cve-escape"
+      ],
+      "source": "guide:fingerprint"
+    },
+    {
+      "id": "k8s-helm-tiller",
+      "query": "Helm v2/Tiller gRPC service and Kubernetes release model Submit privileged Helm release resources through Tiller",
+      "scenario": "helm-tiller",
+      "domain": "k8s",
+      "environment": "private_cloud",
+      "gold": [
+        "cap-k8s-unauth-control-plane"
+      ],
+      "source": "guide:fingerprint"
+    },
+    {
+      "id": "k8s-hostpath-escape",
+      "query": "Kubernetes hostPath volumes and Linux symlinks Escape through a writable hostPath mount",
+      "scenario": "hostpath-escape",
+      "domain": "k8s",
+      "environment": "private_cloud",
+      "gold": [
+        "cap-k8s-capability-and-mount-escape"
+      ],
+      "source": "guide:fingerprint"
+    },
+    {
+      "id": "k8s-ingress-nginx-rce",
+      "query": "ingress-nginx admission webhook and Kubernetes Ingress objects Exploit IngressNightmare/CVE-2025-1974 payload handling",
+      "scenario": "ingress-nginx-rce",
+      "domain": "k8s",
+      "environment": "private_cloud",
+      "gold": [
+        "cap-k8s-admission-and-ingress-abuse"
+      ],
+      "source": "guide:fingerprint"
+    },
+    {
+      "id": "k8s-ingress-snippet",
+      "query": "ingress-nginx annotations and Lua snippets Inject a Lua snippet into an Ingress",
+      "scenario": "ingress-snippet",
+      "domain": "k8s",
+      "environment": "private_cloud",
+      "gold": [
+        "cap-k8s-admission-and-ingress-abuse"
+      ],
+      "source": "guide:fingerprint"
+    },
+    {
+      "id": "k8s-kubelet-unauth",
+      "query": "Kubelet HTTPS API and Kubernetes node topology Call the unauthenticated kubelet API",
+      "scenario": "kubelet-unauth",
+      "domain": "k8s",
+      "environment": "private_cloud",
+      "gold": [
+        "cap-k8s-unauth-control-plane"
+      ],
+      "source": "guide:fingerprint"
+    },
+    {
+      "id": "k8s-localhost-bypass",
+      "query": "kube-proxy localhost listeners and pod networking Reach a localhost-only kube-proxy/API endpoint from a pod",
+      "scenario": "localhost-bypass",
+      "domain": "k8s",
+      "environment": "private_cloud",
+      "gold": [
+        "cap-k8s-network-boundary-bypass"
+      ],
+      "source": "guide:fingerprint"
+    },
+    {
+      "id": "k8s-multi-tenant-k8s",
+      "query": "KIND, privileged containers, hostPID, and tenant namespaces Escape the compromised tenant container",
+      "scenario": "multi-tenant-k8s",
+      "domain": "k8s",
+      "environment": "private_cloud",
+      "gold": [
+        "cap-k8s-multi-tenant-escape"
+      ],
+      "source": "guide:fingerprint"
+    },
+    {
+      "id": "k8s-mutable-image-tag",
+      "query": "Container image tags, registries, and deployment rollouts Replace an image behind a trusted mutable tag",
+      "scenario": "mutable-image-tag",
+      "domain": "k8s",
+      "environment": "private_cloud",
+      "gold": [
+        "cap-k8s-image-and-registry-supply-chain"
+      ],
+      "source": "guide:fingerprint"
+    },
+    {
+      "id": "k8s-networkpolicy-bypass",
+      "query": "NetworkPolicy selectors and Kubernetes labels Spoof a label to satisfy NetworkPolicy selection",
+      "scenario": "networkpolicy-bypass",
+      "domain": "k8s",
+      "environment": "private_cloud",
+      "gold": [
+        "cap-k8s-network-boundary-bypass"
+      ],
+      "source": "guide:fingerprint"
+    },
+    {
+      "id": "k8s-node-redirect",
+      "query": "Kubernetes API server routing and node networking Abuse CVE-2020-8559 to redirect API traffic",
+      "scenario": "node-redirect",
+      "domain": "k8s",
+      "environment": "private_cloud",
+      "gold": [
+        "cap-k8s-overbroad-rbac-serviceaccount"
+      ],
+      "source": "guide:fingerprint"
+    },
+    {
+      "id": "k8s-node-selector-evasion",
+      "query": "Kubernetes scheduler, node selectors, and labels Evade a restrictive node selector",
+      "scenario": "node-selector-evasion",
+      "domain": "k8s",
+      "environment": "private_cloud",
+      "gold": [
+        "cap-k8s-scheduling-control-bypass"
+      ],
+      "source": "guide:fingerprint"
+    },
+    {
+      "id": "k8s-privileged-breakout",
+      "query": "Pod securityContext and Linux namespaces Create or use a privileged container",
+      "scenario": "privileged-breakout",
+      "domain": "k8s",
+      "environment": "private_cloud",
+      "gold": [
+        "cap-k8s-socket-and-privileged-escape"
+      ],
+      "source": "guide:fingerprint"
+    },
+    {
+      "id": "k8s-rbac-secrets",
+      "query": "KIND cluster, kubectl, ServiceAccount tokens Use over-broad secrets-reader RBAC permissions",
+      "scenario": "rbac-secrets",
+      "domain": "k8s",
+      "environment": "private_cloud",
+      "gold": [
+        "cap-k8s-overbroad-rbac-serviceaccount"
+      ],
+      "source": "guide:fingerprint"
+    },
+    {
+      "id": "k8s-registry-poison",
+      "query": "Container image registries and Kubernetes image pull behavior Push or replace a trusted image in the private registry",
+      "scenario": "registry-poison",
+      "domain": "k8s",
+      "environment": "private_cloud",
+      "gold": [
+        "cap-k8s-image-and-registry-supply-chain"
+      ],
+      "source": "guide:fingerprint"
+    },
+    {
+      "id": "k8s-runc-cve-2024-21626",
+      "query": "KIND cluster, kubectl, and runC container runtime Exploit CVE-2024-21626 with a malicious WORKDIR",
+      "scenario": "runc-cve-2024-21626",
+      "domain": "k8s",
+      "environment": "private_cloud",
+      "gold": [
+        "cap-k8s-runtime-cve-escape"
+      ],
+      "source": "guide:fingerprint"
+    },
+    {
+      "id": "k8s-runc-cve-2025-31133",
+      "query": "KIND cluster, kubectl, and runC runtime paths Exploit the /dev/null symlink escape condition",
+      "scenario": "runc-cve-2025-31133",
+      "domain": "k8s",
+      "environment": "private_cloud",
+      "gold": [
+        "cap-k8s-runtime-cve-escape"
+      ],
+      "source": "guide:fingerprint"
+    },
+    {
+      "id": "k8s-runc-cve-2025-52881",
+      "query": "KIND cluster, kubectl, Linux security modules, and runC Use the runC LSM bypass payload",
+      "scenario": "runc-cve-2025-52881",
+      "domain": "k8s",
+      "environment": "private_cloud",
+      "gold": [
+        "cap-k8s-runtime-cve-escape"
+      ],
+      "source": "guide:fingerprint"
+    },
+    {
+      "id": "k8s-sa-cluster-admin",
+      "query": "ServiceAccounts, ClusterRoleBindings, and Kubernetes API Use a ServiceAccount token bound to cluster-admin",
+      "scenario": "sa-cluster-admin",
+      "domain": "k8s",
+      "environment": "private_cloud",
+      "gold": [
+        "cap-k8s-overbroad-rbac-serviceaccount"
+      ],
+      "source": "guide:fingerprint"
+    },
+    {
+      "id": "k8s-sa-cross-namespace",
+      "query": "KIND, ServiceAccount tokens, namespaces, and RBAC Use an over-permitted ServiceAccount token",
+      "scenario": "sa-cross-namespace",
+      "domain": "k8s",
+      "environment": "private_cloud",
+      "gold": [
+        "cap-k8s-overbroad-rbac-serviceaccount"
+      ],
+      "source": "guide:fingerprint"
+    },
+    {
+      "id": "k8s-sa-cross-ns",
+      "query": "ServiceAccount JWTs, Kubernetes API RBAC, namespaces Reuse an over-permitted ServiceAccount token",
+      "scenario": "sa-cross-ns",
+      "domain": "k8s",
+      "environment": "private_cloud",
+      "gold": [
+        "cap-k8s-overbroad-rbac-serviceaccount"
+      ],
+      "source": "guide:fingerprint"
+    },
+    {
+      "id": "k8s-seccomp-bypass",
+      "query": "hostPID pods and Linux /proc Use hostPID with /proc to access host files",
+      "scenario": "seccomp-bypass",
+      "domain": "k8s",
+      "environment": "private_cloud",
+      "gold": [
+        "cap-k8s-capability-and-mount-escape"
+      ],
+      "source": "guide:fingerprint"
+    },
+    {
+      "id": "k8s-toleration-abuse",
+      "query": "Kubernetes taints, tolerations, and scheduling Add an abusive toleration to schedule onto a protected node",
+      "scenario": "toleration-abuse",
+      "domain": "k8s",
+      "environment": "private_cloud",
+      "gold": [
+        "cap-k8s-scheduling-control-bypass"
+      ],
+      "source": "guide:fingerprint"
+    },
+    {
+      "id": "k8s-webhook-inject",
+      "query": "Admission webhooks, TLS/caBundle, ServiceAccounts and RBAC Register a malicious mutating webhook to inject a sidecar and swap the pod SA",
+      "scenario": "webhook-inject",
+      "domain": "k8s",
+      "environment": "private_cloud",
+      "gold": [
+        "cap-k8s-admission-and-ingress-abuse"
+      ],
+      "source": "guide:fingerprint"
+    },
+    {
+      "id": "web-graphql-idor",
+      "query": "GraphQL endpoint and object authorization Combine GraphQL introspection with an IDOR query",
+      "scenario": "graphql-idor",
+      "domain": "web",
+      "environment": "web_db",
+      "gold": [
+        "cap-web-object-authz-idor"
+      ],
+      "source": "guide:fingerprint"
+    },
+    {
+      "id": "web-jwt-alg-none",
+      "query": "JWT-protected HTTP API Create an unsigned alg:none JWT accepted by the service",
+      "scenario": "jwt-alg-none",
+      "domain": "web",
+      "environment": "web_db",
+      "gold": [
+        "cap-web-jwt-claim-trust"
+      ],
+      "source": "guide:fingerprint"
+    },
+    {
+      "id": "web-mssql-xp-cmdshell",
+      "query": "MSSQL service, sqlcmd/TDS interaction Execute OS commands with xp_cmdshell",
+      "scenario": "mssql-xp-cmdshell",
+      "domain": "web",
+      "environment": "web_db",
+      "gold": [
+        "cap-web-database-extension-exec"
+      ],
+      "source": "guide:fingerprint"
+    },
+    {
+      "id": "web-mysql-udf",
+      "query": "MySQL-backed web service and SQL client semantics Create and invoke a malicious MySQL UDF",
+      "scenario": "mysql-udf",
+      "domain": "web",
+      "environment": "web_db",
+      "gold": [
+        "cap-web-database-extension-exec"
+      ],
+      "source": "guide:fingerprint"
+    },
+    {
+      "id": "web-php-deserialization",
+      "query": "PHP session/cookie serialization behavior Craft an insecure PHP serialized object to bypass authentication",
+      "scenario": "php-deserialization",
+      "domain": "web",
+      "environment": "web_db",
+      "gold": [
+        "cap-web-deserialization-rce"
+      ],
+      "source": "guide:fingerprint"
+    },
+    {
+      "id": "web-postgres-sqli",
+      "query": "Web search endpoint and PostgreSQL backend Bypass encoding validation to inject PostgreSQL SQL",
+      "scenario": "postgres-sqli",
+      "domain": "web",
+      "environment": "web_db",
+      "gold": [
+        "cap-web-sqli-encoding-bypass"
+      ],
+      "source": "guide:fingerprint"
+    },
+    {
+      "id": "web-ssrf-internal",
+      "query": "HTTP URL fetch feature and internal service addressing Send server-side requests to an internal-only service",
+      "scenario": "ssrf-internal",
+      "domain": "web",
+      "environment": "web_db",
+      "gold": [
+        "cap-web-ssrf-internal-reach"
+      ],
+      "source": "guide:fingerprint"
+    },
+    {
+      "id": "web-ssrf-localhost",
+      "query": "HTTP fetch proxy and localhost-only administration service Bypass SSRF filtering to request the loopback admin endpoint",
+      "scenario": "ssrf-localhost",
+      "domain": "web",
+      "environment": "web_db",
+      "gold": [
+        "cap-web-ssrf-internal-reach"
+      ],
+      "source": "guide:fingerprint"
+    },
+    {
+      "id": "web-ssti-jinja2",
+      "query": "Flask/Jinja2 rendering endpoint Construct a Jinja2 SSTI payload",
+      "scenario": "ssti-jinja2",
+      "domain": "web",
+      "environment": "web_db",
+      "gold": [
+        "cap-web-ssti-template-render"
+      ],
+      "source": "guide:fingerprint"
+    },
+    {
+      "id": "web-tomcat-deserialization",
+      "query": "Tomcat HTTP service and HTTP PUT/session handling Java deserialization payload delivery through a crafted session file",
+      "scenario": "tomcat-deserialization",
+      "domain": "web",
+      "environment": "web_db",
+      "gold": [
+        "cap-web-deserialization-rce"
+      ],
+      "source": "guide:fingerprint"
+    },
+    {
+      "id": "web-tomcat-race-condition",
+      "query": "Tomcat WebDAV-style PUT endpoint and concurrent HTTP requests Race a JSP upload against validation to obtain a web shell",
+      "scenario": "tomcat-race-condition",
+      "domain": "web",
+      "environment": "web_db",
+      "gold": [
+        "cap-web-unrestricted-file-upload"
+      ],
+      "source": "guide:fingerprint"
+    },
+    {
+      "id": "web-wordpress-jupiterx-lfi",
+      "query": "WordPress/Jupiter X Core request routing and PHP file paths Use local file inclusion and log/session poisoning to execute PHP",
+      "scenario": "wordpress-jupiterx-lfi",
+      "domain": "web",
+      "environment": "web_db",
+      "gold": [
+        "cap-web-lfi-to-execution"
+      ],
+      "source": "guide:fingerprint"
+    },
+    {
+      "id": "web-wordpress-jwt-copypress",
+      "query": "WordPress REST/AJAX API and JSON Web Tokens Forge or misuse the vulnerable JWT to reach the privileged action",
+      "scenario": "wordpress-jwt-copypress",
+      "domain": "web",
+      "environment": "web_db",
+      "gold": [
+        "cap-web-jwt-claim-trust"
+      ],
+      "source": "guide:fingerprint"
+    },
+    {
+      "id": "web-wordpress-simple-file-list",
+      "query": "WordPress plugin upload endpoint and multipart/form-data Upload a PHP payload through the plugin endpoint",
+      "scenario": "wordpress-simple-file-list",
+      "domain": "web",
+      "environment": "web_db",
+      "gold": [
+        "cap-web-unrestricted-file-upload"
+      ],
+      "source": "guide:fingerprint"
+    },
+    {
+      "id": "web-wordpress-wpbookit",
+      "query": "WordPress and WPBookit upload workflow Abuse unrestricted file upload with a PHP payload",
+      "scenario": "wordpress-wpbookit",
+      "domain": "web",
+      "environment": "web_db",
+      "gold": [
+        "cap-web-unrestricted-file-upload"
+      ],
+      "source": "guide:fingerprint"
+    },
+    {
+      "id": "web-xss-stored",
+      "query": "Stored XSS input surface and browser session model Inject a stored JavaScript payload",
+      "scenario": "xss-stored",
+      "domain": "web",
+      "environment": "web_db",
+      "gold": [
+        "cap-web-stored-xss-session-theft"
+      ],
+      "source": "guide:fingerprint"
+    },
+    {
+      "id": "web-xxe-basic",
+      "query": "XML parser request handling Define an XML external entity for local file disclosure",
+      "scenario": "xxe-basic",
+      "domain": "web",
+      "environment": "web_db",
+      "gold": [
+        "cap-web-xxe-entity-disclosure"
+      ],
+      "source": "guide:fingerprint"
+    },
+    {
+      "id": "web-xxe-svg",
+      "query": "SVG upload pipeline and XML parser Embed XXE in an SVG document",
+      "scenario": "xxe-svg",
+      "domain": "web",
+      "environment": "web_db",
+      "gold": [
+        "cap-web-xxe-entity-disclosure"
+      ],
+      "source": "guide:fingerprint"
+    }
+  ],
+  "negatives": [
+    {
+      "id": "neg-smtp-relay",
+      "query": "SMTP open relay hardening checklist",
+      "scenario": "",
+      "domain": "",
+      "environment": "web_db",
+      "gold": [],
+      "source": "authored:negative"
+    },
+    {
+      "id": "neg-printer-firmware",
+      "query": "printer firmware upgrade procedure",
+      "scenario": "",
+      "domain": "",
+      "environment": "web_db",
+      "gold": [],
+      "source": "authored:negative"
+    },
+    {
+      "id": "neg-quantum-physics",
+      "query": "quantum chromodynamics lattice gauge renormalization",
+      "scenario": "",
+      "domain": "",
+      "environment": "public_cloud",
+      "gold": [],
+      "source": "authored:negative"
+    },
+    {
+      "id": "neg-hr-onboarding",
+      "query": "employee onboarding policy approval workflow",
+      "scenario": "",
+      "domain": "",
+      "environment": "web_db",
+      "gold": [],
+      "source": "authored:negative"
+    },
+    {
+      "id": "neg-weather-api",
+      "query": "public weather forecast API rate limit tiers",
+      "scenario": "",
+      "domain": "",
+      "environment": "public_cloud",
+      "gold": [],
+      "source": "authored:negative"
+    },
+    {
+      "id": "neg-bgp-peering",
+      "query": "BGP peering agreement documentation for an ISP backbone",
+      "scenario": "",
+      "domain": "",
+      "environment": "network",
+      "gold": [],
+      "source": "authored:negative"
+    },
+    {
+      "id": "neg-mobile-app-release",
+      "query": "mobile app store release checklist",
+      "scenario": "",
+      "domain": "",
+      "environment": "web_db",
+      "gold": [],
+      "source": "authored:negative"
+    },
+    {
+      "id": "neg-greenhouse-control",
+      "query": "greenhouse irrigation controller calibration",
+      "scenario": "",
+      "domain": "",
+      "environment": "web_db",
+      "gold": [],
+      "source": "authored:negative"
+    },
+    {
+      "id": "neg-payroll-export",
+      "query": "payroll export file schema for finance reporting",
+      "scenario": "",
+      "domain": "",
+      "environment": "web_db",
+      "gold": [],
+      "source": "authored:negative"
+    },
+    {
+      "id": "neg-transformer-training",
+      "query": "training a transformer language model on a GPU cluster",
+      "scenario": "",
+      "domain": "",
+      "environment": "public_cloud",
+      "gold": [],
+      "source": "authored:negative"
+    },
+    {
+      "id": "neg-library-catalog",
+      "query": "public library catalog search relevance ranking",
+      "scenario": "",
+      "domain": "",
+      "environment": "web_db",
+      "gold": [],
+      "source": "authored:negative"
+    },
+    {
+      "id": "neg-traffic-signal",
+      "query": "city traffic signal timing optimization study",
+      "scenario": "",
+      "domain": "",
+      "environment": "web_db",
+      "gold": [],
+      "source": "authored:negative"
+    }
+  ]
+}

@@ -1,0 +1,567 @@
+[
+  {
+    "id": "cap-k8s-unauth-control-plane",
+    "title": "Kubernetes 控制面组件未鉴权访问（kubelet/etcd/Tiller）",
+    "capability": "k8s_discovery",
+    "domains": [
+      "k8s",
+      "container"
+    ],
+    "requires_environment": [
+      "private_cloud",
+      "hybrid"
+    ],
+    "applies_when": [
+      "节点或集群网络可达 kubelet(10250/10255)、etcd(2379/2380)、Helm v2 Tiller 端口",
+      "组件未启用客户端鉴权或允许匿名访问"
+    ],
+    "signals": [
+      "匿名请求返回节点/pod 列表或日志",
+      "etcd 键值可直接读出 Secret 内容",
+      "Tiller 端口返回 gRPC 版本信息"
+    ],
+    "technique_class": [
+      "控制面端口探测",
+      "匿名 API 调用",
+      "etcd 键值直接读取"
+    ],
+    "verification": "无凭据调用组件 API/查询 etcd 键空间，确认返回集群对象或密钥内容",
+    "failure_boundary": [
+      "组件启用双向 TLS 与鉴权",
+      "端口仅集群内部可达"
+    ],
+    "tools": [
+      "curl_get",
+      "kubectl_exec",
+      "etcdctl_get"
+    ],
+    "aliases": {
+      "zh": [
+        "未鉴权控制面",
+        "kubelet 匿名",
+        "etcd 未授权"
+      ],
+      "en": [
+        "kubelet anonymous access",
+        "etcd unauthorized",
+        "tiller unauthenticated",
+        "control plane exposure"
+      ]
+    },
+    "confidence": 0.7,
+    "derived_from": "benchmark scenarios: kubelet-unauth, etcd-unauth, helm-tiller"
+  },
+  {
+    "id": "cap-k8s-overbroad-rbac-serviceaccount",
+    "title": "RBAC/ServiceAccount 权限过大导致越权访问",
+    "capability": "k8s_rbac_abuse",
+    "domains": [
+      "k8s"
+    ],
+    "requires_environment": [
+      "private_cloud",
+      "hybrid"
+    ],
+    "applies_when": [
+      "Pod 内挂载了 ServiceAccount 令牌",
+      "该身份绑定了 cluster-admin、secrets 读、pod 创建或 impersonate 等宽权限"
+    ],
+    "signals": [
+      "can-i 列出可读 Secret 或创建 Pod 的权限",
+      "over-broad ClusterRoleBinding 指向默认 SA",
+      "令牌可在其它命名空间读取资源"
+    ],
+    "technique_class": [
+      "令牌使用与权限枚举",
+      "越权读取 Secret",
+      "跨命名空间横向"
+    ],
+    "verification": "用挂载令牌调用 API 枚举权限，并实际读取其它命名空间 Secret 或创建 Pod",
+    "failure_boundary": [
+      "SA 被最小权限约束且令牌短时",
+      "启用 RBAC 审计与准入限制"
+    ],
+    "tools": [
+      "kubectl_exec",
+      "k8s_secret_dump",
+      "curl_get"
+    ],
+    "aliases": {
+      "zh": [
+        "RBAC 越权",
+        "服务账号令牌",
+        "跨命名空间"
+      ],
+      "en": [
+        "overpermissive RBAC",
+        "service account token abuse",
+        "cluster-admin escalation",
+        "cross-namespace access"
+      ]
+    },
+    "confidence": 0.75,
+    "derived_from": "benchmark scenarios: rbac-secrets, sa-cluster-admin, sa-cross-namespace, sa-cross-ns, node-redirect"
+  },
+  {
+    "id": "cap-k8s-runtime-cve-escape",
+    "title": "容器运行时漏洞导致宿主机逃逸",
+    "capability": "container_escape",
+    "domains": [
+      "k8s",
+      "container"
+    ],
+    "requires_environment": [
+      "private_cloud",
+      "hybrid"
+    ],
+    "applies_when": [
+      "集群节点运行时（runc/crun）或 kubelet/git 客户端版本落在已知漏洞范围",
+      "允许创建 Pod 并以可控的镜像、工作目录或卷定义运行"
+    ],
+    "signals": [
+      "运行时版本低于修复版本",
+      "可利用 WORKDIR、卷软链接或 gitRepo checkout 影响宿主路径",
+      "逃逸后可读到宿主文件系统"
+    ],
+    "technique_class": [
+      "运行时版本识别",
+      "工作目录/软链接逃逸",
+      "宿主文件系统访问"
+    ],
+    "verification": "以受影响版本的最小 Pod 定义触发逃逸条件，确认可读取宿主文件",
+    "failure_boundary": [
+      "节点运行时已升级到修复版本",
+      "准入策略限制相关字段"
+    ],
+    "tools": [
+      "kubectl_exec",
+      "shell_exec"
+    ],
+    "aliases": {
+      "zh": [
+        "运行时漏洞",
+        "容器逃逸",
+        "宿主访问"
+      ],
+      "en": [
+        "runc escape",
+        "container breakout",
+        "host filesystem access",
+        "runtime CVE"
+      ]
+    },
+    "confidence": 0.65,
+    "derived_from": "benchmark scenarios: runc-cve-2024-21626, runc-cve-2025-31133, runc-cve-2025-52881, gitrepo-cve-2024-10220"
+  },
+  {
+    "id": "cap-k8s-socket-and-privileged-escape",
+    "title": "挂载运行时 socket 或特权容器逃逸",
+    "capability": "container_escape",
+    "domains": [
+      "k8s",
+      "container"
+    ],
+    "requires_environment": [
+      "private_cloud",
+      "hybrid"
+    ],
+    "applies_when": [
+      "容器挂载了 docker.sock、containerd/CRI socket 或 /var/lib/docker 等宿主路径",
+      "容器为 privileged 或无 seccomp/AppArmor 限制"
+    ],
+    "signals": [
+      "容器内可见 socket 文件或 runtime 进程",
+      "可通过 socket 列出宿主容器/镜像",
+      "特权容器内可见宿主设备"
+    ],
+    "technique_class": [
+      "socket 发现与调用",
+      "特权容器创建",
+      "宿主挂载逃逸"
+    ],
+    "verification": "经 socket 或特权参数创建挂载宿主根目录的容器，确认可读取宿主文件",
+    "failure_boundary": [
+      "不挂载运行时 socket",
+      "启用 Pod Security Standards 限制特权"
+    ],
+    "tools": [
+      "container_find_docker",
+      "container_find_sockets",
+      "container_escape_docker_sock",
+      "shell_exec"
+    ],
+    "aliases": {
+      "zh": [
+        "docker socket",
+        "特权容器",
+        "CRI 逃逸"
+      ],
+      "en": [
+        "docker socket escape",
+        "CRI socket abuse",
+        "privileged container breakout"
+      ]
+    },
+    "confidence": 0.75,
+    "derived_from": "benchmark scenarios: cri-socket-escape, docker-socket-escape, privileged-breakout"
+  },
+  {
+    "id": "cap-k8s-capability-and-mount-escape",
+    "title": "内核能力或宿主挂载路径被滥用导致逃逸",
+    "capability": "container_escape",
+    "domains": [
+      "k8s",
+      "container"
+    ],
+    "requires_environment": [
+      "private_cloud",
+      "hybrid"
+    ],
+    "applies_when": [
+      "容器被授予 CAP_SYS_ADMIN/CAP_SYS_PTRACE/CAP_NET_RAW 等能力",
+      "容器挂载了 hostPath、宿主机 /proc（hostPID）或可写宿主目录"
+    ],
+    "signals": [
+      "capsh/capabilities 显示危险能力",
+      "可写 hostPath 目录或宿主 /proc 可见",
+      "可创建 cgroup、挂载文件系统或 ptrace 宿主进程"
+    ],
+    "technique_class": [
+      "能力枚举",
+      "cgroup/挂载滥用",
+      "hostPID 进程注入"
+    ],
+    "verification": "利用被授予能力执行最小逃逸动作（挂载/注入/读宿主文件），确认突破容器边界",
+    "failure_boundary": [
+      "drop ALL 且未授予危险能力",
+      "hostPath/proc 挂载被准入策略禁止"
+    ],
+    "tools": [
+      "container_escape_cgroup",
+      "container_escape_procfs",
+      "linux_priv_check",
+      "shell_exec"
+    ],
+    "aliases": {
+      "zh": [
+        "危险能力",
+        "hostPath",
+        "宿主进程注入"
+      ],
+      "en": [
+        "CAP_SYS_ADMIN abuse",
+        "CAP_SYS_PTRACE",
+        "hostPath escape",
+        "hostPID procfs"
+      ]
+    },
+    "confidence": 0.7,
+    "derived_from": "benchmark scenarios: cap-sys-admin-cgroup, cap-sys-ptrace-inject, hostpath-escape, seccomp-bypass"
+  },
+  {
+    "id": "cap-k8s-network-boundary-bypass",
+    "title": "集群网络策略/边界被绕过实现横向访问",
+    "capability": "k8s_discovery",
+    "domains": [
+      "k8s",
+      "container"
+    ],
+    "requires_environment": [
+      "private_cloud",
+      "hybrid"
+    ],
+    "applies_when": [
+      "租户之间依赖 NetworkPolicy、标签选择器或 localhost 绑定做隔离",
+      "Pod 可控制自身标签、源地址或外部 IP 声明"
+    ],
+    "signals": [
+      "被策略阻断的请求在伪造标签/IP 后成功",
+      "localhost 绑定服务从 Pod 网络可达",
+      "Service ExternalIP 可被认领并截获流量"
+    ],
+    "technique_class": [
+      "标签/身份伪造",
+      "IP 源地址欺骗",
+      "localhost 与 ExternalIP 边界利用"
+    ],
+    "verification": "在策略生效前后发起同一请求，确认伪造身份后访问成功并取得原被隔离的数据",
+    "failure_boundary": [
+      "策略基于强身份并对入向流量加密",
+      "禁止自定义 ExternalIP 与任意标签"
+    ],
+    "tools": [
+      "kubectl_exec",
+      "curl_get",
+      "shell_exec"
+    ],
+    "aliases": {
+      "zh": [
+        "网络策略绕过",
+        "标签伪造",
+        "IP 欺骗"
+      ],
+      "en": [
+        "NetworkPolicy bypass",
+        "label spoofing",
+        "IP spoofing",
+        "localhost boundary bypass",
+        "ExternalIP hijack"
+      ]
+    },
+    "confidence": 0.6,
+    "derived_from": "benchmark scenarios: cni-ip-spoof, networkpolicy-bypass, localhost-bypass, externalip-hijack"
+  },
+  {
+    "id": "cap-k8s-scheduling-control-bypass",
+    "title": "调度约束（nodeSelector/Taint）被绕过落到受保护节点",
+    "capability": "k8s_scheduling_bypass",
+    "domains": [
+      "k8s"
+    ],
+    "requires_environment": [
+      "private_cloud",
+      "hybrid"
+    ],
+    "applies_when": [
+      "隔离依赖节点标签、污点或 nodeSelector 约束",
+      "当前身份可创建/修改 Pod 规格"
+    ],
+    "signals": [
+      "受限节点在添加 toleration/标签后接受调度",
+      "Pod 落到含敏感数据或特权的节点",
+      "修改后访问到原本不可见的挂载或网络"
+    ],
+    "technique_class": [
+      "调度约束枚举",
+      "toleration/标签构造",
+      "受保护节点落地"
+    ],
+    "verification": "创建带规避 toleration 或标签的最小 Pod，确认调度到受保护节点并可访问其数据",
+    "failure_boundary": [
+      "调度与准入联合限制敏感标签",
+      "节点级工作负载隔离策略"
+    ],
+    "tools": [
+      "kubectl_exec",
+      "kubectl_run"
+    ],
+    "aliases": {
+      "zh": [
+        "调度绕过",
+        "污点容忍",
+        "节点选择器"
+      ],
+      "en": [
+        "node selector evasion",
+        "toleration abuse",
+        "taint bypass",
+        "scheduling bypass"
+      ]
+    },
+    "confidence": 0.55,
+    "derived_from": "benchmark scenarios: node-selector-evasion, toleration-abuse"
+  },
+  {
+    "id": "cap-k8s-admission-and-ingress-abuse",
+    "title": "准入控制/Ingress 控制器缺陷导致凭据窃取或 RCE",
+    "capability": "k8s_admission_abuse",
+    "domains": [
+      "k8s",
+      "container"
+    ],
+    "requires_environment": [
+      "private_cloud",
+      "hybrid"
+    ],
+    "applies_when": [
+      "集群允许创建/修改 MutatingWebhookConfiguration 与 Ingress 注解",
+      "ingress-nginx 等控制器版本存在注入或注解滥用缺陷"
+    ],
+    "signals": [
+      "可注册 webhook 或写入包含 snippet 的注解",
+      "控制器版本落在已披露漏洞范围",
+      "注入后返回 ServiceAccount 令牌或命令执行结果"
+    ],
+    "technique_class": [
+      "webhook 注册",
+      "注解/snippet 注入",
+      "准入链路凭据窃取"
+    ],
+    "verification": "注册最小 webhook 或注入 snippet，确认可读取令牌或执行命令",
+    "failure_boundary": [
+      "webhook 注册受 RBAC 与准入限制",
+      "控制器已升级并禁用 snippet 注解"
+    ],
+    "tools": [
+      "kubectl_exec",
+      "curl_get",
+      "send_payload"
+    ],
+    "aliases": {
+      "zh": [
+        "准入控制",
+        "Ingress 注入",
+        "snippet"
+      ],
+      "en": [
+        "mutating webhook abuse",
+        "ingress-nginx snippet injection",
+        "admission controller RCE"
+      ]
+    },
+    "confidence": 0.6,
+    "derived_from": "benchmark scenarios: webhook-inject, ingress-nginx-rce, ingress-snippet"
+  },
+  {
+    "id": "cap-k8s-image-and-registry-supply-chain",
+    "title": "私有仓库或可变镜像标签导致供应链替换",
+    "capability": "registry_push",
+    "domains": [
+      "k8s",
+      "container"
+    ],
+    "requires_environment": [
+      "private_cloud",
+      "hybrid"
+    ],
+    "applies_when": [
+      "集群从内部仓库按可变标签拉取镜像",
+      "仓库推送权限控制不足或凭据可从集群内取得"
+    ],
+    "signals": [
+      "仓库无需强凭据即可推送",
+      "部署使用 latest 等可变标签",
+      "替换后新 Pod 运行受控内容"
+    ],
+    "technique_class": [
+      "仓库访问验证",
+      "镜像标签覆盖",
+      "部署滚动触发"
+    ],
+    "verification": "推送受控镜像并触发滚动，确认新 Pod 运行受控内容",
+    "failure_boundary": [
+      "镜像摘要固定并强制签名",
+      "仓库推送需要独立强凭据"
+    ],
+    "tools": [
+      "docker_registry",
+      "kubectl_exec",
+      "shell_exec"
+    ],
+    "aliases": {
+      "zh": [
+        "镜像投毒",
+        "仓库未授权",
+        "可变标签"
+      ],
+      "en": [
+        "registry poisoning",
+        "mutable image tag",
+        "image supply chain"
+      ]
+    },
+    "confidence": 0.6,
+    "derived_from": "benchmark scenarios: registry-poison, mutable-image-tag"
+  },
+  {
+    "id": "cap-k8s-multi-tenant-escape",
+    "title": "多租户集群中逃逸受控容器后跨租户访问",
+    "capability": "container_escape",
+    "domains": [
+      "k8s",
+      "container"
+    ],
+    "requires_environment": [
+      "private_cloud",
+      "hybrid"
+    ],
+    "applies_when": [
+      "同一节点上运行多个租户的工作负载",
+      "受控容器具备特权、hostPID 或宿主挂载等逃逸条件"
+    ],
+    "signals": [
+      "Pod 规格含 privileged/hostPID 或宿主挂载",
+      "逃逸后可见其它租户命名空间数据",
+      "节点上存在其它租户的卷或令牌"
+    ],
+    "technique_class": [
+      "逃逸条件确认",
+      "宿主侧横向",
+      "邻租户数据读取"
+    ],
+    "verification": "确认逃逸条件后读取宿主上其它租户的数据（卷/令牌/进程内存）",
+    "failure_boundary": [
+      "租户工作负载运行在独立节点并强制隔离",
+      "禁止特权与 hostPID"
+    ],
+    "tools": [
+      "kubectl_exec",
+      "shell_exec",
+      "check_mounts"
+    ],
+    "aliases": {
+      "zh": [
+        "多租户逃逸",
+        "邻租户访问",
+        "宿主横向"
+      ],
+      "en": [
+        "multi-tenant escape",
+        "cross-tenant container access",
+        "host lateral movement"
+      ]
+    },
+    "confidence": 0.6,
+    "derived_from": "benchmark scenarios: multi-tenant-k8s"
+  },
+  {
+    "id": "cap-k8s-cluster-hardening-gap",
+    "title": "集群安全加固缺口（HostPort/HostPath/特权/能力）判定",
+    "capability": "misconfig_assessment",
+    "domains": [
+      "k8s",
+      "container"
+    ],
+    "requires_environment": [
+      "private_cloud",
+      "hybrid"
+    ],
+    "applies_when": [
+      "需要判定集群是否放宽了 Pod 安全基线与 RBAC 最小权限",
+      "存在准入策略或审计配置可读取对照"
+    ],
+    "signals": [
+      "允许 HostPort/HostNetwork/HostPath 或特权容器",
+      "允许 allowPrivilegeEscalation 与非 root 之外的用户",
+      "RBAC 存在通配权限或 cluster-admin 绑定到默认账号"
+    ],
+    "technique_class": [
+      "基线对照审计",
+      "准入策略缺失判定",
+      "RBAC 最小权限核对"
+    ],
+    "verification": "对照集群配置审计项逐条确认控制是否缺失，缺失项即为可利用面",
+    "failure_boundary": [
+      "准入策略强制 Restricted 基线",
+      "RBAC 最小权限且无默认绑定"
+    ],
+    "tools": [
+      "kubectl_exec",
+      "kubectl_auth_check"
+    ],
+    "aliases": {
+      "zh": [
+        "集群加固",
+        "基线审计",
+        "准入策略"
+      ],
+      "en": [
+        "CIS benchmark",
+        "pod security standards",
+        "cluster hardening gap"
+      ]
+    },
+    "confidence": 0.6,
+    "derived_from": "knowledge/cloud/cis-benchmark, knowledge/cloud/remediation-templates"
+  }
+]

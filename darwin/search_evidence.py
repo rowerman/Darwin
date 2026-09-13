@@ -56,16 +56,20 @@ def _evidence_item(
     }
 
 
-def format_evidence(source: str, query: str, items: List[Dict[str, Any]]) -> str:
+def format_evidence(source: str, query: str, items: List[Dict[str, Any]],
+                    retrieval: Optional[Dict[str, Any]] = None) -> str:
     """Render a list of evidence items as the unified JSON envelope."""
+    envelope: Dict[str, Any] = {
+        "schema": SCHEMA,
+        "source": source,
+        "query": query,
+        "total": len(items),
+        "results": items[:_MAX_ITEMS],
+    }
+    if retrieval:
+        envelope["retrieval"] = retrieval
     return json.dumps(
-        {
-            "schema": SCHEMA,
-            "source": source,
-            "query": query,
-            "total": len(items),
-            "results": items[:_MAX_ITEMS],
-        },
+        envelope,
         ensure_ascii=False,
         indent=2,
     )
@@ -76,18 +80,29 @@ def empty_evidence(source: str, query: str) -> str:
     return format_evidence(source, query, [])
 
 
-def format_rag_evidence(query: str, results: List[Dict[str, Any]]) -> str:
+def format_rag_evidence(query: str, results: List[Dict[str, Any]],
+                        retrieval: Optional[Dict[str, Any]] = None) -> str:
     """Map DarwinRAG result dicts to the unified envelope."""
     items: List[Dict[str, Any]] = []
     for rank, r in enumerate(results, 1):
         path = r.get("path") or []
+        provenance = r.get("provenance") or {}
         if r.get("source"):
             url = str(r["source"])
         elif path:
             url = "knowledge:" + "/".join(str(p) for p in path)
+        elif provenance.get("source_file"):
+            url = "knowledge:" + str(provenance["source_file"])
         else:
             url = f"knowledge:{r.get('category', '')}/{r.get('id', '')}"
         metadata = {
+            "capability": r.get("capability", ""),
+            "domains": r.get("domains", []),
+            "requires_environment": r.get("requires_environment", []),
+            "cve_ids": r.get("cve_ids", []),
+            "applies_when": r.get("applies_when", []),
+            "failure_boundary": r.get("failure_boundary", []),
+            "provenance": {k: v for k, v in provenance.items() if v not in (None, "", [], {})},
             "category": r.get("category", ""),
             "subcategory": r.get("subcategory", ""),
             "guid": r.get("guid", ""),
@@ -100,12 +115,12 @@ def format_rag_evidence(query: str, results: List[Dict[str, Any]]) -> str:
             rank=rank,
             title=r.get("title", ""),
             url=url,
-            snippet=r.get("description", ""),
+            snippet=r.get("description", "") or r.get("verification", ""),
             relevance=float(r["score"]) if r.get("score") is not None else None,
-            techniques=list(r.get("techniques") or []),
+            techniques=list(r.get("technique_class") or r.get("techniques") or []),
             metadata={k: v for k, v in metadata.items() if v not in (None, "", [], {})},
         ))
-    return format_evidence("rag", query, items)
+    return format_evidence("rag", query, items, retrieval)
 
 
 def format_web_evidence(query: str, items: List[Dict[str, Any]]) -> str:

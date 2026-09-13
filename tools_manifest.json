@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0.0",
-  "generated_at": "2026-09-12T11:15:04+00:00",
+  "generated_at": "2026-09-13T08:46:41+00:00",
   "source": "darwin.tools.manifest",
   "tool_count": 135,
   "tools": [
@@ -3472,7 +3472,7 @@
     {
       "name": "knowledge_search",
       "version": "1.0.0",
-      "description": "Research tool — search the knowledge base for known vulnerabilities, exploitation techniques, and configuration weaknesses for a specific technology, service version, or vulnerability type. Call this BEFORE running exploit tools to identify the correct approach. Example queries: 'SQL injection MariaDB', 'JWT token bypass', 'Flask SSTI exploitation'",
+      "description": "Research tool — search the knowledge base for transferable exploitation techniques that match the target fingerprint (service, version, vulnerability class) and its environment. Returns at most 3 gated candidates; an empty result means the corpus has no technique that fits this target environment, so proceed from reconnaissance instead of forcing a match. Example queries: 'SQL injection MariaDB encoding bypass', 'JWT claim validation bypass', 'cross-tenant predictable resource id'",
       "domains": [
         "research"
       ],
@@ -3482,9 +3482,14 @@
           "type": "string",
           "description": "Natural language query (e.g. 'IDOR in FastAPI')"
         },
-        "category": {
+        "domain": {
           "type": "string",
-          "description": "Optional filter: IDOR, SQLI, AUTH, RECON",
+          "description": "Optional domain hint: web, cloud, k8s, container, db, ad, network",
+          "default": ""
+        },
+        "environment": {
+          "type": "string",
+          "description": "Optional environment hint: public_cloud, private_cloud, hybrid, web_db",
           "default": ""
         }
       },

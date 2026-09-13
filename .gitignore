@@ -13,6 +13,9 @@ checkpoints/
 experiments_results/
 tools_open/
 
+# local model weights (RAG embedder / reranker)
+models/
+
 # secret
 config/
 

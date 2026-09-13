@@ -487,6 +487,8 @@ class ReconCoordinator(CoordinatorContext):
         from darwin.environment import classify_environment
         classification = classify_environment(discovered_ports, self.dkg)
         self._scan_classification = classification
+        from darwin.rag import set_environment
+        set_environment(classification.environment_scope)
         self.dkg.set_scope(
             engagement_id=getattr(self, "engagement_id", ""),
             target_scope=host,
@@ -945,6 +947,8 @@ class ReconCoordinator(CoordinatorContext):
                 # environment classification used by CTAGE.
                 classification = classify_environment(discovered_ports, self.dkg)
                 self._scan_classification = classification
+                from darwin.rag import set_environment
+                set_environment(classification.environment_scope)
                 self.dkg.update_node("environment-classification", {
                     "classification": classification.to_dict(),
                 })
