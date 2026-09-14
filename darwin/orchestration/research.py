@@ -466,6 +466,17 @@ class ResearchCoordinator(CoordinatorContext):
 
             _no_endpoint = 0
             _unknown_endpoint = 0
+            # Re-analysis of the same target restates the same hypotheses.
+            # Seed from the world model so a cycle neither re-stores what is
+            # already there nor keeps several copies inside one response
+            # (benchmark logs showed 3x duplicates of every hypothesis).
+            _seen_hypotheses: set[tuple[str, str, str]] = set()
+            for node in self.dkg.query_nodes("Vulnerability"):
+                _seen_hypotheses.add((
+                    str(node.get("vuln_type", "") or "").lower(),
+                    str(node.get("endpoint", "") or ""),
+                    str(node.get("parameter", "") or ""),
+                ))
             for v in vulns_json:
                 if not v.get("endpoint", ""):
                     _no_endpoint += 1
@@ -487,6 +498,14 @@ class ResearchCoordinator(CoordinatorContext):
                     suggested_tool=v.get("suggested_tool", ""),
                     tool_args=v.get("tool_args", {}) if isinstance(v.get("tool_args"), dict) else {},
                 )
+                _key = (vt.lower(), hypothesis.endpoint, hypothesis.param)
+                if _key in _seen_hypotheses:
+                    log.info(
+                        "ANALYZE: duplicate hypothesis %s on %s (param=%s) — merged",
+                        vt or "?", hypothesis.endpoint, hypothesis.param or "-",
+                    )
+                    continue
+                _seen_hypotheses.add(_key)
                 self.vulnerabilities.append(hypothesis)
 
                 # Record in DKG with LLM-suggested tool if provided
@@ -1007,6 +1026,23 @@ class ResearchCoordinator(CoordinatorContext):
             "searchsploit_search", "go_exploitdb_search", "curl_get",
             "ddg_web_search",  # Python DuckDuckGo web search
         }
+        # External web search costs tens of seconds per query and returns
+        # nothing when local knowledge already answers. Keep it for runs with
+        # real headroom so a long search cannot eat the exploit budget
+        # (cloud-30 spent ~90s of a 600s run on search that produced no task).
+        try:
+            _budget_left = float(self._remaining_budget())
+            _budget_total = float(getattr(self, "time_budget", 0) or 0)
+        except Exception as exc:
+            # No budget view wired (unit doubles): keep the previous behaviour.
+            log.debug("budget lookup failed: %s", exc)
+            _budget_left = _budget_total = 0.0
+        if _budget_total and _budget_left < 0.25 * _budget_total:
+            _local_research_tool_names.discard("ddg_web_search")
+            log.info(
+                "research: skipping external web search — %.0fs left of %.0fs",
+                _budget_left, _budget_total,
+            )
         for gw in [self.attack_gateway]:
             for td in gw.get_tool_definitions():
                 name = td.get("function", {}).get("name", "")

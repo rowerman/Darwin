@@ -31,6 +31,15 @@
 
 ## 相关模块
 
+## 修复分析去重与修枝保护
+
+- `_analyze_and_fix_task()` 按 `(task, tool, params)` 签名只分析一次：同样的失败
+  再次出现时直接判为不可修复（`None`），不再付一次 60–180s 的 LLM 轮次。
+  真实修复会改变签名，因此仍有分析机会。
+- `_cap_pending_tasks()` 修剪低质量任务时保护"某端点的唯一、尚未执行过的任务"，
+  避免剪掉 `ssrf_probe` / `command_injection_test` / `sqlmap_test` 后又被 plan
+  review 重建同一攻击面。
+
 `core/task.py`、`core/task_graph.py`、`core/schemas.py`、`cteg.py`、
 `ports.py`。
 

@@ -18,6 +18,13 @@
 
 `rag.py`、`cteg.py`、`core/schemas.py`、`ports.py`。
 
+## 假设去重
+
+`_analyze_phase` 落库前按 `(vuln_type, endpoint, param)` 去重，并从 DKG 既有的
+`Vulnerability` 节点播种已见集合：同一目标被重复分析（新端点/新服务触发）
+时不会把同一批假设再写一遍。benchmark 日志里同一假设曾以 3 份副本进入计划，
+research/planning/兜底探测都为每份付一次代价。
+
 `_augment_from_dkg()` 仅基于成功响应和真实输入参数生成假设；URL 获取型参数优先映射到 `ssrf_probe`。
 
 ## Analyze 端点的归一化与存在性校验

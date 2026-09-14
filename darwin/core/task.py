@@ -35,6 +35,26 @@ def deps_from_task_ids(task_ids: Iterable[Any]) -> list[dict]:
     return _deps_to_structured(task_ids)
 
 
+def realign_success_condition(condition: dict | None, tool: str) -> bool:
+    """Re-point a tool-pinned completion criterion at the tool that will run.
+
+    A tool is legitimately replaced by plan review, by a fix round, or by the
+    deterministic verb upgrade; the criterion pinned to the previous name then
+    becomes unsatisfiable and the task loops on
+    "expected command_injection_test to run, but ran: ssrf_probe" until the
+    budget ends. Returns True when the pin was rewritten.
+    """
+    if not isinstance(condition, dict) or not tool:
+        return False
+    if str(condition.get("type", "") or "").strip().lower() != "tool_success":
+        return False
+    pinned = str(condition.get("tool", "") or "").strip()
+    if not pinned or pinned == tool:
+        return False
+    condition["tool"] = tool
+    return True
+
+
 @dataclass
 class Task:
     """Typed plan task with decision provenance and execution semantics."""

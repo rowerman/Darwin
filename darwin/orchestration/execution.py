@@ -43,7 +43,7 @@ from darwin.core.schemas import (
     parse_research_findings,
     parse_service_research_findings,
 )
-from darwin.core.task import Task, deps_from_task_ids
+from darwin.core.task import Task, deps_from_task_ids, realign_success_condition
 from darwin.core.task_graph import TaskGraph, dependency_task_ids
 from darwin.tools.contracts import (
     HTTP_REQUEST_CAPABILITIES,
@@ -51,6 +51,11 @@ from darwin.tools.contracts import (
     http_tool_can_express,
     http_tools_for,
     request_body_kind,
+)
+from darwin.tools.arg_contract import project_args
+from darwin.response_evidence import (
+    detect_response_anomalies,
+    traversal_hypotheses,
 )
 from darwin.utils.urls import (
     IDENTIFIER_RE as _IDENTIFIER_RE,
@@ -577,32 +582,23 @@ class ExecutionCoordinator(CoordinatorContext):
     def _normalized_tool_args(
         self, tool: str, params: dict,
     ) -> tuple[dict, list[str]]:
-        """Gateway-normalized args plus the keys that were dropped.
+        """Project args onto the tool contract, plus the keys it cannot express.
 
-        Alias source keys (``body``→``data``) are not reported as dropped —
-        their value was applied to the canonical parameter.
+        Migrated keys (``body``→``data``) are not reported as dropped — their
+        value reached the canonical parameter. A tool registered nowhere has no
+        contract to project against, so its args pass through untouched.
         """
         raw = dict(params or {})
-        alias_keys: set[str] = set()
-        normalize = None
         for _gw in (self.attack_gateway, self.recon_gateway):
             try:
                 if tool not in _gw.get_tool_names():
                     continue
-                normalize = getattr(_gw, "normalize_params", None)
-                spec = _gw.get_tool_specs().get(tool)
-                if spec is not None:
-                    alias_keys = set(getattr(spec, "aliases", {}) or {})
-                break
+                projected, unmappable, _migrated, _dropped = _gw.project_params(tool, raw)
+                return projected, unmappable
             except Exception as exc:
-                log.debug("param normalization lookup failed for %s: %s", tool, exc)
-        try:
-            normalized = normalize(tool, raw) if callable(normalize) else dict(raw)
-        except Exception as exc:
-            log.debug("param normalization failed for %s: %s", tool, exc)
-            normalized = dict(raw)
-        dropped = [k for k in raw if k not in normalized and k not in alias_keys]
-        return normalized, dropped
+                log.debug("param normalization failed for %s: %s", tool, exc)
+                return raw, []
+        return raw, []
 
     def _route_identifiers(self, params: dict, extra_text: str = "") -> list[str]:
         """Scalar identifiers this task/target already observed.
@@ -730,6 +726,150 @@ class ExecutionCoordinator(CoordinatorContext):
             except Exception as exc:
                 log.debug("endpoint edge failed for %s: %s", url, exc)
         return _node_id
+
+    @staticmethod
+    def _negative_call_key(tool: str, params: dict) -> tuple[str, str]:
+        try:
+            fingerprint = json.dumps(params or {}, sort_keys=True, default=str)
+        except (TypeError, ValueError):
+            fingerprint = str(sorted((params or {}).items()))
+        return (tool, fingerprint)
+
+    @staticmethod
+    def _terminal_http_status(result: Any) -> int:
+        """HTTP status that proves the same request will fail again.
+
+        Only 404/405 qualify: the route or the verb is simply not there. A
+        connection error or a 500 may well answer differently after another
+        step, so those are deliberately not cached.
+        """
+        blob = f"{getattr(result, 'stdout', '') or ''} {getattr(result, 'stderr', '') or ''}"
+        for code in (404, 405):
+            if re.search(rf"(?:HTTP/\d(?:\.\d)?\s+|status[^0-9]{{0,3}}|code[^0-9]{{0,3}}|error[^0-9]{{0,3}})\b{code}\b", blob, re.IGNORECASE):
+                return code
+            if re.search(rf"\b{code}\s+(?:NOT FOUND|METHOD NOT ALLOWED)\b", blob, re.IGNORECASE):
+                return code
+        return 0
+
+    async def _execute_tool_call(
+        self, task: Task, tool: str, params: dict, call_id: str, instruction: str,
+    ) -> Any:
+        """Execute one tool call, replaying a cached deterministic failure.
+
+        The benchmark logs re-issued the same request three times, each
+        followed by a full repair round trip that could only restate "the
+        route does not exist". An identical call that already answered 404/405
+        cannot answer differently later in the same run.
+        """
+        if not hasattr(self, "_negative_cache"):
+            self._negative_cache: dict[tuple[str, str], int] = {}
+        key = self._negative_call_key(tool, params)
+        if key in self._negative_cache:
+            status = self._negative_cache[key]
+            self._redundant_calls = int(getattr(self, "_redundant_calls", 0)) + 1
+            url = str(params.get("url", params.get("target_url", "")) or "")
+            log.info(
+                "[DEDUP] %s on %s already answered HTTP %s — cached verdict replayed",
+                tool, url, status,
+            )
+            return ToolResult(
+                tool_name=tool, success=False, stdout="",
+                stderr=(f"[dedup] identical call answered HTTP {status} earlier "
+                        "in this run"),
+                exit_code=status, elapsed_ms=0.0,
+            )
+        result = await self.executor.execute(
+            Task(
+                id=task.id or call_id,
+                type=task.type,
+                goal=instruction,
+                instruction=instruction,
+                action={
+                    "tool": tool,
+                    "target": str(params.get("url", params.get("target_url", ""))),
+                    "params": dict(params),
+                },
+                status=TaskStatus.RUNNING,
+            )
+        )
+        status = self._terminal_http_status(result)
+        if status:
+            self._negative_cache[key] = status
+        return result
+
+    def _ingest_response_evidence(
+        self, tool: str, params: dict, result: Any,
+    ) -> list[dict]:
+        """Promote a response disclosure into grounded hypotheses.
+
+        Only what the target actually said counts: a server path the request
+        never contained (the resolution oracle a traversal needs) or another
+        subject's identifier.  Each promotion is recorded once per
+        ``(vuln_type, endpoint, param)`` so the same observation cannot inflate
+        the plan on every re-probe.
+        """
+        stdout = str(getattr(result, "stdout", "") or "")
+        if not stdout:
+            return []
+        endpoint = str(
+            (params or {}).get("url", (params or {}).get("target_url", "")) or ""
+        )
+        param = str((params or {}).get("param", "") or "")
+        anomalies = detect_response_anomalies(
+            tool=tool, params=dict(params or {}),
+            response_text=stdout, endpoint=endpoint, param=param,
+        )
+        if not anomalies:
+            return []
+        if not hasattr(self, "_evidence_hypotheses_seen"):
+            self._evidence_hypotheses_seen: set[tuple[str, str, str]] = set()
+
+        promoted: list[dict] = []
+        for anomaly in anomalies:
+            candidates = [{
+                "vuln_type": anomaly.vuln_type,
+                "endpoint": anomaly.endpoint,
+                "param": anomaly.param,
+                "confidence": anomaly.confidence,
+                "evidence": anomaly.evidence,
+                "suggested_tool": anomaly.suggested_tool,
+                "tool_args": dict(anomaly.tool_args or {}),
+                "source": "response_evidence",
+            }] + traversal_hypotheses(anomaly)
+            for item in candidates:
+                key = (
+                    str(item.get("vuln_type", "")),
+                    str(item.get("endpoint", "")),
+                    str(item.get("param", "")),
+                )
+                if not key[1] or key in self._evidence_hypotheses_seen:
+                    continue
+                self._evidence_hypotheses_seen.add(key)
+                promoted.append(item)
+                log.info(
+                    "[EVIDENCE] %s on %s (param=%s) — %s",
+                    anomaly.kind, key[1], key[2] or "-", anomaly.detail,
+                )
+                self.dkg.add_node(
+                    "Vulnerability",
+                    f"vuln-evidence-{hashlib.sha1('|'.join(key).encode()).hexdigest()[:10]}",
+                    {
+                        "vuln_type": key[0],
+                        "endpoint": key[1],
+                        "parameter": key[2],
+                        "severity": "unknown",
+                        "source": "response_evidence",
+                        "evidence": item.get("evidence", ""),
+                        "suggested_tool": item.get("suggested_tool", ""),
+                        "tool_args": item.get("tool_args", {}),
+                    },
+                    source="response_evidence",
+                    evidence=anomaly.evidence,
+                )
+        if promoted:
+            # New, grounded hypotheses are exactly what a plan review is for.
+            self._evidence_since_review = True
+        return promoted
 
     def _ingest_observed_routes(self, tool: str, params: dict, result: Any) -> None:
         """Turn a discovery tool's output into world state.
@@ -1807,21 +1947,8 @@ class ExecutionCoordinator(CoordinatorContext):
                 # only execution path. Post-processing below consumes
                 # the normalized ExecutionResult fields unchanged.
                 try:
-                    result = await self.executor.execute(
-                        Task(
-                            id=task.id or tc_id,
-                            type=task.type,
-                            goal=task_instruction,
-                            instruction=task_instruction,
-                            action={
-                                "tool": tc_name,
-                                "target": str(
-                                    tc_args.get("url", tc_args.get("target_url", ""))
-                                ),
-                                "params": dict(tc_args),
-                            },
-                            status=TaskStatus.RUNNING,
-                        )
+                    result = await self._execute_tool_call(
+                        task, tc_name, tc_args, tc_id, task_instruction,
                     )
                 except Exception as e:
                     result = CoreExecutionResult(
@@ -2078,6 +2205,7 @@ class ExecutionCoordinator(CoordinatorContext):
             self._executed_signatures.add((tc_name, _call_url.rstrip("/")))
             if tc_name in _ROUTE_DISCOVERY_TOOLS:
                 self._ingest_observed_routes(tc_name, tc_args, result)
+            self._ingest_response_evidence(tc_name, tc_args or {}, result)
             if _call_url.startswith(("http://", "https://")) and _call_status is not None:
                 self._record_route_probe(
                     _call_url, _call_method(tc_name, tc_args), _call_status,
@@ -2254,6 +2382,10 @@ class ExecutionCoordinator(CoordinatorContext):
                         **(task.action or {}),
                         "tool": _up_tool, "params": dict(_up_params),
                     }
+                    realign_success_condition(_condition, _up_tool)
+                    realign_success_condition(
+                        getattr(task, "success_condition", None), _up_tool,
+                    )
                     if _condition:
                         _up_met, _up_detail = await self._verify_success_condition(
                             _condition, _executed_calls, _any_success, False,
@@ -2402,6 +2534,12 @@ class ExecutionCoordinator(CoordinatorContext):
                         task.id, _task_tool, _fix_tool,
                     )
                     _task_tool = _fix_tool
+                    # The criterion may be pinned to the previous tool name;
+                    # left alone it can never be met again.
+                    realign_success_condition(_condition, _task_tool)
+                    realign_success_condition(
+                        getattr(task, "success_condition", None), _task_tool,
+                    )
                 else:
                     log.warning(
                         "task=%s: ignoring fix tool change %s → %s "
@@ -3285,6 +3423,11 @@ class ExecutionCoordinator(CoordinatorContext):
             self._tried_systematic: set[tuple] = set()
         tried = self._tried_systematic  # (tool, url, param) dedup, cross-cycle
         tested_count = 0
+        # Refusals are reported, not swallowed: "tested 0 combinations" used to
+        # read as "the target survived the sweep" when in fact no request was
+        # ever sent (cloud-29 printed exactly that three times).
+        unexpressible = 0
+        unregistered = 0
         MAX_TESTS = 20
         # Runtime capability snapshot: tools whose binary is missing on this
         # host can only fail with exit=127, so they are dropped from the
@@ -3504,7 +3647,9 @@ class ExecutionCoordinator(CoordinatorContext):
                         if _parsed.port:
                             args["port"] = _parsed.port
                     else:
-                        args = {"url": endpoint, "param": param} if param else {"url": endpoint}
+                        args = {"url": endpoint}
+                        if param:
+                            args["param"] = param
                 # Merge LLM-suggested args (method, body_format, etc.) as overrides
                 if tool_name == llm_tool and llm_args:
                     # Remove 'url' if LLM args provide host-based params (DB tools)
@@ -3527,46 +3672,33 @@ class ExecutionCoordinator(CoordinatorContext):
                 if session_cookies and "headers" not in args:
                     args["headers"] = f"Cookie: {session_cookies}"
 
-                # ── Schema-based tool compatibility check ─────────
-                # Verify that the args we constructed for this endpoint
-                # have at least one key matching the tool's declared
-                # parameters.  If zero overlap, try generic parameter
-                # name remapping before skipping.
+                # ── Project the call onto the tool contract ───────
+                # Same table the gateway uses, applied before dispatch: the
+                # endpoint's `param` is a domain fact, not a tool argument, so
+                # it belongs in the request only when the tool declares such a
+                # slot.  Keys the tool cannot express are reported and left out
+                # instead of being shipped and refused wholesale (which used to
+                # cost a fix-analysis round trip per call).
                 _tool_entry = (
                     self.attack_gateway._registry.get(tool_name)
                     or self.recon_gateway._registry.get(tool_name)
                 )
                 if _tool_entry is not None:
-                    _tool_params = set(_tool_entry.parameters.keys())
-                    _arg_keys = set(args.keys())
-                    if _tool_params and not (_tool_params & _arg_keys):
-                        # ── Generic parameter name remapping ──
-                        # Vulnerabilities store param names like 'url'/'param'/'endpoint',
-                        # but tools may expect 'ssrf_url'/'url_param'/'target_url'.
-                        # Remap based on common aliases — no hardcoded tool names.
-                        _REMAP_TABLE: dict[str, list[str]] = {
-                            "url":         ["ssrf_url", "target_url", "url"],
-                            "endpoint":    ["url", "ssrf_url", "target_url"],
-                            "param":       ["url_param", "param_name"],
-                            "target_url":  ["url", "ssrf_url"],
-                            "host":        ["target", "host"],
-                        }
-                        _remapped: dict[str, object] = {}
-                        for _arg_key, _arg_val in args.items():
-                            if _arg_key in _REMAP_TABLE:
-                                for _candidate in _REMAP_TABLE[_arg_key]:
-                                    if _candidate in _tool_params and _candidate not in _remapped:
-                                        _remapped[_candidate] = _arg_val
-                                        break
-                        if _remapped:
-                            args.update(_remapped)
-                            _arg_keys = set(args.keys())
-
-                    if _tool_params and not (_tool_params & _arg_keys):
+                    _declared = dict(_tool_entry.parameters or {})
+                    args, _unmappable, _migrated, _placeholder_dropped = project_args(
+                        _declared, args,
+                    )
+                    if _unmappable:
+                        unexpressible += 1
                         print(
-                            f"[systematic] skip {tool_name}: schema mismatch "
-                            f"(tool expects {sorted(_tool_params)}, "
-                            f"got {sorted(_arg_keys)})"
+                            f"[systematic] {tool_name} cannot express "
+                            f"{_unmappable} — testing the expressible part"
+                        )
+                    if _declared and not args:
+                        unregistered += 1
+                        print(
+                            f"[systematic] skip {tool_name}: no declared "
+                            f"parameter expressible (expects {sorted(_declared)})"
                         )
                         continue
 
@@ -3708,5 +3840,17 @@ class ExecutionCoordinator(CoordinatorContext):
             if auth_tested > 0:
                 print(f"[systematic] Auth crawl: tested {auth_tested} endpoints with session")
 
-        print(f"[systematic] Done: tested {tested_count} tool+endpoint combinations, no flag found")
+        if tested_count == 0 and (unexpressible or unregistered):
+            print(
+                f"[systematic] FAILED to test anything: {unregistered} call(s) "
+                f"skipped (tool cannot express the planned parameters), "
+                f"{unexpressible} ran with parameters the tool cannot carry — "
+                "this is a framework-side contract gap, not a clean target"
+            )
+        else:
+            print(
+                f"[systematic] Done: tested {tested_count} tool+endpoint "
+                f"combinations, no flag found"
+                + (f" ({unexpressible} with dropped parameters)" if unexpressible else "")
+            )
         return None

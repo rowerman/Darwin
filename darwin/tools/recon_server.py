@@ -1109,8 +1109,12 @@ def register_recon_tools(gateway: MCPGateway) -> MCPGateway:
             return ToolResult(tool_name="try_login", success=False, stdout="", stderr=str(e), exit_code=1, elapsed_ms=0)
 
     # ── IDOR header test tool ───────────────────────────────────
-    async def _idor_header_test(url: str, cookie: str = "", user_ids: str = "",
-                                 insecure: bool = False) -> ToolResult:
+    async def _idor_header_test(
+        url: str,
+        cookie: str = "",
+        user_ids: str = "10052,10032,10033,10053,0,1,2,3,10,100,1000,10000,50000",
+        insecure: bool = False,
+    ) -> ToolResult:
         """Test for IDOR via HTTP headers. Tries common IDOR headers
         (X-UserId, X-User-Id) with various user IDs. Returns all responses."""
         import urllib.request as _ur, re as _re2, ssl
@@ -1161,7 +1165,7 @@ def register_recon_tools(gateway: MCPGateway) -> MCPGateway:
         parameters={
             "url": {"type": "string", "description": "Target URL (e.g. dashboard endpoint)"},
             "cookie": {"type": "string", "description": "Session cookie from try_login"},
-            "user_ids": {"type": "string", "description": "Comma-separated user IDs to try (default: 0,1,2,3,10032,10033)"},
+            "user_ids": {"type": "string", "description": "Comma-separated user IDs to try (default: the standard ID set; an empty value also uses that set, so the sweep is never a no-op)"},
             "insecure": {"type": "boolean", "description": "Skip TLS verification for self-signed certs"},
         },
     )

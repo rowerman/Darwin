@@ -107,6 +107,20 @@ class Runtime:
         return fallback
 
     @staticmethod
+    def _world_signature(state: WorldState) -> tuple:
+        """Cheap fingerprint of what the run has learned so far.
+
+        Only growth matters here: unchanged counts mean a stall replan has
+        nothing new to plan against.
+        """
+        return (
+            len(getattr(state, "endpoints", []) or []),
+            len(getattr(state, "services", []) or []),
+            len(getattr(state, "credentials", []) or []),
+            len(getattr(state, "vulnerabilities", []) or []),
+        )
+
+    @staticmethod
     def _scheduler_world(state: WorldState) -> dict:
         topology = getattr(state, "topology", None)
         paths = getattr(topology, "attack_paths", []) if topology is not None else []
@@ -139,6 +153,11 @@ class Runtime:
         graph: TaskGraph | None = None
         started = time.monotonic()
         stall_tried = False
+        # A stall replan is only worth its cost when the world moved since the
+        # previous stall; otherwise the loop re-asks the same question and
+        # banks a second empty plan (benchmark logs: repeated
+        # "0 iterations, 1 replans (plan_exhausted)").
+        stall_signature: tuple = ()
         max_replans = 3
         current_state = self._current_state(state)
         replans_capped = False
@@ -158,10 +177,17 @@ class Runtime:
                 # Preserve compatibility with injected legacy schedulers.
                 task = self.scheduler.next_ready(graph, budget)
             if task is None:
-                if replans_capped or outcome.replan_count >= max_replans or stall_tried:
+                current_signature = self._world_signature(current_state)
+                if (
+                    replans_capped
+                    or outcome.replan_count >= max_replans
+                    or stall_tried
+                    or current_signature == stall_signature
+                ):
                     outcome.stopped_reason = "plan_exhausted"
                     break
                 stall_tried = True
+                stall_signature = current_signature
                 current_state = self._current_state(current_state)
                 graph = await self.planner.replan(
                     current_state, graph, _STALL_EVALUATION, self.memory

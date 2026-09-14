@@ -53,6 +53,31 @@ upload 等）自动合成 `http_status_in([200,201,202,204])`——工具退出 
 `normalize_success_condition()`），不会静默退化成"工具成功"。
 任务日志记录 `success_condition` 事件（condition/met/detail）。
 
+工具被合法替换时（fix 换工具、确定性动词升级、plan review 回退写任务），
+`core/task.realign_success_condition()` 会把 `tool_success` 条件里钉住的旧
+工具名改成实际执行的新工具名。否则条件永远无法达成，任务会一直循环在
+"expected X to run, but ran: Y"上直到预算耗尽。
+
+## 响应证据摄入（`_ingest_response_evidence`）
+
+## 重复调用缓存（`_execute_tool_call`）
+
+以 `(tool, args)` 指纹缓存**路由级终态失败**（仅 HTTP 404/405）：同一请求在同一
+次运行内再次出现时直接复用判定，不再发网络请求，命中记入 `_redundant_calls`
+并打印 `[DEDUP]`。连接错误与 500 不入缓存——它们可能因后续步骤改变。
+
+## 兜底通道的完成口径
+
+系统性兜底统计 tested / unexpressible / skipped：当 `tested == 0` 而存在跳过
+时打印"框架侧契约缺口，不是目标干净"，不再用一个 "Done" 掩盖零请求
+（cloud-29 曾三次打印 `tested 0 ... no flag found`）。
+
+每次工具调用后运行 `darwin/response_evidence.py`：响应里出现请求未提供过的
+绝对服务器路径（路径预言机）或另一主体标识时，把它写成带证据的 DKG
+`Vulnerability` 节点（`source=response_evidence`），路径预言机还会展开成具体
+遍历 payload 的后续假设，并置位 `_evidence_since_review` 触发 plan review。
+同一 `(vuln_type, endpoint, param)` 只提升一次，重复探测不会放大计划。
+
 ## 身份传播探测
 
 `_probe_identity_propagation()`：当某次读取被 401/403 拒绝，且目标自身在
@@ -113,3 +138,8 @@ planner 直接使用；命中 flag 走既有 DAVE 校验。
   cloud 的 `registry` 条目前，避免被容器 registry 助手截胡。
 - 未映射类型回退到 `_FALLBACK_HTTP_TOOLS`（首个是 `http_method_probe`），
   保证“写类但标签不正确”的假设仍有可表达写动词的工具可用。
+- 每个候选工具的调用参数在分发前经 `tools/arg_contract.project_args()` 投影：
+  漏洞的 `param` 是目标属性而非工具参数，只有该工具声明了对应槽位时才进入
+  请求；工具无法表达的键会打印说明并留在请求之外，而不是原样发出去被网关
+  整调用拒绝（旧行为：每次调用白烧一轮 fix 分析，系统性兜底统计为
+  "tested 0 combinations"）。

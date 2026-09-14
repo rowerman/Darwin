@@ -857,7 +857,7 @@ class ReconCoordinator(CoordinatorContext):
                     parse_sample += stdout[-10000:]
                 try:
                     parse_result = await self._call_tool("response_parse",
-                        {"content": parse_sample})
+                        {"data": parse_sample})
                     if parse_result.success:
                         parsed = getattr(parse_result, "parsed_output", {})
                         forms = parsed.get("forms", [])
@@ -1619,7 +1619,7 @@ class ReconCoordinator(CoordinatorContext):
                             })
                             if 0 < len(out) < 100000:
                                 rp = await self._call_tool("response_parse",
-                                    {"content": out[:50000]})
+                                    {"data": out[:50000]})
                                 if rp.success:
                                     parsed = getattr(rp, "parsed_output", {})
                                     if isinstance(parsed.get("forms"), list):

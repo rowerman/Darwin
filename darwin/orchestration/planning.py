@@ -121,7 +121,7 @@ from darwin.orchestration.execution import (
     _call_method,
     _planned_write_intent,
 )
-from darwin.core.task import Task, deps_from_task_ids
+from darwin.core.task import Task, deps_from_task_ids, realign_success_condition
 from darwin.core.task_graph import TaskGraph, dependency_task_ids
 from darwin.core.belief import (
     node_ids_by_type,
@@ -1056,7 +1056,7 @@ class PlanCoordinator(CoordinatorContext):
                 timeout = _llm_timeout(120.0)
             log.info(
                 "Structured generation stage=%s attempt=%d/%d timeout=%.0fs "
-                "(no registry tools exposed)",
+                "(compact tool-contract card in prompt)",
                 stage, attempt, max_attempts, timeout,
             )
             try:
@@ -2396,6 +2396,25 @@ Output ONLY valid JSON array (3-20 tasks depending on complexity. More tasks != 
         _action = task.action or {}
         tool = str(_action.get("tool", "") or "")
         params = _action.get("params", {}) or {}
+        # The same failing call cannot be repaired twice by asking again: the
+        # benchmark logs show one task analysed three times with an identical
+        # verdict, each round costing a 60-180s LLM call. Analyse each
+        # (task, tool, params) signature once; a real repair changes the
+        # signature and gets its own analysis.
+        try:
+            _signature = (task.id, tool, json.dumps(params, sort_keys=True, default=str))
+        except (TypeError, ValueError):
+            _signature = (task.id, tool, str(params))
+        if not hasattr(self, "_fix_signatures"):
+            self._fix_signatures: dict[tuple, int] = {}
+        if int(self._fix_signatures.get(_signature, 0)) >= 1:
+            log.warning(
+                "task=%s: identical failure on %s already analysed — "
+                "treating as not fixable",
+                task.id, tool or "?",
+            )
+            return None
+        self._fix_signatures[_signature] = int(self._fix_signatures.get(_signature, 0)) + 1
         params_str = json.dumps(params)
         output_trunc = output[:1500]
 
@@ -2885,13 +2904,38 @@ the current tool cannot express the required request)", "corrected_params":
             )
 
         _pending.sort(key=_quality_key)
-        _to_remove = set(t.id for t in _pending[_keep_pending:])
-        trimmed = _pending[:_keep_pending]
+        # A plan review used to trim the only pending task for an endpoint and
+        # then re-generate an equivalent one, so the same surface was never
+        # actually tested (benchmark logs: ssrf_probe / command_injection_test /
+        # sqlmap_test trimmed, then rebuilt). Keep one task per endpoint.
+        _endpoint_counts: dict[str, int] = {}
+        for _task in _pending:
+            _url = _task_url(_task)
+            if _url:
+                _endpoint_counts[_url] = _endpoint_counts.get(_url, 0) + 1
+        _kept_endpoints: set[str] = set()
+        _protected: list[Task] = []
+        _trimmable: list[Task] = []
+        for _task in _pending:
+            _url = _task_url(_task)
+            if (
+                _url
+                and _endpoint_counts.get(_url, 0) <= 1
+                and _url not in _kept_endpoints
+                and not _repeats_executed(_task)
+            ):
+                _kept_endpoints.add(_url)
+                _protected.append(_task)
+            else:
+                _trimmable.append(_task)
+        _keep_extra = max(0, _keep_pending - len(_protected))
+        _trim_targets = _trimmable[_keep_extra:]
+        _to_remove = set(t.id for t in _trim_targets)
         _removed_count = len(_to_remove)
 
         if _removed_count > 0:
             _removed_tools = [
-                (t.action or {}).get("tool", "?") for t in _pending[_keep_pending:]
+                (t.action or {}).get("tool", "?") for t in _trim_targets
             ]
             print(f"\n[PLAN-CAP] Trimmed {_removed_count} low-quality pending task(s): {_removed_tools}")
 
@@ -2938,6 +2982,9 @@ the current tool cannot express the required request)", "corrected_params":
                 "tool": orig_tool,
                 "params": dict(orig_params),
             }
+            realign_success_condition(
+                getattr(task, "success_condition", None), orig_tool,
+            )
             reverted.append(task.id)
         return reverted
 

@@ -74,3 +74,12 @@ STS/SAML/云控制面等）。
 ## 维护提示
 
 新增工具要补注册参数、`darwin/tools/contracts.py` 中的域/capability 分类、manifest 和相关 parser 测试。
+
+## 参数契约
+
+- `response_parse(data, content_type)`：原始响应体走 `data`。bootstrap 与
+  deep recon 的表单/路由抽取都调用它，历史上曾以 `content` 调用而被网关拒绝，
+  使表单参数抽取静默失效；现由 `tools/arg_contract.project_args` 统一投影。
+- `idor_header_test(url, cookie, user_ids)`：默认 `user_ids` 是标准 ID 集合，
+  空值同样回落到该集合——默认值不能产生"测试 0 组组合"的空跑结果，
+  那种结果会被任务记为"已执行但失败"，白烧一轮修复分析。

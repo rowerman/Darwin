@@ -11,7 +11,16 @@ Executor 与所有外部工具之间的唯一执行边界。
 ## 关键入口
 
 - `MCPGateway`：注册、查找、调用和工具定义生成。
-- `ToolResult`：成功、输出、退出码和解析结果。
+- `ToolResult`：成功、输出、退出码和解析结果，另含 `params_repaired`（值被
+  重定向到规范参数）与 `params_dropped`（占位符键被丢弃）。
+- `project_params(name, params)`：完整投影报告，供需要解释一次调用的调用方使用。
+- `normalize_params(name, params)`：投影后的参数预览。
+
+参数名规则集中在 `tools/arg_contract.py`，生产端与网关共用：显式别名迁移，
+删除子串模糊匹配。网关仍然**拒绝**"迁移后仍有值且该工具无法表达"的调用
+（`exit_code=2`），但拒绝信息里会带上该工具的声明参数，以及能表达该意图的
+替代工具（同 capability 优先），使修复循环可据此改参数或换工具，而不是重复
+提交同样的键名。
 
 `register_shell_argv_tool()` 默认使用无 shell 的 argv 执行；为保持跨平台
 契约，显式的 Windows `cmd /c {cmdline}` 模板在 POSIX 环境等价转为

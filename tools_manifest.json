@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0.0",
-  "generated_at": "2026-09-13T08:46:41+00:00",
+  "generated_at": "2026-09-14T11:43:54+00:00",
   "source": "darwin.tools.manifest",
   "tool_count": 135,
   "tools": [
@@ -2469,8 +2469,8 @@
         },
         "user_ids": {
           "type": "string",
-          "description": "Comma-separated user IDs to try (default: 0,1,2,3,10032,10033)",
-          "default": ""
+          "description": "Comma-separated user IDs to try (default: the standard ID set; an empty value also uses that set, so the sweep is never a no-op)",
+          "default": "10052,10032,10033,10053,0,1,2,3,10,100,1000,10000,50000"
         },
         "insecure": {
           "type": "boolean",
@@ -5426,7 +5426,7 @@
       "parameters": {
         "urls": {
           "type": "string",
-          "description": "Comma-separated target URLs (or single URL — will be duplicated for concurrent requests)"
+          "description": "Target URLs: a comma-separated string or a JSON array of URLs (a single URL is duplicated for concurrent requests)"
         },
         "method": {
           "type": "string",

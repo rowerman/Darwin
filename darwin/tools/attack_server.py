@@ -24,6 +24,38 @@ from darwin.tools.paths import resolve_wordlist, tool_path_env
 from darwin.tools.spec import EXECUTOR_SHELL, auto_spec
 
 
+def resolve_fuzz_wordlist(requested: str) -> str:
+    """Resolve an ffuf wordlist, falling back to the bundled default list.
+
+    A hallucinated path such as ``seclists/Discovery/Web-Content/api/
+    api-endpoints.txt`` makes ffuf abort before sending a single request; the
+    task is then banked as "no paths found", which reads as a negative verdict
+    on the target rather than on the argument.
+    """
+    resolved = resolve_wordlist(requested)
+    if resolved:
+        return resolved
+    fallback = resolve_wordlist("common.txt") or "common.txt"
+    if requested:
+        log.warning(
+            "ffuf wordlist '%s' does not exist on this host — using '%s'",
+            requested, fallback,
+        )
+    return fallback
+
+
+def normalize_parallel_urls(urls: str | list) -> list[str]:
+    """Accept a comma-separated string or a JSON array of target URLs.
+
+    The planner sends an array for multi-URL race tests; the string form is
+    what the tool used to assume, so a list crashed on ``urls.split`` before a
+    single request went out.
+    """
+    if isinstance(urls, (list, tuple)):
+        return [str(u).strip() for u in urls if str(u).strip()]
+    return [u.strip() for u in str(urls or "").split(",") if u.strip()]
+
+
 def _parse_ffuf_output(stdout: str) -> Dict[str, Any]:
     """Parse ffuf result lines into discovered paths.
 
@@ -299,7 +331,7 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
 
     # ── Parallel / Race Condition Tool ────────────────────────────
     async def parallel_request(
-        urls: str, method: str = "PUT", body: str = "",
+        urls: str | list, method: str = "PUT", body: str = "",
         concurrency: int = 10, delay_ms: int = 0,
     ) -> ToolResult:
         """Send concurrent HTTP requests for race condition exploitation.
@@ -316,7 +348,7 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
         ctx.check_hostname = False
         ctx.verify_mode = ssl.CERT_NONE
 
-        url_list = [u.strip() for u in urls.split(",") if u.strip()]
+        url_list = normalize_parallel_urls(urls)
         if not url_list:
             elapsed = (time.perf_counter() - start) * 1000
             return ToolResult(
@@ -357,12 +389,11 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
             async with sem:
                 return await _send_one(u, idx)
 
+        # Fewer URLs than the requested concurrency duplicates the URL list so
+        # the race is still real; building the list twice left the first batch
+        # of coroutines un-awaited ("coroutine was never awaited").
         tasks = [_with_sem(url_list[i % len(url_list)], i)
                  for i in range(max(len(url_list), concurrency))]
-        # Duplicate if fewer URLs than concurrency (for race condition)
-        if len(url_list) < concurrency:
-            tasks = [_with_sem(url_list[i % len(url_list)], i)
-                     for i in range(concurrency)]
 
         batch_results = await asyncio.gather(*tasks, return_exceptions=True)
         for r in batch_results:
@@ -403,7 +434,7 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
         func=parallel_request,
         description="Send concurrent/parallel HTTP requests for race condition exploitation. Useful for: Tomcat race condition (WEB-02, CVE-2024-50379 — PUT JSP while racing compilation), TOCTOU attacks, file upload races, and any time-of-check-time-of-use vulnerability. Sends multiple identical requests with controllable concurrency and timing stagger.",
         parameters={
-            "urls": {"type": "string", "description": "Comma-separated target URLs (or single URL — will be duplicated for concurrent requests)"},
+            "urls": {"type": "string", "description": "Target URLs: a comma-separated string or a JSON array of URLs (a single URL is duplicated for concurrent requests)"},
             "method": {"type": "string", "description": "HTTP method: PUT, POST, GET (default: PUT)"},
             "body": {"type": "string", "description": "Request body content for PUT/POST requests"},
             "concurrency": {"type": "integer", "description": "Number of concurrent requests (default: 10, max: 20)"},
@@ -417,8 +448,9 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
         # no placeholder is present — complete the URL instead so a planned
         # "fuzz this host" task actually enumerates paths.
         params["url"] = normalize_fuzz_url(str(params.get("url", "") or ""))
-        resolved = resolve_wordlist(str(params.get("wordlist", "") or ""))
-        params["wordlist"] = resolved or str(params.get("wordlist", "") or "")
+        params["wordlist"] = resolve_fuzz_wordlist(
+            str(params.get("wordlist", "") or "")
+        )
         return params
 
     _ffuf_desc = (

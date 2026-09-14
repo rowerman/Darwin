@@ -17,6 +17,7 @@ from darwin.core.schemas import (
     AnalyzeOutputV1,
     AnalyzeVulnV1,
     extract_json_value,
+    infer_vuln_type,
 )
 
 log = logging.getLogger(__name__)
@@ -55,54 +56,6 @@ def render_tool_contract_card(
     if not lines:
         return "(no tool contracts available)"
     return "\n".join(lines)
-
-
-# Keyword -> canonical vuln_type inference for report-style LLM output.
-_VULN_TYPE_KEYWORDS: list[tuple[str, str]] = [
-    ("sql injection", "SQLi"),
-    ("sqli", "SQLi"),
-    ("injection", "CMDi"),
-    ("command", "CMDi"),
-    ("rce", "CMDi"),
-    ("xss", "XSS"),
-    ("ssti", "SSTI"),
-    ("lfi", "LFI"),
-    ("path traversal", "LFI"),
-    ("file disclosure", "LFI"),
-    ("ssrf", "SSRF"),
-    ("xxe", "XXE"),
-    ("idor", "IDOR"),
-    ("bola", "IDOR"),
-    ("object level authorization", "IDOR"),
-    ("authorization", "IDOR"),
-    ("broken access", "IDOR"),
-    ("cross-tenant", "IDOR"),
-    ("tenant", "IDOR"),
-    ("jwt", "AUTH"),
-    ("signature bypass", "AUTH"),
-    ("authentication", "AUTH"),
-    ("auth bypass", "AUTH"),
-    ("unauthenticated", "AUTH"),
-    ("weak auth", "WeakAuth"),
-    ("weak credentials", "WeakAuth"),
-    ("default credential", "WeakAuth"),
-    ("csrf", "CSRF"),
-    ("file upload", "FileUpload"),
-    ("deserialization", "Deserialization"),
-    ("pickle", "Deserialization"),
-    ("open bucket", "PlatformDiscovery"),
-    ("metadata", "PlatformDiscovery"),
-    ("disclosure", "InformationDisclosure"),
-    ("information", "InformationDisclosure"),
-]
-
-
-def _infer_vuln_type(text: str) -> str:
-    t = (text or "").lower()
-    for keyword, vt in _VULN_TYPE_KEYWORDS:
-        if keyword in t:
-            return vt
-    return "generic"
 
 
 def _absolute_endpoint(endpoint: str, base_url: str) -> str:
@@ -237,7 +190,7 @@ def normalize_analyze_output_lenient(
         confidence = max(0.0, min(1.0, confidence))
         normalized.append(
             AnalyzeVulnV1(
-                vuln_type=str(item.get("vuln_type", "") or "") or _infer_vuln_type(name_blob),
+                vuln_type=str(item.get("vuln_type", "") or "") or infer_vuln_type(name_blob),
                 endpoint=ep_abs,
                 param=_endpoint_param(item),
                 confidence=confidence,

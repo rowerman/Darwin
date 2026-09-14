@@ -82,7 +82,15 @@ async def main():
     )
     print("Starting penetration test ...\n")
 
+    _sigterm_reported = False
+
     def _on_sigterm():
+        # A second SIGTERM must not print a second summary: the benchmark logs
+        # show the block emitted twice for one termination.
+        nonlocal _sigterm_reported
+        if _sigterm_reported:
+            return
+        _sigterm_reported = True
         print(
             "[RUN] SIGTERM received — emitting partial result summary",
             flush=True,

@@ -23,6 +23,6 @@ LLM 会按语义发送 dict/list（`headers={"X-Api-Key": "k"}`、
 
 ## 约束
 
-- 不做参数名映射（别名由 `mcp_gateway._normalize_params()` 与
-  `tools/contracts.py` 负责），只做**值形状**归一化。
+- 不做参数名映射（参数名契约由 `tools/arg_contract.py` 统一提供，网关与
+  生产端共用其投影函数），只做**值形状**归一化。
 - 未知形状按字符串处理，不得抛出异常：工具层必须永远比 LLM 宽容。

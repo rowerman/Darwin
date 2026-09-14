@@ -33,6 +33,13 @@ v2 控制面的唯一执行循环：消费计划、调度 Task、执行、评估
 
 ## 维护提示
 
+## 停滞重排退避
+
+`run()` 在 `next_ready()` 返回空、准备触发一次 stall replan 之前，会比较
+`_world_signature()`（endpoints/services/credentials/vulnerabilities 计数）。
+指纹没有变化说明这次重排没有任何新信息可依据，直接以 `plan_exhausted` 收敛，
+不产生 "0 iterations, 1 replans" 这类空转（benchmark 日志里连续出现四次）。
+
 这是唯一执行路径；状态、预算、失败分类和部分成功提取必须保持一致。拓扑状态必须在 execute 后通过 state provider 刷新，避免 replan 使用过期图快照。
 
 plan-review/replan 的拓扑 diff 只在存在任务级基线（`_topology_before`）时注入；stall/plan-exhausted 等无基线路径会省略该区块，避免把整个图误报为新增。

@@ -214,11 +214,11 @@ class TestNormalizeParamsAnonymous:
         assert result["password"] == "realpw"
 
 
-class TestNormalizeParamsSubstringFuzzy:
-    """Phase 3: substring fuzzy matching."""
+class TestNormalizeParamsExplicitMigration:
+    """Every rename comes from the explicit table, never from substring luck."""
 
-    def test_direction1_declared_param_is_substring_of_provided(self):
-        """declared 'url' ⊂ provided 'target_url' → match."""
+    def test_target_url_migrates_to_declared_url(self):
+        """Explicit pair: a tool declaring 'url' accepts 'target_url'."""
         gw = MCPGateway()
         gw.register(
             name="curl_get",
@@ -233,12 +233,8 @@ class TestNormalizeParamsSubstringFuzzy:
         )
         assert result == {"url": "http://example.com"}
 
-    def test_direction2_provided_is_substring_of_declared(self):
-        """provided 'url' ⊂ declared 'target_url' → match (3 ≥ 3 and 3 ≥ 40%×10=4? No, 3<4).
-        Wait — 3 < 4 so it won't match via substring. Let me check...
-        Actually 'url' is 3 chars, 'target_url' is 10. 40% of 10 = 4. 3 < 4 → fails threshold.
-        BUT this case is covered by the explicit alias 'url'→'target_url' in Phase 1,
-        so it's fine. Let me test a case that DOES pass the threshold."""
+    def test_declared_service_name_accepts_service(self):
+        """Explicit pair: 'service' means the same slot as 'service_name'."""
         gw = MCPGateway()
         gw.register(
             name="test_tool",
@@ -246,7 +242,6 @@ class TestNormalizeParamsSubstringFuzzy:
             description="test",
             parameters={"service_name": {"type": "string"}},
         )
-        # 'service' is 7 chars, 'service_name' is 12. 40% × 12 = 4.8. 7 ≥ 4.8 → match
         result = gw._normalize_params(
             "test_tool",
             {"service": "http"},
@@ -254,8 +249,8 @@ class TestNormalizeParamsSubstringFuzzy:
         )
         assert result == {"service_name": "http"}
 
-    def test_ambiguous_substring_no_match(self):
-        """When multiple candidates exist, no match — avoids guessing wrong."""
+    def test_unlisted_name_is_never_guessed(self):
+        """An unknown name stays unknown instead of being substring-matched."""
         gw = MCPGateway()
         gw.register(
             name="test_tool",
@@ -265,36 +260,30 @@ class TestNormalizeParamsSubstringFuzzy:
         )
         result = gw._normalize_params(
             "test_tool",
-            {"base_url": "x", "target_url": "y"},
+            {"url_base": "x"},
             gw._registry["test_tool"],
         )
-        # Both 'base_url' and 'target_url' contain 'url' → ambiguous → no match
-        assert "url" not in result
+        # 'url_base' shares no explicit pair with any declared parameter.
+        assert result == {}
 
-    def test_complex_cascade_phase1_then_phase3(self):
-        """Ensure Phase 1 aliases don't interfere with Phase 3 matching."""
+    def test_content_migrates_to_data_not_content_type(self):
+        """'content' means the body; the content-type hint is a different slot."""
         gw = MCPGateway()
         gw.register(
             name="test_tool",
-            func=lambda url, param: ToolResult("x", True, "", "", 0, 0),
+            func=lambda data, content_type="auto": ToolResult("x", True, "", "", 0, 0),
             description="test",
             parameters={
-                "url": {"type": "string"},
-                "param": {"type": "string"},
+                "data": {"type": "string"},
+                "content_type": {"type": "string", "default": "auto"},
             },
         )
-        # 'ssrf_url' → 'target_url' alias tries to map to 'target_url' but tool
-        # doesn't have 'target_url'. However 'ssrf_url' contains 'url' (declared),
-        # so Phase 3 Direction 1 should match: declared 'url' ⊂ provided 'ssrf_url'
         result = gw._normalize_params(
             "test_tool",
-            {"ssrf_url": "http://x.com", "param": "id"},
+            {"content": "<html>body</html>"},
             gw._registry["test_tool"],
         )
-        # Phase 1: alias 'ssrf_url'→'target_url' — but 'target_url' NOT in schema → skip
-        # Phase 3: declared 'url' is substring of provided 'ssrf_url' → match!
-        assert result["url"] == "http://x.com"
-        assert result["param"] == "id"
+        assert result == {"data": "<html>body</html>"}
 
 
 class TestNormalizeParamsDropExtras:

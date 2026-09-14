@@ -354,6 +354,14 @@ class DKG:
                 props.setdefault(
                     "provenance_level", endpoint_provenance_level(props),
                 )
+                if is_new:
+                    # The same route arrives from bootstrap probing, form
+                    # extraction and fuzzer ingest with different ids; without
+                    # this the world model lists it several times and every
+                    # copy is planned against separately.
+                    _same_route = self._endpoint_id_for(props)
+                    if _same_route:
+                        node_id, is_new = _same_route, False
             if source or evidence or timestamp:
                 provenance: Dict[str, str] = {}
                 if source:
@@ -378,6 +386,22 @@ class DKG:
             self._persist()
 
         return node_id
+
+    def _endpoint_id_for(self, props: Dict[str, Any]) -> str:
+        """Existing Endpoint node id for the same (method, url) route."""
+        url = str(props.get("url", "") or "").rstrip("/")
+        if not url:
+            return ""
+        method = str(props.get("method", "") or "GET").upper()
+        for other, data in self.graph.nodes(data=True):
+            if data.get("type") != "Endpoint":
+                continue
+            if str(data.get("url", "") or "").rstrip("/") != url:
+                continue
+            if str(data.get("method", "") or "GET").upper() != method:
+                continue
+            return str(other)
+        return ""
 
     @staticmethod
     def _normalize_properties(

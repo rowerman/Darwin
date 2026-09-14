@@ -17,9 +17,14 @@ equivalent:
 
 from __future__ import annotations
 
+import logging
+
 from darwin.core.contracts import TaskStatus
 from darwin.core.task import Task
 from darwin.core.task_graph import TaskGraph, dependency_task_ids
+from darwin.tools.arg_contract import unresolved_placeholders
+
+log = logging.getLogger(__name__)
 
 
 _EXPLOIT_PRIORITY = {
@@ -121,6 +126,23 @@ class ParityScheduler:
                     task.status = TaskStatus.ABANDONED
                 continue
             if deps_met:
+                _params = dict((task.action or {}).get("params", {}) or {})
+                _pending = unresolved_placeholders(_params)
+                if _pending:
+                    # The plan was written before the producer ran, so the
+                    # request still carries e.g. "<function-invoke-route>".
+                    # Sending a literal placeholder can only produce a 404 and
+                    # a repair round trip; abandon and let replan rewrite it.
+                    log.info(
+                        "scheduler: abandoning task %s — unresolved "
+                        "placeholder in %s",
+                        task.id, sorted(_pending),
+                    )
+                    try:
+                        graph.transition(task.id, TaskStatus.ABANDONED)
+                    except ValueError:
+                        task.status = TaskStatus.ABANDONED
+                    continue
                 tool = str((task.action or {}).get("tool", "") or "")
                 if (
                     task.source == "credential-hint"

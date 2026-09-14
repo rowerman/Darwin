@@ -32,6 +32,7 @@ from darwin.tools.spec import (
     shlex_split_value,
 )
 from darwin.tools.paths import tool_path_env
+from darwin.tools.arg_contract import PARAM_ALIASES, project_args
 
 log = logging.getLogger(__name__)
 
@@ -55,45 +56,13 @@ def _pipeline_returncode(returncode: int | None, stdout: str) -> int:
     return rc
 
 
-# ── Semantic parameter alias table ────────────────────────────────────
-# Maps LLM-preferred parameter names to tool-declared canonical names.
-# Aliases are DIRECTIONAL: "alias": "canonical" means "if LLM provides
-# 'alias' but the tool expects 'canonical', remap it."
-# An alias is ONLY applied when the canonical name exists in the tool's
-# declared parameter schema, preventing false matches (e.g. command→query
-# on ssh_exec, which legitimately expects 'command').
+# ── Semantic parameter aliases ────────────────────────────────────────
+# The shared table lives in :mod:`darwin.tools.arg_contract` so producers
+# bind and the gateway projects through the same rules.  ``_PARAM_ALIASES``
+# mirrors it for callers that only need the name pairs.
 _PARAM_ALIASES: Dict[str, list[str]] = {
-    # URL / target concept — 4 LLM names for the same thing.
-    # Each alias maps to a PRIORITY-ORDERED list — first canonical
-    # that exists in the tool's declared parameters wins.
-    "url":        ["target_url", "file_path"],
-    "ssrf_url":   ["target_url"],
-    "endpoint":   ["target_url"],
-
-    # Host / target concept
-    "host":       ["target"],
-    "server":     ["host"],
-    "hostname":   ["host"],
-    "dc_ip":      ["target"],
-
-    # Username concept
-    "username":   ["user"],
-    "login":      ["user"],
-
-    # Password concept
-    "pass":       ["password"],
-    "passwd":     ["password"],
-    "pwd":        ["password"],
-
-    # Request body / data
-    "body":       ["data"],
-    "post_data":  ["data"],
-    "json_body":  ["data"],
+    alias: list(targets) for alias, targets in PARAM_ALIASES.items()
 }
-
-# Substring auto-correction thresholds
-_SUBSTRING_MIN_LEN = 3         # minimum chars for a substring to match
-_SUBSTRING_MIN_RATIO = 0.4     # minimum ratio of substring / declared-param length
 
 
 async def _kill_and_reap(proc: asyncio.subprocess.Process) -> None:
@@ -122,10 +91,13 @@ class ToolResult:
     elapsed_ms: float
     parsed_output: Dict[str, Any] = field(default_factory=dict)
     #: Parameter keys the gateway redirected to a declared parameter before
-    #: dispatch (alias / substring correction). A non-empty list means the
+    #: dispatch (explicit alias migration). A non-empty list means the
     #: call did not receive the exact arguments the caller planned, so a
     #: negative verdict drawn from it is not trustworthy evidence.
     params_repaired: List[str] = field(default_factory=list)
+    #: Parameter keys dropped before dispatch because their value carried no
+    #: intent (empty string, ``<tenant>`` leftover, empty container).
+    params_dropped: List[str] = field(default_factory=list)
 
 
 class MCPGateway:
@@ -505,117 +477,103 @@ class MCPGateway:
 
     def _normalize_params_report(
         self, name: str, params: Dict[str, Any], entry: "_ToolEntry",
-    ) -> tuple[Dict[str, Any], list[str], list[str]]:
-        """Normalize LLM-provided parameters to match tool-declared names.
+    ) -> tuple[Dict[str, Any], list[str], dict[str, str], list[str]]:
+        """Project a call onto the tool's declared parameters.
 
-        Applies four phases:
-          1. Explicit aliases: spec.aliases first, then _PARAM_ALIASES
-          2. 'anonymous' flag → empty credentials
-          3. Substring fuzzy matching for close-but-not-exact names
-          4. Drop params not in the tool's declared schema
-
-        Returns ``(params, unknown, repaired)``. ``unknown`` lists keys the
-        tool does not declare — the dispatch path refuses such a call, because
-        a dropped argument is a lost intent that would otherwise surface as a
-        false-negative result. ``repaired`` lists keys whose value the
-        framework redirected to a declared parameter (alias or substring
-        match): the call still carries the intent, but the caller must know
-        the arguments it planned were not the arguments the tool received.
+        The rules live in :mod:`darwin.tools.arg_contract` and are shared with
+        every producer, so a key that survives projection unmapped is a real
+        contract violation rather than a naming drift.  Returns
+        ``(params, unmappable, migrated, dropped)``: ``unmappable`` keys carry
+        a value the tool cannot express (the dispatch path refuses such a
+        call), ``migrated`` maps each redirected source key to its canonical
+        name and ``dropped`` lists placeholder keys that were discarded.
 
         Aliases are only applied when the canonical name exists in the tool's
         parameters schema — this prevents false matches like command→query on
         ssh_exec, which legitimately expects 'command'.
         """
-        normalized = dict(params)
         tool_params = entry.parameters  # declared parameter schema dict
-
-        # Phase 1: apply explicit aliases
         spec_aliases: Dict[str, list[str]] = {}
         if entry.spec is not None:
             spec_aliases = dict(entry.spec.aliases)
-        alias_table: Dict[str, list[str]] = {}
-        alias_table.update(_PARAM_ALIASES)
-        alias_table.update(spec_aliases)  # spec aliases take precedence
-        applied_aliases: set[str] = set()
-        repaired_keys: set[str] = set()
-        for alias, canonical_list in alias_table.items():
-            if alias not in normalized:
-                continue
-            # Try each canonical name in priority order — first one
-            # that exists in the tool's declared parameters wins.
-            for canonical in canonical_list:
-                if (
-                    canonical in tool_params
-                    and canonical not in normalized
-                ):
-                    val = normalized[alias]
-                    # Compose host:port → target when both are provided
-                    if alias == "host" and "port" in normalized:
-                        val = f"{val}:{normalized['port']}"
-                    normalized[canonical] = val
-                    applied_aliases.add(alias)
-                    repaired_keys.add(alias)
-                    break  # only apply the first matching canonical
 
-        # Phase 2: handle 'anonymous' flag — set empty credentials
+        normalized = dict(params)
+        # 'anonymous' is a request flag, not a tool argument: it means
+        # "connect with empty credentials".
         if normalized.pop("anonymous", None) is True:
             normalized.setdefault("user", "")
             normalized.setdefault("password", "")
 
-        # Phase 3: substring fuzzy matching
-        # Handles both directions:
-        #   Direction 1: declared param is substring of provided key
-        #     e.g.  declared "url"  ←  provided "target_url"
-        #   Direction 2: provided key is substring of declared param
-        #     e.g.  provided "url"  →  declared "target_url"
-        #     (only when key ≥ _SUBSTRING_MIN_LEN chars AND
-        #      key ≥ _SUBSTRING_MIN_RATIO of declared param length)
-        #
-        # CRITICAL: skip candidates that are themselves declared params
-        # of this tool.  Otherwise "key" (etcd key path) matches "tls_key"
-        # (TLS key file path) and corrupts the etcd call.
-        for declared_param in list(tool_params.keys()):
-            if declared_param not in normalized:
-                # Direction 1: declared param is substring of provided key
-                candidates = [
-                    k for k in normalized
-                    if declared_param in k and k != declared_param
-                    and k not in tool_params
-                ]
-                # Direction 2: provided key is substring of declared param
-                if not candidates:
-                    candidates = [
-                        k for k in normalized
-                        if k in declared_param and k != declared_param
-                        and k not in tool_params
-                        and len(k) >= _SUBSTRING_MIN_LEN
-                        and len(k) >= len(declared_param) * _SUBSTRING_MIN_RATIO
-                    ]
-                if len(candidates) == 1:
-                    normalized[declared_param] = normalized[candidates[0]]
-                    repaired_keys.add(candidates[0])
+        projected, migrated, dropped, unmappable = project_args(
+            tool_params, normalized, spec_aliases,
+        )
+        # host:port composition kept from the alias phase: the caller supplied
+        # a host and a port, the tool wants one target string.
+        _port = normalized.get("port")
+        if "host" in migrated and _port not in (None, "") and isinstance(
+            projected.get(migrated["host"]), str
+        ):
+            target = migrated["host"]
+            projected[target] = f"{projected[target]}:{_port}"
+        return projected, unmappable, migrated, dropped
 
-        # Phase 4: separate params the tool declares from the ones it does
-        # not. Unknown keys are reported instead of silently dropped: the
-        # dispatch path turns them into INVALID_ARGUMENT so the caller can
-        # repair the call instead of banking a meaningless result.
-        _unknown = [
-            k for k in normalized
-            if k not in tool_params and k not in applied_aliases
-        ]
-        normalized = {
-            k: v for k, v in normalized.items()
-            if k in tool_params
-        }
+    def project_params(
+        self, name: str, params: Dict[str, Any],
+    ) -> tuple[Dict[str, Any], list[str], dict[str, str], list[str]]:
+        """Full projection report for callers that must explain a call.
 
-        _repaired = sorted(k for k in repaired_keys if k not in normalized)
-        return normalized, sorted(_unknown), _repaired
+        Returns ``(projected, unmappable, migrated, dropped)``. An unregistered
+        tool has no contract to project against, so its arguments pass through
+        untouched.
+        """
+        entry = self._registry.get(name)
+        if entry is None:
+            return dict(params or {}), [], {}, []
+        return self._normalize_params_report(name, params or {}, entry)
+
+    def _suggest_alternative_tools(
+        self,
+        name: str,
+        entry: "_ToolEntry",
+        unknown: list[str],
+        missing: list[str],
+        limit: int = 3,
+    ) -> list[str]:
+        """Registered tools that declare what this call wanted but lacked.
+
+        A refused call is only actionable when the caller learns which tool
+        *can* express the parameters it planned; without that the fix loop
+        re-sends the same argument names (observed as repeated
+        ``ignoring corrected param(s)`` warnings in the benchmark logs).
+        Tools sharing the refused tool's capability rank first.
+        """
+        wanted = set(unknown) | set(missing)
+        if not wanted:
+            return []
+        capability = ""
+        spec = getattr(entry, "spec", None)
+        if spec is not None:
+            capability = str(getattr(spec, "capability", "") or "")
+        ranked: list[tuple[int, int, str]] = []
+        for other, other_entry in self._registry.items():
+            if other == name:
+                continue
+            hits = len(wanted & set((other_entry.parameters or {}).keys()))
+            if not hits:
+                continue
+            other_spec = getattr(other_entry, "spec", None)
+            same_capability = bool(capability) and str(
+                getattr(other_spec, "capability", "") or ""
+            ) == capability
+            ranked.append((0 if same_capability else 1, -hits, other))
+        ranked.sort()
+        return [tool for _rank, _hits, tool in ranked[:limit]]
 
     def _normalize_params(
         self, name: str, params: Dict[str, Any], entry: "_ToolEntry",
     ) -> Dict[str, Any]:
         """Preview form of :meth:`_normalize_params_report` (params only)."""
-        normalized, _unknown, _repaired = self._normalize_params_report(
+        normalized, _unknown, _migrated, _dropped = self._normalize_params_report(
             name, params, entry
         )
         if _unknown:
@@ -637,7 +595,7 @@ class MCPGateway:
         # Normalize LLM-provided parameters before dispatch.
         # This single call site covers BOTH register() Python functions
         # AND register_shell_tool() shell commands.
-        params, _unknown, _repaired = self._normalize_params_report(
+        params, _unknown, _migrated, _dropped = self._normalize_params_report(
             name, params, entry
         )
 
@@ -662,6 +620,11 @@ class MCPGateway:
                     f"unknown parameter(s) {_unknown} (declared: "
                     f"{sorted(entry.parameters or {})})"
                 )
+            _suggested = self._suggest_alternative_tools(name, entry, _unknown, _missing)
+            if _suggested:
+                _details.append(
+                    "use one of these tools instead: " + ", ".join(_suggested)
+                )
             _reason = "; ".join(_details)
             log.warning("tool '%s': refusing call — %s", name, _reason)
             return ToolResult(
@@ -680,8 +643,11 @@ class MCPGateway:
                     tool_name=name, success=True, stdout=str(result) if result is not None else "",
                     stderr="", exit_code=0, elapsed_ms=0,
                 )
+            _repaired = sorted(set(_migrated) | set(_dropped))
             if _repaired:
                 result.params_repaired = list(_repaired)
+            if _dropped:
+                result.params_dropped = list(_dropped)
             self._execution_log.append(result)
             return result
         except Exception as e:

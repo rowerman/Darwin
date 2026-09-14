@@ -29,6 +29,56 @@ log = logging.getLogger(__name__)
 
 # ── Analyze output ──────────────────────────────────────────────────
 
+# Keyword -> canonical vuln_type for report-style LLM output. Lives here (not
+# in the orchestration layer) because the schema itself needs it: a hypothesis
+# that arrives as a bare sentence must still become a typed entry.
+_VULN_TYPE_KEYWORDS: tuple[tuple[str, str], ...] = (
+    ("sql injection", "SQLi"),
+    ("sqli", "SQLi"),
+    ("injection", "CMDi"),
+    ("command", "CMDi"),
+    ("rce", "CMDi"),
+    ("xss", "XSS"),
+    ("ssti", "SSTI"),
+    ("lfi", "LFI"),
+    ("path traversal", "LFI"),
+    ("file disclosure", "LFI"),
+    ("ssrf", "SSRF"),
+    ("xxe", "XXE"),
+    ("idor", "IDOR"),
+    ("bola", "IDOR"),
+    ("object level authorization", "IDOR"),
+    ("authorization", "IDOR"),
+    ("broken access", "IDOR"),
+    ("cross-tenant", "IDOR"),
+    ("tenant", "IDOR"),
+    ("jwt", "AUTH"),
+    ("signature bypass", "AUTH"),
+    ("authentication", "AUTH"),
+    ("auth bypass", "AUTH"),
+    ("unauthenticated", "AUTH"),
+    ("weak auth", "WeakAuth"),
+    ("weak credentials", "WeakAuth"),
+    ("default credential", "WeakAuth"),
+    ("csrf", "CSRF"),
+    ("file upload", "FileUpload"),
+    ("deserialization", "Deserialization"),
+    ("pickle", "Deserialization"),
+    ("open bucket", "PlatformDiscovery"),
+    ("metadata", "PlatformDiscovery"),
+    ("disclosure", "InformationDisclosure"),
+    ("information", "InformationDisclosure"),
+)
+
+
+def infer_vuln_type(text: str) -> str:
+    """Best-effort vuln_type for free-form hypothesis text."""
+    lowered = (text or "").lower()
+    for keyword, vuln_type in _VULN_TYPE_KEYWORDS:
+        if keyword in lowered:
+            return vuln_type
+    return "generic"
+
 
 class AnalyzeVulnV1(BaseModel):
     """One vulnerability hypothesis from the analyze phase."""
@@ -86,6 +136,23 @@ class AnalyzeOutputV1(BaseModel):
     # DKG Vulnerability nodes) and only feed the bounded deterministic
     # fallback pass once the grounded plan is exhausted.
     speculative: list[AnalyzeVulnV1] = Field(default_factory=list)
+
+    @field_validator("vulnerabilities", "speculative", mode="before")
+    @classmethod
+    def _accept_sentence_entries(cls, value: Any) -> Any:
+        """Wrap bare strings so one loose entry cannot void the whole stage."""
+        if not isinstance(value, list):
+            return value
+        wrapped: list[Any] = []
+        for item in value:
+            if isinstance(item, str):
+                text = item.strip()
+                if not text:
+                    continue
+                wrapped.append({"vuln_type": infer_vuln_type(text), "evidence": text})
+            else:
+                wrapped.append(item)
+        return wrapped
 
 
 # ── Research output ─────────────────────────────────────────────────
@@ -184,6 +251,31 @@ class PlanTaskV1(BaseModel):
             return value
         return {"value": value}
 
+    @field_validator("priority", mode="before")
+    @classmethod
+    def _normalize_priority(cls, value: Any) -> Any:
+        """Accept the priority words the planner actually emits.
+
+        ``priority="high"`` used to reject the entire plan review, costing a
+        full regeneration round trip for a value the runtime only ranks on.
+        """
+        if isinstance(value, (int, float)):
+            return value
+        text = str(value or "").strip().lower()
+        if not text:
+            return 0.5
+        words = {
+            "critical": 0.95, "urgent": 0.9, "blocker": 0.95,
+            "high": 0.8, "medium": 0.5, "normal": 0.5, "moderate": 0.5,
+            "low": 0.2, "minor": 0.2, "trivial": 0.1,
+        }
+        if text in words:
+            return words[text]
+        try:
+            return float(text)
+        except ValueError:
+            return 0.5
+
 
 # ── Tolerant JSON extraction (mirrors orchestrator._extract_json) ───
 
@@ -238,12 +330,25 @@ def _parse(
 
     Returns (value, "") on success where value is the model or a list of
     models, or (None, error_message) on any failure.
+
+    An array-shaped stage accepts a single bare object by wrapping it into a
+    one-item list; a wrong-typed payload still fails validation item by item.
     """
     try:
         raw = extract_json_value(text)
         if raw is None:
             return None, "no JSON found in LLM output"
         if array:
+            if isinstance(raw, dict):
+                # Only a complete single instance is wrapped; anything else is
+                # a wrong-shaped payload and must keep saying so.
+                _absent = [
+                    field for field, meta in model_cls.model_fields.items()
+                    if meta.is_required() and field not in raw
+                ]
+                if _absent:
+                    return None, "expected a JSON array"
+                raw = [raw]
             if not isinstance(raw, list):
                 return None, "expected a JSON array"
             parsed = []
