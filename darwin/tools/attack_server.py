@@ -7,6 +7,7 @@ Reference: AWE xss_agent, sqli_agent — exploitation patterns
 from __future__ import annotations
 
 import asyncio
+import json as _json
 import logging
 import os as _os_module
 import random
@@ -56,39 +57,111 @@ def normalize_parallel_urls(urls: str | list) -> list[str]:
     return [u.strip() for u in str(urls or "").split(",") if u.strip()]
 
 
-def _parse_ffuf_output(stdout: str) -> Dict[str, Any]:
-    """Parse ffuf result lines into discovered paths.
+_ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
+_FFUF_RESULT_RE = re.compile(
+    r"^(?P<path>[^\s\[\]]+)\s+\[Status:\s*(?P<code>\d{3})",
+)
+_FFUF_PROGRESS_RE = re.compile(r":: Progress:\s*\[(\d+)/(\d+)\]")
+_FFUF_ERROR_MARKERS = (
+    "Encountered error",
+    "no such file or directory",
+    "Keyword FUZZ defined, but not found",
+)
 
-    ffuf prints ``path [Status: 200, Size: 123, Words: 4, Lines: 1]`` for every
-    match (``-mc`` already restricts which codes are shown) plus a banner and
-    ``:: Progress:`` lines. Without this parser the whole run's discoveries
-    were dropped, so the planner never learned about the routes it had just
-    found.
+
+def _ffuf_path(raw: str) -> str:
+    """Normalize one ffuf match into a leading-slash path."""
+    if raw.startswith(("http://", "https://")):
+        from urllib.parse import urlparse as _up
+        return _up(raw).path or "/"
+    return raw if raw.startswith("/") else "/" + raw
+
+
+def _parse_ffuf_json(text: str) -> tuple[list[dict], bool]:
+    """Read ffuf's ``-of json`` document. Returns ``(paths, parsed)``."""
+    stripped = text.strip()
+    if not stripped.startswith("{"):
+        return [], False
+    try:
+        doc = _json.loads(stripped)
+    except ValueError:
+        return [], False
+    if not isinstance(doc, dict) or "results" not in doc:
+        return [], False
+    paths: list[dict] = []
+    seen: set[str] = set()
+    for item in doc.get("results") or []:
+        if not isinstance(item, dict):
+            continue
+        word = ""
+        inputs = item.get("input")
+        if isinstance(inputs, dict):
+            word = str(inputs.get("FUZZ") or "")
+        # An empty FUZZ word hits the base URL itself and is not a discovery.
+        if not word:
+            continue
+        path = item.get("url") or ("/" + word)
+        path = _ffuf_path(str(path))
+        if path in seen:
+            continue
+        seen.add(path)
+        paths.append({"path": path, "code": str(item.get("status") or 0)})
+    return paths, True
+
+
+def _parse_ffuf_text(text: str) -> list[dict]:
+    """Read ffuf's interactive table.
+
+    ffuf repaints progress with ``\\r`` and prefixes each repaint with
+    ``\\x1b[2K``, so a match line is neither newline-delimited nor anchored at
+    the start of the buffer: the old newline-only, ``^``-anchored regex found
+    nothing at all and every fuzz result was discarded.
     """
     paths: list[dict] = []
     seen: set[str] = set()
-    for line in str(stdout or "").split("\n"):
+    for line in re.split(r"[\r\n]+", _ANSI_ESCAPE_RE.sub("", str(text or ""))):
         line = line.strip()
-        # The banner / progress lines carry no "[Status:" marker, so the
-        # result regex alone decides what is a match.
-        if not line or "Status:" not in line:
+        if "Status:" not in line:
             continue
-        match = re.match(
-            r"^(?P<path>[^\s\[\]]+)\s+\[Status:\s*(?P<code>\d{3})", line,
-        )
+        match = _FFUF_RESULT_RE.match(line)
         if not match:
             continue
-        path = match.group("path")
-        if path.startswith(("http://", "https://")):
-            from urllib.parse import urlparse as _up
-            path = _up(path).path or "/"
-        elif not path.startswith("/"):
-            path = "/" + path
+        path = _ffuf_path(match.group("path"))
         if path in seen:
             continue
         seen.add(path)
         paths.append({"path": path, "code": match.group("code")})
-    return {"discovered_paths": paths, "count": len(paths)}
+    return paths
+
+
+def _parse_ffuf_output(stdout: str) -> Dict[str, Any]:
+    """Parse ffuf output into discovered paths.
+
+    The JSON document is authoritative; the interactive table stays as a
+    fallback for invocations that still print to stdout. ``enumeration_error``
+    is what separates "the scan ran and found nothing" from "the scan never
+    ran" — the two used to look identical to the planner.
+    """
+    text = str(stdout or "")
+    paths, from_json = _parse_ffuf_json(text)
+    completed = from_json
+    if not from_json:
+        paths = _parse_ffuf_text(text)
+        progress = _FFUF_PROGRESS_RE.findall(text)
+        completed = any(int(done) == int(total) and int(total) > 0
+                        for done, total in progress)
+    error = ""
+    if not completed and not paths:
+        error = next(
+            (marker for marker in _FFUF_ERROR_MARKERS if marker.lower() in text.lower()),
+            "ffuf produced no parseable output (scan did not run)",
+        )
+    return {
+        "discovered_paths": paths,
+        "count": len(paths),
+        "scan_completed": bool(completed),
+        "enumeration_error": error,
+    }
 
 
 def _parse_hydra_output(stdout: str) -> Dict[str, Any]:
@@ -205,12 +278,18 @@ def normalize_fuzz_url(url: str) -> str:
 
 async def _python_request(
     method: str, url: str, data: str = "", headers: str = "",
-    timeout: int = 10, insecure: bool = False,
+    timeout: int = 10, insecure: bool = False, tool_name: str = "shell_exec",
 ) -> ToolResult:
     """Execute a HTTP request via Python (for complex payloads).
 
     Uses a temp file to avoid shell escaping issues with special characters
     in URLs and payloads (e.g. single quotes in SQLi).
+
+    Every HTTP answer — 2xx as well as 4xx/5xx — is reported through the same
+    ``STATUS:/HEADER:/BODY_START`` envelope, because a 404/405 body and its
+    ``Allow`` header are exactly the evidence a repair needs.  A request that
+    only produced ``ERROR:`` (no status) never reached the target and is
+    reported as a failed call instead of a successful one.
     """
     import asyncio
     import json
@@ -229,7 +308,7 @@ ctx.verify_mode = ssl.CERT_NONE
         ctx_setup = "ctx = None"
 
     script = f"""
-import urllib.request, json
+import json, urllib.error, urllib.request
 {ctx_setup}
 url = {json.dumps(url)}
 method = {json.dumps(method)}
@@ -245,17 +324,26 @@ if headers:
             k, v = h.split(':', 1)
             req.add_header(k.strip(), v.strip())
 
+def _emit(status, resp_headers, body):
+    print(f"STATUS:{{status}}")
+    for k, v in resp_headers:
+        print(f"HEADER:{{k}}:{{v}}")
+    print("BODY_START")
+    print(body[:10000])
+
 try:
     kwargs = {{"timeout": {timeout}}}
     if ctx is not None:
         kwargs["context"] = ctx
     with urllib.request.urlopen(req, **kwargs) as resp:
         body = resp.read().decode('utf-8', errors='replace')
-        print(f"STATUS:{{resp.status}}")
-        for k, v in resp.getheaders():
-            print(f"HEADER:{{k}}:{{v}}")
-        print("BODY_START")
-        print(body[:10000])
+        _emit(resp.status, resp.getheaders(), body)
+except urllib.error.HTTPError as e:
+    try:
+        body = (e.read() or b'').decode('utf-8', errors='replace')
+    except Exception:
+        body = ''
+    _emit(getattr(e, 'code', 0), list((e.headers or {{}}).items()), body)
 except Exception as e:
     print(f"ERROR:{{e}}")
 """
@@ -271,7 +359,52 @@ except Exception as e:
             _os.unlink(tmpath)
         except OSError as exc:
             log.debug("swallowed exception: %s", exc, exc_info=True)
-    return result
+    return _http_envelope_result(result, method=method, url=url, tool_name=tool_name)
+
+
+def _http_envelope_result(
+    result: ToolResult, *, method: str, url: str, tool_name: str = "",
+) -> ToolResult:
+    """Normalize a ``_python_request`` stdout envelope into a ToolResult.
+
+    The envelope is the only source of the HTTP status: the helper script
+    exits 0 even for 4xx/5xx (urllib raises, the script prints and returns),
+    so without this the caller would see "success" for a request the target
+    refused.
+    """
+    stdout = str(getattr(result, "stdout", "") or "")
+    status_match = re.search(r"^STATUS:(\d{3})", stdout, re.M)
+    if not status_match:
+        result.success = False
+        result.exit_code = -1
+        if not str(getattr(result, "stderr", "") or "").strip():
+            result.stderr = stdout.strip()[:300] or "request produced no HTTP status"
+        return result
+
+    status = int(status_match.group(1))
+    headers_map = {
+        m.group(1).strip(): m.group(2).strip()
+        for m in re.finditer(r"^HEADER:([^:\r\n]+):(.*)$", stdout, re.M)
+    }
+    body_match = re.search(r"^BODY_START\r?\n?(.*)", stdout, re.M | re.S)
+    body = body_match.group(1) if body_match else ""
+    return ToolResult(
+        tool_name=tool_name or result.tool_name,
+        success=200 <= status < 400,
+        stdout=stdout,
+        stderr=str(getattr(result, "stderr", "") or ""),
+        exit_code=status if not 200 <= status < 400 else 0,
+        elapsed_ms=float(getattr(result, "elapsed_ms", 0.0) or 0.0),
+        parsed_output={
+            "status": status,
+            "headers": headers_map,
+            "body": body,
+            "method": str(method or "").upper(),
+            "url": url,
+        },
+        params_repaired=list(getattr(result, "params_repaired", []) or []),
+        params_dropped=list(getattr(result, "params_dropped", []) or []),
+    )
 
 
 def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
@@ -462,18 +595,31 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
         "url": {"type": "string", "description": "Target URL with FUZZ keyword"},
         "wordlist": {"type": "string", "description": "Wordlist name or absolute path (resolved against the project wordlist directory)", "default": "common.txt"},
     }
+    # ffuf's interactive table is repainted with \r and ANSI escapes, which no
+    # line-oriented parser survives reliably: ask for the JSON document and
+    # keep ffuf's own exit status (the old trailing `| head -200` reported the
+    # reader's status instead). The command must still start with the `ffuf`
+    # token — the manifest derives this tool's external dependency from it.
+    _ffuf_cmd = (
+        "ffuf -u '{url}' -w {wordlist} -mc 200,204,301,302,307,401,403,405 "
+        "-of json -o /tmp/darwin_ffuf_$$.json >/tmp/darwin_ffuf_err_$$.txt 2>&1; "
+        "rc=$?; cat /tmp/darwin_ffuf_$$.json 2>/dev/null; "
+        "cat /tmp/darwin_ffuf_err_$$.txt >&2 2>/dev/null; "
+        "rm -f /tmp/darwin_ffuf_$$.json /tmp/darwin_ffuf_err_$$.txt; exit $rc"
+    )
     _ffuf_spec = auto_spec(
         name="ffuf_fuzz",
         description=_ffuf_desc,
         parameters=_ffuf_params,
         executor=EXECUTOR_SHELL,
-        command_template="ffuf -u '{url}' -w {wordlist} -mc 200,204,301,302,307,401,403,405 -o /dev/null 2>&1 | head -200",
+        command_template=_ffuf_cmd,
     )
     # 1.1.0: parsed output (discovered_paths) — fuzz results now reach the DKG.
-    _ffuf_spec.version = "1.1.0"
+    # 1.2.0: JSON output file + ANSI/CR-tolerant fallback + scan_completed.
+    _ffuf_spec.version = "1.2.0"
     gateway.register_shell_tool(
         name="ffuf_fuzz",
-        command_template="ffuf -u '{url}' -w {wordlist} -mc 200,204,301,302,307,401,403,405 -o /dev/null 2>&1 | head -200",
+        command_template=_ffuf_cmd,
         description=_ffuf_desc,
         parameters=_ffuf_params,
         parser=_parse_ffuf_output,
@@ -523,7 +669,8 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
             if param:
                 full_url = f"{url}{separator}{urllib.parse.urlencode({param: encoded_payload})}"
             return await _python_request(
-                "GET", full_url, headers=extra_headers, insecure=insecure
+                "GET", full_url, headers=extra_headers, insecure=insecure,
+                tool_name="send_payload",
             )
         elif body_format == "json":
             import json as _js
@@ -542,23 +689,21 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
             if extra_headers:
                 _hdr = f"{_hdr}\n{extra_headers}"
             return await _python_request(
-                _method, url, body,
-                headers=_hdr,
-                insecure=insecure,
+                _method, url, body, headers=_hdr, insecure=insecure,
+                tool_name="send_payload",
             )
         else:
             # If param is empty and payload looks like a complete form body
             # (contains = or &), send it raw — the LLM constructed a
             # multi-parameter payload like "ak=X&sk=Y&Version=Z".
             if not param and ('=' in payload or '&' in payload):
-                return await _python_request(_method, url, encoded_payload,
-                                            headers=extra_headers or "",
-                                            insecure=insecure)
+                return await _python_request(
+                    _method, url, encoded_payload, headers=extra_headers or "",
+                    insecure=insecure, tool_name="send_payload")
             body = urllib.parse.urlencode({param: encoded_payload})
             return await _python_request(
-                _method, url, body,
-                headers=extra_headers or "",
-                insecure=insecure,
+                _method, url, body, headers=extra_headers or "",
+                insecure=insecure, tool_name="send_payload",
             )
 
     gateway.register(

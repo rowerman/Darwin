@@ -32,7 +32,7 @@ from darwin.tools.spec import (
     shlex_split_value,
 )
 from darwin.tools.paths import tool_path_env
-from darwin.tools.arg_contract import PARAM_ALIASES, project_args
+from darwin.tools.arg_contract import PARAM_ALIASES, coerce_string_params, project_args
 
 log = logging.getLogger(__name__)
 
@@ -98,6 +98,9 @@ class ToolResult:
     #: Parameter keys dropped before dispatch because their value carried no
     #: intent (empty string, ``<tenant>`` leftover, empty container).
     params_dropped: List[str] = field(default_factory=list)
+    #: Parameter keys whose container value was serialized into the string
+    #: slot the tool declares (alias migration can route a list/dict there).
+    params_coerced: List[str] = field(default_factory=list)
 
 
 class MCPGateway:
@@ -477,16 +480,18 @@ class MCPGateway:
 
     def _normalize_params_report(
         self, name: str, params: Dict[str, Any], entry: "_ToolEntry",
-    ) -> tuple[Dict[str, Any], list[str], dict[str, str], list[str]]:
+    ) -> tuple[Dict[str, Any], list[str], dict[str, str], list[str], list[str]]:
         """Project a call onto the tool's declared parameters.
 
         The rules live in :mod:`darwin.tools.arg_contract` and are shared with
         every producer, so a key that survives projection unmapped is a real
         contract violation rather than a naming drift.  Returns
-        ``(params, unmappable, migrated, dropped)``: ``unmappable`` keys carry
-        a value the tool cannot express (the dispatch path refuses such a
-        call), ``migrated`` maps each redirected source key to its canonical
-        name and ``dropped`` lists placeholder keys that were discarded.
+        ``(params, unmappable, migrated, dropped, coerced)``: ``unmappable``
+        keys carry a value the tool cannot express (the dispatch path refuses
+        such a call), ``migrated`` maps each redirected source key to its
+        canonical name, ``dropped`` lists placeholder keys that were
+        discarded and ``coerced`` lists string slots that received a
+        container value serialized into text.
 
         Aliases are only applied when the canonical name exists in the tool's
         parameters schema — this prevents false matches like command→query on
@@ -507,6 +512,7 @@ class MCPGateway:
         projected, migrated, dropped, unmappable = project_args(
             tool_params, normalized, spec_aliases,
         )
+        projected, coerced = coerce_string_params(tool_params, projected)
         # host:port composition kept from the alias phase: the caller supplied
         # a host and a port, the tool wants one target string.
         _port = normalized.get("port")
@@ -515,20 +521,20 @@ class MCPGateway:
         ):
             target = migrated["host"]
             projected[target] = f"{projected[target]}:{_port}"
-        return projected, unmappable, migrated, dropped
+        return projected, unmappable, migrated, dropped, coerced
 
     def project_params(
         self, name: str, params: Dict[str, Any],
-    ) -> tuple[Dict[str, Any], list[str], dict[str, str], list[str]]:
+    ) -> tuple[Dict[str, Any], list[str], dict[str, str], list[str], list[str]]:
         """Full projection report for callers that must explain a call.
 
-        Returns ``(projected, unmappable, migrated, dropped)``. An unregistered
-        tool has no contract to project against, so its arguments pass through
-        untouched.
+        Returns ``(projected, unmappable, migrated, dropped, coerced)``. An
+        unregistered tool has no contract to project against, so its arguments
+        pass through untouched.
         """
         entry = self._registry.get(name)
         if entry is None:
-            return dict(params or {}), [], {}, []
+            return dict(params or {}), [], {}, [], []
         return self._normalize_params_report(name, params or {}, entry)
 
     def _suggest_alternative_tools(
@@ -573,8 +579,8 @@ class MCPGateway:
         self, name: str, params: Dict[str, Any], entry: "_ToolEntry",
     ) -> Dict[str, Any]:
         """Preview form of :meth:`_normalize_params_report` (params only)."""
-        normalized, _unknown, _migrated, _dropped = self._normalize_params_report(
-            name, params, entry
+        normalized, _unknown, _migrated, _dropped, _coerced = (
+            self._normalize_params_report(name, params, entry)
         )
         if _unknown:
             log.warning(
@@ -595,8 +601,8 @@ class MCPGateway:
         # Normalize LLM-provided parameters before dispatch.
         # This single call site covers BOTH register() Python functions
         # AND register_shell_tool() shell commands.
-        params, _unknown, _migrated, _dropped = self._normalize_params_report(
-            name, params, entry
+        params, _unknown, _migrated, _dropped, _coerced = (
+            self._normalize_params_report(name, params, entry)
         )
 
         # Refuse a call whose declared parameters are not satisfied:
@@ -648,6 +654,8 @@ class MCPGateway:
                 result.params_repaired = list(_repaired)
             if _dropped:
                 result.params_dropped = list(_dropped)
+            if _coerced:
+                result.params_coerced = list(_coerced)
             self._execution_log.append(result)
             return result
         except Exception as e:

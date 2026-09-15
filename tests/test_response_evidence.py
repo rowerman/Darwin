@@ -10,6 +10,7 @@ from darwin.response_evidence import (
     detect_response_anomalies,
     disclosed_paths,
     disclosed_subjects,
+    extract_target_response,
     traversal_hypotheses,
 )
 from darwin.tools.arg_contract import unresolved_placeholders
@@ -77,6 +78,112 @@ def test_clean_response_produces_no_evidence():
     )
 
     assert anomalies == []
+
+
+def test_target_response_is_extracted_from_the_status_envelope():
+    stdout = (
+        "STATUS:200\nHEADER:Content-Type:application/json\nBODY_START\n"
+        + _WORKFLOW_BODY + "\n"
+    )
+
+    assert extract_target_response("send_payload", stdout) == _WORKFLOW_BODY + "\n"
+
+
+def test_target_response_is_extracted_from_curl_output():
+    stdout = (
+        "HTTP/1.1 200 OK\r\nServer: Werkzeug\r\n\r\n" + _WORKFLOW_BODY
+    )
+
+    assert extract_target_response("curl_get", stdout) == _WORKFLOW_BODY
+
+
+def test_tool_chatter_is_not_a_target_response():
+    """ffuf's banner names this host's wordlist; the target said nothing."""
+    banner = (
+        "        /'___\\  /'___\\\n"
+        " :: Wordlist         : FUZZ: /usr/share/dirb/wordlists/common.txt\n"
+        " :: Progress: [4614/4614] :: Job [1/1] :: 1136 req/sec ::\n"
+    )
+
+    assert extract_target_response("ffuf_fuzz", banner) == ""
+    assert disclosed_paths(extract_target_response("ffuf_fuzz", banner)) == []
+
+
+def test_values_already_sent_earlier_in_the_run_are_not_disclosures():
+    """The server's default workspace echo is not another tenant's identifier."""
+    anomalies = detect_response_anomalies(
+        tool="http_post",
+        params={"url": "http://t/workflows", "data": '{"dataset_ref": "script.sql"}'},
+        response_text=_WORKFLOW_BODY,
+        endpoint="http://t/workflows",
+        param="dataset_ref",
+        seen_values=["tenant-a", "workspace"],
+    )
+
+    assert "cross_subject_echo" not in {a.kind for a in anomalies}
+
+
+class _RecordingDKG:
+    def __init__(self):
+        self.vulns: dict = {}
+
+    def query_nodes(self, node_type=None, filters=None, **_kw):
+        if node_type == "Endpoint":
+            return []
+        return [{"id": k, **v} for k, v in self.vulns.items()]
+
+    def add_node(self, node_type, node_id, props=None, **kw):
+        if node_type == "Vulnerability":
+            self.vulns[node_id] = dict(props or {})
+        return node_id
+
+    def update_node(self, node_id, props):
+        self.vulns.setdefault(node_id, {}).update(props)
+        return True
+
+
+def _ingest(dkg, tool, params, result):
+    from darwin.orchestration.execution import ExecutionCoordinator
+
+    orch = type("Orch", (), {"dkg": dkg})()
+    coord = ExecutionCoordinator.__new__(ExecutionCoordinator)
+    object.__setattr__(coord, "_orch", orch)
+    return coord._ingest_response_evidence(tool, params, result)
+
+
+def _tool_result(stdout):
+    return type("R", (), {"stdout": stdout, "parsed_output": {}})()
+
+
+def test_a_fuzz_banner_never_becomes_a_vulnerability():
+    dkg = _RecordingDKG()
+    banner = (
+        "        /'___\\  /'___\\\n"
+        " :: Wordlist         : FUZZ: /usr/share/dirb/wordlists/common.txt\n"
+    )
+
+    promoted = _ingest(
+        dkg, "ffuf_fuzz", {"url": "http://t:10640/FUZZ", "wordlist": "common.txt"},
+        _tool_result(banner),
+    )
+
+    assert promoted == []
+    assert dkg.vulns == {}
+
+
+def test_a_target_disclosure_still_becomes_a_vulnerability():
+    dkg = _RecordingDKG()
+    stdout = "STATUS:200\nHEADER:Content-Type:application/json\nBODY_START\n" + _WORKFLOW_BODY
+
+    promoted = _ingest(
+        dkg, "send_payload",
+        {"url": "http://t:10640/workflows", "param": "dataset_ref",
+         "payload": "../../../../etc/passwd"},
+        _tool_result(stdout),
+    )
+
+    assert {p["vuln_type"] for p in promoted} == {"LFI", "IDOR"}
+    assert dkg.vulns
 
 
 def test_unresolved_placeholder_is_visible_before_dispatch():

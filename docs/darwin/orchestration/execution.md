@@ -28,6 +28,25 @@
   `encode_type`/`content_type`/`insecure`/`follow_redirects`/`timeout` 等），
   路由变体只在 verified 基址上派生；`_ingest_observed_routes()` 把
   ffuf/gobuster/dirb 解析出的路径写回 Endpoint（非 404 记 verified）。
+- `_apply_request_template()`：派发前用 `RequestTemplate` 规范化调用形状并存入
+  `Task.action["request"]`；同 URL 的后续调用继承动词/body 形态/头部，但 URL 与
+  payload 始终取自本次参数（否则两次不同 URL 会被当成同一请求）。
+  `_remap_http_params()` 同样改为"用新工具渲染同一个请求"，工具替换不再丢
+  `payload`/`content_type`。
+- `_observe_tool_result()`：工具结果进入世界状态的**唯一入口**——路由入库、
+  动词补测、响应证据、路由动词记录、利用原语提升。任务路径与
+  `_systematic_exploit_pass()` 都调用它（兜底通道此前完全跳过证据摄入）。
+- `_routes_with_unknown_verb()` / `_probe_route_verbs()`：fuzz 命中的
+  401/403/405 表示"路由存在但动词未知"，自动发 `http_method_probe(OPTIONS)`
+  并把 `Allow` 写回 Endpoint，交给动词升级与计划完成性检查。
+- `_record_exploit_primitive()`：2xx + 带注入位点 + 响应出现真实内容时，把这次
+  请求（模板 + 注入位点 + payload + 证据）写成 DKG `ExploitPrimitive` 节点，
+  并把同端点同参数的 Vulnerability 提升为 `status=proven`。这是 cloud-29 里
+  "证明了却丢掉"的那份能力。
+- `_remember_route_sample()` 为每条路由保留一条响应摘录（≤1500 字符），多租户
+  目标的主体词汇由此进入世界状态；`_remember_tool_refusal()` 把工具拒绝原因
+  （not allow-listed / binary not installed / command not found）写入 run 级
+  不可行工具记忆，供 plan review 读取。
 
 ## 相关模块
 

@@ -328,7 +328,10 @@ def parse_tool_stdout(stdout: str) -> dict:
     """Parse ToolResult.stdout into {status_code, headers, body, elapsed_ms}.
 
     Extracts structured HTTP response data from the STATUS:/HEADER:/BODY_START
-    format emitted by _python_request in attack_server.py.
+    format emitted by _python_request in attack_server.py, and from the
+    ``curl -i`` response that curl_get returns (status line + headers + body).
+    Without the curl branch the status stayed 0, so a 405 from a discovery
+    fetch looked like "no HTTP answer at all".
     Returns a dict that can be passed as http_response to ExploitAttempt.
     """
     result: dict = {"status_code": 0, "headers": {}, "body": stdout, "elapsed_ms": 0}
@@ -337,6 +340,16 @@ def parse_tool_stdout(stdout: str) -> dict:
     m = re.search(r"STATUS:(\d+)", stdout)
     if m:
         result["status_code"] = int(m.group(1))
+    else:
+        m = re.search(r"^HTTP/[\d.]+\s+(\d{3})", stdout, re.MULTILINE)
+        if m:
+            result["status_code"] = int(m.group(1))
+            for line in stdout[m.end():].split("\n")[1:]:
+                if not line.strip():
+                    break
+                if ":" in line:
+                    key, value = line.split(":", 1)
+                    result["headers"][key.strip()] = value.strip()
     for m in re.finditer(r"HEADER:([^:]+):(.+)", stdout):
         result["headers"][m.group(1).strip()] = m.group(2).strip()
     m = re.search(r"BODY_START\n?(.*)", stdout, re.DOTALL)

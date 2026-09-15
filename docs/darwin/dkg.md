@@ -21,6 +21,11 @@
 - `verified_endpoints()`：只返回目标真实响应过的 Endpoint（`provenance_level="verified"`）。派生/假设路由存在图中但不作为事实参与规划与报告。
 - Endpoint 的 `provenance_level`：`verified`（对该 (url, method) 观测到非 404 响应）/ `derived`（规则或猜测产生，仅观测到 404 或未观测，含 `derived_from`）/ `hypothesized`。未显式给出时由 `endpoint_provenance_level()` 按 `sample_status` 计算，因此一次 404 变体探测不会被记成"已发现路由"。
 - `NODE_TYPES`、`EDGE_TYPES`：图语义目录。
+- `ExploitPrimitive`（节点类型）：已证实的利用原语，保存请求模板（动词 / URL /
+  Content-Type / body 形态 / 注入位点 / payload）、命中证据与时间。由
+  `execution._record_exploit_primitive()` 写入，被 `lifecycle._sweep_exploit_primitives()`
+  按同一请求形状回放以取 flag；同端点同参数的 Vulnerability 同时提升为
+  `status="proven"` 并记录 `primitive_id`。
 
 拓扑快照、拓扑上下文和摘要会隐藏 Credential 的 secret/token/password；原始 `query_nodes()`、checkpoint 和执行器专用读取仍保留完整凭据。
 

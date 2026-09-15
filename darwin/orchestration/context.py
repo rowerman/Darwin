@@ -103,6 +103,37 @@ class CoordinatorContext:
         else:
             setattr(object.__getattribute__(self, "_orch"), name, value)
 
+    def _unusable_tools(self) -> dict:
+        """Run-level memo of tools this run cannot use, and why.
+
+        Planning-side findings (a binary that is not installed) and
+        execution-side ones (a tool refusing "not allow-listed") share one
+        record, so a plan review cannot resurrect a task that can only fail
+        the same way again.
+        """
+        memo = getattr(self, "_unusable_tools_memo", None)
+        if not isinstance(memo, dict):
+            memo = {}
+            self._unusable_tools_memo = memo
+        return memo
+
+    def _remember_unusable(self, tool: str, reason: str) -> None:
+        if tool:
+            self._unusable_tools().setdefault(str(tool), str(reason or "unusable"))
+
+    def _unusable_tools_note(self) -> str:
+        memo = self._unusable_tools()
+        if not memo:
+            return ""
+        listed = ", ".join(
+            f"{tool} ({reason})" for tool, reason in sorted(memo.items())
+        )
+        return (
+            f"## Tools unusable in this run\n{listed}\n"
+            "Do NOT create tasks with these tools — they cannot run here. "
+            "Use another tool or a different approach.\n\n"
+        )
+
     async def _call_tool(self, name: str, params: dict) -> ToolResult:
         # A tool call must never outlive the active run/phase deadline.
         remaining = self._orch._remaining_budget()

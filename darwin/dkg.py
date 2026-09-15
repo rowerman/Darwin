@@ -25,6 +25,7 @@ NODE_TYPES = [
     "Service",        # port, protocol, version, banner
     "Endpoint",       # URL, method, params, auth_required
     "Vulnerability",  # type, endpoint, parameter, severity, cve_id
+    "ExploitPrimitive",  # request that proved impact: method/url/inject/body
     "Credential",     # user, password, hash, type, source_host
     "Session",        # host, user, access_level, shell_type
     "Domain",         # name, functional_level, trusts

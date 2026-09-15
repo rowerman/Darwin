@@ -340,15 +340,25 @@ def _parse(
             return None, "no JSON found in LLM output"
         if array:
             if isinstance(raw, dict):
-                # Only a complete single instance is wrapped; anything else is
-                # a wrong-shaped payload and must keep saying so.
-                _absent = [
-                    field for field, meta in model_cls.model_fields.items()
-                    if meta.is_required() and field not in raw
+                # A model that wraps the list in a named envelope
+                # ({"tasks": [...]}) is answering the same question; unwrap it
+                # instead of spending a whole repair round trip on wording.
+                _wrapped = [
+                    value for value in raw.values() if isinstance(value, list)
                 ]
-                if _absent:
-                    return None, "expected a JSON array"
-                raw = [raw]
+                if len(raw) == 1 and len(_wrapped) == 1:
+                    raw = _wrapped[0]
+                else:
+                    # Otherwise only a complete single instance is wrapped;
+                    # anything else is a wrong-shaped payload and must keep
+                    # saying so.
+                    _absent = [
+                        field for field, meta in model_cls.model_fields.items()
+                        if meta.is_required() and field not in raw
+                    ]
+                    if _absent:
+                        return None, "expected a JSON array"
+                    raw = [raw]
             if not isinstance(raw, list):
                 return None, "expected a JSON array"
             parsed = []

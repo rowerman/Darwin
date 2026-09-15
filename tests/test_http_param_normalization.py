@@ -14,8 +14,10 @@ import pytest
 
 from darwin.orchestration.execution import ExecutionCoordinator
 from darwin.orchestration.planning import PlanCoordinator
+from darwin.tools.attack_server import create_attack_gateway
 from darwin.tools.contracts import apply_explicit_contracts
 from darwin.tools.mcp_gateway import MCPGateway, ToolResult
+from darwin.tools.recon_server import create_recon_gateway
 
 
 def _gateway_with_echo() -> MCPGateway:
@@ -126,3 +128,55 @@ def test_render_tool_params_marks_required_and_defaults():
 
     assert "url: string (REQUIRED)" in rendered
     assert "data: string (optional" in rendered
+
+
+@pytest.mark.asyncio
+async def test_container_value_in_string_slot_is_serialized_not_crashed():
+    """`credentials: [...]` migrated onto curl_get.cookie must not raise."""
+    gateway = create_recon_gateway()
+
+    result = await gateway.call("curl_get", {
+        "url": "http://127.0.0.1:1/",
+        "credentials": ["admin:admin", "root:root"],
+    })
+
+    assert result.params_coerced == ["cookie"]
+    # The call reached curl (which cannot connect) instead of dying in Python.
+    assert "has no attribute" not in result.stderr
+
+
+@pytest.mark.asyncio
+async def test_body_container_is_not_rewritten_by_coercion(monkeypatch):
+    """A dict body keeps its JSON form: the tool, not the gateway, encodes it."""
+    gateway = create_recon_gateway()
+    captured: dict = {}
+
+    def _fake_urlopen(req, timeout=30, context=None):
+        captured["body"] = req.data
+        captured["content_type"] = req.headers.get("Content-type")
+
+        class _Resp:
+            status = 200
+            headers: dict = {}
+
+            def read(self):
+                return b'{"ok":1}'
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+        return _Resp()
+
+    monkeypatch.setattr("urllib.request.urlopen", _fake_urlopen)
+
+    result = await gateway.call("http_post", {
+        "url": "http://127.0.0.1:1/workflows",
+        "json": {"workspace": "tenant-a", "dataset_ref": "../tenant-b/secret.txt"},
+    })
+
+    assert result.params_coerced == []
+    assert captured["body"] == b'{"workspace": "tenant-a", "dataset_ref": "../tenant-b/secret.txt"}'
+    assert captured["content_type"] == "application/json"

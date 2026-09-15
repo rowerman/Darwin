@@ -170,3 +170,38 @@ def project_args(
         unmappable.append(key)
 
     return projected, migrated, sorted(dropped), sorted(unmappable)
+
+
+def coerce_string_params(declared: dict, params: dict) -> tuple[dict, list[str]]:
+    """Serialize container values that landed in a declared ``string`` slot.
+
+    Alias migration can route a list/dict into a ``str`` parameter — the
+    planner sent ``credentials: [...]`` and the shared table mapped it onto
+    ``cookie`` — and the tool then does ``value.strip()`` on it and raises
+    ``AttributeError``, which kills the whole hypothesis instead of the call.
+
+    Slots whose registrations already accept containers (body/header shapes,
+    ``send_payload.payload``, ``parallel_request.urls``) are left alone: their
+    tools normalize dict/list themselves, and rewriting them would corrupt a
+    body that was about to be sent as JSON.
+    """
+    container_tolerant = {
+        "data", "body", "json", "content", "payload",
+        "headers", "header", "urls",
+    }
+    coerced: list[str] = []
+    out = dict(params or {})
+    for key, value in out.items():
+        if key in container_tolerant:
+            continue
+        meta = (declared or {}).get(key)
+        if not isinstance(meta, dict) or str(meta.get("type", "")) != "string":
+            continue
+        if not isinstance(value, (list, tuple, set, dict)):
+            continue
+        if isinstance(value, dict):
+            out[key] = ", ".join(f"{k}={v}" for k, v in value.items())
+        else:
+            out[key] = ", ".join(str(item) for item in value)
+        coerced.append(key)
+    return out, sorted(coerced)

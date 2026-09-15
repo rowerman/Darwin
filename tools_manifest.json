@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0.0",
-  "generated_at": "2026-09-14T11:43:54+00:00",
+  "generated_at": "2026-09-15T11:59:13+00:00",
   "source": "darwin.tools.manifest",
   "tool_count": 135,
   "tools": [
@@ -1623,7 +1623,7 @@
     },
     {
       "name": "ffuf_fuzz",
-      "version": "1.1.0",
+      "version": "1.2.0",
       "description": "Fuzz web parameters or paths using ffuf. Returns the discovered paths/status codes so new routes enter the world state instead of being discarded.",
       "domains": [
         "web"
@@ -1644,7 +1644,7 @@
         "url"
       ],
       "executor": "shell",
-      "command_template": "ffuf -u '{url}' -w {wordlist} -mc 200,204,301,302,307,401,403,405 -o /dev/null 2>&1 | head -200",
+      "command_template": "ffuf -u '{url}' -w {wordlist} -mc 200,204,301,302,307,401,403,405 -of json -o /tmp/darwin_ffuf_$$.json >/tmp/darwin_ffuf_err_$$.txt 2>&1; rc=$?; cat /tmp/darwin_ffuf_$$.json 2>/dev/null; cat /tmp/darwin_ffuf_err_$$.txt >&2 2>/dev/null; rm -f /tmp/darwin_ffuf_$$.json /tmp/darwin_ffuf_err_$$.txt; exit $rc",
       "shell_args": [],
       "split_params": [],
       "dependencies": [

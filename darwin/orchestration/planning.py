@@ -44,6 +44,11 @@ _MIN_EXECUTIONS_BETWEEN_REVIEWS = 3
 #: return; the run goes straight to the final sweep instead.
 _REVIEW_MIN_REMAINING_SECONDS = 120.0
 
+#: An LLM round trip shorter than this cannot produce a usable answer, so it
+#: is not started at all: the run spent its last 12 seconds on a plan review
+#: that was guaranteed to be discarded.
+_LLM_MIN_REMAINING_SECONDS = 25.0
+
 #: Failure classes that mean the plan itself is wrong (rather than the
 #: hypothesis): they justify an immediate review without waiting for
 #: ``_MIN_EXECUTIONS_BETWEEN_REVIEWS``.
@@ -183,7 +188,33 @@ from darwin.prompts.research import SYSTEM_PROMPT_RESEARCH
 
 from darwin.orchestration.context import CoordinatorContext
 
+
+def _note_skipped(task_view: dict, note: str) -> None:
+    """Append a skip reason once, not once per plan review.
+
+    The instruction string survives reviews, so re-appending produced
+    ``[skipped: aws_cli binary not installed]`` eight times on one task.
+    """
+    instruction = str(task_view.get("instruction", "") or "")
+    if note not in instruction:
+        task_view["instruction"] = f"{instruction} {note}".strip()
+
+
 class PlanCoordinator(CoordinatorContext):
+    def _llm_min_remaining(self) -> float:
+        """Smallest remaining budget that can still pay for one LLM call.
+
+        The floor must not exceed a small share of the run: a 30-second smoke
+        run cannot be expected to keep 25 seconds free for one call.
+        """
+        try:
+            budget = float(getattr(self, "time_budget", 0) or 0)
+        except Exception:
+            budget = 0.0
+        if budget <= 0:
+            return _LLM_MIN_REMAINING_SECONDS
+        return min(_LLM_MIN_REMAINING_SECONDS, budget * 0.1)
+
     def _migrate_blocked_path_tasks(self) -> int:
         """Move tasks blocked on stale/rejected attack paths to NEEDS_REPLAN.
 
@@ -286,6 +317,7 @@ class PlanCoordinator(CoordinatorContext):
         time-wasting tools (e.g. hydra_ssh_brute) never reach execution,
         regardless of which code path injected them.
         """
+        _unusable = self._unusable_tools()
         # v2: the plan is stored as typed Tasks; this sanitizer keeps its
         # legacy dict-based transformation logic verbatim by working on a
         # mutable legacy view, then writes the mutated fields back onto the
@@ -581,8 +613,17 @@ class PlanCoordinator(CoordinatorContext):
             # otherwise drop it with a recorded reason instead of burning a
             # scheduler slot.
             if tool and tool not in self._BLACKLISTED_TOOLS:
+                _known_reason = _unusable.get(tool, "")
+                if _known_reason:
+                    # The run already learned this tool cannot work here; a
+                    # review that re-creates the task must not re-learn it
+                    # (one cloud-30 task was skipped this way eight times).
+                    t["status"] = "skipped"
+                    _note_skipped(t, f"[skipped: {tool} {_known_reason}]")
+                    continue
                 _avail_spec = _tool_specs.get(tool)
                 if _avail_spec is not None and not is_available(_avail_spec):
+                    self._remember_unusable(tool, "binary not installed")
                     _is_http_task = "http://" in _evidence or "https://" in _evidence
                     _substitute = (
                         _pick_http_tool(_tool_specs) if _is_http_task else ""
@@ -605,9 +646,8 @@ class PlanCoordinator(CoordinatorContext):
                             "skipping task '%s'", tool, t.get("id", "?"),
                         )
                         t["status"] = "skipped"
-                        t["instruction"] = (
-                            t.get("instruction", "")
-                            + f" [skipped: {tool} binary not installed]"
+                        _note_skipped(
+                            t, f"[skipped: {tool} binary not installed]",
                         )
                         continue
 
@@ -1037,6 +1077,17 @@ class PlanCoordinator(CoordinatorContext):
         err = ""
         _timed_out = False
         for attempt in range(1, max_attempts + 1):
+            if self._remaining_budget() < self._llm_min_remaining():
+                log.info(
+                    "Structured generation stage=%s skipped: %.0fs of budget "
+                    "left (minimum %.0fs)",
+                    stage, self._remaining_budget(), self._llm_min_remaining(),
+                )
+                self._task_log_event(
+                    "info", "llm_skipped_low_budget", stage=stage,
+                    remaining_s=round(self._remaining_budget(), 1),
+                )
+                break
             attempt_prompt = prompt
             if attempt > 1 and not _timed_out:
                 attempt_prompt = (
@@ -3000,12 +3051,19 @@ the current tool cannot express the required request)", "corrected_params":
         one with zero executions in between is not. Late in the run a rewrite
         costs more than it can return, so it is skipped outright.
         """
-        if force:
-            return ""
+        # The budget gate is not negotiable: ``force`` means "review as soon as
+        # the cadence allows", not "review with no time left to finish".
         try:
             _remaining = float(self._remaining_budget())
         except Exception:
             _remaining = float("inf")
+        if _remaining < self._llm_min_remaining():
+            return (
+                f"Skipping plan review: only {_remaining:.0f}s of budget left "
+                f"(minimum {self._llm_min_remaining():.0f}s to start an LLM call)"
+            )
+        if force:
+            return ""
         if _remaining < _REVIEW_MIN_REMAINING_SECONDS:
             return (
                 f"Skipping plan review: only {_remaining:.0f}s of budget left "
@@ -3268,6 +3326,7 @@ the current tool cannot express the required request)", "corrected_params":
                 f"\n## Unreachable (do NOT probe again)\n"
                 f"{', '.join(sorted(self._absent_services)[:8])}\n"
             )
+        _absent_text += "\n" + self._unusable_tools_note()
 
         # Detect plan drift: when primary target has failed tasks, remind LLM
         # to fix them BEFORE exploring incidentally discovered HTTP ports.

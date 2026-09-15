@@ -53,8 +53,10 @@ from darwin.tools.contracts import (
     request_body_kind,
 )
 from darwin.tools.arg_contract import project_args
+from darwin.tools.request_template import RequestTemplate
 from darwin.response_evidence import (
     detect_response_anomalies,
+    extract_target_response,
     traversal_hypotheses,
 )
 from darwin.utils.urls import (
@@ -124,7 +126,11 @@ class _RuntimeFlagFound(Exception):
 _WRITE_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 _WRITE_TOOLS = frozenset({"http_post", "file_upload", "tomcat_exploit", "php_filter_chain"})
 _METHOD_DEFAULT = {"http_post": "POST", "curl_get": "GET", "http_method_probe": "OPTIONS"}
-_HTTP_STATUS_RE = re.compile(r"HTTP/\d(?:\.\d)?\s+(\d{3})|\bHTTP\s+(\d{3})")
+#: Status carriers: the ``STATUS:`` envelope from _python_request, curl's
+#: ``HTTP/1.1 200`` status line, and http_post's ``HTTP 405`` first line.
+_HTTP_STATUS_RE = re.compile(
+    r"STATUS:(\d{3})|HTTP/\d(?:\.\d)?\s+(\d{3})|\bHTTP\s+(\d{3})",
+)
 
 # Identity propagation: when a resource read is denied and the target itself
 # disclosed an identity/token value, retry the denied request presenting that
@@ -172,7 +178,8 @@ def _http_status_of(text: str) -> int | None:
     match = _HTTP_STATUS_RE.search(str(text or ""))
     if not match:
         return None
-    return int(match.group(1) or match.group(2))
+    code = next((group for group in match.groups() if group), "")
+    return int(code) if code else None
 
 
 # ── Route-variant retry ─────────────────────────────────────────────
@@ -317,6 +324,26 @@ def _args_fingerprint(args: dict) -> str:
     except Exception:
         blob = str(args)
     return hashlib.sha1(blob.encode()).hexdigest()[:12]
+
+
+def _with_request_shape(tool_args: dict, template: RequestTemplate | None) -> dict:
+    """Carry the proven request's shape onto a follow-up hypothesis.
+
+    ``traversal_hypotheses()`` only knew ``url``/``param``/``payload``, so the
+    follow-up to a *JSON POST* disclosure went out as a GET and came back 405 —
+    the strongest lead in the run was killed by its own argument shape.
+    """
+    if template is None:
+        return tool_args
+    shaped = dict(tool_args)
+    payload = str(shaped.get("payload") or template.payload)
+    rendered = template.render(payload).tool_params("send_payload")
+    if not rendered:
+        return tool_args
+    shaped.update({k: v for k, v in rendered.items() if k != "payload"})
+    shaped["param"] = template.inject.name if template.inject else shaped.get("param", "")
+    shaped["payload"] = payload
+    return shaped
 
 
 def _json_body(stdout: str) -> Any:
@@ -569,7 +596,12 @@ class ExecutionCoordinator(CoordinatorContext):
 
     def _tool_declared_params(self, tool: str) -> dict:
         """Declared parameter schema of ``tool`` ({} when unknown)."""
-        for _gw in (self.attack_gateway, self.recon_gateway):
+        for _gw in (
+            getattr(self, "attack_gateway", None),
+            getattr(self, "recon_gateway", None),
+        ):
+            if _gw is None:
+                continue
             try:
                 spec = _gw.get_tool_specs().get(tool)
             except Exception as exc:
@@ -593,7 +625,9 @@ class ExecutionCoordinator(CoordinatorContext):
             try:
                 if tool not in _gw.get_tool_names():
                     continue
-                projected, unmappable, _migrated, _dropped = _gw.project_params(tool, raw)
+                projected, unmappable, _migrated, _dropped, _coerced = (
+                    _gw.project_params(tool, raw)
+                )
                 return projected, unmappable
             except Exception as exc:
                 log.debug("param normalization failed for %s: %s", tool, exc)
@@ -735,6 +769,65 @@ class ExecutionCoordinator(CoordinatorContext):
             fingerprint = str(sorted((params or {}).items()))
         return (tool, fingerprint)
 
+    def _apply_request_template(
+        self, tool: str, params: dict, *, task: Task | None = None,
+    ) -> dict:
+        """Canonicalize a call through its RequestTemplate.
+
+        The template carries the verb/content-type/body the plan reasoned
+        about; re-deriving parameters from a tool's defaults is how a JSON
+        POST turned into a GET (405) and a payload got dropped mid-repair. The
+        template is stored on the task the first time it is used, so the repair
+        loop, the follow-up hypotheses and the flag sweep all render the same
+        request instead of re-deriving one.
+        Non-HTTP tools keep their parameters untouched.
+        """
+        template = None
+        url = str((params or {}).get("url", (params or {}).get("target_url", "")) or "")
+        incoming = RequestTemplate.derive(
+            tool, params, documented_methods=self._endpoint_declared_methods(url),
+        )
+        if incoming is None:
+            return params
+        stored = None
+        if task is not None:
+            stored = RequestTemplate.from_dict(
+                (getattr(task, "action", {}) or {}).get("request")
+            )
+        # The stored template is a *shape* memory for this route, never a
+        # replacement for the caller's target or payload: reusing it wholesale
+        # would make two different URLs look like the same request.
+        if stored is not None and stored.url.rstrip("/") == incoming.url.rstrip("/"):
+            template = replace(
+                incoming,
+                method=stored.method or incoming.method,
+                body_format=(
+                    stored.body_format if stored.body_format != "none"
+                    else incoming.body_format
+                ),
+                content_type=stored.content_type or incoming.content_type,
+                headers=stored.headers or incoming.headers,
+                cookies=stored.cookies or incoming.cookies,
+                inject=incoming.inject or stored.inject,
+            )
+        else:
+            template = incoming
+            if task is not None:
+                task.action["request"] = template.to_dict()
+        if template is None:
+            return params
+        declared = self._tool_declared_params(tool)
+        rendered = template.tool_params(tool, declared)
+        if not rendered:
+            return params
+        merged = {**dict(params or {}), **rendered}
+        if merged != params:
+            log.debug(
+                "[REQUEST] %s shape materialized: method=%s body_format=%s",
+                tool, template.method, template.body_format,
+            )
+        return merged
+
     @staticmethod
     def _terminal_http_status(result: Any) -> int:
         """HTTP status that proves the same request will fail again.
@@ -763,6 +856,7 @@ class ExecutionCoordinator(CoordinatorContext):
         """
         if not hasattr(self, "_negative_cache"):
             self._negative_cache: dict[tuple[str, str], int] = {}
+        params = self._apply_request_template(tool, params, task=task)
         key = self._negative_call_key(tool, params)
         if key in self._negative_cache:
             status = self._negative_cache[key]
@@ -807,9 +901,22 @@ class ExecutionCoordinator(CoordinatorContext):
         subject's identifier.  Each promotion is recorded once per
         ``(vuln_type, endpoint, param)`` so the same observation cannot inflate
         the plan on every re-probe.
+
+        Two boundaries separate a disclosure from tool noise:
+
+        * the text scanned is the target's response body, never the whole
+          stdout (a fuzz banner printed this host's wordlist path and was
+          promoted as an LFI on ``/FUZZ``);
+        * a subject the target volunteers to a request that injected nothing
+          is the endpoint's own vocabulary (its default workspace), not
+          another tenant's identifier.
         """
-        stdout = str(getattr(result, "stdout", "") or "")
-        if not stdout:
+        parsed = getattr(result, "parsed_output", {}) or {}
+        response_text = extract_target_response(
+            tool, str(getattr(result, "stdout", "") or ""), parsed,
+        )
+        self._remember_request_values(params)
+        if not response_text:
             return []
         endpoint = str(
             (params or {}).get("url", (params or {}).get("target_url", "")) or ""
@@ -817,10 +924,39 @@ class ExecutionCoordinator(CoordinatorContext):
         param = str((params or {}).get("param", "") or "")
         anomalies = detect_response_anomalies(
             tool=tool, params=dict(params or {}),
-            response_text=stdout, endpoint=endpoint, param=param,
+            response_text=response_text, endpoint=endpoint, param=param,
+            seen_values=sorted(self._request_values_seen),
         )
+        injected = any(
+            str((params or {}).get(key) or "").strip()
+            for key in ("payload", "data", "body", "json", "param")
+        )
+        if not injected:
+            for anomaly in anomalies:
+                if anomaly.kind == "cross_subject_echo":
+                    self._benign_subjects.update(
+                        anomaly.signals.get("disclosed_subjects", [])
+                    )
+        anomalies = [
+            anomaly for anomaly in anomalies
+            if not (
+                anomaly.kind == "cross_subject_echo"
+                and set(anomaly.signals.get("disclosed_subjects", []))
+                <= self._benign_subjects
+            )
+        ]
+        self._evidence_anomalies_last_call = [
+            {"kind": a.kind, "evidence": a.evidence, "endpoint": a.endpoint,
+             "param": a.param, "vuln_type": a.vuln_type}
+            for a in anomalies
+        ]
         if not anomalies:
             return []
+        template = RequestTemplate.derive(
+            tool, params, documented_methods=self._endpoint_declared_methods(
+                str((params or {}).get("url", (params or {}).get("target_url", "")) or "")
+            ),
+        )
         if not hasattr(self, "_evidence_hypotheses_seen"):
             self._evidence_hypotheses_seen: set[tuple[str, str, str]] = set()
 
@@ -837,6 +973,9 @@ class ExecutionCoordinator(CoordinatorContext):
                 "source": "response_evidence",
             }] + traversal_hypotheses(anomaly)
             for item in candidates:
+                item["tool_args"] = _with_request_shape(
+                    item.get("tool_args") or {}, template,
+                )
                 key = (
                     str(item.get("vuln_type", "")),
                     str(item.get("endpoint", "")),
@@ -871,6 +1010,117 @@ class ExecutionCoordinator(CoordinatorContext):
             self._evidence_since_review = True
         return promoted
 
+    #: Grounds that the target disclosed real content rather than an error.
+    _CONTENT_DISCLOSURE_RE = re.compile(
+        r"(root:x:0:0:|/bin/(?:bash|sh)\b|uid=\d+\(|gid=\d+\(|"
+        r"BEGIN [A-Z ]*PRIVATE KEY|AKIA[0-9A-Z]{16})"
+    )
+
+    def _record_exploit_primitive(
+        self, tool: str, params: dict, result: Any, *, task: Task | None = None,
+    ) -> str:
+        """Store the request that produced impact as a reusable primitive.
+
+        Everything downstream (repair, follow-up hypotheses, the final flag
+        sweep) renders *this* request again instead of re-guessing verb, body
+        and content type. cloud-29 proved an arbitrary file read and then lost
+        it precisely because the proof was never a first-class value.
+        """
+        parsed = getattr(result, "parsed_output", {}) or {}
+        status = parsed.get("status")
+        if not isinstance(status, int) or not 200 <= status < 400:
+            return ""
+        url = str(
+            (params or {}).get("url", (params or {}).get("target_url", "")) or ""
+        )
+        template = None
+        if task is not None:
+            template = RequestTemplate.from_dict(
+                (getattr(task, "action", {}) or {}).get("request")
+            )
+        if template is None:
+            template = RequestTemplate.derive(
+                tool, params, documented_methods=self._endpoint_declared_methods(url),
+            )
+        if template is None or template.inject is None:
+            return ""
+
+        body = str(parsed.get("body") or "")
+        disclosure = self._CONTENT_DISCLOSURE_RE.search(body)
+        anomalies = list(getattr(self, "_evidence_anomalies_last_call", []) or [])
+        if not disclosure and not anomalies:
+            return ""
+        evidence = (
+            anomalies[0]["evidence"] if anomalies
+            else f"target returned file/secret content for the injected value "
+                 f"(match: {disclosure.group(0)!r})"
+        )
+
+        node_id = "prim-" + hashlib.sha1(
+            f"{template.fingerprint()}|{template.payload}".encode()
+        ).hexdigest()[:12]
+        self.dkg.add_node("ExploitPrimitive", node_id, {
+            "endpoint": template.url,
+            "method": template.method,
+            "content_type": template.content_type,
+            "body_format": template.body_format,
+            "headers": dict(template.headers),
+            "cookies": template.cookies,
+            "inject": template.inject.to_dict(),
+            "payload": template.payload,
+            "request": template.to_dict(),
+            "tool": tool,
+            "evidence": str(evidence)[:500],
+            "status": "proven",
+            "proven_at": time.strftime("%H:%M:%S"),
+        }, source="exploit", evidence=str(evidence)[:200])
+        _marked = self._mark_vulnerabilities_proven(template, node_id)
+        log.info(
+            "[PRIMITIVE] %s %s inject=%s payload=%r%s",
+            template.method, template.url, template.inject.name,
+            template.payload[:60], f" → {_marked} hypothesis(es)" if _marked else "",
+        )
+        self._task_log_event("info", "exploit_primitive", tool=tool,
+                             endpoint=template.url, method=template.method,
+                             param=template.inject.name)
+        return node_id
+
+    def _mark_vulnerabilities_proven(self, template: RequestTemplate, node_id: str) -> int:
+        """A hypothesis whose endpoint+parameter just produced data is proven."""
+        marked = 0
+        slot = template.inject.name if template.inject else ""
+        for vuln in self.dkg.query_nodes("Vulnerability"):
+            if str(vuln.get("endpoint", "")).rstrip("/") != template.url.rstrip("/"):
+                continue
+            if slot and str(vuln.get("parameter", "") or "") != slot:
+                continue
+            vuln_id = str(vuln.get("id", "") or "")
+            if not vuln_id:
+                continue
+            self.dkg.update_node(vuln_id, {
+                "status": "proven",
+                "primitive_id": node_id,
+                "confidence": max(float(vuln.get("confidence", 0.0) or 0.0), 0.9),
+            })
+            marked += 1
+        return marked
+
+    def _remember_request_values(self, params: dict) -> None:
+        """Remember every scalar this run has sent (evidence must be new).
+
+        A value the caller supplied cannot be a disclosure, and a value some
+        *earlier* call supplied (the default workspace of a baseline request)
+        must not come back later as "another subject's identifier".
+        """
+        if not hasattr(self, "_request_values_seen"):
+            self._request_values_seen: set[str] = set()
+            self._benign_subjects: set[str] = set()
+        for value in (params or {}).values():
+            if isinstance(value, (str, int, float)) and not isinstance(value, bool):
+                text = str(value).strip()
+                if text:
+                    self._request_values_seen.add(text)
+
     def _ingest_observed_routes(self, tool: str, params: dict, result: Any) -> None:
         """Turn a discovery tool's output into world state.
 
@@ -898,16 +1148,24 @@ class ExecutionCoordinator(CoordinatorContext):
             except (TypeError, ValueError):
                 status = 0
             _url = f"{_base}{path}"
+            # 401/403/405 prove the route EXISTS with the verb mismatched or
+            # gated; treating those as "no route" is what left cloud-30's
+            # POST-only /deploy invisible to the whole run.
+            _denied = status in (401, 403, 405)
+            _create_props = {
+                "sample_status": status,
+                "discovered_by": f"{tool}-result",
+                "methods": {"GET": status},
+                "provenance_level": (
+                    "derived" if status in (0, 404) else "verified"
+                ),
+            }
+            if not _denied:
+                _create_props["method"] = "GET"
+            else:
+                _create_props["verb_unknown"] = True
             if not self._upsert_endpoint(
-                _url,
-                create_props={
-                    "method": "GET",
-                    "sample_status": status,
-                    "discovered_by": f"{tool}-result",
-                    "provenance_level": (
-                        "derived" if status in (0, 404) else "verified"
-                    ),
-                },
+                _url, create_props=_create_props,
             ):
                 continue
             _added += 1
@@ -919,6 +1177,143 @@ class ExecutionCoordinator(CoordinatorContext):
             self._task_log_event(
                 "info", "routes_ingested", tool=tool, count=_added,
             )
+
+    def _routes_with_unknown_verb(self) -> list[str]:
+        """Verified routes whose method was never learned (from a 401/403/405).
+
+        A fuzz hit only proves the path exists; the target never said which
+        verb it wants. Until the verb is known no request can test the route,
+        so the next step is the target's own ``Allow`` header.
+        """
+        out: list[str] = []
+        for ep in self.dkg.query_nodes("Endpoint"):
+            url = str(ep.get("url", "") or "")
+            if not url.startswith(("http://", "https://")):
+                continue
+            if str(ep.get("allow_methods", "") or "").strip():
+                continue
+            if str(ep.get("documented_methods", "") or "").strip():
+                continue
+            statuses = {
+                int(v or 0) for v in (ep.get("methods", {}) or {}).values()
+            }
+            if str(ep.get("method", "") or "").upper() not in ("", "OPTIONS", "HEAD"):
+                continue
+            if statuses & {401, 403, 405}:
+                out.append(url)
+        return out
+
+    async def _probe_route_verbs(self, limit: int = 5) -> int:
+        """Ask each verb-unknown route what it accepts (OPTIONS → Allow).
+
+        The answer is written to the Endpoint node, which is what
+        ``_endpoint_declared_methods`` and the plan-completeness invariant
+        read; without it a discovered POST-only route stays untestable.
+        """
+        probed = 0
+        for url in (self._routes_with_unknown_verb())[:limit]:
+            if self._remaining_budget() <= 0:
+                break
+            try:
+                result = await self._call_tool(
+                    "http_method_probe", {"url": url, "method": "OPTIONS"},
+                )
+            except Exception as exc:
+                log.debug("verb probe failed for %s: %s", url, exc)
+                continue
+            probed += 1
+            parsed = getattr(result, "parsed_output", {}) or {}
+            allow = str(
+                parsed.get("allow")
+                or (parsed.get("headers", {}) or {}).get("Allow", "")
+            ).strip()
+            _node_id = self._upsert_endpoint(url)
+            if not _node_id:
+                continue
+            status = parsed.get("status")
+            methods = dict(
+                (self.dkg.get_node(_node_id) or {}).get("methods", {}) or {}
+            )
+            methods["OPTIONS"] = int(status or 0)
+            self.dkg.update_node(_node_id, {
+                "methods": methods,
+                "allow_methods": allow,
+                "verb_unknown": False,
+            })
+            if allow:
+                log.info("[ROUTES] %s accepts %s", url, allow)
+        return probed
+
+    async def _observe_tool_result(
+        self, tool: str, params: dict, result: Any, *, task: Task | None = None,
+    ) -> None:
+        """The single place a tool result becomes world state.
+
+        Routes, response evidence, the verb a route answered with and (new)
+        the reusable exploit primitive all come from here, so the task path
+        and the systematic fallback pass cannot drift apart — the systematic
+        pass used to skip evidence ingestion entirely, which is why the first
+        successful traversal in cloud-29 left no trace in the world model.
+        """
+        params = dict(params or {})
+        url = str(params.get("url", params.get("target_url", "")) or "")
+        status = _http_status_of(str(getattr(result, "stdout", "") or ""))
+        if tool in _ROUTE_DISCOVERY_TOOLS:
+            self._ingest_observed_routes(tool, params, result)
+            await self._probe_route_verbs()
+        self._ingest_response_evidence(tool, params, result)
+        if url.startswith(("http://", "https://")) and status is not None:
+            self._record_route_probe(url, _call_method(tool, params), status)
+            self._remember_route_sample(url, tool, result)
+        self._record_exploit_primitive(tool, params, result, task=task)
+        self._remember_tool_refusal(tool, result)
+
+    _TOOL_REFUSAL_MARKERS = (
+        "not allow-listed",
+        "binary not installed",
+        "command not found",
+    )
+
+    def _remember_tool_refusal(self, tool: str, result: Any) -> None:
+        """A tool that refused to run here should not be planned again.
+
+        ``cloud_discovery_command`` was re-planned and re-skipped on every
+        review; the refusal reason belongs to the run, not to one task.
+        """
+        if getattr(result, "success", False):
+            return
+        blob = (
+            f"{getattr(result, 'stderr', '') or ''} "
+            f"{getattr(result, 'stdout', '') or ''}"
+        ).lower()
+        reason = next(
+            (marker for marker in self._TOOL_REFUSAL_MARKERS if marker in blob), "",
+        )
+        if not reason:
+            return
+        self._remember_unusable(tool, reason)
+        log.info("[TOOLS] %s is unusable in this run: %s", tool, reason)
+
+    def _remember_route_sample(self, url: str, tool: str, result: Any) -> None:
+        """Keep one response excerpt per route as world state.
+
+        The subject vocabulary of a multi-tenant target only ever appears in
+        its responses; without keeping one, the later flag sweep has no way to
+        know which neighbouring tenant names exist (the executor keeps these
+        in memory, but the sweep runs through the shared world model).
+        """
+        node_id = self._upsert_endpoint(url)
+        if not node_id:
+            return
+        node = self.dkg.get_node(node_id) or {}
+        if str(node.get("sample_response") or "").strip():
+            return
+        body = extract_target_response(
+            tool, str(getattr(result, "stdout", "") or ""),
+            getattr(result, "parsed_output", {}) or {},
+        )
+        if body:
+            self.dkg.update_node(node_id, {"sample_response": body[:1500]})
 
     def _untested_documented_routes(self) -> list[tuple[str, str]]:
         """(url, method) pairs the target documented but nobody exercised.
@@ -956,9 +1351,12 @@ class ExecutionCoordinator(CoordinatorContext):
         """
         if not url:
             return set()
+        dkg = getattr(self, "dkg", None)
+        if dkg is None:
+            return set()
         methods: set[str] = set()
         _base = str(url).rstrip("/")
-        for ep in self.dkg.query_nodes("Endpoint"):
+        for ep in dkg.query_nodes("Endpoint"):
             _ep_url = str(ep.get("url", "") or "").rstrip("/")
             if not _ep_url or _ep_url != _base:
                 continue
@@ -1069,6 +1467,19 @@ class ExecutionCoordinator(CoordinatorContext):
         names; the verb follows the endpoint's own declaration (a write verb
         when it advertises one, otherwise the tool's own default).
         """
+        # Render the *same request* through the new tool. Rebuilding the
+        # arguments key-by-key is what dropped `payload`/`content_type` and
+        # turned an already-working JSON POST into a body-less write.
+        _methods = set(methods or set()) | self._endpoint_declared_methods(
+            str((params or {}).get("url", (params or {}).get("target_url", "")) or "")
+        )
+        template = RequestTemplate.derive(
+            old_tool, params, documented_methods=_methods,
+        )
+        if template is not None:
+            rendered = template.tool_params(new_tool, self._tool_declared_params(new_tool))
+            if rendered:
+                return {**dict(params or {}), **rendered}
         _new_params: dict = {}
         for key, value in dict(params or {}).items():
             if key in ("url", "target_url"):
@@ -2203,13 +2614,7 @@ class ExecutionCoordinator(CoordinatorContext):
             if not hasattr(self, "_executed_signatures"):
                 self._executed_signatures: set[tuple[str, str]] = set()
             self._executed_signatures.add((tc_name, _call_url.rstrip("/")))
-            if tc_name in _ROUTE_DISCOVERY_TOOLS:
-                self._ingest_observed_routes(tc_name, tc_args, result)
-            self._ingest_response_evidence(tc_name, tc_args or {}, result)
-            if _call_url.startswith(("http://", "https://")) and _call_status is not None:
-                self._record_route_probe(
-                    _call_url, _call_method(tc_name, tc_args), _call_status,
-                )
+            await self._observe_tool_result(tc_name, tc_args or {}, result, task=task)
             # Track if automated test found nothing
             rl = (getattr(result, 'stdout', '') or '').lower()
             if "no evidence" in rl or "no flag" in rl:
@@ -3748,6 +4153,9 @@ class ExecutionCoordinator(CoordinatorContext):
                             "test_result": stdout[:200],
                             "test_tool": tool_name,
                         })
+                    # Same world-state pipeline as the task path: a route or a
+                    # proven primitive discovered here must not be lost.
+                    await self._observe_tool_result(tool_name, args, result)
 
                     # DAVE L4: check for flag
                     flags = self.flag_pattern.findall(stdout)

@@ -24,9 +24,18 @@ Planner 发现工具、Executor 执行工具的攻击域注册层。
   运行时由 `tools/paths.resolve_wordlist()` 解析，解析失败时
   `resolve_fuzz_wordlist()` 回退到内置 `common.txt` 并告警——幻觉路径会让
   ffuf 在发出第一个请求前中止，任务却记为"未发现路径"。输出经
-  `_parse_ffuf_output()` 解析为 `discovered_paths`（`path` + `code`），由
+  `_parse_ffuf_output()` 解析为 `discovered_paths`（`path` + `code`）+
+  `scan_completed` / `enumeration_error`（区分"扫了没发现"与"扫描没跑起来"），由
   `execution._ingest_observed_routes()` 写回 Endpoint 世界状态——此前没有
-  解析器，整轮 fuzz 结果被丢弃并记为"无新状态"。spec 1.1.0。
+  解析器，整轮 fuzz 结果被丢弃并记为"无新状态"。命令行改为 `-of json` 输出到
+  临时文件并原样透传 ffuf 退出码（旧模板的 `| head -200` 让下游退出码冒充
+  ffuf 的结论）；解析优先读 JSON 文档，文本回退会 strip ANSI 并按 `[\r\n]+`
+  切分——ffuf 用 `\r` 重绘进度且行首带 `\x1b[2K`，按 `\n` 切分 + `^` 锚定的
+  旧解析器对真实输出恒返回 0 条。spec 1.2.0。
+- `send_payload`：HTTP 回应用同一个信封回报，4xx/5xx 现在
+  `success=False, exit_code=<status>` 且 `parsed_output={status, headers, body,
+  method, url}`（保留 `Allow` 与错误响应体）。此前异常被打印成 `ERROR:` 而
+  python 进程仍以 0 退出，一次 404 被记成 `OK (exit=0, 32 bytes)`。
 - `parallel_request`：`normalize_parallel_urls()` 同时接受逗号分隔字符串与
   JSON 数组（规划层发数组，旧实现直接 `urls.split` 崩溃）；URL 少于并发数时
   复制同一 URL 以形成真实竞态，构建逻辑只保留一份（旧实现重复构建 coroutine

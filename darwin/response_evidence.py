@@ -18,6 +18,42 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
+from typing import Iterable
+
+
+#: Bodies emitted by _python_request ("STATUS:/HEADER:/BODY_START") and by the
+#: HTTP tools that print a status line before the response.
+_ENVELOPE_BODY_RE = re.compile(r"^BODY_START\r?\n?(.*)$", re.MULTILINE | re.DOTALL)
+_STATUS_LINE_RE = re.compile(r"^(?:HTTP/[\d.]+\s+\d{3}|HTTP\s+\d{3})", re.MULTILINE)
+
+
+def extract_target_response(
+    tool: str = "", stdout: str = "", parsed_output: dict | None = None,
+) -> str:
+    """The part of a tool result the TARGET said.
+
+    Only this text may become evidence. Scanning the whole stdout is how
+    ffuf's own banner (``:: Wordlist : FUZZ: /usr/share/dirb/wordlists/
+    common.txt``) was promoted into an LFI hypothesis against ``/FUZZ`` — a
+    local path the framework printed, attributed to the target.
+    """
+    body = str((parsed_output or {}).get("body") or "")
+    if body:
+        return body
+    text = str(stdout or "")
+    envelope = _ENVELOPE_BODY_RE.search(text)
+    if envelope:
+        return envelope.group(1)
+    status_line = _STATUS_LINE_RE.search(text)
+    if status_line:
+        rest = text[status_line.end():]
+        for separator in ("\r\n\r\n", "\n\n"):
+            if separator in rest:
+                return rest.split(separator, 1)[1]
+        return ""
+    # No recognizable HTTP response: the output is the tool talking, not the
+    # target answering.
+    return ""
 
 #: Absolute POSIX/Windows paths.  Requires a known root so ordinary slash-laden
 #: text (URLs, MIME types) is not mistaken for a filesystem disclosure.
@@ -83,9 +119,12 @@ def detect_response_anomalies(
     response_text: str,
     endpoint: str = "",
     param: str = "",
+    seen_values: Iterable[str] | None = None,
 ) -> list[ResponseAnomaly]:
     """Observed disclosures in one tool result, as promotable hypotheses."""
-    request_blob = " ".join(str(v) for v in dict(params or {}).values())
+    request_blob = " ".join(
+        [str(v) for v in dict(params or {}).values()] + list(seen_values or [])
+    )
     anomalies: list[ResponseAnomaly] = []
 
     paths = disclosed_paths(response_text, request_blob)

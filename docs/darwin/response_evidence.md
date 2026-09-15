@@ -14,8 +14,15 @@
 
 ## 关键入口
 
-- `detect_response_anomalies(tool, params, response_text, endpoint, param)`：
-  返回 `ResponseAnomaly` 列表（kind / detail / evidence / signals）。
+- `extract_target_response(tool, stdout, parsed_output)`：只返回**目标**说过的话
+  （`STATUS:/HEADER:/BODY_START` 信封、curl/`http_post` 状态行之后的响应体）。
+  识别不出 HTTP 回应的输出返回空串——ffuf 表、构建日志、SQL 客户端回显都属
+  此类。整段 stdout 直接送检曾把 ffuf banner 里的本机词表路径
+  `/usr/share/dirb/wordlists/common.txt` 升级成 `/FUZZ` 上的 LFI 假设。
+- `detect_response_anomalies(tool, params, response_text, endpoint, param,
+  seen_values=...)`：返回 `ResponseAnomaly` 列表（kind / detail / evidence /
+  signals）。`seen_values` 是本 run 已发送过的所有标量值，这些值再出现在响应里
+  不是泄露。
 - `disclosed_paths(response_text, request_blob)`：请求中不含的绝对路径。
   只认可已知根（`/app`、`/srv`、`/opt`、`/etc`、`/var`、`/home`、`/usr`…），
   避免把 URL 与 MIME 里的斜杠当成文件系统泄露。
@@ -27,12 +34,18 @@
 ## 消费方
 
 `orchestration/execution._ingest_response_evidence()` 在每次工具调用后运行：
+只对 `extract_target_response()` 的结果跑检测（工具自身输出永不进入证据通道）；
 命中的证据写成 DKG `Vulnerability` 节点（`source=response_evidence`），并按
 `(vuln_type, endpoint, param)` 去重，重复探测不会反复放大计划；同时置位
 `_evidence_since_review`，让 plan review 有真实增量可评审。
+
+派生的后续假设会带上触发它的请求形状（`_with_request_shape()`），因此"JSON
+POST 的穿越"不会在后续步骤里退化成 GET 并收获 405。
 
 ## 约束
 
 - 只上报观测到的值；不做"可能存在"的推断（那是 analyze 阶段的职责）。
 - 同一 `(vuln_type, endpoint, param)` 只提升一次。
 - 路径识别要求已知根前缀；宁可漏报也不要把普通文本当成路径泄露。
+- 没有携带注入值的请求所回显的主体标识属于端点自己的词汇（服务器默认工作区），
+  记入 `_benign_subjects`，不再升级为跨主体泄漏。

@@ -12,6 +12,7 @@ from __future__ import annotations
 from darwin.core.contracts import TaskStatus
 from darwin.core.task import Task
 from darwin.orchestration.planning import (
+    _LLM_MIN_REMAINING_SECONDS,
     PlanCoordinator,
     _MIN_EXECUTIONS_BETWEEN_REVIEWS,
     _REVIEW_MIN_REMAINING_SECONDS,
@@ -186,3 +187,59 @@ def test_cap_prefers_tasks_that_have_not_already_run():
     fresh = _task("t-new", "curl_get", {"url": "http://h:1/new"})
     kept = coord._cap_pending_tasks([repeat, fresh], max_total=1)
     assert [t.id for t in kept] == ["t-new"]
+
+
+def test_forced_review_still_respects_the_llm_budget_floor():
+    """`force=True` means "as soon as cadence allows", not "with 12s left"."""
+    coord = _coordinator()
+    coord.time_budget = 600.0
+    coord._remaining_budget = lambda: _LLM_MIN_REMAINING_SECONDS - 12.0
+
+    reason = coord._review_skip_reason(_task("t-1", "curl_get"), force=True)
+
+    assert "budget" in reason
+
+
+def test_forced_review_runs_when_the_budget_can_afford_it():
+    coord = _coordinator()
+    coord._remaining_budget = lambda: 600.0
+    coord._review_done_this_cycle = True
+    coord._evidence_since_review = False
+    coord._executions_since_review = 0
+
+    assert coord._review_skip_reason(_task("t-1", "curl_get"), force=True) == ""
+
+
+def test_unusable_tool_is_remembered_and_reused_as_a_skip_reason():
+    coord = _coordinator()
+
+    coord._remember_unusable("aws_cli", "binary not installed")
+    coord._remember_unusable("aws_cli", "binary not installed again")
+
+    assert coord._unusable_tools() == {"aws_cli": "binary not installed"}
+    assert "aws_cli (binary not installed)" in coord._unusable_tools_note()
+
+
+def test_plan_sanitizer_skips_a_remembered_tool_without_repeating_the_note():
+    """A tool the run already proved unusable is not re-planned every review."""
+    coord = _coordinator()
+    object.__setattr__(
+        coord, "_orch",
+        type("Orch", (), {
+            "_BLACKLISTED_TOOLS": {},
+            "_absent_services": set(),
+            "attack_gateway": None,
+            "recon_gateway": None,
+            "dkg": type("DKK", (), {
+                "query_nodes": lambda self, *a, **k: [],
+            })(),
+        })(),
+    )
+    coord._remember_unusable("aws_cli", "binary not installed")
+    tasks = [_task("t-aws", "aws_cli", {"service": "s3", "action": "ls"})]
+
+    coord._sanitize_plan_tools(tasks)
+    coord._sanitize_plan_tools(tasks)
+
+    assert tasks[0].status is TaskStatus.ABANDONED
+    assert tasks[0].instruction.count("[skipped: aws_cli") == 1

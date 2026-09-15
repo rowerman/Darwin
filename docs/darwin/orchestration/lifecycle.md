@@ -32,7 +32,12 @@
   / exploit 0.55 / finalize 0.05；未使用额度仍按原 carryover 语义顺延。
 - 深侦察若在“发现即校验”阶段命中已验证 flag，`run()` 用 `_RunFinished`
   直接结束（`phase=done`），跳过研究/分析/利用阶段。
-- 收尾的 `_check_response_for_flag()` 先逐字请求每个已发现 Endpoint URL，
+- 收尾的 `_check_response_for_flag()` 先跑 `_sweep_exploit_primitives()`：
+  对 DKG 里每个 `ExploitPrimitive` 用**它自己的请求形状**回放 flag 路径族
+  （通用 flag 文件名 + 由目标披露推导出的相邻主体，如 `tenant-a` → `../tenant-b/secret.txt`）。
+  通用 GET 扫描只作为兜底——无凭据无 body 的 GET 结构上无法复用一次已证实的
+  JSON POST 原语（cloud-29 就是这样带着"任意文件读"结束却拿不到 flag）。
+  再逐字请求每个已发现 Endpoint URL，
   再对服务根拼接通用诊断路径（health/status/metrics/logs/api/docs/
   openapi.json/swagger.json/api-docs 与经典 flag 路径），全部为协议级通用
   约定，不含任何场景名。

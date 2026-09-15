@@ -1929,12 +1929,38 @@ class ReconCoordinator(CoordinatorContext):
             if not stdout:
                 continue
             safe_id = re.sub(r"[^A-Za-z0-9_.-]+", "_", url)[:48]
-            self.dkg.add_node("Endpoint", f"ep-verified-{safe_id}", {
-                "url": url, "method": "GET", "params": "",
+            status = int((parse_tool_stdout(stdout) or {}).get("status_code") or 0)
+            node = {
+                "url": url, "params": "",
                 "sample_response": stdout[:5000],
                 "response_size": len(stdout),
+                "sample_status": status,
+                "methods": {"GET": status},
                 "discovered_by": "deep-recon-verified",
-            })
+            }
+            if status in (401, 403, 405):
+                # The path exists but GET is not the verb it wants; recording
+                # GET as "the" method is how a POST-only route stayed
+                # untestable for a whole run.
+                node["verb_unknown"] = True
+            else:
+                node["method"] = "GET"
+            self.dkg.add_node("Endpoint", f"ep-verified-{safe_id}", node)
+            if status in (401, 403, 405):
+                probe = await self._call_tool(
+                    "http_method_probe", {"url": url, "method": "OPTIONS"},
+                )
+                parsed_probe = getattr(probe, "parsed_output", {}) or {}
+                allow = str(
+                    parsed_probe.get("allow")
+                    or (parsed_probe.get("headers", {}) or {}).get("Allow", "")
+                ).strip()
+                if allow:
+                    self.dkg.update_node(f"ep-verified-{safe_id}", {
+                        "allow_methods": allow,
+                        "verb_unknown": False,
+                    })
+                    log.info("_deep_recon: %s accepts %s", url, allow)
             flags = self.flag_pattern.findall(stdout)
             if not flags:
                 continue
