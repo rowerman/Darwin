@@ -27,8 +27,8 @@ def _all_specs():
 def test_every_registered_tool_has_a_valid_spec():
     specs = _all_specs()
     # Existing attack/recon tools + registry meta tools + the read-only
-    # conditional cloud discovery tool.
-    assert len(specs) == 135
+    # conditional cloud discovery tool + kubectl_logs + oob_listener.
+    assert len(specs) == 137
     assert check_all_specs(specs) == []
 
 

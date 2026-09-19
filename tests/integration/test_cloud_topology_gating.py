@@ -9,6 +9,8 @@ classifications map resources and relations into the DKG.
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from darwin.dkg import DKG
@@ -16,6 +18,56 @@ from darwin.tools.mcp_gateway import ToolResult
 
 
 pytestmark = pytest.mark.integration
+
+
+def _kubectl_stdout(cluster_name: str) -> dict:
+    """Kubectl payloads for a KIND cluster shaped like the cloud-02 scenario."""
+    node_name = f"{cluster_name}-control-plane"
+    return {
+        "kubectl cluster-info": (
+            f"Kubernetes control plane is running at https://127.0.0.1:42087\n"
+        ),
+        "kubectl get nodes -o json": json.dumps({"items": [{
+            "metadata": {"name": node_name},
+            "status": {"addresses": [
+                {"type": "InternalIP", "address": "172.18.0.2"},
+            ]},
+            "spec": {"taints": []},
+        }]}),
+        "kubectl get pods -A -o json": json.dumps({"items": [{
+            "metadata": {"name": "attacker", "namespace": "default",
+                         "labels": {"app": "attacker"}},
+            "spec": {
+                "nodeName": node_name,
+                "serviceAccountName": "default",
+                "containers": [{
+                    "name": "attacker", "image": "python:3.11-slim",
+                    "securityContext": {"capabilities": {"add": ["NET_RAW"]}},
+                }],
+            },
+            "status": {"phase": "Running"},
+        }]}),
+        "kubectl get svc -A -o json": json.dumps({"items": [{
+            "metadata": {"name": "metadata", "namespace": "default"},
+            "spec": {"clusterIP": "10.96.202.38", "selector": {"app": "metadata"},
+                     "type": "ClusterIP",
+                     "ports": [{"name": "imds", "port": 5000, "protocol": "TCP"}]},
+        }, {
+            "metadata": {"name": "kube-dns", "namespace": "kube-system"},
+            "spec": {"clusterIP": "10.96.0.10", "selector": {"k8s-app": "kube-dns"},
+                     "type": "ClusterIP",
+                     "ports": [
+                         {"name": "dns", "port": 53, "protocol": "UDP"},
+                         {"name": "dns-tcp", "port": 53, "protocol": "TCP"},
+                         {"name": "metrics", "port": 9153, "protocol": "TCP"},
+                     ]},
+        }]}),
+        "kubectl get namespaces -o json": json.dumps({"items": [
+            {"metadata": {"name": "default"}},
+            {"metadata": {"name": "kube-system"}},
+        ]}),
+        "kubectl auth can-i --list -A": "pods [get list] in default\n",
+    }
 
 
 class RecordingToolPort:
@@ -151,6 +203,40 @@ async def test_aws_mapper_without_port_never_spawns():
     mapper = CloudTopologyMapper(DKG(), tool_port=None)
     ok, out = await mapper._run_discovery("kubectl cluster-info")
     assert ok is False and out == ""
+
+
+@pytest.mark.asyncio
+async def test_kind_only_target_survives_bootstrap(
+    make_orchestrator, fake_llm, fake_gateway, aws_environment
+):
+    """cloud-02 regression: a cluster-only target must reach the planner.
+
+    nmap sees nothing on the host (the API server sits on a random port), every
+    service lives in-cluster, and the exploit-relevant pod carries a bare
+    capability name.  Bootstrap wrote two competing Service shapes for the
+    same cluster services and died formatting the port that one of them
+    omitted, ending the run with zero steps.
+    """
+    orch = make_orchestrator(fake_llm(content="[]"), fake_gateway({}), fake_gateway({}))
+    port = RecordingToolPort(kubectl_stdout=_kubectl_stdout("kind-cloud02"))
+    orch._tool_port = port
+    orch._provided_username = ""
+    orch._provided_password = ""
+
+    await orch.recon._bootstrap_scan("http://localhost", port_range="10000-14000")
+
+    services = orch.dkg.query_nodes("Service")
+    assert services
+    assert all(isinstance(row.get("port"), int) for row in services)
+    assert len({row["id"] for row in services}) == len(services)
+    assert not any(row["id"].startswith("k8s-service-") for row in services)
+
+    pods = {row["id"]: row for row in orch.dkg.query_nodes("K8sPod")}
+    assert pods["k8s-pod-default-attacker"]["capabilities"] == ["NET_RAW"]
+
+    endpoints = {row["id"]: row for row in orch.dkg.query_nodes("Endpoint")}
+    assert endpoints["endpoint-svc-default-metadata-5000"]["url"] == "http://10.96.202.38:5000"
+    assert orch._scan_classification.kind.value == "hybrid"
 
 
 @pytest.mark.asyncio

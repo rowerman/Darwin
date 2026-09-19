@@ -12,6 +12,11 @@
 
 - `CloudTopologyMapper`：维护拓扑映射，接受注入的 discovery tool port。
 - `discover_cloud_topology()`：异步发现并写入拓扑。
+- `write_k8s_service_nodes()`：K8s Service 的唯一写入点。一个 Service 节点 =
+  一个监听端口（`port/protocol/service_name/version/banner` + `k8s_namespace`/
+  `k8s_service_type`/`cluster_ip`/`k8s_selector`/`name`），id 为
+  `svc-k8s-<ns>-<name>-<port>`；cluster discovery 与本 mapper 都调用它，
+  重复发现是幂等更新，同一 Service 不会以两种形状出现在世界模型里。
 - `CloudTopology`、`K8sRBACBinding`、`PodSecurityProfile`：拓扑结果模型。
 - `CloudTopology` 还承载 Service、Deployment/StatefulSet/DaemonSet、EndpointSlice、Ingress、NetworkPolicy、RBAC 资源及 Secret/ConfigMap 元数据。
 - IMDS 发现会写入完整 `Credential`、`IAMRole`、metadata Host/Service/Endpoint 及 `credential_for_role` 关系；完整凭据仅用于执行器读取，摘要和 prompt-facing 拓扑视图自动脱敏。
@@ -20,6 +25,13 @@
 - ConfigMap 采集保存非敏感 `data`（单值截断 200 字符、排除 secret 类 key）；IAMPolicy 额外按 `DefaultVersionId` 拉取 `get-policy-version` 文档。
 - RouteTable 与 Subnet 的 association 写为 `route_table_routes_to`；EKS `name`/`ClusterName` 均登记为 crosswalk 查找键。
 - **Host 唯一主机模型**：K8s 节点与 AWS EC2 实例统一写入 `Host` 节点（`provider=k8s/aws`，属性保留 cluster/internal_ip/InstanceId/SubnetId/Groups 等）；ENI 折叠为 Host 的 `network_interfaces` 属性，不再单独建节点。`EC2`/`K8sNode`/`ENI` 仅为旧 checkpoint 的 legacy 类型，新环境不再产生。
+- **Pod 安全画像**：`securityContext.capabilities.add` 里的裸能力名（K8s 写成
+  `NET_RAW`）与 libcap 写法（`CAP_NET_RAW`）归一后参与 `escape_vectors` /
+  `risk_score`；high-risk 入选条件是「分数 > 0.3 或存在任一 escape vector」，
+  因此只带 NET_RAW 的 pod（二层 MITM 原语）也会进入 `cloud-topology-high-risk`
+  Analysis 节点。`K8sPod` 节点同时写入 `privileged` 与 `capabilities`，
+  供 planner 世界状态读取；容器镜像以 `images` 列表写入，使"节点上已有哪个
+  镜像"成为可规划事实（特权 pod 路线必须使用节点上已存在的镜像）。
 
 ## 输入/输出概览
 

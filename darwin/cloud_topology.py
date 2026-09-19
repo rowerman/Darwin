@@ -59,16 +59,17 @@ class PodSecurityProfile:
     @property
     def escape_vectors(self) -> list[str]:
         """Return list of applicable escape vectors based on security profile."""
+        caps = self._capabilities
         vectors = []
         if self.privileged:
             vectors.append("privileged_container")
-        if "SYS_ADMIN" in self.capabilities_add:
+        if "SYS_ADMIN" in caps:
             vectors.append("cap_sys_admin_cgroup")
-        if "CAP_DAC_READ_SEARCH" in self.capabilities_add:
+        if "DAC_READ_SEARCH" in caps:
             vectors.append("cap_dac_read_search")
-        if "CAP_SYS_PTRACE" in self.capabilities_add:
+        if "SYS_PTRACE" in caps:
             vectors.append("cap_sys_ptrace")
-        if "CAP_NET_RAW" in self.capabilities_add:
+        if "NET_RAW" in caps:
             vectors.append("cap_net_raw_mitm")
         if self.host_pid:
             vectors.append("hostpid_procfs")
@@ -85,10 +86,11 @@ class PodSecurityProfile:
     @property
     def risk_score(self) -> float:
         """0.0 (safe) to 1.0 (critical). Weighted by escape vector severity."""
+        caps = self._capabilities
         score = 0.0
         if self.privileged:
             score += 0.40
-        if "SYS_ADMIN" in self.capabilities_add:
+        if "SYS_ADMIN" in caps:
             score += 0.30
         if self.host_pid:
             score += 0.20
@@ -96,11 +98,37 @@ class PodSecurityProfile:
             score += 0.15
         if self.mounted_sockets:
             score += 0.25
-        if "CAP_DAC_READ_SEARCH" in self.capabilities_add:
+        if "DAC_READ_SEARCH" in caps:
             score += 0.15
-        if "CAP_SYS_PTRACE" in self.capabilities_add:
+        if "SYS_PTRACE" in caps:
             score += 0.10
+        if "NET_RAW" in caps:
+            score += 0.25
         return min(score, 1.0)
+
+    @property
+    def is_high_risk(self) -> bool:
+        """Security-relevant pod: notable score *or* any escape vector.
+
+        The score only ranks known escalation primitives; a capability that
+        has no weight yet (e.g. dedicated-network traffic manipulation) must
+        still reach the world model instead of being filtered out.
+        """
+        return self.risk_score > 0.3 or bool(self.escape_vectors)
+
+    @property
+    def _capabilities(self) -> set[str]:
+        """Declared capabilities in a comparable form.
+
+        Kubernetes reports ``securityContext.capabilities.add`` entries as
+        bare names (``NET_RAW``) while scans and knowledge entries use the
+        libcap spelling (``CAP_NET_RAW``); both must rank identically.
+        """
+        return {
+            str(cap).strip().upper().removeprefix("CAP_")
+            for cap in self.capabilities_add
+            if str(cap).strip()
+        }
 
 
 @dataclass
@@ -129,6 +157,52 @@ class CloudTopology:
     aws_coverage: dict[str, Any] = field(default_factory=dict)
     aws_warnings: list[str] = field(default_factory=list)
     high_risk_pods: list[PodSecurityProfile] = field(default_factory=list)
+
+
+def write_k8s_service_nodes(dkg: DKG, services: list[dict]) -> list[str]:
+    """Write one canonical ``Service`` node per Kubernetes Service port.
+
+    ``Service`` is the DKG's "listening endpoint" type: every consumer
+    (bootstrap summary, ``ServiceInfo.from_dkg``, host-side probing) reads a
+    scalar ``port``, never a Kubernetes ``ports`` list.  Cluster discovery and
+    the topology mapper both call this function, so a cluster service becomes
+    one node instead of two competing shapes, and repeated discovery is an
+    idempotent update.  Returns the node ids written.
+    """
+    written: list[str] = []
+    for service in services or []:
+        if not isinstance(service, dict):
+            continue
+        name = str(service.get("name", "") or "")
+        namespace = str(service.get("namespace", service.get("k8s_namespace", "")) or "")
+        cluster_ip = str(service.get("cluster_ip", service.get("clusterIP", "")) or "")
+        svc_type = str(service.get("type", "ClusterIP") or "ClusterIP")
+        selector = service.get("selector", service.get("k8s_selector", {}))
+        for port_row in service.get("ports", []) or []:
+            if isinstance(port_row, dict):
+                raw_port = port_row.get("port", port_row.get("targetPort"))
+                protocol = str(port_row.get("protocol", "TCP") or "TCP")
+            else:
+                raw_port, protocol = port_row, "TCP"
+            try:
+                port = int(raw_port)
+            except (TypeError, ValueError):
+                continue
+            node_id = f"svc-k8s-{namespace}-{name}-{port}"
+            dkg.add_node("Service", node_id, {
+                "port": port,
+                "protocol": protocol.lower(),
+                "service_name": f"k8s-{name}",
+                "version": f"{svc_type} {cluster_ip}:{port}".strip(),
+                "banner": f"K8s Service {name}.{namespace}.svc.cluster.local",
+                "name": name,
+                "k8s_namespace": namespace,
+                "k8s_service_type": svc_type,
+                "cluster_ip": cluster_ip,
+                "k8s_selector": selector,
+            }, source="cloud_discovery:k8s_service")
+            written.append(node_id)
+    return written
 
 
 # ── K8s Topology Discovery ──────────────────────────────────────────────
@@ -196,9 +270,11 @@ class CloudTopologyMapper:
 
         # Phase 2: Pod security analysis
         topology.pod_security_profiles = self._analyze_pod_security(topology.pods)
-        topology.high_risk_pods = [
-            p for p in topology.pod_security_profiles if p.risk_score > 0.3
-        ]
+        topology.high_risk_pods = sorted(
+            (p for p in topology.pod_security_profiles if p.is_high_risk),
+            key=lambda profile: profile.risk_score,
+            reverse=True,
+        )
 
         # Phase 3: Cloud IAM (only if IMDS/cloud metadata reachable)
         await self._discover_iam(topology)
@@ -968,6 +1044,7 @@ class CloudTopologyMapper:
             # ── Pods ──
             for pod in topology.pods:
                 pid = f"k8s-pod-{pod['namespace']}-{pod['name']}"
+                containers = pod.get("containers", []) or []
                 self.dkg.add_node("K8sPod", pid, {
                     "name": pod["name"],
                     "namespace": pod["namespace"],
@@ -975,7 +1052,16 @@ class CloudTopologyMapper:
                     "phase": pod.get("phase", ""),
                     "host_network": pod.get("host_network", False),
                     "host_pid": pod.get("host_pid", False),
+                    "privileged": any(c.get("privileged") for c in containers),
+                    "capabilities": sorted({
+                        str(cap) for c in containers
+                        for cap in (c.get("capabilities_add") or [])
+                    }),
                     "service_account": pod.get("service_account", "default"),
+                    "images": sorted({
+                        str(c.get("image", "") or "")
+                        for c in containers if c.get("image")
+                    }),
                     "labels": pod.get("labels", {}),
                 })
 
@@ -1052,16 +1138,7 @@ class CloudTopologyMapper:
                             self.dkg.add_edge(said, rid, "sa_bound_to_role")
 
         # ── Services and first-class Kubernetes resources ──
-        for service in topology.services:
-            sid = f"k8s-service-{service.get('namespace', '')}-{service.get('name', '')}"
-            self.dkg.add_node("Service", sid, {
-                "name": service.get("name", ""),
-                "k8s_namespace": service.get("namespace", ""),
-                "k8s_selector": service.get("selector", {}),
-                "k8s_type": service.get("type", "ClusterIP"),
-                "ports": service.get("ports", []),
-                "cluster_ip": service.get("cluster_ip", ""),
-            }, source="cloud_discovery:k8s_service")
+        write_k8s_service_nodes(self.dkg, topology.services)
 
         for workload in topology.workloads:
             kind = str(workload.get("kind", "Deployment"))

@@ -51,9 +51,11 @@ from darwin.tools.contracts import (
     http_tool_can_express,
     http_tools_for,
     request_body_kind,
+    tool_domain,
 )
 from darwin.tools.arg_contract import project_args
 from darwin.tools.request_template import RequestTemplate
+from darwin.reachability import is_host_reachable
 from darwin.response_evidence import (
     detect_response_anomalies,
     extract_target_response,
@@ -207,6 +209,10 @@ _ROUTE_ID_CONTROL_KEYS = frozenset({
 _FALLBACK_HTTP_TOOLS = [
     "http_method_probe", "http_post", "send_payload", "curl_get",
 ]
+
+#: Domains whose tools are thin wrappers over one CLI/API surface, where a
+#: repair may substitute one tool for another (kubectl auth check → logs).
+_CLI_WRAPPER_DOMAINS = frozenset({"k8s", "cloud", "container", "network", "ad", "lnx"})
 
 # Vulnerability type -> systematic-pass tool mapping (with fuzzy matching).
 # A type whose exploit IS a write (publish/register/overwrite) must map to a
@@ -1453,10 +1459,23 @@ class ExecutionCoordinator(CoordinatorContext):
 
     @staticmethod
     def _tool_in_same_capability_family(old_tool: str, new_tool: str) -> bool:
-        """Whether a repair may switch *old_tool* → *new_tool*."""
+        """Whether a repair may switch *old_tool* → *new_tool*.
+
+        Same capability family is the safe case. For infrastructure domains the
+        tools are thin wrappers over ONE surface, so a switch inside the domain
+        is also allowed: ``kubectl_auth_check`` → ``kubectl_logs`` →
+        ``k8s_secret_dump`` are different capability labels on the same cluster
+        access, and blocking that switch left every K8s failure unpatchable.
+        Web tools are deliberately excluded — there a switch changes what is
+        done to the request (fetch → SQL map → payload injector), which is what
+        the capability-family rule exists to prevent.
+        """
         if not old_tool or not new_tool:
             return False
-        return capability_family(old_tool) == capability_family(new_tool)
+        if capability_family(old_tool) == capability_family(new_tool):
+            return True
+        domain = tool_domain(old_tool)
+        return domain in _CLI_WRAPPER_DOMAINS and domain == tool_domain(new_tool)
 
     def _remap_http_params(
         self, old_tool: str, new_tool: str, params: dict, methods: set[str],
@@ -3827,6 +3846,13 @@ class ExecutionCoordinator(CoordinatorContext):
         if not hasattr(self, '_tried_systematic'):
             self._tried_systematic: set[tuple] = set()
         tried = self._tried_systematic  # (tool, url, param) dedup, cross-cycle
+        # Endpoints derived from cluster internals are not routable from this
+        # host: the sweep must not spend a request timeout on each.
+        _unroutable_urls = {
+            str(ep.get("url", "") or "")
+            for ep in self.dkg.query_nodes("Endpoint")
+            if str(ep.get("url", "") or "") and not is_host_reachable(ep)
+        }
         tested_count = 0
         # Refusals are reported, not swallowed: "tested 0 combinations" used to
         # read as "the target survived the sweep" when in fact no request was
@@ -3874,6 +3900,8 @@ class ExecutionCoordinator(CoordinatorContext):
             # Skip infrastructure ports
             if any(s.get("skip_exploit") for s in self.dkg.query_nodes("Service")
                    if s.get("port") and f":{s['port']}" in endpoint):
+                continue
+            if endpoint in _unroutable_urls:
                 continue
 
             tools = _resolve_tools(vt)

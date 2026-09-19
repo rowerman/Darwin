@@ -20,7 +20,13 @@ Orchestrator 上下文读写状态并调用工具端口。
   支持写动词的路径写入 `method`、`body_format`、`documented_methods`（服务
   自己声明的动词）与 `params`（字段名仅来自清单/schema，不伪造）。
   `/invoke` 类路径仅打 `invoke_signal` 候选标记，不判定漏洞。
-- `_k8s_cluster_discovery()`：仅在分类为 private cloud/hybrid 后通过 discovery tool port 执行 K8s 只读发现；bootstrap 完成后 `CloudTopologyMapper` 写入扩展资源，并由 `RelationAnalyzer` 建立 canonical 关系。
+- `_k8s_cluster_discovery()`：在 `k8s_signal`（无开放端口 / private cloud /
+  hybrid / 服务文本带 k8s 关键词）成立后通过 discovery tool port 执行 K8s
+  只读发现；bootstrap 完成后 `CloudTopologyMapper` 写入扩展资源，并由
+  `RelationAnalyzer` 建立 canonical 关系。发现的节点 Host 节点带
+  `provider=k8s`（环境分类的 `dkg:k8s-host` 信号依赖它，缺失时 KIND 集群会
+  被判成 public cloud 而丢掉 K8s 知识集）；Service 节点经
+  `cloud_topology.write_k8s_service_nodes()` 写入，与 CTAGE 共用同一形状与 id。
 - `_deep_recon()`：HTTP 端点深侦察。HTML 主站继续运行 gobuster/nikto/form_extract；
   JSON、纯文本与 API 响应跳过这三类重型工具，改为 JSON 结构解析、路由提取与
   HTTP 方法验证（复用 `_api_route_discovery`）。**JSON 根不再直接返回**：
@@ -28,6 +34,24 @@ Orchestrator 上下文读写状态并调用工具端口。
   用正确动词访问过声明路由的情况下判定耗尽。
 - `_detect_defenses()`：DPM 防御检测。
 - `_verify_flag()`：DAVE L4 flag 验证与蜜罐拒绝。
+- `_probe_cms()` / `_probe_service_hint_paths()`：CMS 入口与标签暗示路径探测。
+
+### 宿主可达性（`darwin/reachability.py`）
+
+`relation_analyzer:*` 合成的 ClusterIP/云暴露端点（`virtual: True`）只存在于
+集群网络内，宿主没有到 Service CIDR 的路由。`is_host_reachable()` 是唯一判定
+入口，CMS 探测、端点深侦察、标签路径探测、DPM 探测与 systematic pass 都据此
+跳过它们；它们仍作为拓扑事实进入 planner 上下文。
+
+CMS 路径探测只对 HTML 型端点执行（`_looks_like_html`），单次 `curl_get`
+超时 5s，并且只有响应体带真实 CMS 指纹（`_has_cms_marker`：`wp-content`
+/`wp-includes`/`wordpress`/`joomla`/`drupal`/`typo3`，或 2xx 且含 password
+表单）才登记 Endpoint。Kubernetes API server 对任意路径都返回同一份 403
+Status JSON，旧规则把它当成 10 个"认证墙 CMS 端点"，既污染假设生成又让
+`/wp-json/wp/v2/` 触发假的 Docker Registry 检测。
+
+`_detect_defenses()` 先做 3s 可达性预检，最多对 3 个可达端点发探针：不可达
+端点的完整探针族只会消耗预算而不产生任何 DPM 证据。
 
 ## 相关模块
 

@@ -16,6 +16,17 @@ bootstrap recon 和后续服务研究阶段的工具注册层。
   响应头与 body；用于自适应侦察的 API 路由发现与 POST/JSON 验证。
 - 各 `_parse_*` 函数：外部 CLI 输出适配。
 
+## TLS 自动降级
+
+`curl_get` 与 `http_post` 在 `insecure=False` 时若遇到证书校验失败
+（Python `SSLCertVerificationError` 或 curl `(60) SSL certificate problem`），
+会用关闭校验的方式重试一次，并在输出里追加
+`# retried with ... (self-signed certificate)`。判定与上下文构造集中在
+`darwin/tools/tls.py`（`is_cert_verify_error()` / `unverified_context()`），
+`send_payload` 等 `attack_server` 侧工具复用同一套。实验室/靶场与 KIND
+API server 普遍是自签名证书：请求根本到不了应用，把它当作"空响应"探测结果
+会直接毁掉 k8s 场景的 HTTP 验证。
+
 ## HTTP 写请求（`http_post`）
 
 `http_post` 是 HTTP **写**工具：`method` 默认 `POST`，可选

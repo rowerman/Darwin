@@ -72,6 +72,8 @@ _CAPABILITY_BY_NAME = {
     "nsenter_exec": "container_escape", "kubectl_run": "k8s_apply", "kubectl_exec": "k8s_apply",
     "k8s_secret_dump": "secret_dump", "k8s_configmap_dump": "secret_dump",
     "kubectl_get_secrets": "secret_dump", "etcdctl_get": "secret_dump", "k8s_etcd_keys": "secret_dump",
+    "kubectl_logs": "k8s_discovery",
+    "oob_listener": "oob_callback",
     "docker_registry": "registry_push", "aws_sts_query": "cloud_iam_assume",
     "aws_iam_federation": "cloud_iam_assume", "aws_cli": "cloud_iam_assume",
     "saml_forge": "cloud_iam_assume", "jwt_forge": "cloud_iam_assume",
@@ -95,18 +97,31 @@ def _domain_for(name: str, entry: Any) -> list[str]:
         return []
     if entry.domain:
         return [entry.domain]
+    return [tool_domain(name) or "web"]
+
+
+def tool_domain(name: str) -> str:
+    """Primary domain implied by a tool's name, or "" when unrecognized.
+
+    Used by the repair loop to decide whether two tools act on the same
+    surface (kubectl auth check → kubectl logs are both "k8s"). Unlike
+    :func:`_domain_for` it has no "web" fallback, so unknown names never look
+    like a match.
+    """
+    if not name or name.startswith("tool_registry_"):
+        return ""
     if name in {"ssh_exec", "ssh_key_exec", "hydra_ssh_brute", "test_credential", "test_db_credential"}:
-        return ["network"]
+        return "network"
     if name in _WEB_NAMES:
-        return ["web"]
+        return "web"
     for domain, prefixes in _DOMAIN_PREFIXES:
         if any(name == prefix or name.startswith(prefix) for prefix in prefixes):
-            return [domain]
+            return domain
     if name in {"nmap_scan", "nmap_full_scan", "nmap_port_range", "nmap_vulners_scan", "masscan_scan"}:
-        return ["network"]
+        return "network"
     if name in {"cloud_discovery_aws", "cloud_discovery_command"}:
-        return ["cloud" if name.endswith("_aws") else "k8s"]
-    return ["web"]
+        return "cloud" if name.endswith("_aws") else "k8s"
+    return ""
 
 
 def _capability_for(name: str, domain: str) -> str:

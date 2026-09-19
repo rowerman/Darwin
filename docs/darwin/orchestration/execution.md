@@ -77,6 +77,13 @@ upload 等）自动合成 `http_status_in([200,201,202,204])`——工具退出 
 工具名改成实际执行的新工具名。否则条件永远无法达成，任务会一直循环在
 "expected X to run, but ran: Y"上直到预算耗尽。
 
+替换范围由 `_tool_in_same_capability_family()` 界定：同 capability family 允许，
+另外在"CLI 包装器"域（k8s/cloud/container/network/ad/lnx）内允许同域替换
+（`kubectl_auth_check` → `kubectl_logs` → `k8s_secret_dump` 是同一份集群访问
+的三种用法，禁掉这条会让 K8s 失败永远不可修）。web 域被显式排除：那里换工具
+等于改变"对请求做什么"（fetch → sqlmap → payload injector），正是 family
+规则要拦的事。
+
 ## 响应证据摄入（`_ingest_response_evidence`）
 
 ## 重复调用缓存（`_execute_tool_call`）

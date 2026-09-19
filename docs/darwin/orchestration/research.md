@@ -27,6 +27,16 @@ research/planning/兜底探测都为每份付一次代价。
 
 `_augment_from_dkg()` 仅基于成功响应和真实输入参数生成假设；URL 获取型参数优先映射到 `ssrf_probe`。
 
+数字 ID 启发式走 `numeric_object_path(url, status)`：只匹配 URL **路径**里的
+数字段（`/1`、`/user/1`）且要求记录状态 < 400。旧实现用 `re.search(r'/\d+',
+url)` 匹配整条 URL，`https://127.0.0.1:45889/...` 里的 `//127` 会被当成对象
+id，于是每个端点都凭空多出一条 IDOR，被 research/planning/systematic 各消费
+一次。
+
+`_research_phase()` 的 LLM 轮次里，`ddg_web_search` 每阶段最多
+`_MAX_RESEARCH_WEB_SEARCHES`（默认 4）次，超出时以工具结果形式告知模型改用
+本地知识：每次外网搜索花费数十秒，长尾假设列表不能吃掉 exploit 窗口。
+
 ## Analyze 端点的归一化与存在性校验
 
 analyze LLM 偶尔把端口写成路径段（`http://host/10726`），这类 URL 指向

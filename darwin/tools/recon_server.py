@@ -16,6 +16,7 @@ from darwin.tools.mcp_gateway import MCPGateway, ToolResult
 from darwin.tools.params import coerce_body, normalize_headers
 from darwin.tools.paths import resolve_wordlist
 from darwin.tools.spec import auto_spec
+from darwin.tools.tls import is_cert_verify_error, unverified_context
 
 
 _LOG = logging.getLogger(__name__)
@@ -727,32 +728,48 @@ def register_recon_tools(gateway: MCPGateway) -> MCPGateway:
                         argv.extend(["-H", h.strip()])
         argv.append(url)
         started = time.perf_counter()
-        proc = await asyncio.create_subprocess_exec(
-            *argv,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        try:
-            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout + 2)
-        except asyncio.TimeoutError:
+
+        async def _curl(argv_local: list[str]) -> ToolResult:
+            proc = await asyncio.create_subprocess_exec(
+                *argv_local,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
             try:
-                proc.kill()
-                await proc.communicate()
-            except (ProcessLookupError, OSError) as exc:
-                _LOG.debug("swallowed exception: %s", exc, exc_info=True)
+                stdout, stderr = await asyncio.wait_for(
+                    proc.communicate(), timeout=timeout + 2)
+            except asyncio.TimeoutError:
+                try:
+                    proc.kill()
+                    await proc.communicate()
+                except (ProcessLookupError, OSError) as exc:
+                    _LOG.debug("swallowed exception: %s", exc, exc_info=True)
+                return ToolResult(
+                    tool_name="curl_get", success=False, stdout="",
+                    stderr=f"curl timeout after {timeout}s", exit_code=-1,
+                    elapsed_ms=(time.perf_counter() - started) * 1000,
+                )
             return ToolResult(
-                tool_name="curl_get", success=False, stdout="",
-                stderr=f"curl timeout after {timeout}s", exit_code=-1,
+                tool_name="curl_get",
+                success=proc.returncode == 0,
+                stdout=stdout.decode("utf-8", errors="replace"),
+                stderr=stderr.decode("utf-8", errors="replace"),
+                exit_code=proc.returncode or 0,
                 elapsed_ms=(time.perf_counter() - started) * 1000,
             )
-        return ToolResult(
-            tool_name="curl_get",
-            success=proc.returncode == 0,
-            stdout=stdout.decode("utf-8", errors="replace"),
-            stderr=stderr.decode("utf-8", errors="replace"),
-            exit_code=proc.returncode or 0,
-            elapsed_ms=(time.perf_counter() - started) * 1000,
-        )
+
+        result = await _curl(list(argv))
+        if not insecure and is_cert_verify_error(
+            f"{result.stdout}{result.stderr}"
+        ):
+            # Self-signed target certificate: the first request never reached
+            # the application. Retry once without verification.
+            retry_argv = list(argv[:-1]) + ["-k", argv[-1]]
+            result = await _curl(retry_argv)
+            result.stdout = (
+                f"{result.stdout}\n# retried with -k (self-signed certificate)"
+            )
+        return result
 
     gateway.register(
         name="curl_get",
@@ -818,10 +835,7 @@ def register_recon_tools(gateway: MCPGateway) -> MCPGateway:
                 exit_code=2, elapsed_ms=0,
             )
         try:
-            ctx = ssl.create_default_context()
-            if insecure:
-                ctx.check_hostname = False
-                ctx.verify_mode = ssl.CERT_NONE
+            ctx = unverified_context() if insecure else ssl.create_default_context()
             hdrs = normalize_headers(headers)
             if cookie:
                 hdrs["Cookie"] = cookie.strip().rstrip(";")
@@ -871,6 +885,18 @@ def register_recon_tools(gateway: MCPGateway) -> MCPGateway:
                                "method": _method, "url": url},
             )
         except Exception as e:
+            if not insecure and is_cert_verify_error(str(e)):
+                # Self-signed target certificate: the write never reached the
+                # application. Retry once without verification.
+                retry = await _http_post(
+                    url=url, data=data, headers=headers, cookie=cookie,
+                    content_type=content_type, method=method, insecure=True,
+                )
+                retry.stdout = (
+                    f"{retry.stdout}\n# retried with TLS verification disabled "
+                    "(self-signed certificate)"
+                )
+                return retry
             return ToolResult(tool_name="http_post", success=False, stdout="", stderr=str(e), exit_code=1, elapsed_ms=0)
 
     _http_post_desc = (

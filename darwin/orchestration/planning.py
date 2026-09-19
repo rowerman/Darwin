@@ -38,6 +38,39 @@ _WRITE_DEFAULT_TOOL = "http_method_probe"
 
 # A plan review regenerates the whole plan, so it is only worth its cost once
 # the previous rewrite has been TESTED by real executions.
+
+# Documented body fields whose value the server executes as code, a script or
+# a command. Output of such a field often never returns in the HTTP response
+# (the work is queued and run asynchronously), so the plan needs the OOB flow.
+_EXEC_FIELD_NAMES = frozenset({
+    "script", "cmd", "command", "code", "shell", "hook", "run", "exec", "payload",
+})
+
+#: Response/URL markers that are actually evidence of a Docker Registry v2 API.
+_REGISTRY_SIGNALS = (
+    "docker-distribution", "docker registry", "registry/2.0", "docker-registry",
+)
+
+
+def registry_signal(text: str) -> bool:
+    """Whether an endpoint signature proves a Docker Registry v2 API.
+
+    A bare ``/v2/`` used to qualify: it matched any URL containing that path
+    segment (e.g. a CMS probe endpoint such as ``/wp-json/wp/v2/``) and sent the
+    planner off poisoning a registry the target never exposed.
+    """
+    lowered = str(text or "").lower()
+    return any(marker in lowered for marker in _REGISTRY_SIGNALS)
+
+
+def exec_body_fields(params: Any) -> List[str]:
+    """Documented body fields whose value the server executes as code."""
+    names = {
+        field.strip().lower()
+        for field in str(params or "").replace(";", ",").split(",")
+        if field.strip()
+    }
+    return sorted(names & _EXEC_FIELD_NAMES)
 _MIN_EXECUTIONS_BETWEEN_REVIEWS = 3
 
 #: Below this much remaining budget a full plan rewrite costs more than it can
@@ -505,7 +538,7 @@ class PlanCoordinator(CoordinatorContext):
                         tool = "helm"
                         # Build --host from DKG service data:
                         # svc_name="k8s-tiller-deploy", banner="...tiller-deploy.kube-system.svc.cluster.local"
-                        _tiller_host = (_svc.get("k8s_cluster_ip", "") or "")
+                        _tiller_host = (_svc.get("cluster_ip", "") or "")
                         _tiller_ns = (_svc.get("k8s_namespace", "") or "kube-system")
                         _tiller_name = (_svc_name.replace("k8s-", "") if _svc_name.startswith("k8s-") else _svc_name)
                         if _tiller_name and _tiller_ns:
@@ -1287,6 +1320,22 @@ class PlanCoordinator(CoordinatorContext):
             banner = str(ep.get("banner", "") or ep.get("sample_response", "") or "").lower()
             url = str(ep.get("url", "") or "").lower()
             _ep_sig = f"{banner} {url}"
+            # A documented body field the server executes (script/command/code)
+            # is a code-execution surface. Output may be delivered later to a
+            # callback URL instead of coming back in the HTTP response, so the
+            # plan must pair it with the OOB listener rather than reading the
+            # response body for evidence.
+            _exec_fields = exec_body_fields(ep.get("params", ""))
+            if _exec_fields and "oob_async" not in _artifact_seen:
+                _artifact_lines.append(
+                    "- **Server-side execution field detected** ("
+                    + ", ".join(_exec_fields) + "): the endpoint runs the "
+                    + "supplied value as code/script. Output may arrive later on a "
+                    + "callback URL instead of in the response — start "
+                    + "`oob_listener`, deliver the payload with one of its "
+                    + "callback_urls, then `oob_listener` action=read to confirm "
+                    + "execution and capture the output.")
+                _artifact_seen.add("oob_async")
             if ("s3" in _ep_sig or "object" in banner or "bucket" in banner) and "s3_endpoint" not in _artifact_seen:
                 _artifact_lines.append(
                     "- **Object-storage / S3 endpoint detected**: use "
@@ -1310,15 +1359,30 @@ class PlanCoordinator(CoordinatorContext):
                     + "direct Query API calls (no AWS CLI needed). If SCP "
                     + "blocks access, try `api_version=2010-05-08` (pre-SCP legacy)")
                 _artifact_seen.add("sts_endpoint")
-            if ("docker-distribution" in _ep_sig or "docker registry" in _ep_sig
-                    or "registry/2.0" in _ep_sig or "/v2/" in _ep_sig
-                    or "docker-registry" in _ep_sig) and "docker_registry" not in _artifact_seen:
+            if registry_signal(_ep_sig) and "docker_registry" not in _artifact_seen:
                 _artifact_lines.append(
                     "- **Docker Registry v2 API detected**: use `docker_registry` "
                     + "to pull, modify (backdoor), and push images. Then use "
                     + "`kubectl_get_pods` + `kubectl_exec` to trigger pod restart "
                     + "and read flag from the compromised container.")
                 _artifact_seen.add("docker_registry")
+        # (b2) Service map — a discovered registry port with a registry-ish
+        # label is registry evidence even before its /v2/ API was probed.
+        if "docker_registry" not in _artifact_seen:
+            for svc in self.dkg.query_nodes("Service"):
+                if int(svc.get("port", 0) or 0) not in (5000, 5001):
+                    continue
+                _svc_sig = " ".join(
+                    str(svc.get(k, "") or "")
+                    for k in ("service_name", "version", "banner", "fingerprint")
+                ).lower()
+                if "registry" in _svc_sig or "docker" in _svc_sig:
+                    _artifact_lines.append(
+                        "- **Docker Registry service detected**: use `docker_registry` "
+                        + "to pull, modify (backdoor), and push images, then restart "
+                        + "the consuming workload to read the flag.")
+                    _artifact_seen.add("docker_registry")
+                    break
         # (c) Analysis / Vulnerability nodes — check for PEM keys in evidence
         for an in self.dkg.query_nodes("Analysis"):
             ev = str(an.get("evidence", "") or an.get("summary", "") or an.get("findings", "") or "")
@@ -1329,6 +1393,36 @@ class PlanCoordinator(CoordinatorContext):
                     + "`aws_cli` action=assume-role-with-saml")
                 _artifact_seen.add("pem_key")
                 break
+        # (c2) Kubernetes access facts — the kubectl identity's rights decide
+        # which cluster-side paths are reachable at all.
+        _k8s_access: set[str] = set()
+        for host in self.dkg.query_nodes("Host"):
+            for tag in (host.get("k8s_access") or []):
+                _k8s_access.add(str(tag))
+        _exited_pods = [
+            pod for pod in self.dkg.query_nodes("K8sPod")
+            if str(pod.get("phase", "") or "").strip().lower()
+            in ("succeeded", "failed", "completed")
+        ]
+        if _exited_pods and "k8s_exited_pod" not in _artifact_seen:
+            _pod_names = ", ".join(
+                f"{pod.get('namespace', 'default')}/{pod.get('name', '?')}"
+                for pod in _exited_pods[:5]
+            )
+            _artifact_lines.append(
+                f"- **Exited workload(s) detected** ({_pod_names}): read their "
+                + "logs with `kubectl_logs` before planning an exploit — a pod "
+                + "that already ran its command may have printed the flag.")
+            _artifact_seen.add("k8s_exited_pod")
+        if ({"cluster-admin", "create-pods"} & _k8s_access
+                and "k8s_pod_create" not in _artifact_seen):
+            _artifact_lines.append(
+                "- **kubectl identity can create pods ("
+                + ", ".join(sorted(_k8s_access)) + ")**: to read node-local files "
+                + "(hostPath /), deploy `k8s_backdoor_daemonset` with an image "
+                + "already present on the node and collect its output with "
+                + "`kubectl_logs`.")
+            _artifact_seen.add("k8s_pod_create")
         # (d) Vulnerability nodes — type-based hints
         for vn in self.dkg.query_nodes("Vulnerability"):
             vt = str(vn.get("vuln_type", "") or "").lower()

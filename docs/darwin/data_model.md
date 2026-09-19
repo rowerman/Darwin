@@ -24,6 +24,13 @@
 写入 `PipelineState.endpoints`：派生/假设路由留在图里供审计，但不作为事实进入
 规划上下文与运行报告。
 
+`to_prompt_context()` 在渲染上下文最前面额外输出 "## Cluster & Access Facts"
+（`_cluster_access_block()`）：K8sCluster（名称/api_url/版本）、Host 节点上的
+`k8s_access_summary`（当前 kubectl 身份能做什么）、以及 K8sPod 的名称/命名空间/
+phase/镜像/privileged/hostPID。这些是"哪条攻击路径可行"的一等事实，过去只存在
+于 Analysis note 里，而渲染窗口只保留最后两条 note，于是 cluster-admin 权限
+从未进入任何 prompt。
+
 ## 相关模块
 
 `dkg.py`、`core/contracts.py`、`core/task.py`、`orchestrator.py`。

@@ -45,6 +45,31 @@ Planner 发现工具、Executor 执行工具的攻击域注册层。
 
 `mcp_gateway.py`、`spec.py`、`manifest.py`、`core/capabilities.py`。
 
+## K8s 工具族（宿主侧 kubeconfig 语义）
+
+- `kubectl_logs(pod, namespace, tail_lines, container)`：读 pod 日志。已跑完
+  （Completed/Failed）的脆弱性 PoC pod 的输出仍在这里，是恢复 flag 最便宜
+  的一步；此前工具面里没有读日志的能力。
+- `kubectl_auth_check(sa="", namespace="")`：默认查**当前身份**
+  （`kubectl auth can-i --list`）。旧实现总是拼 `--as={sa}`，空 SA 名会把自己
+  降级成 `system:anonymous`，于是"集群什么都没授权"成了错误结论。
+- `k8s_secret_dump` / `k8s_configmap_dump`：kubeconfig 优先
+  （`kubectl get ... -A -o json`），SA token 与 API URL 回退，并在输出里标注
+  用了哪条路径。旧实现只认 pod 内挂载点，且 `_k8s_api_url()` 之前用
+  "第一个点分数字"正则解析 kubeconfig，会把 `https://127.0.0.1:45889` 变成
+  `https://127.0.0.1/api/...`（丢端口）。
+- `k8s_backdoor_daemonset(image, shell_cmd, namespace, image_pull_policy)`：
+  YAML 用 quoted heredoc 写入（不再 `echo '...'` 拼多行清单）；
+  `imagePullPolicy` 默认 `IfNotPresent`，命中 `ErrImagePull`/`ImagePullBackOff`
+  时自动用 `Never` 重试一次——`:latest` 的隐式 Always 拉取会让节点上已加载的
+  镜像失败；默认 `shell_cmd` 扫描 `/host` 下的 flag 文件。
+- `container_escape_runc`：仅针对 CVE-2019-5736；先解析 `runc version x.y.z`，
+  已修补时直接失败并建议换路线。版本横幅只作为输出上报，不再拼接进 shell
+  命令（旧实现会把多行 runc 输出按词拆开，报 `/bin/sh: 1: [Checking: not found`）。
+- `k8s_etcd_keys(..., keys_only=)`：参数名与 CLI 语义一致（旧名 `prefix` 是
+  布尔，planner 传 key 路径时被参数归一化丢弃）；`etcdctl` 不在宿主时快速返回
+  127 并建议改用 `kubectl_get_secrets` / `k8s_secret_dump`。
+
 ## 阅读建议
 
 先看注册函数按能力/域的组织，再看具体工具的 parser 和契约；完整清单查 `tools_manifest.json`。

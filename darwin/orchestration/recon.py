@@ -352,6 +352,74 @@ def _parse_status_and_content_type(stdout: str) -> tuple[int, str]:
     if status == 0:
         status = 200 if stdout else 0
     return status, content_type
+
+
+#: Fingerprints that make a response evidence of a real CMS entry point.
+_CMS_MARKER_RE = re.compile(
+    r"(wp-content|wp-includes|wordpress|joomla|drupal|typo3|"
+    r"xmlrpc\.php|/administrator/index\.php)",
+    re.I,
+)
+#: A login form is the one CMS-shaped signal that is not brand-specific.
+_PASSWORD_FORM_RE = re.compile(r"<input[^>]+type=[\"']?password", re.I)
+
+
+def _looks_like_html(endpoint: dict) -> bool:
+    """Whether a discovered endpoint answered with HTML (not JSON/plain text)."""
+    content_type = str(endpoint.get("sample_content_type", "") or "").lower()
+    if "html" in content_type:
+        return True
+    if content_type and "html" not in content_type:
+        return False
+    body = response_body(str(endpoint.get("sample_response", "") or "")).strip()
+    if not body:
+        return False
+    return (
+        body.startswith("<")
+        or "<!doctype" in body[:200].lower()
+        or "</" in body
+    )
+
+
+def _has_cms_marker(stdout: str, status: int) -> bool:
+    """Whether a CMS-path probe response actually looks like that CMS."""
+    body = response_body(stdout)
+    if _CMS_MARKER_RE.search(body):
+        return True
+    return 200 <= status < 400 and bool(_PASSWORD_FORM_RE.search(body))
+
+
+def parse_k8s_access(lines) -> list[str]:
+    """Capability tags implied by ``kubectl auth can-i --list`` output.
+
+    The kubectl identity decides which K8s paths are even attemptable, so these
+    tags are carried into the world state instead of being read as free text
+    out of an Analysis note. Columns are ``Resources / Non-Resource URLs /
+    Resource Names / Verbs``; only the Verbs column is inspected.
+    """
+    tags: set[str] = set()
+    for raw in lines or []:
+        line = str(raw or "").strip()
+        if not line or line.startswith("Resources"):
+            continue
+        columns = line.split()
+        if not columns:
+            continue
+        resource = columns[0]
+        verbs = columns[-1].strip("[]").split()
+        if resource == "*.*" and "*" in verbs:
+            tags.add("cluster-admin")
+        if "pods/log" in resource:
+            tags.add("read-pod-logs")
+        if resource == "pods" and "create" in verbs:
+            tags.add("create-pods")
+        if resource == "pods/exec" and "create" in verbs:
+            tags.add("exec-pods")
+        if resource == "secrets" and "get" in verbs:
+            tags.add("read-secrets")
+    return sorted(tags)
+
+
 from darwin.cteg import CTEG, TaskRecord, build_scenario_profile
 from darwin.core.context import ContextManager
 from darwin.core.contracts import (
@@ -393,6 +461,7 @@ from darwin.data_model import (
 from darwin.dkg import DKG
 from darwin.dpm import DefensePerceptionModule, DefenseStateVector
 from darwin.dave import DAVE, ExploitAttempt, parse_tool_stdout
+from darwin.reachability import is_host_reachable
 from darwin.tools.mcp_client import MCPClientPool, load_mcp_config
 from darwin.tools.mcp_gateway import ToolResult
 from darwin.tools.recon_server import create_recon_gateway, parse_response
@@ -1015,7 +1084,11 @@ class ReconCoordinator(CoordinatorContext):
         print(f"\n[BOOTSTRAP] {len(hosts)} host(s), {len(services)} service(s)")
         for s in services:
             ver = s.get("version", "") or s.get("banner", "")
-            print(f"  port {s.get('port'):>5}/{s.get('protocol','tcp'):<6} {ver[:55]}")
+            # Display-only: heterogeneous writers may leave fields unset, and
+            # a missing port must never abort the phase.
+            port = s.get("port")
+            port_text = str(port) if isinstance(port, int) else "?"
+            print(f"  port {port_text:>5}/{str(s.get('protocol') or 'tcp'):<6} {str(ver)[:55]}")
         if db_found:
             print(f"  Non-HTTP services: {', '.join(db_found)}")
         if domains:
@@ -1166,14 +1239,18 @@ class ReconCoordinator(CoordinatorContext):
 
         # ── Step 6: Check current permissions ──
         permissions: list[str] = []
+        access_tags: list[str] = []
         try:
             result = await _discovery("kubectl auth can-i --list -A")
             out = result.stdout or ""
             if result.success:
                 for line in out.split("\n"):
                     line = line.strip()
-                    if line and not line.startswith("Resources") and "yes" in line.lower():
+                    if not line or line.startswith("Resources"):
+                        continue
+                    if "yes" in line.lower():
                         permissions.append(line)
+                access_tags = parse_k8s_access(out.split("\n"))
         except Exception as exc:
             log.debug("swallowed exception: %s", exc, exc_info=True)
 
@@ -1186,7 +1263,17 @@ class ReconCoordinator(CoordinatorContext):
                 "ip": node["internal_ip"] or node["name"],
                 "is_reachable": True,
                 "is_internal": True,
+                # Environment classification reads this tag: without it a KIND
+                # cluster is classified from the analysis text alone and the
+                # K8s knowledge set is filtered out of retrieval.
+                "provider": "k8s",
                 "k8s_node_name": node["name"],
+                # The identity kubectl is using drives which attack paths are
+                # even possible (privileged pod, secret read, pod exec).
+                "k8s_access": access_tags,
+                "k8s_access_summary": (
+                    "kubectl identity: " + (", ".join(access_tags) if access_tags else "no elevated rights")
+                ),
                 "k8s_node_labels": node["labels"],
                 "k8s_node_taints": node["taints"],
                 "is_control_plane": node["is_control_plane"],
@@ -1203,21 +1290,10 @@ class ReconCoordinator(CoordinatorContext):
                 "discovered_by": "k8s-cluster-discovery",
             })
 
-        # Service nodes for each K8S service (ClusterIP only)
-        for svc in k8s_svcs:
-            for port_info in svc["ports"]:
-                svc_id = f"svc-k8s-{svc['namespace']}-{svc['name']}-{port_info['port']}"
-                self.dkg.add_node("Service", svc_id, {
-                    "port": port_info["port"],
-                    "protocol": port_info["protocol"].lower(),
-                    "service_name": f"k8s-{svc['name']}",
-                    "version": f"ClusterIP {svc['cluster_ip']}:{port_info['port']}",
-                    "banner": f"K8s Service {svc['name']}.{svc['namespace']}.svc.cluster.local",
-                    "k8s_namespace": svc["namespace"],
-                    "k8s_cluster_ip": svc["cluster_ip"],
-                    "k8s_selector": svc["selector"],
-                    "discovered_by": "k8s-cluster-discovery",
-                })
+        # Service nodes for each K8S service port (single canonical writer
+        # shared with CTAGE, which maps the same services later in bootstrap).
+        from darwin.cloud_topology import write_k8s_service_nodes
+        write_k8s_service_nodes(self.dkg, k8s_svcs)
 
         # Analysis node with cluster summary
         analysis_parts: list[str] = []
@@ -1576,6 +1652,8 @@ class ReconCoordinator(CoordinatorContext):
             ep_id = endpoint.get("id", "") or f"ep-{url[:50]}"
             if not url or not url.startswith("http"):
                 return
+            if not is_host_reachable(endpoint):
+                return
             resp_len = endpoint.get("response_size", 0)
             sample = endpoint.get("sample_response", "")
             if "403 Forbidden" in sample or "connection refused" in sample.lower():
@@ -1840,11 +1918,20 @@ class ReconCoordinator(CoordinatorContext):
             url = endpoint.get("url", "")
             if not url or not url.startswith("http"):
                 return
+            if not is_host_reachable(endpoint):
+                return
+            # Directory-brute-force style path guessing only makes sense for a
+            # browsable HTML app.  A JSON/API root answers every guessed path
+            # with the same error envelope, which used to register ten bogus
+            # CMS endpoints on a Kubernetes API server.
+            if not _looks_like_html(endpoint):
+                return
             base = url.rstrip("/")
             for path in _CMS_PATHS:
                 try:
                     r = await self._call_tool("curl_get",
-                        {"url": f"{base}{path}", "follow_redirects": True, "insecure": True})
+                        {"url": f"{base}{path}", "follow_redirects": True,
+                         "insecure": True, "timeout": 5})
                     if r.success:
                         out = getattr(r, "stdout", "")
                         st = 200
@@ -1853,14 +1940,15 @@ class ReconCoordinator(CoordinatorContext):
                             pts = fl.split()
                             if len(pts) >= 2 and pts[1].isdigit():
                                 st = int(pts[1])
-                        # Only register CMS endpoints that return actual content
-                        # (2xx/3xx) or auth-required responses (401/403).
-                        # Exclude 400, 404, 405, 5xx — these are error pages, not
-                        # real CMS endpoints (e.g. ingress-nginx returns 400 for
-                        # unrecognized paths, which looks like a hit but isn't).
+                        # Only register a path when the response carries a CMS
+                        # fingerprint.  A uniform 401/403 auth wall (any API
+                        # gateway, any Kubernetes API server) is not evidence
+                        # that the path hosts a CMS.
                         _is_content = 200 <= st < 400
                         _is_auth_wall = st in (401, 403)
-                        if (_is_content or _is_auth_wall) and len(out) > 50:
+                        if ((_is_content or _is_auth_wall)
+                                and len(out) > 50
+                                and _has_cms_marker(out, st)):
                             self.dkg.add_node("Endpoint", f"ep-cms-{path.replace('/','-')[:30]}", {
                                 "url": f"{base}{path}", "method": "GET", "params": "",
                                 "sample_status": st, "sample_response": out[:2000],
@@ -1871,7 +1959,10 @@ class ReconCoordinator(CoordinatorContext):
                     log.debug("swallowed exception: %s", exc, exc_info=True)
 
         # Run deep recon in parallel across endpoints (max 6 concurrent)
-        batch = [ep for ep in endpoints[:8] if ep.get("url","").startswith("http")]
+        batch = [
+            ep for ep in endpoints[:8]
+            if ep.get("url", "").startswith("http") and is_host_reachable(ep)
+        ]
         if batch:
             tasks = [asyncio.create_task(_probe_one(ep)) for ep in batch]
             tasks += [asyncio.create_task(_probe_cms(ep)) for ep in batch]
@@ -2002,6 +2093,8 @@ class ReconCoordinator(CoordinatorContext):
             }
             base_by_port: dict[int, str] = {}
             for ep in self.dkg.query_nodes("Endpoint"):
+                if not is_host_reachable(ep):
+                    continue
                 m = _re.search(r":(\d+)(/|$)", str(ep.get("url", "")))
                 if m:
                     base_by_port.setdefault(int(m.group(1)), str(ep.get("url", "")))
@@ -2074,19 +2167,40 @@ class ReconCoordinator(CoordinatorContext):
         endpoints = self.dkg.query_nodes("Endpoint")
         get_endpoints = [
             e for e in endpoints
-            if e.get("url", "").startswith("http") and e.get("method", "GET") == "GET"
+            if is_host_reachable(e)
+            and e.get("url", "").startswith("http") and e.get("method", "GET") == "GET"
             and e.get("params")  # prefer endpoints with parameters
         ][:6]
         if len(get_endpoints) < 3:
             # Fall back to any GET endpoints
             get_endpoints = [
                 e for e in endpoints
-                if e.get("url", "").startswith("http") and e.get("method", "GET") == "GET"
+                if is_host_reachable(e)
+                and e.get("url", "").startswith("http") and e.get("method", "GET") == "GET"
             ][:6]
         if not get_endpoints:
             print("[DEFENSE] No HTTP endpoints to probe — skipping defense detection "
                   f"({len(endpoints)} non-HTTP endpoints)")
             return
+
+        # Reachability pre-flight: a cluster-internal or already-dead endpoint
+        # costs a full probe-class sweep without producing any evidence.
+        _reachable: list[dict] = []
+        for ep in get_endpoints:
+            try:
+                _pre = await self._call_tool(
+                    "curl_get", {"url": ep["url"], "timeout": 3, "insecure": True}
+                )
+            except Exception:
+                continue
+            if _pre and getattr(_pre, "success", False) and (getattr(_pre, "stdout", "") or "").strip():
+                _reachable.append(ep)
+            if len(_reachable) >= 3:
+                break
+        if not _reachable:
+            print("[DEFENSE] No reachable HTTP endpoint — skipping defense detection")
+            return
+        get_endpoints = _reachable
 
         all_probe_results = []
         all_responses = []

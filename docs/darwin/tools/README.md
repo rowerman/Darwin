@@ -10,6 +10,9 @@
 
 所有内置工具都在注册完成后绑定显式 v2 `ToolSpec`。契约目录统一提供域（web/db/ad/cloud/k8s/container/network/lnx/research）、意图型 capability、参数默认值、别名、依赖、executor 和输出契约；LLM registry、域过滤、manifest 与 Executor 均读取同一份规格。复杂命令可继续使用 shell executor，适合无 shell 执行的命令使用 shell_argv。
 
+辅助模块：`oob_listener.py`（带外回调监听工具族，盲打/异步验证的唯一可信
+通道）、`tls.py`（自签名证书判定与降级上下文，HTTP 工具共用）。
+
 新增或修改工具时，必须更新对应注册参数和 `darwin/tools/contracts.py` 的分类规则，并重新生成、校验 `tools_manifest.json`：
 
 ```bash

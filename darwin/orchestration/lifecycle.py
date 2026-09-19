@@ -97,12 +97,19 @@ class LifecycleCoordinator(CoordinatorContext):
     # ``darwin.phase_ratios`` in config/darwin.yaml.  Exploitation owns the
     # larger share because every exploit task costs at least one LLM
     # round-trip, while recon/research are mostly local tool calls.
+    #
+    # ``deep_recon`` (directory/CMS probing) and ``defense`` (DPM filter
+    # probes) are budgeted phases of their own: left unbounded they can burn
+    # the whole run against unreachable or non-HTML endpoints and starve the
+    # exploit phase of a KIND/ClusterIP target.
     _PHASE_RATIOS = {
-        "recon": 0.15,
+        "recon": 0.10,
+        "deep_recon": 0.10,
+        "defense": 0.05,
         "service_research": 0.05,
         "analyze": 0.12,
         "vulnerability_research": 0.08,
-        "exploit": 0.55,
+        "exploit": 0.45,
         "finalize": 0.05,
     }
 
@@ -316,7 +323,7 @@ class LifecycleCoordinator(CoordinatorContext):
                     metadata={"hosts": _hosts, "services": _svcs, "endpoints": _eps})
 
             # ── Phase 1.5: Deep Recon (dirb, nikto, form_extract) ──
-            await self._deep_recon()
+            await self._run_phase_with_budget("deep_recon", self._deep_recon())
             # A flag found while checking freshly discovered paths ends the
             # run here — no exploitation work is needed for this target.
             if getattr(self, "_recon_flag_result", None) is not None:
@@ -347,7 +354,7 @@ class LifecycleCoordinator(CoordinatorContext):
             await self._cloud_discovery_hint()
 
             # ── Phase 1.6: Defense Detection (DPM) ──
-            await self._detect_defenses()
+            await self._run_phase_with_budget("defense", self._detect_defenses())
 
             # ── Phase log: defense detection ──
             if self.phase_logger:
@@ -712,6 +719,15 @@ class LifecycleCoordinator(CoordinatorContext):
                     log.warning("HTTP client cleanup failed: %s", _exc)
             if self.mcp_pool.is_connected:
                 await self.mcp_pool.disconnect_all()
+            # OOB listeners hold ports in this process; a finished run must not
+            # keep them bound for the next scenario.
+            try:
+                from darwin.tools.oob_listener import stop_all_listeners
+                _stopped = stop_all_listeners()
+                if _stopped:
+                    log.info("OOB listeners stopped: %d", _stopped)
+            except Exception as _exc:
+                log.warning("OOB listener cleanup failed: %s", _exc)
 
         # Write task log
         if result is None:

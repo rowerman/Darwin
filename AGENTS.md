@@ -33,6 +33,7 @@ darwin/
                            parameters, memory, metrics, schemas, contracts,
                            events, belief
   dkg.py                   动态知识图谱（NetworkX MultiDiGraph，线程安全）
+  reachability.py          端点宿主可达性判定（集群内部地址不探测）
   dpm.py                   防御感知（规则 → WAF 签名 → LLM）
   dave.py                  四级验证（HTTP → Browser → Integrity → Impact）
   cteg.py                  跨任务经验图（动态模式，半衰期衰减）
@@ -47,7 +48,9 @@ darwin/
     mcp_gateway.py         工具注册表 + 统一调用（ToolResult）
     spec.py                ToolSpec 工具契约（校验、auto_spec）
     manifest.py            工具清单生成/校验 CLI
-    attack_server.py       攻击域工具注册（约 130 个工具的主体）
+    attack_server.py       攻击域工具注册（约 135 个工具的主体）
+    oob_listener.py        带外回调监听（盲打/异步验证）
+    tls.py                 自签名证书判定与降级上下文
     recon_server.py        侦察域工具注册
     mcp_client.py          可选 MCP 客户端池
   prompts/                 role prompts（orchestrator/planner/evaluator/memory/research/dpm_classifier）
@@ -58,7 +61,7 @@ tests/                     pytest 测试（38 个测试文件）
 knowledge/                 静态知识：web/ windows_ad/ cloud/ network/、scenarios/、taxonomy.json
 config/                    darwin.yaml / llm.yaml / waf_fingerprints.yaml / mcp_servers.yaml（已 gitignore）
 checkpoints/、log/、cteg_state.json   运行时产物（gitignore）
-tools_manifest.json        130 个工具的机器可读契约（提交入库，作为锁文件）
+tools_manifest.json        135 个工具的机器可读契约（提交入库，作为锁文件）
 docs/                      与生产源码层级对应的模块导航文档（不替代源码/API 契约）
 ```
 
@@ -230,7 +233,7 @@ LLM 工具定义由 `get_tool_definitions()` 生成，格式为 OpenAI function-
 
 ### 工具清单（manifest）
 
-`tools_manifest.json` 是提交入库的锁文件：`{schema_version, generated_at, source, tool_count, tools[]}`，当前 132 个工具（130 个攻击/侦察工具 + `tool_registry_list` / `tool_registry_get` 两个注册表元工具）。所有注册表改动后必须：
+`tools_manifest.json` 是提交入库的锁文件：`{schema_version, generated_at, source, tool_count, tools[]}`，当前 137 个工具（135 个攻击/侦察工具 + `tool_registry_list` / `tool_registry_get` 两个注册表元工具）。所有注册表改动后必须：
 
 ```bash
 python -m darwin.tools.manifest --out tools_manifest.json

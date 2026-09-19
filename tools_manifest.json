@@ -1,8 +1,8 @@
 {
   "schema_version": "1.0.0",
-  "generated_at": "2026-09-15T11:59:13+00:00",
+  "generated_at": "2026-09-19T07:43:49+00:00",
   "source": "darwin.tools.manifest",
-  "tool_count": 135,
+  "tool_count": 137,
   "tools": [
     {
       "name": "aws_cli",
@@ -691,7 +691,7 @@
     {
       "name": "command_injection_test",
       "version": "1.0.0",
-      "description": "Test for command injection using multiple probe techniques",
+      "description": "Test for command injection using multiple probe techniques. Set method=POST and body_format=json for API endpoints that execute a documented body field (script/command/code). If the endpoint acknowledges the payload without output, execution may be asynchronous — confirm with `oob_listener`.",
       "domains": [
         "web"
       ],
@@ -704,6 +704,16 @@
         "param": {
           "type": "string",
           "description": "Parameter to test"
+        },
+        "method": {
+          "type": "string",
+          "description": "HTTP method (default GET; use POST for JSON APIs)",
+          "default": "GET"
+        },
+        "body_format": {
+          "type": "string",
+          "description": "POST body format: form or json (default form)",
+          "default": "form"
         },
         "insecure": {
           "type": "boolean",
@@ -1003,7 +1013,7 @@
     {
       "name": "container_escape_runc",
       "version": "1.0.0",
-      "description": "Attempt CVE-2019-5736 runc container breakout. Exploits runc < 1.0.0-rc6 by overwriting /proc/self/exe. DESTRUCTIVE — overwrites runc binary on host. Use ONLY as last resort when docker.sock, cgroup, cap_dac, and mount_disk all fail. The payload_cmd is executed on the HOST the next time someone runs 'docker exec' in this container.",
+      "description": "Attempt CVE-2019-5736 runc container breakout (runc < 1.0.0-rc6, overwrites /proc/self/exe). DESTRUCTIVE — overwrites the host runc binary. This is ONLY for CVE-2019-5736 and fails fast on a patched runc: it is NOT the CVE-2024-21626 WORKDIR escape and NOT CVE-2025-31133/52881. For modern runc CVEs use the cluster path instead (read the affected pod's logs, or with pod-create rights deploy a privileged pod mounting the node root).",
       "domains": [
         "container"
       ],
@@ -3180,7 +3190,7 @@
     {
       "name": "k8s_backdoor_daemonset",
       "version": "1.0.0",
-      "description": "DEPLOY privileged DaemonSet on ALL cluster nodes with host root mounted. Creates a pod on every node that can access the host filesystem via /host. Use when you have cluster-admin access and need host-level access. Start with shell_cmd='cat /host/flag*' to find flags.",
+      "description": "DEPLOY a privileged DaemonSet on ALL cluster nodes with the node root mounted at /host. Use when you have pod-create rights (cluster-admin) and need host/node files, e.g. node-mounted flag files. The default shell_cmd searches /host for flag files and prints them. Set image to an image that already exists on the node (an image referenced by a running pod) — pulling is not required and the call retries with imagePullPolicy=Never if the kubelet reports ErrImagePull.",
       "domains": [
         "k8s"
       ],
@@ -3194,12 +3204,17 @@
         "shell_cmd": {
           "type": "string",
           "description": "Command to execute on each node's HOST filesystem (via /host mount)",
-          "default": "cat /host/flag* 2>/dev/null; id"
+          "default": "find /host -maxdepth 5 -name 'flag*' -type f -exec cat {} + 2>/dev/null; id"
         },
         "namespace": {
           "type": "string",
           "description": "Target namespace (default 'kube-system')",
           "default": "kube-system"
+        },
+        "image_pull_policy": {
+          "type": "string",
+          "description": "imagePullPolicy for the DaemonSet (default IfNotPresent; retried as Never on ErrImagePull)",
+          "default": "IfNotPresent"
         }
       },
       "required": [],
@@ -3260,7 +3275,7 @@
     {
       "name": "k8s_etcd_keys",
       "version": "1.0.0",
-      "description": "ENUMERATE etcd keys for K8s secrets. Reads directly from etcd (port 2379) without API server. Use when etcd is accessible. For HTTPS endpoints auto-skips TLS verify. Supports mutual TLS via cacert/cert/tls_key params. Start with key='/' and prefix=true to discover all keys. More direct than k8s_secret_dump — reads raw base64-encoded secrets from etcd.",
+      "description": "ENUMERATE etcd keys for K8s secrets. Reads directly from etcd (port 2379) without API server. Use when etcd is accessible. For HTTPS endpoints auto-skips TLS verify. Supports mutual TLS via cacert/cert/tls_key params. Start with key='/' to discover all keys, then read a specific key like /registry/secrets/default/mysecret.",
       "domains": [
         "k8s"
       ],
@@ -3275,9 +3290,9 @@
           "description": "etcd key path to read (default '/' for all keys)",
           "default": "/"
         },
-        "prefix": {
+        "keys_only": {
           "type": "boolean",
-          "description": "Use --prefix for recursive key listing (default true)",
+          "description": "List keys only instead of values (default true)",
           "default": true
         },
         "insecure": {
@@ -3571,7 +3586,7 @@
     {
       "name": "kubectl_auth_check",
       "version": "1.0.0",
-      "description": "Check Kubernetes RBAC permissions for a service account in a namespace",
+      "description": "List Kubernetes RBAC permissions via 'kubectl auth can-i --list'. Leave sa AND namespace empty to inspect the identity darwin is actually using (the ambient kubeconfig); pass sa to impersonate a ServiceAccount. Use this to decide whether cluster-admin paths (pod create, pod logs, secret read) are available.",
       "domains": [
         "k8s"
       ],
@@ -3579,24 +3594,21 @@
       "parameters": {
         "sa": {
           "type": "string",
-          "description": "Service account name"
+          "description": "ServiceAccount name to impersonate (default: empty = current identity)",
+          "default": ""
         },
         "namespace": {
           "type": "string",
-          "description": "K8s namespace"
+          "description": "Namespace for the impersonated SA (default: empty = cluster scope / current context)",
+          "default": ""
         }
       },
-      "required": [
-        "sa",
-        "namespace"
-      ],
-      "executor": "shell",
-      "command_template": "kubectl auth can-i --list --as={sa} -n {namespace} 2>&1",
+      "required": [],
+      "executor": "python",
+      "command_template": "",
       "shell_args": [],
       "split_params": [],
-      "dependencies": [
-        "kubectl"
-      ],
+      "dependencies": [],
       "flags": {
         "destructive": false,
         "interactive": false,
@@ -3755,6 +3767,57 @@
       "dependencies": [
         "kubectl"
       ],
+      "flags": {
+        "destructive": false,
+        "interactive": false,
+        "requires_network": true,
+        "idempotent": true
+      },
+      "output_contract": {
+        "type": "tool_result",
+        "success_field": "success"
+      },
+      "aliases": {},
+      "deprecated": false,
+      "auto": false
+    },
+    {
+      "name": "kubectl_logs",
+      "version": "1.0.0",
+      "description": "Read a pod's logs (kubectl logs). Use this FIRST for any pod that already ran a command and exited (Completed/Failed workload, PoC or exploit pod): its stdout — including any flag it printed — is still available here.",
+      "domains": [
+        "k8s"
+      ],
+      "capability": "k8s_discovery",
+      "parameters": {
+        "pod": {
+          "type": "string",
+          "description": "Pod name"
+        },
+        "namespace": {
+          "type": "string",
+          "description": "Namespace (default 'default')",
+          "default": "default"
+        },
+        "tail_lines": {
+          "type": "integer",
+          "description": "How many trailing log lines to fetch (default 200)",
+          "default": 200
+        },
+        "container": {
+          "type": "string",
+          "description": "Container name for multi-container pods (optional)",
+          "default": ""
+        }
+      },
+      "required": [
+        "pod"
+      ],
+      "executor": "python",
+      "command_template": "",
+      "shell_args": [],
+      "split_params": [],
+      "dependencies": [],
       "flags": {
         "destructive": false,
         "interactive": false,
@@ -5288,6 +5351,66 @@
       "auto": false
     },
     {
+      "name": "oob_listener",
+      "version": "1.0.0",
+      "description": "Out-of-band callback listener for blind/asynchronous verification (blind command injection, SSRF, webhook/runbook execution, exfiltration). Flow: action=start → the target-side payload calls one of the returned callback_urls → action=read (wait_seconds up to 30) shows what arrived, including any flag. action=stop frees the listener. The returned payloads dict holds ready-made curl/python3/sh/nc one-liners. IMPORTANT: hand the target a callback URL it can route to (a docker gateway address, not 127.0.0.1).",
+      "domains": [
+        "web"
+      ],
+      "capability": "oob_callback",
+      "parameters": {
+        "action": {
+          "type": "string",
+          "description": "start | read | stop | list (default start)",
+          "default": "start"
+        },
+        "listener_id": {
+          "type": "string",
+          "description": "Listener id (start may set it; read/stop select it)",
+          "default": ""
+        },
+        "port": {
+          "type": "integer",
+          "description": "Port to bind on start (0 = auto)",
+          "default": 0
+        },
+        "wait_seconds": {
+          "type": "integer",
+          "description": "For read: wait up to N seconds for a callback (max 30)",
+          "default": 0
+        },
+        "filter": {
+          "type": "string",
+          "description": "For read: only keep hits containing this substring",
+          "default": ""
+        },
+        "limit": {
+          "type": "integer",
+          "description": "Maximum hits to return",
+          "default": 20
+        }
+      },
+      "required": [],
+      "executor": "python",
+      "command_template": "",
+      "shell_args": [],
+      "split_params": [],
+      "dependencies": [],
+      "flags": {
+        "destructive": false,
+        "interactive": false,
+        "requires_network": true,
+        "idempotent": true
+      },
+      "output_contract": {
+        "type": "tool_result",
+        "success_field": "success"
+      },
+      "aliases": {},
+      "deprecated": false,
+      "auto": false
+    },
+    {
       "name": "oracle_query",
       "version": "1.0.0",
       "description": "Execute a SQL query on an Oracle Database. Use for data extraction, privilege escalation via PL/SQL, and TNS listener interaction.",
@@ -6568,7 +6691,7 @@
     {
       "name": "ssti_inject",
       "version": "1.0.0",
-      "description": "Test for Server-Side Template Injection (SSTI). Sends math evaluation payloads ({{7*7}}, ${7*7}, <%= 7*7 %>) to detect Jinja2/Twig/FreeMarker/ERB template injection. If SSTI is confirmed, attempts RCE via OS command execution to read flag files. Supports GET and POST methods.",
+      "description": "Test for Server-Side Template Injection (SSTI). Sends math evaluation payloads ({{7*7}}, ${7*7}, <%= 7*7 %>) to detect Jinja2/Twig/FreeMarker/ERB template injection. If SSTI is confirmed, attempts RCE via OS command execution to read flag files. Supports GET and POST (form or JSON body via body_format).",
       "domains": [
         "web"
       ],
@@ -6592,6 +6715,11 @@
           "type": "string",
           "description": "Template engine to target: jinja2, twig, freemarker, erb, or 'all' to auto-detect. Default jinja2.",
           "default": "jinja2"
+        },
+        "body_format": {
+          "type": "string",
+          "description": "POST body format: form (default) or json",
+          "default": "form"
         }
       },
       "required": [

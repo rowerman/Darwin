@@ -31,6 +31,25 @@
 
 ## 相关模块
 
+## 产物 → 工具桥接（Discovered Artifacts）
+
+`_generate_exploitation_plan()` 在 plan prompt 里注入结构化推荐，规则本身
+可在单测里直接调用：
+
+- `registry_signal(text)`：只有在签名含 `docker-distribution` /
+  `docker registry` / `registry/2.0` / `docker-registry` 时才判定注册表。
+  裸 `/v2/` 子串会把 CMS 探测出的 `/wp-json/wp/v2/` 当成 Docker Registry，
+  于是 planner 花 3+ 个任务做无目标的 registry 投毒。
+- 端口 5000/5001 且服务标签含 registry/docker 时同样给出 `docker_registry`
+  推荐（在 `/v2/` 尚未被探测前的等价证据）。
+- `exec_body_fields(params)`：文档化 body 字段名命中
+  `script|cmd|command|code|shell|hook|run|exec|payload` 时，注入"服务端执行字段"
+  提示，要求按 `oob_listener` 起监听 → 投递带回调 URL 的载荷 → 读回调三步建模
+  （输出可能异步投递，HTTP 响应里看不到）。
+- Kubernetes 许可事实：Host 节点的 `k8s_access` 含 `cluster-admin`/`create-pods`
+  时推荐特权 pod + hostPath 路线；DKG 存在 `phase ∈ {succeeded, failed,
+  completed}` 的 K8sPod 时，先推荐用 `kubectl_logs` 读该 pod 已产生的输出。
+
 ## 修复分析去重与修枝保护
 
 - `_analyze_and_fix_task()` 按 `(task, tool, params)` 签名只分析一次：同样的失败

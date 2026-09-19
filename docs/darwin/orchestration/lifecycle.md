@@ -28,8 +28,15 @@
 ## 阶段预算与收尾
 
 - 阶段预算比例可通过 `darwin.phase_ratios`（config/darwin.yaml）覆盖，默认
-  recon 0.15 / service_research 0.05 / analyze 0.12 / vulnerability_research 0.08
-  / exploit 0.55 / finalize 0.05；未使用额度仍按原 carryover 语义顺延。
+  recon 0.10 / deep_recon 0.10 / defense 0.05 / service_research 0.05 /
+  analyze 0.12 / vulnerability_research 0.08 / exploit 0.45 / finalize 0.05；
+  未使用额度仍按原 carryover 语义顺延。
+- `_deep_recon()`、`_cloud_discovery_hint()`、`_detect_defenses()` 必须在
+  `_run_phase_with_budget()` 内运行（分别是 `deep_recon` 与 `defense` 阶段）。
+  裸跑时一次不可达端点的 CMS/目录探测就吃掉过约 220s，加上 DPM 的 65s，
+  600s 预算里只剩 110~160s 给 exploit。
+- `finally` 分支统一停止 OOB 回调监听（`darwin.tools.oob_listener.
+  stop_all_listeners()`），监听端口不会跨场景残留。
 - 深侦察若在“发现即校验”阶段命中已验证 flag，`run()` 用 `_RunFinished`
   直接结束（`phase=done`），跳过研究/分析/利用阶段。
 - 收尾的 `_check_response_for_flag()` 先跑 `_sweep_exploit_primitives()`：

@@ -188,14 +188,25 @@ class RelationAnalyzer:
         self, dkg: DKG, result: TopologyAnalysisResult, changed_ids: set[str],
         services: list[dict[str, Any]],
     ) -> None:
-        """Link K8s Service clusterIP/ports to Endpoint nodes."""
+        """Link K8s Service clusterIP/ports to Endpoint nodes.
+
+        A ``Service`` node is one listening port: the cluster IP comes from
+        the node itself and the port list is the legacy shape kept for
+        checkpoints written before per-port Service nodes.
+        """
         endpoints = self._nodes(dkg, "Endpoint")
         endpoint_by_url = {str(row.get("url", "")).rstrip("/"): self._node_id(row) for row in endpoints}
         for service in services:
             sid = self._node_id(service)
             cluster_ip = str(service.get("cluster_ip", service.get("clusterIP", "")) or "")
+            # Only K8s services have an in-cluster address; host/network
+            # services are scanned where they listen and get no alias.
+            if not cluster_ip and not service.get("k8s_namespace"):
+                continue
             ports = self._json(service.get("ports", []), [])
-            for port_row in ports if isinstance(ports, list) else []:
+            if not isinstance(ports, list) or not ports:
+                ports = [{"port": service.get("port")}]
+            for port_row in ports:
                 if not isinstance(port_row, dict):
                     continue
                 port = port_row.get("port", port_row.get("targetPort"))

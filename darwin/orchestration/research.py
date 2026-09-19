@@ -17,6 +17,27 @@ from urllib.parse import urlparse
 
 log = logging.getLogger(__name__)
 
+#: External web searches allowed per vulnerability-research phase. Each one
+#: costs tens of seconds; a long-tail hypothesis list must not spend the
+#: exploit window on near-duplicate queries.
+_MAX_RESEARCH_WEB_SEARCHES = 4
+
+
+def numeric_object_path(url: str, status: int = 0) -> bool:
+    """Whether a URL addresses a numeric object id in its PATH.
+
+    The check is anchored to the path on purpose: matching the raw URL with
+    ``/\\d+`` treated the host digits of ``https://127.0.0.1:45889/...``
+    ("//127") as an object id and manufactured an IDOR hypothesis for every
+    endpoint. A recorded 4xx/5xx probe is an observation, not an object route.
+    """
+    if not url or not str(url).startswith("http"):
+        return False
+    if int(status or 0) >= 400:
+        return False
+    return bool(re.search(r'(?:^|/)\d+(?:/|$)', urlparse(str(url)).path or ""))
+
+
 from darwin.cteg import CTEG, TaskRecord, build_scenario_profile
 from darwin.core.context import ContextManager
 from darwin.core.contracts import (
@@ -751,20 +772,24 @@ class ResearchCoordinator(CoordinatorContext):
                     # URL-fetch parameters are handled by the SSRF probe;
                     # do not flood the plan with generic injection guesses.
                     continue
-        # Numeric path segments provide concrete IDOR evidence.
+        # Numeric path segments provide concrete IDOR evidence.  The match is
+        # anchored to the path component: matching the raw URL treated the
+        # host/port digits of ``https://127.0.0.1:45889/...`` ("//127") as an
+        # object id and manufactured an IDOR for every endpoint.
         for ep in self.dkg.query_nodes("Endpoint"):
             url = ep.get("url", "")
-            if not url or not url.startswith("http") or any(v.endpoint == url for v in self.vulnerabilities):
+            if not numeric_object_path(url, int(ep.get("sample_status", 0) or 0)):
                 continue
-            if re.search(r'/\d+', url):
-                self.vulnerabilities.append(VulnerabilityHypothesis(
-                    vuln_type="IDOR", endpoint=url, param="id",
-                    confidence=0.3, evidence="Numeric ID in URL path",
-                ))
-                self.dkg.add_node("Vulnerability", f"vuln-{len(self.vulnerabilities)-1}", {
-                    "vuln_type": "IDOR", "endpoint": url, "parameter": "id",
-                    "severity": "medium", "source": "path_heuristic",
-                })
+            if any(v.endpoint == url and v.vuln_type == "IDOR" for v in self.vulnerabilities):
+                continue
+            self.vulnerabilities.append(VulnerabilityHypothesis(
+                vuln_type="IDOR", endpoint=url, param="id",
+                confidence=0.3, evidence="Numeric ID in URL path",
+            ))
+            self.dkg.add_node("Vulnerability", f"vuln-{len(self.vulnerabilities)-1}", {
+                "vuln_type": "IDOR", "endpoint": url, "parameter": "id",
+                "severity": "medium", "source": "path_heuristic",
+            })
 
         # ── Non-HTTP service vulnerability detection ─────────────────
         _NON_HTTP_VULN_MAP = {
@@ -1310,6 +1335,7 @@ class ResearchCoordinator(CoordinatorContext):
         )
 
         # LLM-driven rounds (max 2 more)
+        _web_searches = 0
         for _ in range(2):
             if not tool_calls:
                 break
@@ -1317,6 +1343,18 @@ class ResearchCoordinator(CoordinatorContext):
                 tc_name = tc.get("name", "")
                 tc_args = tc.get("arguments", {})
                 tc_id = tc.get("id", "")
+                # Search fan-out is the one research action that costs tens of
+                # seconds per call. Bound it per phase so a long-tail list of
+                # near-duplicate hypotheses cannot eat the exploit window.
+                if tc_name == "ddg_web_search":
+                    if _web_searches >= _MAX_RESEARCH_WEB_SEARCHES:
+                        self.llm.add_tool_result(
+                            tc_id,
+                            "Web-search budget for this phase is exhausted — "
+                            "rely on local knowledge and what was already returned.",
+                        )
+                        continue
+                    _web_searches += 1
                 try:
                     if tc_name in self.attack_gateway.get_tool_names():
                         result = await self._call_tool(tc_name, tc_args)

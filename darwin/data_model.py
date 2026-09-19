@@ -355,6 +355,51 @@ class PipelineState:
         ep = self.get_endpoint(url)
         return ep.params if ep else []
 
+    def _cluster_access_block(self) -> List[str]:
+        """Render cluster topology and kubectl identity facts.
+
+        Whether the current identity may create pods or read pod logs decides
+        which K8s attack paths are reachable at all.  These facts used to live
+        only in an Analysis note, which the "last two notes" window dropped, so
+        the planner never learned it was holding cluster-admin credentials.
+        """
+        lines: List[str] = []
+        clusters = [n for n in self.topology.nodes if n.node_type == "K8sCluster"]
+        pods = [n for n in self.topology.nodes if n.node_type == "K8sPod"]
+        access = sorted({
+            str(h.get("k8s_access_summary", ""))
+            for h in self.hosts
+            if h.get("k8s_access_summary")
+        })
+        if not (clusters or pods or access):
+            return lines
+        for cluster in clusters:
+            props = cluster.properties
+            lines.append(
+                f"- cluster {props.get('name', '?')} "
+                f"api={props.get('api_url', '?')} "
+                f"version={props.get('version', '')}"
+            )
+        lines.extend(f"- {entry}" for entry in access)
+        for pod in pods[:20]:
+            props = pod.properties
+            line = (
+                f"- pod {props.get('namespace', '?')}/{props.get('name', '?')} "
+                f"[{props.get('phase', '?')}]"
+            )
+            images = props.get("images") or []
+            if images:
+                line += f" images={images}"
+            if props.get("privileged"):
+                line += " privileged=True"
+            if props.get("host_pid"):
+                line += " hostPID=True"
+            sa_name = str(props.get("service_account", "") or "")
+            if sa_name and sa_name != "default":
+                line += f" sa={sa_name}"
+            lines.append(line)
+        return lines
+
     def to_prompt_context(self) -> str:
         """Render full state as LLM prompt text. Single canonical format."""
         parts = []
@@ -363,6 +408,12 @@ class PipelineState:
             parts.append("## Application Understanding")
             for note in self.analysis_notes[-2:]:
                 parts.append(f"- {note}")
+            parts.append("")
+
+        _cluster_lines = self._cluster_access_block()
+        if _cluster_lines:
+            parts.append("## Cluster & Access Facts")
+            parts.extend(_cluster_lines)
             parts.append("")
 
         parts.append("## Endpoints (with probed responses)")
