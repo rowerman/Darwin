@@ -1,9 +1,5 @@
-"""Dynamic Knowledge Graph — shared structured state.
-
-Reference:
-  - Cochise src/cochise/knowledge.py:73 — incremental knowledge accumulation
-  - AWE MemoryStorage (SQLite) — node/edge schema design
-  - VulnBot db/models/ — relational model for pentest entities
+"""
+Dynamic Knowledge Graph — shared structured state.
 """
 
 from __future__ import annotations

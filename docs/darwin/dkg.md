@@ -45,6 +45,12 @@
 
 图语义和 provenance 字段是全局约束，新增关系要检查所有查询消费者。
 
+## 与跨任务记忆的关系
+
+DKG 仍是单次运行的唯一事实源，跨任务记忆只读取它、不反向写入：任务结束时
+`graph_fingerprint.build_snapshot()` 从 DKG 投影出攻击面图，`Flag` / `Credential` /
+`ExploitPrimitive` 被排除在快照之外（避免把一次挑战的答案带进下一次）。
+
 ## Endpoint 去重
 
 `add_node()` 对 `Endpoint` 做 (method, url) 归一：同一路由以不同 node id

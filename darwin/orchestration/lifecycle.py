@@ -16,7 +16,6 @@ from typing import Any, Dict, List, Optional
 
 log = logging.getLogger(__name__)
 
-from darwin.cteg import CTEG, TaskRecord, build_scenario_profile
 from darwin.core.context import ContextManager
 from darwin.core.contracts import (
     Budget,
@@ -368,77 +367,25 @@ class LifecycleCoordinator(CoordinatorContext):
                               "complexity": _complexity,
                               "has_honeypot": _honeypot})
 
-            # Query CTEG for cross-task experience
+            # ── Cross-task memory: graph precedent → RAG prior ──────
+            # Past tasks are indexed by their environment graph.  When this
+            # graph resembles a historical one, the knowledge that worked
+            # there is ranked higher in the retrieval that follows; with no
+            # match the prior stays empty and retrieval is unchanged.
             state = self._get_state()
-            tech_query = " ".join(
-                s.version or s.banner
-                for s in state.services[:5]
-                if s.version or s.banner
-            )
-            # P4: scenario-matched CTEG retrieval — only patterns whose
-            # vuln/defense/tech/domain fingerprint overlaps the current task
-            # are injected (hard gate, no placeholder when empty).
-            cteg_hints = self.memory.experience_hints(
-                profile=build_scenario_profile(
-                    state, self.vulnerabilities, self.defense_state
-                )
-            )
-            if cteg_hints.get("bypass_strategies") or cteg_hints.get("exploit_strategies"):
-                self._task_log_event("info", "cteg_hints", hints=cteg_hints)
+            cteg_hints: dict = {}
+            self._publish_knowledge_prior()
 
-            # Load known credentials from CTEG (cross-task memory)
-            # Only inject credentials whose service/port actually EXISTS on the current
-            # target. A credential for MSSQL:10119 is useless (and noisy) when the
-            # current target is an Apache HTTP server on port 10108.
-            _current_ports = {str(s.port) for s in state.services if s.port}
-            _current_svc_names = {
-                (s.get("service_name", "") or "").lower()
-                for s in self.dkg.query_nodes("Service")
-                if s.get("service_name")  # exclude nodes without service_name (empty
-            }                              # string matches ALL strings in Python)
-            _cteg_creds = self.cteg.get_credentials(host=self.target_host)
-            _cteg_creds_filtered = []
-            for _c in _cteg_creds[:10]:
-                _c_port = str(_c.get("port", ""))
-                _c_svc = (_c.get("service_type", "") or "").lower()
-                # Only inject if the port matches a currently open port, OR the
-                # service type matches a discovered service
-                _port_match = _c_port in _current_ports
-                _svc_match = any(
-                    _c_svc in _sn or _sn in _c_svc
-                    for _sn in _current_svc_names
-                ) if _current_svc_names else False
-                if not _port_match and not _svc_match:
-                    log.debug("CTEG: skipping credential %s:%s (port %s/%s not on target)",
-                              _c['username'], _c['service_type'], _c_port, _c_svc)
-                    continue
-                _cteg_creds_filtered.append(_c)
-                _cred_id = f"cred-cteg-{_c['username']}@{_c['host']}:{_c['port']}"
-                self.dkg.add_node("Credential", _cred_id, {
-                    "username": _c["username"],
-                    "password": _c["password"],
-                    "host": _c["host"],
-                    "port": _c["port"],
-                    "cred_type": _c["service_type"],
-                    "source": "cteg_memory",
-                })
-            if _cteg_creds_filtered:
-                log.info("CTEG: loaded %d matching credentials for %s (filtered from %d total)",
-                         len(_cteg_creds_filtered), self.target_host, len(_cteg_creds))
-            # Use filtered list for hints
-            _cteg_creds = _cteg_creds_filtered
-
-            # Inject CTEG credentials into cteg_hints so the LLM sees them
-            if _cteg_creds:
-                _cred_lines = []
-                for _c in _cteg_creds[:8]:
-                    _cred_lines.append(
-                        f"  {_c['username']}:{_c['password']} → "
-                        f"{_c['service_type']}://{_c['host']}:{_c['port']} "
-                        f"(ONLY valid for {_c['service_type']} on port {_c['port']} — "
-                        f"do NOT reuse for SSH, HTTP, or other services)"
-                    )
+            # Remembered credentials, bound to the same scope PLUS the exact
+            # (host, port, service) identity of a service actually discovered
+            # here.  Port alone is not identity — benchmark targets reuse
+            # 10601/10670/... across unrelated challenges.
+            _cred_lines = self._load_remembered_credentials(state)
+            if _cred_lines:
                 cteg_hints["known_credentials"] = _cred_lines
+                self._task_log_event(
+                    "info", "credential_memory", count=len(_cred_lines)
+                )
 
             # ── Main Loop: B-driven mode switching ────────────────
             self._loop_count = 0
@@ -767,38 +714,10 @@ class LifecycleCoordinator(CoordinatorContext):
 
         self._task_log_write()
 
-        # Commit task to CTEG for cross-task learning
+        # Commit this task's environment graph + knowledge ledger so the next
+        # task can retrieve it by graph similarity.
         if result and self.step_count > 0:
-            vuln_types = [v.vuln_type for v in self.vulnerabilities]
-            # Extract technology stack from discovered services
-            tech_stack = []
-            for s in self.dkg.query_nodes("Service"):
-                ver = s.get("version", "") or s.get("banner", "")
-                if ver and ver not in ("unknown", "tcpwrapped", "ssh"):
-                    tech_stack.append(ver)
-            # Extract key findings from task log
-            key_findings = []
-            if result.flag:
-                key_findings.append(f"flag found: {result.flag[:30]}...")
-            if result.waf_bypassed:
-                key_findings.append(f"WAF bypassed: {self.defense_state.waf_type}")
-            # Build exploit chain from LLM loop steps
-            exploit_chain = getattr(self, '_exploit_chain', [])
-            task_record = TaskRecord(
-                task_id=f"task-{int(self.start_time)}",
-                benchmark="unknown",
-                vulnerability_types=vuln_types,
-                outcome="success" if result.success else "failure",
-                defense_encountered=self.defense_state.to_dict(),
-                timestamp=time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(self.start_time)),
-                technology_stack=tech_stack,
-                key_findings=key_findings,
-                exploit_chain=exploit_chain,
-            )
-            new_patterns = self.cteg.commit_task(task_record)
-            self._cteg_committed = new_patterns
-            if new_patterns > 0:
-                log.info("CTEG: extracted %d new patterns from task", new_patterns)
+            self._record_task_memory(result)
 
         return result
 
@@ -1314,7 +1233,7 @@ class LifecycleCoordinator(CoordinatorContext):
                     "time_budget": self.time_budget,
                     "events": self._task_log,
                     "dkg_summary": self.dkg.summary(),
-                    "cteg_patterns_committed": getattr(self, '_cteg_committed', 0),
+                    "knowledge_prior": getattr(self, '_knowledge_prior', {}),
                 }, f, indent=2, default=str)
             log.info("Task log written to %s (%d events)", self._task_log_path, len(self._task_log))
 
@@ -1322,6 +1241,200 @@ class LifecycleCoordinator(CoordinatorContext):
         """Generate a checkpoint path for a given phase."""
         sanitized = re.sub(r"[^a-zA-Z0-9_.-]", "_", self.target_url)
         return os.path.join("checkpoints", f"checkpoint_{sanitized}_{phase}.json")
+
+    # ── Cross-task memory (graph precedent → RAG prior) ─────────────
+
+    def _memory_labels(self) -> dict:
+        return {
+            "scope": self.memory_scope(),
+            "environment": self.memory_environment(),
+        }
+
+    def _publish_knowledge_prior(self) -> None:
+        """Fingerprint the current graph and publish the RAG ranking prior."""
+        from darwin.graph_fingerprint import build_snapshot, fingerprint
+        from darwin.precedent_store import publish_prior
+        from darwin.rag import reset_surfaced, set_graph_context
+
+        reset_surfaced()
+        self._knowledge_prior = {}
+        store = getattr(self, "precedent", None)
+        if store is None or not store.enabled:
+            publish_prior({})
+            return
+        try:
+            labels = self._memory_labels()
+            self._memory_snapshot = build_snapshot(
+                self.dkg,
+                max_hops=self.memory_config.projection_max_hops,
+                max_nodes=self.memory_config.projection_max_nodes,
+                labels=labels,
+            )
+            # Structural preconditions on corpus entries are checked against this.
+            set_graph_context(self._memory_snapshot)
+            current = fingerprint(self._memory_snapshot)
+            prior = store.prior(current)
+            publish_prior(prior)
+            self._knowledge_prior = prior
+            if prior:
+                log.info(
+                    "Memory: graph precedent boosted %d knowledge entr(ies)", len(prior)
+                )
+            else:
+                log.info("Memory: no graph precedent above threshold — plain RAG")
+            self._task_log_event(
+                "info", "graph_precedent",
+                prior=prior,
+                labels=labels,
+                coverage=self._memory_snapshot.get("coverage", {}),
+            )
+        except Exception as exc:
+            # Cross-task memory is an optimisation: a projection or store
+            # failure must degrade to plain retrieval, never abort the run.
+            log.warning("Memory: precedent lookup skipped (%s)", exc)
+            publish_prior({})
+
+    def _load_remembered_credentials(self, state) -> list:
+        """DKG-load remembered credentials whose full target identity matches."""
+        memory = getattr(self, "credential_memory", None)
+        if memory is None:
+            return []
+        scope, environment = self.memory_scope(), self.memory_environment()
+        lines: list = []
+        seen: set = set()
+        try:
+            for service in list(getattr(state, "services", None) or []):
+                service_type = str(
+                    getattr(service, "service_name", "") or getattr(service, "protocol", "")
+                ).strip().lower()
+                if not service_type:
+                    continue
+                for cred in memory.lookup(
+                    host=self.target_host, port=service.port,
+                    service_type=service_type, scope=scope, environment=environment,
+                ):
+                    key = (cred["username"], cred["port"], cred["service_type"])
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    self.dkg.add_node(
+                        "Credential",
+                        f"cred-memory-{cred['username']}@{cred['host']}:{cred['port']}",
+                        {
+                            "username": cred["username"],
+                            "password": cred["password"],
+                            "host": cred["host"],
+                            "port": cred["port"],
+                            "cred_type": cred["service_type"],
+                            "source": "credential_memory",
+                        },
+                        source="credential_memory",
+                    )
+                    lines.append(
+                        f"  {cred['username']}:{cred['password']} → "
+                        f"{cred['service_type']}://{cred['host']}:{cred['port']} "
+                        f"(ONLY valid for {cred['service_type']} on port {cred['port']})"
+                    )
+        except Exception as exc:
+            log.warning("Memory: credential recall skipped (%s)", exc)
+            return []
+        if lines:
+            log.info(
+                "Memory: loaded %d remembered credential(s) for %s",
+                len(lines), self.target_host,
+            )
+        return lines[:8]
+
+    def _record_task_memory(self, result) -> None:
+        """Persist this task's graph, fingerprint and knowledge ledger."""
+        store = getattr(self, "precedent", None)
+        if store is None or not store.enabled:
+            return
+        from darwin.graph_fingerprint import build_snapshot, fingerprint
+        from darwin.rag import surfaced_ids
+
+        try:
+            labels = self._memory_labels()
+            snapshot = build_snapshot(
+                self.dkg,
+                max_hops=self.memory_config.projection_max_hops,
+                max_nodes=self.memory_config.projection_max_nodes,
+                labels=labels,
+            )
+            knowledge = self._knowledge_ledger(result, surfaced_ids())
+            store.record_task_snapshot(
+                task_id=f"task-{int(self.start_time)}",
+                fingerprint=fingerprint(snapshot),
+                snapshot=snapshot,
+                knowledge=knowledge,
+                labels=labels,
+            )
+            log.info(
+                "Memory: recorded snapshot %d nodes / %d edges, %d knowledge entr(ies)",
+                len(snapshot.get("nodes", [])), len(snapshot.get("edges", [])),
+                len(knowledge),
+            )
+        except Exception as exc:
+            log.warning("Memory: snapshot not recorded (%s)", exc)
+
+    def _knowledge_ledger(self, result, surfaced: set) -> list:
+        """Per-entry accounting: surfaced, used, verified success.
+
+        ``used`` comes from the plan's explicit ``source_knowledge_ids`` when
+        the planner supplied them, plus a deterministic text match against the
+        instruction of tasks that actually executed.  Credit is only granted
+        for outcomes verified as successful — a knowledge entry that was shown
+        during a failed run does not become reusable.
+        """
+        from darwin.precedent_store import build_knowledge_record
+
+        executed = [
+            task for task in list(getattr(self.exploitation_plan, "tasks", []) or [])
+            if getattr(task, "attempt_count", 0) > 0
+        ]
+        used = {
+            str(entry_id)
+            for task in executed
+            for entry_id in (getattr(task, "source_knowledge_ids", None) or [])
+        }
+        if surfaced:
+            text = " ".join(
+                str(getattr(task, "instruction", "") or "").lower()
+                for task in executed
+            )
+            rag = self._rag_entry_lookup()
+            for entry_id in surfaced:
+                entry = rag.get(str(entry_id))
+                if not entry:
+                    continue
+                needles = [str(entry.get("title", "")).lower()] + [
+                    str(term).lower() for term in (entry.get("technique_class") or [])
+                ]
+                if any(needle and needle in text for needle in needles):
+                    used.add(str(entry_id))
+        verified = bool(result and result.success and getattr(result, "flag", ""))
+        failed = bool(result and not result.success)
+        return [
+            build_knowledge_record(
+                entry_id,
+                surfaced=True,
+                used=entry_id in used,
+                verified_success=verified and entry_id in used,
+                failed=failed and entry_id in used,
+            )
+            for entry_id in sorted(surfaced)
+        ]
+
+    def _rag_entry_lookup(self) -> dict:
+        """Corpus entries by id, for ledger attribution (empty when unavailable)."""
+        try:
+            from darwin.rag import get_rag
+
+            rag = get_rag()
+            return {str(entry.get("id")): entry for entry in getattr(rag, "_entries", [])}
+        except Exception as exc:
+            log.debug("swallowed exception: %s", exc, exc_info=True)
+            return {}
 
     def _check_tool_dependencies(self) -> None:
         """Verify external CLI tools exist on PATH. Warn for missing required ones."""

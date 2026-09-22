@@ -5,13 +5,16 @@ __pycache__/
 *.egg-info/
 
 # Virtual environment
-venv/
+venv*/
 log/
 
 # checkpoint
 checkpoints/
 experiments_results/
 tools_open/
+
+# cross-task graph memory (snapshots + credentials)
+memory/
 
 # local model weights (RAG embedder / reranker)
 models/

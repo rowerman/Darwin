@@ -223,6 +223,10 @@ class PlanTaskV1(BaseModel):
     # prompt contract (tool guessing / scheduler priority).
     vuln_type: str = ""
     source: str = ""
+    # Corpus entry ids this task was derived from (cross-task memory
+    # accounting).  Optional: the planner may omit it and the runtime then
+    # falls back to matching the task text against the injected entries.
+    source_knowledge_ids: list[str] = Field(default_factory=list)
 
     @model_validator(mode="before")
     @classmethod

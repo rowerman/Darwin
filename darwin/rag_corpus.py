@@ -46,7 +46,7 @@ ENTRY_FIELDS = (
     "id", "title", "capability", "domains", "requires_environment",
     "applies_when", "signals", "technique_class", "verification",
     "failure_boundary", "tools", "cve_ids", "aliases", "confidence",
-    "provenance", "search_text_dense", "search_text_sparse",
+    "graph_pattern", "provenance", "search_text_dense", "search_text_sparse",
 )
 
 _CVE_RE = re.compile(r"CVE-\d{4}-\d{4,}", re.I)
@@ -649,6 +649,15 @@ def build_entry(raw: Dict[str, Any], *, path: Path, knowledge_root: Path,
         "confidence": float(raw.get("confidence") or 0.5),
         "provenance": provenance,
     }
+    graph_pattern = raw.get("graph_pattern")
+    if isinstance(graph_pattern, dict) and (graph_pattern.get("nodes") or graph_pattern.get("edges")):
+        # Structural precondition: the entry only applies when the current
+        # environment graph contains this subgraph (see graph_fingerprint).
+        entry["graph_pattern"] = {
+            "nodes": [n for n in graph_pattern.get("nodes", []) if isinstance(n, dict)],
+            "edges": [e for e in graph_pattern.get("edges", []) if isinstance(e, dict)],
+            "requires_subgraph": bool(graph_pattern.get("requires_subgraph", True)),
+        }
     if converted:
         for key in ("title", "verification"):
             entry[key] = sanitize_text(entry[key])
@@ -714,6 +723,35 @@ def lint_entry(entry: Dict[str, Any]) -> List[str]:
         problems.append("target_specific_value")
     if not entry.get("search_text_dense") or not entry.get("search_text_sparse"):
         problems.append("missing_search_text")
+    problems.extend(_lint_graph_pattern(entry.get("graph_pattern")))
+    return problems
+
+
+def _lint_graph_pattern(pattern: Any) -> List[str]:
+    """Validate an optional structural precondition against the DKG vocabulary."""
+    if pattern is None:
+        return []
+    if not isinstance(pattern, dict):
+        return ["bad_graph_pattern"]
+    from darwin.dkg import EDGE_TYPES, NODE_TYPES
+
+    problems: List[str] = []
+    nodes = pattern.get("nodes")
+    edges = pattern.get("edges")
+    if nodes is not None and not isinstance(nodes, list):
+        problems.append("bad_graph_pattern_nodes")
+        nodes = []
+    if edges is not None and not isinstance(edges, list):
+        problems.append("bad_graph_pattern_edges")
+        edges = []
+    for node in nodes or []:
+        if not isinstance(node, dict) or node.get("type") not in NODE_TYPES:
+            problems.append("unknown_graph_pattern_node_type")
+        elif node.get("where") is not None and not isinstance(node["where"], str):
+            problems.append("bad_graph_pattern_where")
+    for edge in edges or []:
+        if not isinstance(edge, dict) or edge.get("type") not in EDGE_TYPES:
+            problems.append("unknown_graph_pattern_edge_type")
     return problems
 
 

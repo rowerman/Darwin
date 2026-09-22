@@ -2639,7 +2639,6 @@ class ExecutionCoordinator(CoordinatorContext):
             if "no evidence" in rl or "no flag" in rl:
                 _auto_test_negative = True
 
-            # CTEG tracking
             raw_stdout = getattr(result, 'stdout', '') or ''
             _raw_task_stdouts.append(raw_stdout)  # full, for credential extraction
             _TOOL_VULN_MAP = {
@@ -2918,17 +2917,19 @@ class ExecutionCoordinator(CoordinatorContext):
                         "cred_type": _cred_type,
                         "source": "partial_success",
                     })
-                    # Also persist to CTEG for cross-task reuse
+                    # Also persist for cross-task reuse (full identity match)
                     try:
-                        self.cteg.add_credential(
+                        self.credential_memory.record(
                             host=self.target_host, port=_cred_port,
                             service_type=_cred_type,
                             username=_cred_user, password=_cred_pass,
                             source="partial_success",
+                            scope=self.memory_scope(),
+                            environment=self.memory_environment(),
                         )
                     except Exception as exc:
                         log.debug("swallowed exception: %s", exc, exc_info=True)
-                    log.info("[PARTIAL SUCCESS] Stored credential '%s' (auth OK → CTEG)",
+                    log.info("[PARTIAL SUCCESS] Stored credential '%s' (auth OK → memory)",
                              creds["username"])
                 task_success = True
                 task_result_text = (

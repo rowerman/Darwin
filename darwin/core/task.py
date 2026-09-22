@@ -100,6 +100,9 @@ class Task:
     # tool guessing; not part of the LLM task contract.
     source: str = ""
     vuln_type: str = ""
+    # Corpus entry ids the plan credited (see PlanTaskV1).  Consumed at task
+    # end to credit cross-task memory.
+    source_knowledge_ids: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         """Canonical JSON-safe serialization for plan checkpoints.
@@ -128,6 +131,7 @@ class Task:
             "result_summary": self.result_summary,
             "source": self.source,
             "vuln_type": self.vuln_type,
+            "source_knowledge_ids": list(self.source_knowledge_ids),
         }
 
     @classmethod
@@ -154,6 +158,9 @@ class Task:
             result_summary=d.get("result_summary", "") or "",
             source=str(d.get("source", "") or ""),
             vuln_type=str(d.get("vuln_type", "") or ""),
+            source_knowledge_ids=[
+                str(item) for item in (d.get("source_knowledge_ids") or [])
+            ],
         )
 
     def summary(self, max_len: int = 80) -> str:

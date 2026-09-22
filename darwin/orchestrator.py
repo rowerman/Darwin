@@ -22,6 +22,9 @@ log = logging.getLogger(__name__)
 
 from darwin.cteg import CTEG, TaskRecord, build_scenario_profile
 from darwin.core.context import ContextManager
+from darwin.credential_memory import CredentialMemory
+from darwin.memory_config import MemoryConfig
+from darwin.precedent_store import PrecedentStore
 from darwin.core.contracts import (
     Budget,
     Objective,
@@ -160,6 +163,12 @@ class Orchestrator:
         self.dpm = DefensePerceptionModule(llm_session=self.llm)
         self.dave = DAVE(browser_enabled=browser_enabled)
         self.cteg = CTEG(storage_path="cteg_state.json")
+        # Cross-task memory: the environment graph is the index key.  CTEG's
+        # retrieval channel above is superseded; it is still constructed so
+        # existing call sites and tests keep a stable object.
+        self.memory_config = MemoryConfig.from_files()
+        self.precedent = PrecedentStore(self.memory_config)
+        self.credential_memory = CredentialMemory(self.memory_config.credentials_path)
 
         # Tool infrastructure
         self.recon_gateway = create_recon_gateway()
@@ -464,6 +473,22 @@ class Orchestrator:
 
     def _checkpoint_path(self, phase: str) -> str:
         return self.lifecycle._checkpoint_path(phase)
+
+    def memory_scope(self) -> str:
+        """Target scope that binds cross-task credentials to one environment.
+
+        Credentials are only reused between tasks that share this scope, so a
+        benchmark target reusing ``localhost`` ports across challenges cannot
+        inherit another challenge's credentials.
+        """
+        scope = getattr(self.dkg, "scope", {}) or {}
+        return str(scope.get("target_scope", "") or "")
+
+    def memory_environment(self) -> str:
+        """Environment classification recorded during recon (may be empty)."""
+        from darwin.rag_query import environment_from_dkg
+
+        return environment_from_dkg(self.dkg)
 
     def _check_tool_dependencies(self) -> None:
         return self.lifecycle._check_tool_dependencies()

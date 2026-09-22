@@ -1783,6 +1783,7 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
         try:
             import re
 
+            from darwin.precedent_store import current_prior
             from darwin.rag import get_environment, get_rag
             from darwin.rag_query import active_domains
             from darwin.search_evidence import empty_evidence, format_rag_evidence
@@ -1791,7 +1792,8 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
             resolved_environment = environment or get_environment()
             domains = [d for d in re.split(r"[,\s]+", domain or "") if d] or active_domains([query])
             results = rag.retrieve(
-                query, environment=resolved_environment, domains=domains
+                query, environment=resolved_environment, domains=domains,
+                prior=current_prior(),
             )
             retrieval = {
                 "backend": rag.backend,

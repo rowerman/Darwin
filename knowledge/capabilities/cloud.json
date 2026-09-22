@@ -47,6 +47,14 @@
       ]
     },
     "confidence": 0.7,
+    "graph_pattern": {
+      "nodes": [
+        {
+          "type": "S3"
+        }
+      ],
+      "requires_subgraph": true
+    },
     "derived_from": "benchmark scenarios: attachme-volume, cosmiss-notebook, dataform-pt, lowcode-secrets"
   },
   {
@@ -148,6 +156,19 @@
       ]
     },
     "confidence": 0.65,
+    "graph_pattern": {
+      "nodes": [
+        {
+          "type": "IAMRole"
+        }
+      ],
+      "edges": [
+        {
+          "type": "role_can_assume"
+        }
+      ],
+      "requires_subgraph": true
+    },
     "derived_from": "benchmark scenarios: cross-account-trust"
   },
   {
@@ -198,6 +219,14 @@
       ]
     },
     "confidence": 0.6,
+    "graph_pattern": {
+      "nodes": [
+        {
+          "type": "CloudAccount"
+        }
+      ],
+      "requires_subgraph": true
+    },
     "derived_from": "benchmark scenarios: iam-enum-oracle, resource-explorer, beta-endpoint"
   },
   {
@@ -450,6 +479,19 @@
       ]
     },
     "confidence": 0.6,
+    "graph_pattern": {
+      "nodes": [
+        {
+          "type": "IAMRole"
+        }
+      ],
+      "edges": [
+        {
+          "type": "role_has_policy"
+        }
+      ],
+      "requires_subgraph": true
+    },
     "derived_from": "benchmark scenarios: serverless-sa"
   },
   {

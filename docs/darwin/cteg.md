@@ -4,9 +4,16 @@
 
 CTEG（Cross-Task Experience Graph）跨挑战积累 exploit、bypass 和 credential 模式，并按场景匹配和衰减。
 
+**当前状态（feat_20260922_1 起）：CTEG 的检索通道已下线。** 运行时不再调用
+`get_suggestions()` 注入提示词，跨任务经验改由"环境图相似度 → RAG 先验"提供
+（见 `graph_fingerprint.md` / `precedent_store.md`），凭据通道由 `credential_memory.py`
+承接。本模块保留的原因：`core/memory.py` 的执行级经验写入仍指向它，旧状态
+`cteg_state.json` 仍可读；它已不再影响规划或分析提示词。
+
 ## 所在链路
 
-编排器的经验记忆层，参与规划前提示和任务结束后的经验沉淀。
+不再位于主链路。历史链路（规划前提示、任务结束提交）已被跨任务图记忆取代；
+仅 `MemoryManager.record_execution()` 的鸭子类型写入仍会触达它。
 
 ## 关键入口
 
@@ -30,4 +37,6 @@ CTEG（Cross-Task Experience Graph）跨挑战积累 exploit、bypass 和 creden
 ## 维护提示
 
 持久化字段、半衰期或匹配权重变化时需要考虑旧状态兼容。
-
+若要彻底删除本模块，需要同时处理 `core/memory.py` 的 `experience` 写入路径与
+`tests/test_cteg_experience.py`；删除前确认 `precedent_store` 的知识账本已覆盖
+同样的效果归因。

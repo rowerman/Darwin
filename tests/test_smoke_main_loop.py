@@ -356,8 +356,13 @@ class _AnalyzeStubCTEG:
 
 
 @pytest.mark.asyncio
-async def test_analyze_injects_cteg_section_only_when_matched(monkeypatch):
-    """P4: analyze prompt shows the CTEG section only on a scenario match."""
+async def test_analyze_has_no_cteg_experience_block(monkeypatch):
+    """The CTEG retrieval channel is retired.
+
+    Cross-task knowledge now reaches the prompt only as gate-passing RAG
+    candidates ranked by the graph-similarity prior, so a matched legacy CTEG
+    pattern must not appear as a standalone prompt section.
+    """
     llm = FakeLLM(content='{"application_understanding": "test app", "vulnerabilities": []}')
     orch = _make_orchestrator(llm, FakeGateway({}), FakeGateway({}), monkeypatch)
     orch._task_description = "analyze test"
@@ -380,10 +385,5 @@ async def test_analyze_injects_cteg_section_only_when_matched(monkeypatch):
         "exploit_strategies": [],
     }
     await orch._analyze_phase()
-    assert "Prior Cross-Task Experience (matched)" in captured["prompt"]
-    assert "double_encode" in captured["prompt"]
-
-    captured["prompt"] = ""
-    stub_cteg.suggestions = {}
-    await orch._analyze_phase()
     assert "Prior Cross-Task Experience (matched)" not in captured["prompt"]
+    assert "double_encode" not in captured["prompt"]

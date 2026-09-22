@@ -38,7 +38,6 @@ def numeric_object_path(url: str, status: int = 0) -> bool:
     return bool(re.search(r'(?:^|/)\d+(?:/|$)', urlparse(str(url)).path or ""))
 
 
-from darwin.cteg import CTEG, TaskRecord, build_scenario_profile
 from darwin.core.context import ContextManager
 from darwin.core.contracts import (
     Budget,
@@ -330,15 +329,14 @@ class ResearchCoordinator(CoordinatorContext):
             f"## Tool Contract Card (use these EXACT tool names and parameters)\n"
             f"{_tool_card}"
         )
-        # P4: hard-gated scenario match — no CTEG text at all when nothing
-        # overlaps (the old unconditional "no prior experience" filler is gone).
-        cteg_suggestions = self.cteg.get_suggestions(
-            profile=build_scenario_profile(
-                state, self.vulnerabilities, self.defense_state
-            )
-        )
-        if cteg_suggestions.get("bypass_strategies") or cteg_suggestions.get("exploit_strategies"):
-            prompt += f"\n\n## Prior Cross-Task Experience (matched)\n{json.dumps(cteg_suggestions, indent=2, ensure_ascii=False)}"
+        # Cross-task experience no longer arrives as a separate prompt block:
+        # the graph-similarity prior published by the lifecycle reorders the
+        # RAG candidates below, so only gate-passing knowledge is injected.
+        from darwin.precedent_store import current_prior
+
+        knowledge_prior = current_prior()
+        if knowledge_prior:
+            self._task_log_event("info", "knowledge_prior", prior=knowledge_prior)
 
         self._maybe_compress()
         tokens_before = self.llm.token_count
@@ -360,7 +358,7 @@ class ResearchCoordinator(CoordinatorContext):
         self._task_log_event("info", "llm_analyze_call",
             prompt=prompt, response=content[:2000],
             tokens_used=tokens_used,
-            cteg_suggestions=cteg_suggestions,
+            knowledge_prior=knowledge_prior,
         )
 
         print(f"[ANALYZE] LLM response ({tokens_used} tokens):")

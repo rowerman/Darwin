@@ -16,12 +16,16 @@
 - `build_entry()` + `source_fields()`：按来源形状抽取 applies_when/signals/technique_class。
 - `sanitize_text()` / `sanitize_technique()`：剥离目标专属值与 payload/请求体。
 - `lint_entry()`：schema 与目标值校验；`DOMAIN_ENVIRONMENTS` 定义域 → 环境前提。
+- `graph_pattern`（可选字段）：条目的**结构前置条件**，声明它需要当前环境图包含
+  哪个子图才适用（节点/边条件 + `requires_subgraph`）。由
+  `graph_fingerprint.match_graph_pattern()` 在检索候选阶段判定，不满足即丢弃。
 
 ## 输入/输出概览
 
 输入是 `knowledge/**`（`scenarios/**` 除外，记为 `answer_leak` 排除）；输出统一
 条目，含 `applies_when` / `signals` / `technique_class` / `verification` /
-`failure_boundary` / `requires_environment` / `provenance` 与两路检索文本。
+`failure_boundary` / `requires_environment` / `graph_pattern` / `provenance` 与
+两路检索文本。
 
 ## 相关模块
 

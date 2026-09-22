@@ -49,6 +49,19 @@
       ]
     },
     "confidence": 0.7,
+    "graph_pattern": {
+      "nodes": [
+        {
+          "type": "Endpoint"
+        }
+      ],
+      "edges": [
+        {
+          "type": "service_targets_pod"
+        }
+      ],
+      "requires_subgraph": true
+    },
     "derived_from": "benchmark scenarios: kubelet-unauth, etcd-unauth, helm-tiller"
   },
   {
@@ -100,6 +113,19 @@
       ]
     },
     "confidence": 0.75,
+    "graph_pattern": {
+      "nodes": [
+        {
+          "type": "K8sSA"
+        }
+      ],
+      "edges": [
+        {
+          "type": "sa_bound_to_role"
+        }
+      ],
+      "requires_subgraph": true
+    },
     "derived_from": "benchmark scenarios: rbac-secrets, sa-cluster-admin, sa-cross-namespace, sa-cross-ns, node-redirect"
   },
   {
@@ -203,6 +229,20 @@
       ]
     },
     "confidence": 0.75,
+    "graph_pattern": {
+      "nodes": [
+        {
+          "type": "K8sPod",
+          "where": "privileged=true"
+        }
+      ],
+      "edges": [
+        {
+          "type": "node_hosts_pod"
+        }
+      ],
+      "requires_subgraph": true
+    },
     "derived_from": "benchmark scenarios: cri-socket-escape, docker-socket-escape, privileged-breakout"
   },
   {
@@ -512,6 +552,19 @@
       ]
     },
     "confidence": 0.6,
+    "graph_pattern": {
+      "nodes": [
+        {
+          "type": "K8sNamespace"
+        }
+      ],
+      "edges": [
+        {
+          "type": "namespace_contains_pod"
+        }
+      ],
+      "requires_subgraph": true
+    },
     "derived_from": "benchmark scenarios: multi-tenant-k8s"
   },
   {

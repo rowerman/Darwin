@@ -17,6 +17,11 @@
 - `_apply_final_defense_state()`：在所有返回路径将最终 DPM 快照投影到
   `TaskResult`；`run()` 同时释放普通 HTTP 与防御探测客户端。
 - `_extract_json()` / `_extract_json_array()`：JSON 宽容解析。
+- `_publish_knowledge_prior()` / `_record_task_memory()`：跨任务图记忆的读端与写端；
+  读端在 recon 后按当前图指纹发布 RAG 先验并发布结构前置条件快照，写端在任务结束
+  落库图快照与知识账本。
+- `_load_remembered_credentials()`：按 scope + host + port + service 完整身份
+  复用历史凭据；替代原先"端口或服务名匹配"的 CTEG 凭据通道。
 
 ## 相关模块
 

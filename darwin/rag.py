@@ -23,6 +23,7 @@ import json
 import logging
 import math
 import os
+import threading
 import time
 from collections import Counter
 from dataclasses import dataclass
@@ -138,10 +139,16 @@ class RetrievalTrace:
     sparse_rank: Optional[int] = None
     fused: float = 0.0
     rerank: float = 0.0
+    #: Cross-task precedent boost.  Ordering only — the gate always reads the
+    #: unboosted ``rerank`` value so a precedent can never admit an entry the
+    #: calibrated gate rejected.
+    prior: float = 0.0
     dropped: str = ""
 
     def to_dict(self) -> Dict[str, Any]:
         data: Dict[str, Any] = {"fused": round(self.fused, 4), "rerank": round(self.rerank, 4)}
+        if self.prior:
+            data["prior"] = round(self.prior, 4)
         if self.dense_rank is not None:
             data["dense_rank"] = self.dense_rank
         if self.sparse_rank is not None:
@@ -323,8 +330,16 @@ class DarwinRAG:
         environment: str = "",
         domains: Optional[Iterable[str]] = None,
         top_k: Optional[int] = None,
+        prior: Optional[Dict[str, float]] = None,
     ) -> List[Dict[str, Any]]:
-        """Hybrid retrieval with environment filtering, reranking and gating."""
+        """Hybrid retrieval with environment filtering, reranking and gating.
+
+        ``prior`` maps corpus entry ids to a cross-task boost (see
+        ``darwin.precedent_store``).  It reorders candidates and the final
+        selection, but the gate is always evaluated on the unboosted score:
+        precedent can promote a technique that already cleared the bar, never
+        override the bar itself.
+        """
         if not self._loaded:
             self.load()
         if not self._entries or not str(query).strip():
@@ -366,10 +381,20 @@ class DarwinRAG:
 
         allowed_domains = {d for d in (domains or []) if d}
         candidates: List[int] = []
+        graph_context = get_graph_context()
+        pattern_matcher = None
+        if graph_context is not None:
+            from darwin.graph_fingerprint import match_graph_pattern
+
+            pattern_matcher = match_graph_pattern
         for idx, trace in traces.items():
             entry = self._entries[idx]
             if not self._environment_allows(entry, environment):
                 trace.dropped = "environment"
+                continue
+            pattern = entry.get("graph_pattern")
+            if pattern and pattern_matcher and not pattern_matcher(pattern, graph_context):
+                trace.dropped = "graph_pattern"
                 continue
             if allowed_domains and entry.get("domains"):
                 if not (set(entry["domains"]) & allowed_domains):
@@ -378,7 +403,15 @@ class DarwinRAG:
                 trace.fused *= (1.0 - cfg.undeclared_environment_penalty)
             candidates.append(idx)
 
-        candidates.sort(key=lambda idx: traces[idx].fused, reverse=True)
+        if prior:
+            for idx in candidates:
+                try:
+                    boost = prior.get(str(self._entries[idx].get("id", "")))
+                    traces[idx].prior = float(boost or 0.0)
+                except (TypeError, ValueError):
+                    traces[idx].prior = 0.0
+
+        candidates.sort(key=lambda idx: traces[idx].fused + traces[idx].prior, reverse=True)
         candidates = candidates[: cfg.rerank_candidates]
         if not candidates:
             return []
@@ -399,7 +432,7 @@ class DarwinRAG:
         selected: List[int] = []
         per_capability: Counter = Counter()
         seen_keys: set = set()
-        for idx in sorted(candidates, key=lambda i: traces[i].rerank, reverse=True):
+        for idx in sorted(candidates, key=lambda i: traces[i].rerank + traces[i].prior, reverse=True):
             trace, entry = traces[idx], self._entries[idx]
             if trace.rerank < score_min or trace.rerank < top_score - score_window:
                 trace.dropped = trace.dropped or "gate"
@@ -425,6 +458,7 @@ class DarwinRAG:
             entry["retrieval"] = traces[idx].to_dict()
             results.append(entry)
 
+        note_surfaced(entry.get("id", "") for entry in results)
         rag_log.info(
             "RAG_RETRIEVE query=%r env=%r candidates=%d selected=%d backend=%s",
             str(query)[:120], environment or "unknown", len(candidates), len(results),
@@ -512,6 +546,45 @@ class DarwinRAG:
 
 _rag_instance: Optional[DarwinRAG] = None
 _rag_environment: str = ""
+
+#: Corpus entries injected into a prompt during the current task.  Consumed by
+#: the cross-task memory ledger to distinguish "we showed this to the LLM" from
+#: "this was actually used" — see ``darwin.precedent_store``.
+_surfaced_lock = threading.RLock()
+_surfaced_ids: set = set()
+
+
+def note_surfaced(entry_ids: Iterable[str]) -> None:
+    with _surfaced_lock:
+        for entry_id in entry_ids:
+            if entry_id:
+                _surfaced_ids.add(str(entry_id))
+
+
+def surfaced_ids() -> set:
+    with _surfaced_lock:
+        return set(_surfaced_ids)
+
+
+def reset_surfaced() -> None:
+    with _surfaced_lock:
+        _surfaced_ids.clear()
+
+
+#: Attack-surface snapshot of the current target.  Corpus entries carrying a
+#: ``graph_pattern`` structural precondition are filtered against it; when no
+#: snapshot has been published the filter is skipped (retrieval behaves as
+#: before rather than silently dropping knowledge).
+_graph_context: Optional[Dict[str, Any]] = None
+
+
+def set_graph_context(snapshot: Optional[Dict[str, Any]]) -> None:
+    global _graph_context
+    _graph_context = snapshot if isinstance(snapshot, dict) else None
+
+
+def get_graph_context() -> Optional[Dict[str, Any]]:
+    return _graph_context
 
 
 def set_environment(kind: str) -> None:

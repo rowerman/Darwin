@@ -20,6 +20,7 @@ dependencies = [
     "rich>=13.8",
     "langgraph>=1.0",
     "ddgs>=8.0",
+    "neo4j>=5.2",
 ]
 
 [project.optional-dependencies]

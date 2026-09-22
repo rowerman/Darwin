@@ -16,6 +16,8 @@ LLM 输出与 Orchestrator/Planner 输入之间的契约边界。
 - `PlanTaskV1.success_condition`（可选）声明可机器校验的完成条件
   （tool_success / body_contains / body_not_contains / http_status_in /
   flag_captured / probe），由执行层校验后才判定任务成功。
+- `PlanTaskV1.source_knowledge_ids`（可选，默认空列表）声明该任务参考了哪些语料条目，
+  透传到 `Task.source_knowledge_ids` 供跨任务知识账本归因；缺省时严格校验不报错。
 - `parse_analyze_output()`、`parse_research_findings()`、`parse_plan_tasks()`：解析入口。
 - `extract_json_value()`：从自然语言/围栏中提取 JSON。
 

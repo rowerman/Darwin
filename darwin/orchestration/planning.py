@@ -1068,6 +1068,9 @@ class PlanCoordinator(CoordinatorContext):
                     ),
                     source=str(d.get("source", "") or ""),
                     vuln_type=str(d.get("vuln_type", "") or ""),
+                    source_knowledge_ids=[
+                        str(item) for item in (d.get("source_knowledge_ids") or [])
+                    ],
                 )
             )
         # Sync appended hint tasks back to the caller's list.
@@ -1223,6 +1226,7 @@ class PlanCoordinator(CoordinatorContext):
                 domains_from_dkg,
                 environment_from_dkg,
             )
+            from darwin.precedent_store import current_prior
             rag = get_rag()
             if rag and rag.loaded:
                 query = build_capability_query(
@@ -1232,7 +1236,10 @@ class PlanCoordinator(CoordinatorContext):
                 )
                 environment = environment_from_dkg(self.dkg)
                 domains = domains_from_dkg(self.dkg)
-                results = rag.retrieve(query, environment=environment, domains=domains)
+                results = rag.retrieve(
+                    query, environment=environment, domains=domains,
+                    prior=current_prior(),
+                )
                 if results:
                     lines = ["\n## Candidate Techniques (RAG, unverified)\n"]
                     for r in results:
@@ -1657,6 +1664,7 @@ Output ONLY valid JSON array (3-20 tasks depending on complexity. More tasks != 
                         status=TaskStatus.READY,
                         source=t.source,
                         vuln_type=t.vuln_type,
+                        source_knowledge_ids=list(t.source_knowledge_ids),
                         success_condition=normalize_success_condition(
                             t.success_condition
                         ),
@@ -2045,6 +2053,9 @@ Output ONLY valid JSON array (3-20 tasks depending on complexity. More tasks != 
             status=status,
             source=str(d.get("source", "") or ""),
             vuln_type=str(d.get("vuln_type", "") or ""),
+            source_knowledge_ids=[
+                str(item) for item in (d.get("source_knowledge_ids") or [])
+            ],
             success_condition=normalize_success_condition(
                 d.get("success_condition")
             ),
@@ -2623,6 +2634,7 @@ Output ONLY valid JSON array (3-20 tasks depending on complexity. More tasks != 
             if svc_name:
                 try:
                     from darwin.rag import get_rag
+                    from darwin.precedent_store import current_prior
                     from darwin.rag_query import (
                         build_capability_query,
                         domains_from_dkg,
@@ -2635,6 +2647,7 @@ Output ONLY valid JSON array (3-20 tasks depending on complexity. More tasks != 
                         ),
                         environment=environment_from_dkg(self.dkg),
                         domains=domains_from_dkg(self.dkg),
+                        prior=current_prior(),
                     )
                     if rag_results:
                         rag_text = "\n".join(
@@ -2745,16 +2758,16 @@ the current tool cannot express the required request)", "corrected_params":
     async def _extract_credentials_from_task(
         self, task: Task, raw_stdouts: list[str]
     ) -> None:
-        """Extract discovered credentials from task stdout → DKG + CTEG.
+        """Extract discovered credentials from task stdout → DKG + memory.
 
         Regex pre-filters for credential patterns, then uses a lightweight
         LLM call (classifier profile, isolated session) to extract structured
         username:password pairs. Only fires for tools that commonly discover
         credentials (shell_exec, ssh_exec, test_credential).
 
-        Extracted credentials are stored as DKG Credential nodes and in CTEG,
-        making them available for $credentials.* placeholder resolution in
-        subsequent tasks.
+        Extracted credentials are stored as DKG Credential nodes and in the
+        cross-task credential memory, making them available for
+        $credentials.* placeholder resolution in subsequent tasks.
         """
         tool = str((task.action or {}).get("tool", "") or "")
         if tool not in ("shell_exec", "ssh_exec", "test_credential",
@@ -2795,9 +2808,6 @@ the current tool cannot express the required request)", "corrected_params":
             })
             log.info("Extracted AWS credentials: AccessKeyId=%s... SecretAccessKey=%s...",
                      _ak[:12], _sk[:8])
-            # CTEG task recording is handled by the orchestrator's main loop
-            # at orchestrator.py:630 via TaskRecord dataclass — no explicit
-            # commit_task call needed here.
             return
 
         # ── Regex pre-filter ────────────────────────────────────────
@@ -2883,7 +2893,7 @@ the current tool cannot express the required request)", "corrected_params":
         except Exception:
             return
 
-        # ── Store in DKG + CTEG ─────────────────────────────────────
+        # ── Store in DKG + credential memory ────────────────────────
         for cred in creds_list:
             username = str(cred.get("username", "")).strip()
             password = str(cred.get("password", "")).strip()
@@ -2900,17 +2910,19 @@ the current tool cannot express the required request)", "corrected_params":
                 "source": "task_discovery",
             })
             try:
-                self.cteg.add_credential(
+                self.credential_memory.record(
                     host=self.target_host,
                     port=int(_port) if _port and _port.isdigit() else 0,
                     service_type=_svc_name,
                     username=username, password=password,
                     source="task_discovery",
+                    scope=self.memory_scope(),
+                    environment=self.memory_environment(),
                 )
             except Exception as exc:
                 log.debug("swallowed exception: %s", exc, exc_info=True)
             log.info(
-                "Credential extracted from task output: %s:*** → DKG + CTEG",
+                "Credential extracted from task output: %s:*** → DKG + credential memory",
                 username,
             )
             print(f"\n[CRED] Discovered: {username}:**** → stored for subsequent tasks")

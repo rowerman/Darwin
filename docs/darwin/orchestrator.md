@@ -22,6 +22,10 @@ DARWIN 的主编排器门面（薄门面）：保留全部状态与构造逻辑�
 - 模块级导出：`TaskExecution`、`_RuntimeFlagFound`、
   `_RuntimePlannerAdapter`、`_RuntimeExecutorAdapter`、`_RuntimeEvaluatorAdapter`
   继续从 `darwin.orchestration.execution` re-export。
+- 跨任务记忆组件：构造时装配 `memory_config`（`MemoryConfig.from_files()`）、
+  `precedent`（`PrecedentStore`）与 `credential_memory`（`CredentialMemory`）；
+  `memory_scope()` / `memory_environment()` 给出绑定凭据与快照的环境标识。
+  `self.cteg` 仍被构造以兼容执行级经验写入，但已不参与检索。
 
 ## 输入/输出概览
 
