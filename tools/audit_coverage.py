@@ -6,7 +6,7 @@ Phase 3 (linkage): for every taxonomy leaf (benchmark scenario) verify:
     - leaf.capability ∈ CapabilityRegistry
     - a knowledge entry exists for leaf.id in knowledge/scenarios/**
 
-Output: TOOL_COVERAGE_AUDIT.md at the repo root.
+Output: artifacts/tool_coverage_audit.md by default.
 
 Usage:
     python -m tools.audit_coverage
@@ -102,10 +102,15 @@ def render_markdown(result: dict) -> str:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--out", default=str(ROOT / "TOOL_COVERAGE_AUDIT.md"))
+    parser.add_argument(
+        "--out",
+        default=str(ROOT / "artifacts" / "tool_coverage_audit.md"),
+    )
     args = parser.parse_args(argv)
     result = audit()
-    Path(args.out).write_text(
+    output = Path(args.out)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(
         render_markdown(result), encoding="utf-8"
     )
     print(

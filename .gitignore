@@ -3,23 +3,29 @@ __pycache__/
 *.pyc
 *.pyo
 *.egg-info/
+.pytest_cache/
+.cache/
 
 # Virtual environment
 venv*/
-log/
 
-# checkpoint
+# Runtime output
+log/
+*.log
 checkpoints/
 experiments_results/
 tools_open/
+artifacts/
+tmp/
+cteg_state.json
 
-# cross-task graph memory (snapshots + credentials)
+# Cross-task graph memory (snapshots + credentials)
 memory/
 
-# local model weights (RAG embedder / reranker)
+# Local model weights (RAG embedder / reranker)
 models/
 
-# secret
+# Secrets
 config/
 
 # IDE
@@ -27,11 +33,11 @@ config/
 .vscode/
 .reasonix/
 
-# log
-log/
-experiments_results/
-
+# Local agent and change records
 .claude/
 CHANGES/
 plans/
-tmp/
+
+# Editor and merge backups
+*.bak
+*.bak-*
