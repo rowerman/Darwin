@@ -14,10 +14,10 @@ import time
 
 import pytest
 
-from darwin.data_model import ExploitationPlan
+from darwin.world.data_model import ExploitationPlan
 from darwin.core.contracts import TaskStatus
 from darwin.core.task import Task
-from darwin.orchestrator import Orchestrator
+from darwin.app.orchestrator import Orchestrator
 from darwin.tools.mcp_gateway import ToolResult
 
 
@@ -144,10 +144,10 @@ def _task(tool, params):
 
 
 def _make_orchestrator(llm, recon_gw, attack_gw, monkeypatch):
-    monkeypatch.setattr("darwin.orchestrator.create_recon_gateway", lambda: recon_gw)
-    monkeypatch.setattr("darwin.orchestrator.create_attack_gateway", lambda: attack_gw)
-    monkeypatch.setattr("darwin.orchestrator.MCPClientPool", lambda: FakeMCPPool())
-    monkeypatch.setattr("darwin.orchestrator.CTEG", FakeCTEG)
+    monkeypatch.setattr("darwin.app.orchestrator.create_recon_gateway", lambda: recon_gw)
+    monkeypatch.setattr("darwin.app.orchestrator.create_attack_gateway", lambda: attack_gw)
+    monkeypatch.setattr("darwin.app.orchestrator.MCPClientPool", lambda: FakeMCPPool())
+    monkeypatch.setattr("darwin.app.orchestrator.CTEG", FakeCTEG)
 
     orch = Orchestrator(llm_session=llm, time_budget=1200)
     orch.start_time = time.time()  # loop checks _time_exceeded() immediately
@@ -321,7 +321,7 @@ async def test_plan_generation_injects_matched_cteg_hints_only(monkeypatch):
         return "[]", None, ""
 
     monkeypatch.setattr(orch, "_generate_structured", _fake_generate)
-    monkeypatch.setattr("darwin.rag.get_rag", lambda: None)
+    monkeypatch.setattr("darwin.knowledge.rag.get_rag", lambda: None)
 
     matched = {
         "bypass_strategies": [{"mechanism": "double_encode", "overlap": 0.9}],

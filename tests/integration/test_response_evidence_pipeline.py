@@ -19,7 +19,7 @@ from darwin.core.contracts import TaskStatus
 from darwin.core.scheduler import ParityScheduler
 from darwin.core.task import Task, deps_from_task_ids
 from darwin.core.task_graph import TaskGraph
-from darwin.dkg import DKG
+from darwin.world.dkg import DKG
 from darwin.orchestration.execution import ExecutionCoordinator
 from darwin.tools.attack_server import create_attack_gateway
 from darwin.tools.recon_server import create_recon_gateway

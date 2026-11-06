@@ -168,7 +168,7 @@ def _evaluate_dump(dump: list, top_k: int, score_min: float,
 
 def _calibrate(rag, queries: list) -> dict:
     """Print rerank-score distributions for gold vs non-gold candidates."""
-    from darwin.rag import DarwinRAG, RagConfig
+    from darwin.knowledge.rag import DarwinRAG, RagConfig
 
     open_config = RagConfig(
         max_results=50, rerank_candidates=30,
@@ -269,7 +269,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"wrote baseline {baseline_path}")
         return 0
 
-    from darwin.rag import DarwinRAG
+    from darwin.knowledge.rag import DarwinRAG
 
     rag = DarwinRAG(knowledge_dir=str(ROOT / "knowledge"))
     rag.load()

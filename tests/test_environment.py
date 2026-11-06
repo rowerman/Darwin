@@ -1,5 +1,5 @@
-from darwin.dkg import DKG
-from darwin.environment import EnvironmentKind, classify_environment
+from darwin.world.dkg import DKG
+from darwin.world.environment import EnvironmentKind, classify_environment
 
 
 def test_web_db_classification_does_not_enable_cloud():

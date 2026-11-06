@@ -25,11 +25,11 @@ from typing import Any, Dict, List, Tuple
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from darwin.dkg import DKG  # noqa: E402
-from darwin.graph_fingerprint import (  # noqa: E402
+from darwin.world.dkg import DKG  # noqa: E402
+from darwin.memory.graph_fingerprint import (  # noqa: E402
     DEFAULT_WEIGHTS, build_snapshot, fingerprint, similarity,
 )
-from darwin.memory_config import MemoryConfig  # noqa: E402
+from darwin.memory.memory_config import MemoryConfig  # noqa: E402
 
 CHECKPOINT_DIR = Path("checkpoints")
 

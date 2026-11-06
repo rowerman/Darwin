@@ -1,7 +1,7 @@
 """Tests for Dynamic Knowledge Graph operations."""
 
 import pytest
-from darwin.dkg import (
+from darwin.world.dkg import (
     DKG,
     EDGE_TYPES,
     NODE_TYPES,

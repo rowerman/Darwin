@@ -7,9 +7,9 @@ import pytest
 from darwin.core.contracts import TaskStatus
 from darwin.core.memory import MemoryManager
 from darwin.core.task import Task, deps_from_task_ids
-from darwin.data_model import ExploitationPlan, PipelineState
-from darwin.data_model import VulnerabilityHypothesis
-from darwin.dkg import DKG
+from darwin.world.data_model import ExploitationPlan, PipelineState
+from darwin.world.data_model import VulnerabilityHypothesis
+from darwin.world.dkg import DKG
 
 
 # ── Task serialization round-trip ───────────────────────────────────
@@ -285,7 +285,7 @@ async def test_sanitize_plan_tools_appends_credential_hint(
 
 
 def test_task_from_llm_dict_normalizes_params_deps_status():
-    from darwin.orchestrator import Orchestrator
+    from darwin.app.orchestrator import Orchestrator
 
     task = Orchestrator._task_from_llm_dict({
         "id": "t1",
@@ -301,7 +301,7 @@ def test_task_from_llm_dict_normalizes_params_deps_status():
 
 
 def test_task_from_llm_dict_unknown_status_is_created():
-    from darwin.orchestrator import Orchestrator
+    from darwin.app.orchestrator import Orchestrator
 
     task = Orchestrator._task_from_llm_dict({
         "id": "t1", "instruction": "x", "status": "bogus",

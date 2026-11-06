@@ -9,10 +9,10 @@ import pytest
 from darwin.core.belief import render_belief_snapshot
 from darwin.core.contracts import TaskStatus
 from darwin.core.task import Task
-from darwin.data_model import ExploitationPlan, normalize_dkg_state
-from darwin.dkg import DKG
+from darwin.world.data_model import ExploitationPlan, normalize_dkg_state
+from darwin.world.dkg import DKG
 from darwin.tools.mcp_gateway import ToolResult
-from darwin.topology_analysis import TopologyAnalysisResult
+from darwin.world.topology_analysis import TopologyAnalysisResult
 
 
 def test_dkg_topology_snapshot_and_diff_are_bounded_and_stable():
@@ -119,7 +119,7 @@ def test_dkg_revision_persists_and_legacy_checkpoint_loads_with_zero(tmp_path):
 
 
 def test_attack_path_summary_gate_and_revision_cache(monkeypatch):
-    import darwin.cloud_attack_path as cloud_attack_path
+    import darwin.world.cloud_attack_path as cloud_attack_path
 
     calls = {"n": 0}
 

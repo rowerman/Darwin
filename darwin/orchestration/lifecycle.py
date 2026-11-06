@@ -49,18 +49,18 @@ from darwin.core.belief import (
     render_critical_facts,
     render_new_discoveries,
 )
-from darwin.data_model import (
+from darwin.world.data_model import (
     normalize_dkg_state, PipelineState, EndpointInfo,
     OrchestratorPhase, TaskResult, VulnerabilityHypothesis, ExploitationPlan,
 )
-from darwin.dkg import DKG
-from darwin.dpm import DefensePerceptionModule, DefenseStateVector
-from darwin.dave import DAVE, ExploitAttempt, parse_tool_stdout
+from darwin.world.dkg import DKG
+from darwin.security.dpm import DefensePerceptionModule, DefenseStateVector
+from darwin.verification.dave import DAVE, ExploitAttempt, parse_tool_stdout
 from darwin.tools.mcp_client import MCPClientPool, load_mcp_config
 from darwin.tools.mcp_gateway import ToolResult
 from darwin.tools.recon_server import create_recon_gateway, parse_response
 from darwin.tools.attack_server import create_attack_gateway
-from darwin.response_evidence import disclosed_subjects, extract_target_response
+from darwin.world.response_evidence import disclosed_subjects, extract_target_response
 from darwin.utils.http_client import HTTPClient, ProbeClient, HTTPResponse
 from darwin.utils.llm import LLMSession
 from darwin.utils.phase_logger import PhaseLogger
@@ -283,7 +283,7 @@ class LifecycleCoordinator(CoordinatorContext):
         # Preload RAG in background (takes ~45s — run in parallel with bootstrap)
         _rag_task: asyncio.Task | None = None
         try:
-            from darwin.rag import get_rag
+            from darwin.knowledge.rag import get_rag
             _rag_task = asyncio.create_task(asyncio.to_thread(get_rag))
         except Exception as exc:
             log.debug("swallowed exception: %s", exc, exc_info=True)
@@ -1252,9 +1252,9 @@ class LifecycleCoordinator(CoordinatorContext):
 
     def _publish_knowledge_prior(self) -> None:
         """Fingerprint the current graph and publish the RAG ranking prior."""
-        from darwin.graph_fingerprint import build_snapshot, fingerprint
-        from darwin.precedent_store import publish_prior
-        from darwin.rag import reset_surfaced, set_graph_context
+        from darwin.memory.graph_fingerprint import build_snapshot, fingerprint
+        from darwin.memory.precedent_store import publish_prior
+        from darwin.knowledge.rag import reset_surfaced, set_graph_context
 
         reset_surfaced()
         self._knowledge_prior = {}
@@ -1350,8 +1350,8 @@ class LifecycleCoordinator(CoordinatorContext):
         store = getattr(self, "precedent", None)
         if store is None or not store.enabled:
             return
-        from darwin.graph_fingerprint import build_snapshot, fingerprint
-        from darwin.rag import surfaced_ids
+        from darwin.memory.graph_fingerprint import build_snapshot, fingerprint
+        from darwin.knowledge.rag import surfaced_ids
 
         try:
             labels = self._memory_labels()
@@ -1386,7 +1386,7 @@ class LifecycleCoordinator(CoordinatorContext):
         for outcomes verified as successful — a knowledge entry that was shown
         during a failed run does not become reusable.
         """
-        from darwin.precedent_store import build_knowledge_record
+        from darwin.memory.precedent_store import build_knowledge_record
 
         executed = [
             task for task in list(getattr(self.exploitation_plan, "tasks", []) or [])
@@ -1428,7 +1428,7 @@ class LifecycleCoordinator(CoordinatorContext):
     def _rag_entry_lookup(self) -> dict:
         """Corpus entries by id, for ledger attribution (empty when unavailable)."""
         try:
-            from darwin.rag import get_rag
+            from darwin.knowledge.rag import get_rag
 
             rag = get_rag()
             return {str(entry.get("id")): entry for entry in getattr(rag, "_entries", [])}

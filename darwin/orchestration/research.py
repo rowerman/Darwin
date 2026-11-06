@@ -75,13 +75,13 @@ from darwin.core.belief import (
     render_critical_facts,
     render_new_discoveries,
 )
-from darwin.data_model import (
+from darwin.world.data_model import (
     normalize_dkg_state, PipelineState, EndpointInfo,
     OrchestratorPhase, TaskResult, VulnerabilityHypothesis, ExploitationPlan,
 )
-from darwin.dkg import DKG
-from darwin.dpm import DefensePerceptionModule, DefenseStateVector
-from darwin.dave import DAVE, ExploitAttempt, parse_tool_stdout
+from darwin.world.dkg import DKG
+from darwin.security.dpm import DefensePerceptionModule, DefenseStateVector
+from darwin.verification.dave import DAVE, ExploitAttempt, parse_tool_stdout
 from darwin.tools.mcp_client import MCPClientPool, load_mcp_config
 from darwin.tools.mcp_gateway import ToolResult
 from darwin.tools.recon_server import create_recon_gateway, parse_response
@@ -273,7 +273,7 @@ class ResearchCoordinator(CoordinatorContext):
         # CTAGE: compute attack paths from cloud topology
         cloud_attack_paths_context = ""
         try:
-            from darwin.cloud_attack_path import compute_attack_paths
+            from darwin.world.cloud_attack_path import compute_attack_paths
             attack_path_report = compute_attack_paths(self.dkg)
             if attack_path_report.paths:
                 cloud_attack_paths_context = attack_path_report.to_prompt_context() + "\n"
@@ -332,7 +332,7 @@ class ResearchCoordinator(CoordinatorContext):
         # Cross-task experience no longer arrives as a separate prompt block:
         # the graph-similarity prior published by the lifecycle reorders the
         # RAG candidates below, so only gate-passing knowledge is injected.
-        from darwin.precedent_store import current_prior
+        from darwin.memory.precedent_store import current_prior
 
         knowledge_prior = current_prior()
         if knowledge_prior:
@@ -976,7 +976,7 @@ class ResearchCoordinator(CoordinatorContext):
                 if port in _NON_HTTP_RAG_PORTS:
                     try:
                         svc_name = version or f"port {port}"
-                        from darwin.rag_query import environment_from_dkg
+                        from darwin.knowledge.rag_query import environment_from_dkg
                         rag_result = await self._call_tool(
                             "knowledge_search",
                             {"query": f"{svc_name} exploitation unauthorized access weak credentials",
@@ -1230,7 +1230,7 @@ class ResearchCoordinator(CoordinatorContext):
 
         # knowledge_search (RAG)
         try:
-            from darwin.rag_query import environment_from_dkg
+            from darwin.knowledge.rag_query import environment_from_dkg
             _tasks["rag"] = asyncio.create_task(
                 self._call_tool("knowledge_search",
                     {"query": _queries["rag"],

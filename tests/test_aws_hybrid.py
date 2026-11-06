@@ -1,13 +1,13 @@
 import pytest
 
-from darwin.cloud_attack_path import AttackPath, AttackPathReport
-from darwin.cloud_topology import CloudTopology, CloudTopologyMapper
-from darwin.dkg import DKG
+from darwin.world.cloud_attack_path import AttackPath, AttackPathReport
+from darwin.world.cloud_topology import CloudTopology, CloudTopologyMapper
+from darwin.world.dkg import DKG
 from darwin.core.task import Task
 from darwin.core.task_graph import TaskGraph
 from darwin.tools.mcp_gateway import MCPGateway, ToolResult
 from darwin.tools.recon_server import register_recon_tools
-from darwin.topology_analysis import RelationAnalyzer
+from darwin.world.topology_analysis import RelationAnalyzer
 
 
 @pytest.mark.asyncio
@@ -96,7 +96,7 @@ def test_relation_analyzer_handles_iam_policy_trust_and_network_edges():
 
 
 def test_partial_attack_path_refresh_recomputes_only_affected_categories(monkeypatch):
-    import darwin.cloud_attack_path as attack_path
+    import darwin.world.cloud_attack_path as attack_path
 
     calls = []
 

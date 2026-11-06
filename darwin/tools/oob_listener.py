@@ -27,7 +27,7 @@ import time
 import uuid
 from typing import Any, Dict, List
 
-from darwin.dave import DAVE
+from darwin.verification.dave import DAVE
 from darwin.tools.mcp_gateway import MCPGateway, ToolResult
 
 log = logging.getLogger(__name__)

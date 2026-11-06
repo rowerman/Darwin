@@ -62,7 +62,7 @@ def main(argv: list[str] | None = None) -> int:
             index_args.append("--rebuild")
         status |= index_main(index_args)
     if args.stats:
-        from darwin.rag import DarwinRAG
+        from darwin.knowledge.rag import DarwinRAG
 
         rag = DarwinRAG(knowledge_dir=knowledge_dir)
         rag.load()

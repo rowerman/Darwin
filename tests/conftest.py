@@ -8,7 +8,7 @@ import time
 
 import pytest
 
-from darwin.orchestrator import Orchestrator
+from darwin.app.orchestrator import Orchestrator
 from darwin.tools.mcp_gateway import ToolResult
 
 
@@ -149,10 +149,10 @@ def make_orchestrator(monkeypatch):
     """Factory: make_orchestrator(llm, recon_gw, attack_gw) -> Orchestrator."""
 
     def _make(llm, recon_gw, attack_gw):
-        monkeypatch.setattr("darwin.orchestrator.create_recon_gateway", lambda: recon_gw)
-        monkeypatch.setattr("darwin.orchestrator.create_attack_gateway", lambda: attack_gw)
-        monkeypatch.setattr("darwin.orchestrator.MCPClientPool", lambda: FakeMCPPool())
-        monkeypatch.setattr("darwin.orchestrator.CTEG", FakeCTEG)
+        monkeypatch.setattr("darwin.app.orchestrator.create_recon_gateway", lambda: recon_gw)
+        monkeypatch.setattr("darwin.app.orchestrator.create_attack_gateway", lambda: attack_gw)
+        monkeypatch.setattr("darwin.app.orchestrator.MCPClientPool", lambda: FakeMCPPool())
+        monkeypatch.setattr("darwin.app.orchestrator.CTEG", FakeCTEG)
         orch = Orchestrator(llm_session=llm, time_budget=1200)
         orch.start_time = time.time()
         orch._solo_cycle_context_injected = False

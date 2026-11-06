@@ -27,10 +27,10 @@ from darwin.core.metrics import MetricsCalculator
 from darwin.core.runtime import Runtime
 from darwin.core.task import Task
 from darwin.core.task_graph import TaskGraph
-from darwin.dave import DAVE, ExploitAttempt, VerifyStatus
-from darwin.dpm import DefenseCategory, DefensePerceptionModule
-from darwin.cteg import CTEG
-from darwin.dkg import DKG
+from darwin.verification.dave import DAVE, ExploitAttempt, VerifyStatus
+from darwin.security.dpm import DefenseCategory, DefensePerceptionModule
+from darwin.memory.cteg import CTEG
+from darwin.world.dkg import DKG
 from darwin.tools.mcp_gateway import MCPGateway, ToolResult
 from darwin.tools.recon_server import create_recon_gateway
 from darwin.utils.http_client import HTTPResponse, ProbeClient
@@ -339,7 +339,7 @@ async def test_public_orchestrator_run_uses_local_target_and_real_gateways(
 ):
     """The public run path reaches Runtime and captures a remote flag."""
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr("darwin.rag.get_rag", lambda: None)
+    monkeypatch.setattr("darwin.knowledge.rag.get_rag", lambda: None)
     monkeypatch.setattr(
         ProbeClient,
         "PROBE_CLASSES",
@@ -347,7 +347,7 @@ async def test_public_orchestrator_run_uses_local_target_and_real_gateways(
          "D": ["javascript:"], "E": ["%3C"]},
     )
     flag_url = f"{local_http_target}/flag"
-    from darwin.orchestrator import Orchestrator
+    from darwin.app.orchestrator import Orchestrator
 
     llm = ReplayLLM(flag_url)
     orchestrator = Orchestrator(llm_session=llm, time_budget=30, token_budget=2000)
@@ -471,10 +471,10 @@ async def test_manifest_route_is_exercised_with_its_documented_method(
 ):
     """End-to-end: a read tool on a POST-only route is repaired, not abandoned."""
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr("darwin.rag.get_rag", lambda: None)
+    monkeypatch.setattr("darwin.knowledge.rag.get_rag", lambda: None)
     base_url, hits = manifest_target
     workflow_url = f"{base_url}/plane/workflows"
-    from darwin.orchestrator import Orchestrator
+    from darwin.app.orchestrator import Orchestrator
 
     llm = ManifestReplayLLM(workflow_url)
     orchestrator = Orchestrator(llm_session=llm, time_budget=30, token_budget=2000)

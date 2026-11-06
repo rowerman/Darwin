@@ -14,7 +14,7 @@ import sys
 import logging
 import argparse
 from urllib.parse import urlparse
-from darwin.runner import Orchestrator
+from darwin.app.runner import Orchestrator
 from darwin.utils.llm import LLMSession
 from darwin.tools.mcp_client import load_mcp_config
 

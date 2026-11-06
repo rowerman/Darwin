@@ -127,7 +127,7 @@ def _pick_http_tool(
         return name
     return ""
 
-from darwin.cteg import CTEG, TaskRecord, build_scenario_profile
+from darwin.memory.cteg import CTEG, TaskRecord, build_scenario_profile
 from darwin.core.context import ContextManager
 from darwin.core.contracts import (
     Budget,
@@ -167,13 +167,13 @@ from darwin.core.belief import (
     render_critical_facts,
     render_new_discoveries,
 )
-from darwin.data_model import (
+from darwin.world.data_model import (
     normalize_dkg_state, PipelineState, EndpointInfo,
     OrchestratorPhase, TaskResult, VulnerabilityHypothesis, ExploitationPlan,
 )
-from darwin.dkg import DKG
-from darwin.dpm import DefensePerceptionModule, DefenseStateVector
-from darwin.dave import DAVE, ExploitAttempt, parse_tool_stdout
+from darwin.world.dkg import DKG
+from darwin.security.dpm import DefensePerceptionModule, DefenseStateVector
+from darwin.verification.dave import DAVE, ExploitAttempt, parse_tool_stdout
 from darwin.tools.mcp_client import MCPClientPool, load_mcp_config
 from darwin.tools.mcp_gateway import ToolResult
 from darwin.tools.contracts import (
@@ -1220,13 +1220,13 @@ class PlanCoordinator(CoordinatorContext):
         # out instead of being offered as a suggestion.
         rag_context = ""
         try:
-            from darwin.rag import get_rag
-            from darwin.rag_query import (
+            from darwin.knowledge.rag import get_rag
+            from darwin.knowledge.rag_query import (
                 build_capability_query,
                 domains_from_dkg,
                 environment_from_dkg,
             )
-            from darwin.precedent_store import current_prior
+            from darwin.memory.precedent_store import current_prior
             rag = get_rag()
             if rag and rag.loaded:
                 query = build_capability_query(
@@ -2473,7 +2473,7 @@ Output ONLY valid JSON array (3-20 tasks depending on complexity. More tasks != 
         Tracks deltas (new discoveries since last cycle) and surfaces
         failed/successful approaches so the LLM knows what to avoid/repeat.
         """
-        from darwin.data_model import CycleTransitionSummary
+        from darwin.world.data_model import CycleTransitionSummary
 
         plan = getattr(self, 'exploitation_plan', None)
         tasks_done = sum(
@@ -2633,9 +2633,9 @@ Output ONLY valid JSON array (3-20 tasks depending on complexity. More tasks != 
             svc_name = svc_match.group(0) if svc_match else ""
             if svc_name:
                 try:
-                    from darwin.rag import get_rag
-                    from darwin.precedent_store import current_prior
-                    from darwin.rag_query import (
+                    from darwin.knowledge.rag import get_rag
+                    from darwin.memory.precedent_store import current_prior
+                    from darwin.knowledge.rag_query import (
                         build_capability_query,
                         domains_from_dkg,
                         environment_from_dkg,

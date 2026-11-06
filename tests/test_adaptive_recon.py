@@ -12,7 +12,7 @@ import pytest
 
 from darwin.core.contracts import TaskStatus
 from darwin.core.task import Task
-from darwin.orchestrator import Orchestrator
+from darwin.app.orchestrator import Orchestrator
 from darwin.orchestration.recon import (
     _MAX_ROUTE_CANDIDATES,
     _same_origin_candidate,
@@ -295,12 +295,12 @@ class FakeLLM:
 
 
 def _make_orchestrator(llm, recon_gw, attack_gw, monkeypatch):
-    monkeypatch.setattr("darwin.orchestrator.create_recon_gateway",
+    monkeypatch.setattr("darwin.app.orchestrator.create_recon_gateway",
                         lambda: recon_gw)
-    monkeypatch.setattr("darwin.orchestrator.create_attack_gateway",
+    monkeypatch.setattr("darwin.app.orchestrator.create_attack_gateway",
                         lambda: attack_gw)
-    monkeypatch.setattr("darwin.orchestrator.MCPClientPool", FakeMCPPool)
-    monkeypatch.setattr("darwin.orchestrator.CTEG", FakeCTEG)
+    monkeypatch.setattr("darwin.app.orchestrator.MCPClientPool", FakeMCPPool)
+    monkeypatch.setattr("darwin.app.orchestrator.CTEG", FakeCTEG)
     orch = Orchestrator(llm_session=llm, time_budget=1200)
     orch.start_time = time.time()
     return orch

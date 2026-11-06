@@ -8,9 +8,9 @@ from pathlib import Path
 
 import pytest
 
-from darwin.rag import DarwinRAG, RagConfig
-from darwin.rag_corpus import build_corpus, write_corpus
-from darwin.rag_embedder import HashEmbedder, TokenOverlapReranker
+from darwin.knowledge.rag import DarwinRAG, RagConfig
+from darwin.knowledge.rag_corpus import build_corpus, write_corpus
+from darwin.knowledge.rag_embedder import HashEmbedder, TokenOverlapReranker
 
 
 def _capability(entry_id: str, title: str, capability: str, domains, requires,

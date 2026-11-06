@@ -13,7 +13,7 @@ import json
 
 import pytest
 
-from darwin.dkg import DKG
+from darwin.world.dkg import DKG
 from darwin.tools.mcp_gateway import ToolResult
 
 
@@ -114,7 +114,7 @@ class RecordingToolPort:
 @pytest.fixture
 def aws_environment(monkeypatch):
     monkeypatch.setattr(
-        "darwin.rag.get_rag", lambda: None,
+        "darwin.knowledge.rag.get_rag", lambda: None,
     )
 
 
@@ -198,7 +198,7 @@ async def test_aws_classification_maps_resources_and_relations(
 @pytest.mark.asyncio
 async def test_aws_mapper_without_port_never_spawns():
     """The mapper must refuse to discover when no gateway port is injected."""
-    from darwin.cloud_topology import CloudTopologyMapper
+    from darwin.world.cloud_topology import CloudTopologyMapper
 
     mapper = CloudTopologyMapper(DKG(), tool_port=None)
     ok, out = await mapper._run_discovery("kubectl cluster-info")

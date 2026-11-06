@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 
-from darwin.search_evidence import (
+from darwin.knowledge.search_evidence import (
     SCHEMA,
     empty_evidence,
     format_rag_evidence,

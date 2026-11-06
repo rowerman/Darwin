@@ -15,7 +15,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
 
-from darwin.dkg import DKG
+from darwin.world.dkg import DKG
 from darwin.orchestration.execution import ExecutionCoordinator
 from darwin.orchestration.ports import GatewayToolCallPort
 from darwin.tools.attack_server import create_attack_gateway

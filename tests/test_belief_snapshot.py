@@ -14,7 +14,7 @@ from darwin.core.belief import (
     render_critical_facts,
     render_new_discoveries,
 )
-from darwin.data_model import (
+from darwin.world.data_model import (
     CredentialInfo,
     EndpointInfo,
     ExploitationPlan,
@@ -22,7 +22,7 @@ from darwin.data_model import (
     ServiceInfo,
     VulnerabilityHypothesis,
 )
-from darwin.dkg import DKG
+from darwin.world.dkg import DKG
 
 
 def _state(**kw) -> PipelineState:

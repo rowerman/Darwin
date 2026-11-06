@@ -1,6 +1,6 @@
 """DARWIN orchestration package — decoupled orchestrator phase coordinators.
 
-The Orchestrator (``darwin.orchestrator``) composes these coordinators through a
+The Orchestrator (``darwin.app.orchestrator``) composes these coordinators through a
 shared context: all state lives on the Orchestrator instance; coordinators
 forward unknown attributes/methods to it and call tools via the injected
 ``ToolCallPort``.

@@ -23,7 +23,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--max-report", type=int, default=25)
     args = parser.parse_args(argv)
 
-    from darwin.rag_corpus import build_corpus, lint_entry, load_corpus
+    from darwin.knowledge.rag_corpus import build_corpus, lint_entry, load_corpus
 
     knowledge_root = Path(args.knowledge_dir)
     if args.sources:

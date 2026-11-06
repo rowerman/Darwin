@@ -13,7 +13,7 @@ from darwin.prompts.planner import SYSTEM_PROMPT_PLANNER
 from darwin.prompts.research import SYSTEM_PROMPT_RESEARCH
 from darwin.core.contracts import TaskStatus
 from darwin.core.task import Task, deps_from_task_ids
-from darwin.data_model import ExploitationPlan, VulnerabilityHypothesis
+from darwin.world.data_model import ExploitationPlan, VulnerabilityHypothesis
 
 
 # ── Structural assertions ────────────────────────────────────────────

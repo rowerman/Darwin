@@ -10,7 +10,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from darwin.orchestrator import Orchestrator
+from darwin.app.orchestrator import Orchestrator
 from darwin.tools.mcp_gateway import ToolResult
 from darwin.utils.llm import LLMSession
 
@@ -221,12 +221,12 @@ def _make_orchestrator(llm, monkeypatch):
 
     recon_gw = _RegistryGateway()
     attack_gw = _RegistryGateway()
-    monkeypatch.setattr("darwin.orchestrator.create_recon_gateway",
+    monkeypatch.setattr("darwin.app.orchestrator.create_recon_gateway",
                         lambda: recon_gw)
-    monkeypatch.setattr("darwin.orchestrator.create_attack_gateway",
+    monkeypatch.setattr("darwin.app.orchestrator.create_attack_gateway",
                         lambda: attack_gw)
-    monkeypatch.setattr("darwin.orchestrator.MCPClientPool", _FakeMCP)
-    monkeypatch.setattr("darwin.orchestrator.CTEG", _FakeCTEG)
+    monkeypatch.setattr("darwin.app.orchestrator.MCPClientPool", _FakeMCP)
+    monkeypatch.setattr("darwin.app.orchestrator.CTEG", _FakeCTEG)
     orch = Orchestrator(llm_session=llm, time_budget=1200)
     return orch, recon_gw, attack_gw
 

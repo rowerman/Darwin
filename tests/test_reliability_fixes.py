@@ -1,10 +1,10 @@
 import pytest
 
-from darwin.data_model import TaskResult
-from darwin.dpm import DefenseCategory, DefenseStateVector
+from darwin.world.data_model import TaskResult
+from darwin.security.dpm import DefenseCategory, DefenseStateVector
 from darwin.core.task import Task
 from darwin.core.contracts import TaskStatus
-from darwin.data_model import ExploitationPlan
+from darwin.world.data_model import ExploitationPlan
 
 
 @pytest.mark.asyncio

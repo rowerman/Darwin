@@ -1,8 +1,8 @@
 """Regression coverage for cloud data-plane DKG facts."""
 
-from darwin.cloud_attack_path import compute_attack_paths
-from darwin.cloud_topology import CloudTopology, CloudTopologyMapper
-from darwin.dkg import DKG
+from darwin.world.cloud_attack_path import compute_attack_paths
+from darwin.world.cloud_topology import CloudTopology, CloudTopologyMapper
+from darwin.world.dkg import DKG
 
 
 def test_imds_mapper_persists_credential_and_redacts_prompt_views():

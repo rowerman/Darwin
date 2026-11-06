@@ -2,7 +2,7 @@
 
 from types import SimpleNamespace
 
-from darwin.cteg import (
+from darwin.memory.cteg import (
     CTEG,
     BypassPattern,
     ExploitPattern,

@@ -5,7 +5,7 @@ from __future__ import annotations
 import tempfile
 from pathlib import Path
 
-from darwin.dkg import DKG
+from darwin.world.dkg import DKG
 
 
 def _dkg() -> DKG:

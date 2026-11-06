@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from darwin.rag_corpus import (
+from darwin.knowledge.rag_corpus import (
     SCHEMA_VERSION,
     build_corpus,
     lint_entry,

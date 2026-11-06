@@ -420,7 +420,7 @@ def parse_k8s_access(lines) -> list[str]:
     return sorted(tags)
 
 
-from darwin.cteg import CTEG, TaskRecord, build_scenario_profile
+from darwin.memory.cteg import CTEG, TaskRecord, build_scenario_profile
 from darwin.core.context import ContextManager
 from darwin.core.contracts import (
     Budget,
@@ -454,14 +454,14 @@ from darwin.core.belief import (
     render_critical_facts,
     render_new_discoveries,
 )
-from darwin.data_model import (
+from darwin.world.data_model import (
     normalize_dkg_state, PipelineState, EndpointInfo,
     OrchestratorPhase, TaskResult, VulnerabilityHypothesis, ExploitationPlan,
 )
-from darwin.dkg import DKG
-from darwin.dpm import DefensePerceptionModule, DefenseStateVector
-from darwin.dave import DAVE, ExploitAttempt, parse_tool_stdout
-from darwin.reachability import is_host_reachable
+from darwin.world.dkg import DKG
+from darwin.security.dpm import DefensePerceptionModule, DefenseStateVector
+from darwin.verification.dave import DAVE, ExploitAttempt, parse_tool_stdout
+from darwin.world.reachability import is_host_reachable
 from darwin.tools.mcp_client import MCPClientPool, load_mcp_config
 from darwin.tools.mcp_gateway import ToolResult
 from darwin.tools.recon_server import create_recon_gateway, parse_response
@@ -553,10 +553,10 @@ class ReconCoordinator(CoordinatorContext):
             log.warning("nmap failed for %s, probing %d common HTTP ports",
                        host, len(common_ports))
 
-        from darwin.environment import classify_environment
+        from darwin.world.environment import classify_environment
         classification = classify_environment(discovered_ports, self.dkg)
         self._scan_classification = classification
-        from darwin.rag import set_environment
+        from darwin.knowledge.rag import set_environment
         set_environment(classification.environment_scope)
         self.dkg.set_scope(
             engagement_id=getattr(self, "engagement_id", ""),
@@ -1016,7 +1016,7 @@ class ReconCoordinator(CoordinatorContext):
                 # environment classification used by CTAGE.
                 classification = classify_environment(discovered_ports, self.dkg)
                 self._scan_classification = classification
-                from darwin.rag import set_environment
+                from darwin.knowledge.rag import set_environment
                 set_environment(classification.environment_scope)
                 self.dkg.update_node("environment-classification", {
                     "classification": classification.to_dict(),
@@ -1032,8 +1032,8 @@ class ReconCoordinator(CoordinatorContext):
         # CTAGE: Cloud Topology & Attack Graph Engine — extend K8s discovery
         # with RBAC mapping, pod security analysis, and IAM enumeration.
         try:
-            from darwin.cloud_topology import discover_cloud_topology
-            from darwin.topology_analysis import RelationAnalyzer
+            from darwin.world.cloud_topology import discover_cloud_topology
+            from darwin.world.topology_analysis import RelationAnalyzer
             if classification.cloud_enabled:
                 self._cloud_topology = await discover_cloud_topology(
                     self.dkg, tool_port=self._call_tool, environment=classification
@@ -1292,7 +1292,7 @@ class ReconCoordinator(CoordinatorContext):
 
         # Service nodes for each K8S service port (single canonical writer
         # shared with CTAGE, which maps the same services later in bootstrap).
-        from darwin.cloud_topology import write_k8s_service_nodes
+        from darwin.world.cloud_topology import write_k8s_service_nodes
         write_k8s_service_nodes(self.dkg, k8s_svcs)
 
         # Analysis node with cluster summary

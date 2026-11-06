@@ -6,7 +6,7 @@ from darwin.core.contracts import TaskStatus
 from darwin.core.scheduler import ParityScheduler
 from darwin.core.task import Task, deps_from_task_ids
 from darwin.core.task_graph import TaskGraph
-from darwin.response_evidence import (
+from darwin.world.response_evidence import (
     detect_response_anomalies,
     disclosed_paths,
     disclosed_subjects,

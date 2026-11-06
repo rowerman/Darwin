@@ -1,6 +1,6 @@
 """Shared context for orchestrator coordinators.
 
-Every coordinator receives the owning :class:`darwin.orchestrator.Orchestrator`
+Every coordinator receives the owning :class:`darwin.app.orchestrator.Orchestrator`
 instance and forwards unknown attribute reads, writes and method calls to it.
 State therefore stays on the Orchestrator (single source of truth) while each
 coordinator owns a domain slice of behavior. Tool calls go through the

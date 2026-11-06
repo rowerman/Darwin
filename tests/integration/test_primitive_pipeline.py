@@ -17,7 +17,7 @@ from pathlib import Path
 
 import pytest
 
-from darwin.dkg import DKG
+from darwin.world.dkg import DKG
 from darwin.orchestration.execution import ExecutionCoordinator
 from darwin.orchestration.lifecycle import LifecycleCoordinator
 from darwin.orchestration.ports import GatewayToolCallPort
@@ -192,7 +192,7 @@ def _lifecycle_coordinator(dkg, port):
         "_tokens_used": lambda self: 0,
         "_verify_flag": staticmethod(_verify_flag),
         "flag_pattern": __import__("re").compile(r"flag\{[^}]+\}"),
-        "phase": __import__("darwin.data_model", fromlist=["OrchestratorPhase"])
+        "phase": __import__("darwin.world.data_model", fromlist=["OrchestratorPhase"])
         .OrchestratorPhase.EXPLOIT,
         "step_count": 0,
         "start_time": 0.0,

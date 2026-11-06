@@ -40,7 +40,7 @@ def main(argv: list[str] | None = None) -> int:
                         help="verify the committed corpus matches the sources")
     args = parser.parse_args(argv)
 
-    from darwin.rag_corpus import build_corpus, corpus_manifest, write_corpus
+    from darwin.knowledge.rag_corpus import build_corpus, corpus_manifest, write_corpus
 
     knowledge_root = Path(args.knowledge_dir)
     build = build_corpus(knowledge_root)

@@ -28,7 +28,7 @@ from enum import Enum
 from typing import Any
 
 from darwin.core.task import Task
-from darwin.data_model import normalize_dkg_state
+from darwin.world.data_model import normalize_dkg_state
 
 log = logging.getLogger(__name__)
 

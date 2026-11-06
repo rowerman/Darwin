@@ -117,7 +117,7 @@ async def test_runtime_stall_runs_plan_exhaustion_review(
     orch = make_orchestrator(llm, fake_gateway({}), fake_gateway({}))
     failed = _task("t-fail", tool="curl_get")
     failed.status = TaskStatus.FAILED
-    from darwin.data_model import ExploitationPlan
+    from darwin.world.data_model import ExploitationPlan
     orch.exploitation_plan = ExploitationPlan(
         plan_id="exhaust", phase="exploit", goal="g", tasks=[failed]
     )

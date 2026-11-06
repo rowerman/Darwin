@@ -11,7 +11,7 @@ import json
 
 import pytest
 
-from darwin.dave import DAVE, ExploitAttempt
+from darwin.verification.dave import DAVE, ExploitAttempt
 from darwin.orchestration.planning import _HTTP_TARGET_PARAMS, _pick_http_tool
 from darwin.orchestration.structured import render_tool_contract_card
 from darwin.tools.attack_server import (

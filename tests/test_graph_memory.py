@@ -7,14 +7,14 @@ from pathlib import Path
 
 import pytest
 
-from darwin.credential_memory import CredentialMemory
-from darwin.dkg import NODE_TYPES, DKG
-from darwin.graph_fingerprint import (
+from darwin.memory.credential_memory import CredentialMemory
+from darwin.world.dkg import NODE_TYPES, DKG
+from darwin.memory.graph_fingerprint import (
     SNAPSHOT_EXCLUDED_TYPES, build_snapshot, coarse_class, fingerprint,
     match_graph_pattern, similarity,
 )
-from darwin.memory_config import MemoryConfig
-from darwin.precedent_store import (
+from darwin.memory.memory_config import MemoryConfig
+from darwin.memory.precedent_store import (
     PrecedentStore, build_knowledge_record, clear_prior, current_prior, publish_prior,
 )
 

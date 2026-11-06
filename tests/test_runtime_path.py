@@ -8,7 +8,7 @@ memory/metrics recording, and the plan-exhausted stall review.
 import pytest
 import time
 
-from darwin.data_model import ExploitationPlan
+from darwin.world.data_model import ExploitationPlan
 from darwin.core.contracts import TaskStatus
 from darwin.core.task import Task
 from darwin.tools.mcp_gateway import ToolResult

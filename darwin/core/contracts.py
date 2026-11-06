@@ -18,7 +18,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Protocol
 
-from darwin.data_model import PipelineState
+from darwin.world.data_model import PipelineState
 
 
 class TaskStatus(str, Enum):
@@ -64,7 +64,7 @@ class ReplanRecommendation(str, Enum):
 
 WorldState = PipelineState
 """Typed snapshot of the world (DKG) consumed by Planner/Evaluator.
-Reuses darwin.data_model.PipelineState instead of inventing a second type."""
+Reuses darwin.world.data_model.PipelineState instead of inventing a second type."""
 
 
 @dataclass(frozen=True)

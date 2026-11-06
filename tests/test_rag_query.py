@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from darwin.rag import RagConfig, DarwinRAG, get_environment, reset_rag, set_environment
-from darwin.rag_query import (
+from darwin.knowledge.rag import RagConfig, DarwinRAG, get_environment, reset_rag, set_environment
+from darwin.knowledge.rag_query import (
     active_domains,
     build_capability_query,
     domains_from_dkg,

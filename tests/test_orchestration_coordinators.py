@@ -13,7 +13,7 @@ import asyncio
 
 import pytest
 
-from darwin.orchestrator import Orchestrator
+from darwin.app.orchestrator import Orchestrator
 from darwin.orchestration import (
     ExecutionCoordinator,
     LifecycleCoordinator,

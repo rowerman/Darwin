@@ -2,10 +2,10 @@
 
 import pytest
 
-from darwin.cloud_topology import CloudTopology, CloudTopologyMapper
+from darwin.world.cloud_topology import CloudTopology, CloudTopologyMapper
 from darwin.core.belief import render_belief_snapshot
-from darwin.dkg import DKG
-from darwin.topology_analysis import RelationAnalyzer
+from darwin.world.dkg import DKG
+from darwin.world.topology_analysis import RelationAnalyzer
 
 
 def test_k8s_nodes_are_written_as_host_and_linked_to_cluster_and_pods():
@@ -114,7 +114,7 @@ def test_virtual_endpoint_nodes_are_rendered_with_marker():
     dkg.add_node("Endpoint", "ep-virtual", {
         "url": "http://cluster.local:80", "virtual": True,
     })
-    from darwin.data_model import normalize_dkg_state
+    from darwin.world.data_model import normalize_dkg_state
 
     text = render_belief_snapshot(normalize_dkg_state(dkg))
     assert "Endpoint:ep-virtual (http://cluster.local:80) [virtual]" in text

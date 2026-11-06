@@ -14,7 +14,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from darwin.data_model import PipelineState, TopologyNode, TopologySnapshot
+from darwin.world.data_model import PipelineState, TopologyNode, TopologySnapshot
 from darwin.orchestration.lifecycle import LifecycleCoordinator
 from darwin.orchestration.planning import (
     exec_body_fields,
@@ -26,7 +26,7 @@ from darwin.orchestration.recon import (
     parse_k8s_access,
 )
 from darwin.orchestration.research import numeric_object_path
-from darwin.reachability import is_host_reachable
+from darwin.world.reachability import is_host_reachable
 
 _K8S_403_BODY = (
     'HTTP/2 403\r\nContent-Type: application/json\r\n\r\n'

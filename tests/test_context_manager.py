@@ -3,7 +3,7 @@
 from darwin.core.context import ContextManager
 from darwin.core.executor import ExecutionResult
 from darwin.core.memory import MemoryManager
-from darwin.dkg import DKG
+from darwin.world.dkg import DKG
 
 
 class RecordingLLM:

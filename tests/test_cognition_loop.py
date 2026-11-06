@@ -12,7 +12,7 @@ Verifies:
 from darwin.core.belief import SNAPSHOT_MARKER, node_ids_by_type
 from darwin.core.contracts import TaskStatus
 from darwin.core.task import Task, deps_from_task_ids
-from darwin.data_model import ExploitationPlan, VulnerabilityHypothesis
+from darwin.world.data_model import ExploitationPlan, VulnerabilityHypothesis
 from darwin.tools.mcp_gateway import ToolResult
 
 import pytest

@@ -35,7 +35,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from darwin.orchestrator import Orchestrator, TaskResult
+from darwin.app.orchestrator import Orchestrator, TaskResult
 from darwin.utils.llm import LLMSession
 
 from experiments.scenario_loader import (

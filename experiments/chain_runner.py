@@ -20,8 +20,8 @@ from typing import Any, Dict, List
 
 import yaml
 
-from darwin.dkg import DKG
-from darwin.orchestrator import Orchestrator, TaskResult
+from darwin.world.dkg import DKG
+from darwin.app.orchestrator import Orchestrator, TaskResult
 from darwin.utils.llm import LLMSession
 
 log = logging.getLogger(__name__)

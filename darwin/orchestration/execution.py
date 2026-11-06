@@ -17,7 +17,7 @@ from typing import Any, Dict, List, Optional
 
 log = logging.getLogger(__name__)
 
-from darwin.cteg import CTEG, TaskRecord, build_scenario_profile
+from darwin.memory.cteg import CTEG, TaskRecord, build_scenario_profile
 from darwin.core.context import ContextManager
 from darwin.core.contracts import (
     Budget,
@@ -55,8 +55,8 @@ from darwin.tools.contracts import (
 )
 from darwin.tools.arg_contract import project_args
 from darwin.tools.request_template import RequestTemplate
-from darwin.reachability import is_host_reachable
-from darwin.response_evidence import (
+from darwin.world.reachability import is_host_reachable
+from darwin.world.response_evidence import (
     detect_response_anomalies,
     extract_target_response,
     traversal_hypotheses,
@@ -73,13 +73,13 @@ from darwin.core.belief import (
     render_critical_facts,
     render_new_discoveries,
 )
-from darwin.data_model import (
+from darwin.world.data_model import (
     normalize_dkg_state, PipelineState, EndpointInfo,
     OrchestratorPhase, TaskResult, VulnerabilityHypothesis, ExploitationPlan,
 )
-from darwin.dkg import DKG
-from darwin.dpm import DefensePerceptionModule, DefenseStateVector
-from darwin.dave import DAVE, ExploitAttempt, parse_tool_stdout
+from darwin.world.dkg import DKG
+from darwin.security.dpm import DefensePerceptionModule, DefenseStateVector
+from darwin.verification.dave import DAVE, ExploitAttempt, parse_tool_stdout
 from darwin.tools.mcp_client import MCPClientPool, load_mcp_config
 from darwin.tools.mcp_gateway import ToolResult
 from darwin.tools.recon_server import create_recon_gateway, parse_response

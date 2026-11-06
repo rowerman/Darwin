@@ -14,14 +14,14 @@ from types import SimpleNamespace
 import pytest
 
 from darwin.core.task import Task
-from darwin.dkg import DKG
-from darwin.data_model import OrchestratorPhase
-from darwin.memory_config import MemoryConfig
+from darwin.world.dkg import DKG
+from darwin.world.data_model import OrchestratorPhase
+from darwin.memory.memory_config import MemoryConfig
 from darwin.orchestration.lifecycle import LifecycleCoordinator
-from darwin.precedent_store import (
+from darwin.memory.precedent_store import (
     PrecedentStore, clear_prior, current_prior,
 )
-from darwin.rag import note_surfaced, reset_surfaced
+from darwin.knowledge.rag import note_surfaced, reset_surfaced
 
 pytestmark = pytest.mark.integration
 
@@ -88,7 +88,7 @@ def _reset_memory_registries(monkeypatch):
     clear_prior()
     reset_surfaced()
     monkeypatch.setattr(
-        "darwin.rag.get_rag",
+        "darwin.knowledge.rag.get_rag",
         lambda: SimpleNamespace(_entries=[{
             "id": KNOWLEDGE_ID, "title": "rbac serviceaccount overpermissive",
             "technique_class": ["token permission enumeration"],

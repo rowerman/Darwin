@@ -13,7 +13,7 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from darwin.orchestrator import Orchestrator, TaskResult
+from darwin.app.orchestrator import Orchestrator, TaskResult
 from darwin.utils.llm import LLMSession
 from experiments.metrics import ExperimentMetrics, compute_pass_at_k
 

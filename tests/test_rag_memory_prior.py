@@ -7,11 +7,11 @@ from pathlib import Path
 
 import pytest
 
-from darwin.dkg import DKG
-from darwin.graph_fingerprint import build_snapshot
-from darwin.rag import DarwinRAG, RagConfig, set_graph_context
-from darwin.rag_corpus import build_corpus, write_corpus
-from darwin.rag_embedder import HashEmbedder, TokenOverlapReranker
+from darwin.world.dkg import DKG
+from darwin.memory.graph_fingerprint import build_snapshot
+from darwin.knowledge.rag import DarwinRAG, RagConfig, set_graph_context
+from darwin.knowledge.rag_corpus import build_corpus, write_corpus
+from darwin.knowledge.rag_embedder import HashEmbedder, TokenOverlapReranker
 
 QUERY = "union select payload extraction bypass filter encoding evasion"
 

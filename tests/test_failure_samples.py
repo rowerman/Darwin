@@ -13,7 +13,7 @@ from darwin.core.evaluator import Evaluation, FailureAnalyzer, FailureType
 from darwin.core.executor import ToolExecutor
 from darwin.core.replan import Replanner
 from darwin.core.task import Task
-from darwin.data_model import ExploitationPlan
+from darwin.world.data_model import ExploitationPlan
 from darwin.tools.mcp_gateway import ToolResult
 
 

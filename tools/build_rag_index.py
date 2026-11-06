@@ -37,7 +37,7 @@ def _embed_shard(payload: tuple) -> tuple:
     import torch
 
     torch.set_num_threads(2)
-    from darwin.rag_embedder import SentenceTransformerEmbedder
+    from darwin.knowledge.rag_embedder import SentenceTransformerEmbedder
 
     embedder = SentenceTransformerEmbedder(
         model_dir, batch_size=batch_size, max_seq_length=max_seq_length
@@ -48,7 +48,7 @@ def _embed_shard(payload: tuple) -> tuple:
 def build_vectors(texts: list, model_dir: str, workers: int,
                   max_seq_length: int, batch_size: int) -> np.ndarray:
     if workers <= 1:
-        from darwin.rag_embedder import SentenceTransformerEmbedder
+        from darwin.knowledge.rag_embedder import SentenceTransformerEmbedder
 
         embedder = SentenceTransformerEmbedder(
             model_dir, batch_size=batch_size, max_seq_length=max_seq_length
@@ -85,9 +85,9 @@ def main(argv: list[str] | None = None) -> int:
                              "each worker holds its own model copy)")
     args = parser.parse_args(argv)
 
-    from darwin.rag import DarwinRAG, RagConfig, corpus_cache_key
-    from darwin.rag_corpus import load_corpus
-    from darwin.rag_embedder import SentenceTransformerEmbedder, resolve_embedder
+    from darwin.knowledge.rag import DarwinRAG, RagConfig, corpus_cache_key
+    from darwin.knowledge.rag_corpus import load_corpus
+    from darwin.knowledge.rag_embedder import SentenceTransformerEmbedder, resolve_embedder
 
     entries, manifest = load_corpus(Path(args.knowledge_dir))
     if not entries:

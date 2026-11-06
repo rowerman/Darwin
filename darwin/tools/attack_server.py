@@ -1783,10 +1783,10 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
         try:
             import re
 
-            from darwin.precedent_store import current_prior
-            from darwin.rag import get_environment, get_rag
-            from darwin.rag_query import active_domains
-            from darwin.search_evidence import empty_evidence, format_rag_evidence
+            from darwin.memory.precedent_store import current_prior
+            from darwin.knowledge.rag import get_environment, get_rag
+            from darwin.knowledge.rag_query import active_domains
+            from darwin.knowledge.search_evidence import empty_evidence, format_rag_evidence
 
             rag = get_rag()
             resolved_environment = environment or get_environment()
@@ -1836,7 +1836,7 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
         (schema darwin.research_evidence.v1) shared with knowledge_search.
         """
         try:
-            from darwin.search_evidence import empty_evidence, format_web_evidence
+            from darwin.knowledge.search_evidence import empty_evidence, format_web_evidence
             from ddgs import DDGS
             # ddgs ships a Yandex engine but ships it disabled. Re-enable it:
             # in restricted networks (mainland China) Yandex is reachable while
@@ -1947,7 +1947,7 @@ def register_attack_tools(gateway: MCPGateway) -> MCPGateway:
             # Check if msfconsole is not installed (shell returns "not found")
             if "not found" in output.lower() or "not found" in err_output.lower():
                 return ToolResult(tool_name="metasploit_search", success=False,
-                    stdout="msfconsole not installed. Install: curl https://raw.githubusercontent.com/rapid7/metasploit-omnibus/master/config/templates/metasploit-framework-wrappers/msfupdate.erb > msfinstall && sudo bash msfinstall",
+                    stdout="msfconsole not installed. If the bundled installer is trusted, run: sudo bash scripts/msfinstall",
                     stderr="msfconsole not found on PATH", exit_code=127, elapsed_ms=0)
             if "Matching Modules" in output or "exploit/" in output:
                 return ToolResult(tool_name="metasploit_search", success=True,

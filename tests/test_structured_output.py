@@ -170,7 +170,7 @@ def test_lenient_normalization_drops_entries_without_endpoint():
 
 
 def _make_orch(monkeypatch, llm):
-    from darwin.orchestrator import Orchestrator
+    from darwin.app.orchestrator import Orchestrator
     from darwin.tools.mcp_client import MCPClientPool
 
     class _FakeMCP:
@@ -196,12 +196,12 @@ def _make_orch(monkeypatch, llm):
         def get_suggestions(self, *args, **kwargs):
             return {}
 
-    monkeypatch.setattr("darwin.orchestrator.create_recon_gateway",
+    monkeypatch.setattr("darwin.app.orchestrator.create_recon_gateway",
                         lambda: _NoToolGateway())
-    monkeypatch.setattr("darwin.orchestrator.create_attack_gateway",
+    monkeypatch.setattr("darwin.app.orchestrator.create_attack_gateway",
                         lambda: _NoToolGateway())
-    monkeypatch.setattr("darwin.orchestrator.MCPClientPool", _FakeMCP)
-    monkeypatch.setattr("darwin.orchestrator.CTEG", _FakeCTEG)
+    monkeypatch.setattr("darwin.app.orchestrator.MCPClientPool", _FakeMCP)
+    monkeypatch.setattr("darwin.app.orchestrator.CTEG", _FakeCTEG)
     return Orchestrator(llm_session=llm, time_budget=1200)
 
 
@@ -261,7 +261,7 @@ async def test_plan_prompt_marks_self_describing_api_and_embeds_contract_card(
         "sample_response": '{"service": "Directory API", "endpoints": ["POST /token"]}',
         "discovered_by": "bootstrap",
     })
-    monkeypatch.setattr("darwin.rag.get_rag", lambda: None)
+    monkeypatch.setattr("darwin.knowledge.rag.get_rag", lambda: None)
     await orch._generate_exploitation_plan("http://localhost:10632")
     plan_prompts = [
         p for (stage, p, _) in llm.calls

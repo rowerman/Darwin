@@ -1,11 +1,11 @@
-from darwin.dkg import DKG
-from darwin.cloud_topology import (
+from darwin.world.dkg import DKG
+from darwin.world.cloud_topology import (
     CloudTopology,
     CloudTopologyMapper,
     PodSecurityProfile,
     write_k8s_service_nodes,
 )
-from darwin.topology_analysis import RelationAnalyzer
+from darwin.world.topology_analysis import RelationAnalyzer
 
 
 def test_relation_analyzer_builds_k8s_relationships_idempotently():

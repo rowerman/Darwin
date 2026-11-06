@@ -1,6 +1,6 @@
-from darwin.dkg import DKG
-from darwin.environment import EnvironmentKind, classify_environment
-from darwin.rag import DarwinRAG
+from darwin.world.dkg import DKG
+from darwin.world.environment import EnvironmentKind, classify_environment
+from darwin.knowledge.rag import DarwinRAG
 
 
 def test_endpoint_cloud_evidence_enables_cloud_classification():
