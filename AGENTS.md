@@ -26,24 +26,21 @@ DARWIN（Defense-Aware Adaptive Penetration Testing Agent Framework）是一个 
 ```
 run.py                     CLI 入口（参数解析、LLM 配置加载、结果汇总）
 darwin/
-  orchestrator.py          主编排器（薄门面）：状态容器 + 对 orchestration/ 各 Coordinator 的方法委托
+  app/                     orchestrator.py（薄门面）+ runner.py
   orchestration/           阶段协调层：context.py（共享上下文）、ports.py（工具端口）+ 5 个 Coordinator
   core/                    v2 控制面：task, task_graph, scheduler, runtime,
                            executor, evaluator, replan, capabilities,
                            parameters, memory, metrics, schemas, contracts,
                            events, belief
-  dkg.py                   动态知识图谱（NetworkX MultiDiGraph，线程安全）
-  reachability.py          端点宿主可达性判定（集群内部地址不探测）
-  dpm.py                   防御感知（规则 → WAF 签名 → LLM）
-  dave.py                  四级验证（HTTP → Browser → Integrity → Impact）
-  cteg.py                  跨任务经验图（动态模式，半衰期衰减）
-  rag.py                   静态知识检索（Faiss + SentenceTransformer）
-  cloud_topology.py        CTAGE：K8s 集群拓扑与 IAM 信任关系自动发现
-  cloud_attack_path.py     AttackPath：攻击路径 BFS 推理
-  rag_corpus.py            统一语料 schema / legacy 转换 / lint
-  rag_embedder.py          embedding 与 cross-encoder 重排后端
-  rag_query.py             运行期指纹 → 检索查询 / 环境 / 域
-  search_evidence.py       证据检索
+  world/                   dkg, data_model, environment, reachability,
+                           topology_analysis, cloud_topology,
+                           cloud_attack_path, response_evidence
+  knowledge/               rag, rag_corpus, rag_embedder, rag_query,
+                           search_evidence
+  memory/                  cteg, credential_memory, graph_fingerprint,
+                           memory_config, precedent_store
+  security/                dpm（规则 → WAF 签名 → LLM）
+  verification/            dave（HTTP → Browser → Integrity → Impact）
   tools/
     mcp_gateway.py         工具注册表 + 统一调用（ToolResult）
     spec.py                ToolSpec 工具契约（校验、auto_spec）
@@ -55,14 +52,16 @@ darwin/
     mcp_client.py          可选 MCP 客户端池
   prompts/                 role prompts（orchestrator/planner/evaluator/memory/research/dpm_classifier）
   utils/                   llm.py（LiteLLM 封装）、http_client、thought_logger、phase_logger
+  *.py                     旧顶层 import 路径的兼容 re-export 层
 experiments/               runner.py / parallel_runner.py / scenario_loader.py 等评测入口
 tools/                     知识入库与审计脚本（ingest_*、build_taxonomy、audit_coverage、eval_knowledge_retrieval）
-tests/                     pytest 测试（38 个测试文件）
+scripts/                   msfinstall 等辅助脚本
+tests/                     pytest 测试
 knowledge/                 静态知识：web/ windows_ad/ cloud/ network/、scenarios/、taxonomy.json
 config/                    darwin.yaml / llm.yaml / waf_fingerprints.yaml / mcp_servers.yaml（已 gitignore）
-checkpoints/、log/、cteg_state.json   运行时产物（gitignore）
-tools_manifest.json        135 个工具的机器可读契约（提交入库，作为锁文件）
-docs/                      与生产源码层级对应的模块导航文档（不替代源码/API 契约）
+checkpoints/、log/、artifacts/、cteg_state.json   运行时产物（gitignore）
+tools_manifest.json        137 个工具的机器可读契约（提交入库，作为锁文件）
+docs/                      架构、运行入口和稳定公共边界文档（不逐一镜像源码）
 ```
 
 ### 关键设计决策（改动前必须保持的约束）
@@ -96,7 +95,7 @@ Orchestrator.run()（委托 LifecycleCoordinator，各阶段由 orchestration/ �
   `python -m tools.eval_knowledge_retrieval` 对比 `knowledge/eval/baseline.json` →
   `python -m tools.audit_coverage` 校验 taxonomy 引用 → 补测试。
 - 修改核心循环：对应 `tests/test_core_*.py` 或 `tests/test_runtime_path.py`，并跑 `pytest tests/ -m acceptance -v`。
-- 修改编排阶段逻辑（`darwin/orchestration/*.py`）：先读 `docs/darwin/orchestration/README.md` 与对应 Coordinator 文档；Coordinator 内 `self.<attr>`/`self.<method>` 经共享上下文转发、工具调用必须走 `self._call_tool()` 端口；改后跑全量 `pytest tests/ -v`。
+- 修改编排阶段逻辑（`darwin/orchestration/*.py`）：先读 `docs/darwin/orchestration/README.md` 与对应源码；Coordinator 内 `self.<attr>`/`self.<method>` 经共享上下文转发、工具调用必须走 `self._call_tool()` 端口；改后跑全量 `pytest tests/ -v`。
 - 任何改动完成前：全量 `pytest tests/ -v` 必须通过。
 - 当用户附上执行失败的报错信息要求分析错误并修复时，要注意寻找错误产生的根本原因，拒绝“打补丁”式修改，防止错误堆积
 - 每次修改代码之前，都要把此次修改的计划写到plans目录下面的{type}_YYYYMMDD_x.md下面，然后把此md文件作为实现进度文档。其中type分为feat、fix、refactor三类，分别对应新增功能、修复错误以及重构；YYYYMMDD为日期，x为这是该日的第几次对应修改
@@ -104,15 +103,14 @@ Orchestrator.run()（委托 LifecycleCoordinator，各阶段由 orchestration/ �
 
 ### 模块文档与源码同步
 
-`docs/` 是生产源码的导航入口，目标是让维护者先了解模块职责和阅读路径，再进入源码。文档是概览，不是 API 手册；详细行为始终以源码、schema 和 `tools_manifest.json` 为准。
+`docs/` 只维护架构、运行入口和稳定公共边界，不要求逐模块镜像。源码、schema 和
+`tools_manifest.json` 始终是行为事实来源。
 
-- 修改生产源码前，先阅读对应模块文档：例如 `darwin/core/runtime.py` 对应 `docs/darwin/core/runtime.md`。
-- 当模块职责、主要入口、数据流或关键约束发生变化时，在同一变更中同步更新对应 Markdown 文档。
-- 新增、删除或移动生产模块时，同步创建、删除或移动 `docs/` 下的镜像文档。
-- `__init__.py` 的导出或包职责变化同步到所在目录的 `docs/**/README.md`。
-- 文档与源码不一致时以源码为事实来源，先完成代码判断，再修正文档。
-- 文档镜像范围包括 `darwin/**/*.py`、根目录 `run.py`、`tools/*.py` 和 `config/*`；`experiments/`、`tests/`、`knowledge/`、`wordlists/`、缓存及运行时产物不在范围内。
-- `config/` 文档只记录配置区域、默认结构和环境变量关系，不记录真实密钥。
+- [docs/architecture.md](docs/architecture.md) 是领域包职责、依赖方向和旧路径兼容策略的入口。
+- 修改 `core/` 的 Runtime、Task、contracts 或阶段 schema 时，同步更新 `docs/darwin/core/` 下对应文档。
+- 修改工具注册、网关或 manifest 流程时，同步更新 `docs/darwin/tools/README.md`。
+- 目录、公共 import 路径或文档保留策略变化时，更新 `README.md`、本文件和架构文档。
+- 一次性命令说明、逐叶子模块文档、实验报告和自动生成报告不进入版本库。
 
 ## 4. 依赖环境与配置
 
@@ -253,12 +251,12 @@ unified / planner / analyze 等 LLM prompt **不再内嵌静态工具目录**。
 
 ## 7. 测试标准
 
-环境是通过conda创建的虚拟环境，具体env_name需要列举一下
+Linux 默认使用项目根目录的 `venv`；Windows 可使用 `deeplearn` conda 环境。
 
 ```bash
-conda run -n env_name python -m pytest -q
-conda run --no-capture-output -n env_name python -m pytest -m integration -v
-conda run -n env_name python -m pytest -m acceptance -v
+venv/bin/python -m pytest -q
+venv/bin/python -m pytest -m integration -v
+venv/bin/python -m pytest -m acceptance -v
 ```
 
 后续测试按以下顺序执行：
@@ -268,11 +266,11 @@ conda run -n env_name python -m pytest -m acceptance -v
 3. 修改核心循环、工具注册、工具契约或知识库时，运行 `pytest -m acceptance -v`，并分别执行 manifest/taxonomy 校验：
 
    ```bash
-   conda run -n deeplearn python -m darwin.tools.manifest --out tools_manifest.json --check
-   conda run -n deeplearn python -m tools.audit_coverage
+   venv/bin/python -m darwin.tools.manifest --out tools_manifest.json --check
+   venv/bin/python -m tools.audit_coverage
    ```
 
-4. 在提交前运行全量回归 `conda run -n deeplearn python -m pytest -q`，同时检查 `git diff --check`。Windows 下涉及子进程或异步管道的测试应使用 `-W default`，不得遗留 transport、pipe 或 running subprocess 警告。
+4. 在提交前运行全量回归 `venv/bin/python -m pytest -q`，同时检查 `git diff --check`。Windows 下涉及子进程或异步管道的测试应使用 `-W default`，不得遗留 transport、pipe 或 running subprocess 警告。
 5. 只有在显式 live 联调时才运行 Docker/benchmark 场景；这类测试不纳入默认回归，必须记录所需外部工具、服务和命令结果。Mutation testing 仅在环境提供 `mutmut`、`cosmic-ray` 等 runner 时执行；没有 runner 时不得声称已完成，应记录为环境限制。
 
 约定（`pyproject.toml` 已配置 `asyncio_mode = "auto"`、`acceptance` 和 `integration` marker）：

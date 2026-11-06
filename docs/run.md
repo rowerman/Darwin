@@ -2,7 +2,8 @@
 
 ## 模块定位
 
-命令行入口。负责解析目标、凭证、预算和端口范围，加载 LLM/MCP 配置，并调用 `darwin.runner.Orchestrator`。
+命令行入口。负责解析目标、凭证、预算和端口范围，加载 LLM/MCP 配置，并调用
+`darwin.app.runner.Orchestrator`。
 
 ## 所在链路
 
@@ -22,7 +23,8 @@ CLI 启动层，位于 `Orchestrator.run()` 之前。
 
 ## 相关模块
 
-`darwin/runner.py`、`darwin/orchestrator.py`、`darwin/utils/llm.py`、`darwin/tools/mcp_client.py`。
+`darwin/app/runner.py`、`darwin/app/orchestrator.py`、`darwin/utils/llm.py`、
+`darwin/tools/mcp_client.py`。
 
 ## 阅读建议
 

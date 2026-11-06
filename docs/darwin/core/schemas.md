@@ -23,7 +23,7 @@ LLM 输出与 Orchestrator/Planner 输入之间的契约边界。
 
 ## 相关模块
 
-`orchestrator.py`、`prompts/`、`core/task.py`、`core/contracts.py`。
+`darwin/app/orchestrator.py`、`darwin/prompts/`、`core/task.py`、`core/contracts.py`。
 
 ## 阅读建议
 

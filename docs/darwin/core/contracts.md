@@ -16,7 +16,7 @@
 
 ## 相关模块
 
-`task.py`、`runtime.py`、`evaluator.py`、`executor.py`、`data_model.py`。
+`task.py`、`runtime.py`、`evaluator.py`、`executor.py`、`darwin/world/data_model.py`。
 
 ## 阅读建议
 

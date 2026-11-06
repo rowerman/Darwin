@@ -1,6 +1,6 @@
 # `darwin/orchestration` 包
 
-编排器的阶段协调层：将原 `darwin/orchestrator.py` 中按域耦合的方法拆分为 5 个
+编排器的阶段协调层：将原单体编排器中的按域耦合方法拆分为 5 个
 Coordinator，通过「组合 + 共享上下文」协作，`Orchestrator` 退化为薄门面。
 
 ## 协作契约
@@ -13,7 +13,7 @@ Coordinator，通过「组合 + 共享上下文」协作，`Orchestrator` 退化
   工具的唯一通道是 `self._call_tool(name, params)`，由 Orchestrator 注入的
   端口实现路由（先 attack 网关、后 recon 网关，按 `get_tool_names()` 匹配）。
 - 门面委托：`Orchestrator` 对全部既有方法保留一行委托（名称/签名不变），
-  因此 `run.py`、`darwin.runner` 与既有测试入口无感；跨 Coordinator 调用
+  因此 `run.py`、`darwin.app.runner` 与既有测试入口无感；跨 Coordinator 调用
   也统一经门面转发。
 
 ## 模块清单

@@ -22,7 +22,7 @@ Edit `config/llm.yaml` to match your provider and model. Set `api_key` to `""` (
 ### 2. Install Dependencies
 
 ```bash
-cd /home/kianabin/Darwin
+cd Darwin
 
 # Install pip if missing
 sudo apt-get install -y python3-pip
@@ -50,15 +50,18 @@ The orchestrator checks for these at startup and warns if any are missing.
 ### 4. Run Against a Target
 
 ```bash
-# Scan an IP or hostname — nmap discovers all ports automatically
-python run.py 192.168.1.100
+# Default benchmark port range: 10000-14000
 python run.py example.com
 
-# Or a full URL if you know the exact target
+# Or use the full port range
+python run.py example.com --port-range ""
+
+# A full URL skips target normalization
 python run.py http://192.168.1.100:8080
 ```
 
-No need to guess the port. DARWIN runs nmap against the target to discover all open ports, then probes each HTTP service automatically. If nmap is unavailable, it falls back to scanning a set of common HTTP ports (80, 443, 8080, 8443, 3000, 5000, 8000, 8888, 9090).
+For a bare host, DARWIN runs nmap over `10000-14000` by default. Pass `--port-range ""`
+to scan the full port range. If nmap is unavailable, it falls back to common HTTP ports.
 
 **What happens during a run:**
 
@@ -67,7 +70,8 @@ No need to guess the port. DARWIN runs nmap against the target to discover all o
 3. **Defense handling** — if a WAF or other defense is detected, DPM classifies it and the agent attempts bypass strategies (encoding mutation, case alternation, parameter pollution, etc.).
 4. **Verification** — DAVE validates HTTP responses (L1), optionally browser execution (L2), defense integrity (L3), and flag authenticity (L4, rejecting honeypot flags).
 
-Results and checkpoints are written to the `checkpoints/` directory. Cross-task patterns accumulate in `cteg_state.json`.
+Results and checkpoints are written to the ignored `checkpoints/` directory. Cross-task
+patterns accumulate in the ignored `cteg_state.json`.
 
 **Note:** MCP servers configured in `config/mcp_servers.yaml` are optional — the agent connects to them on startup with a short timeout, but operates fully without them.
 
@@ -99,13 +103,13 @@ WAF bypassed:   False
 
 ```bash
 # Run all unit tests
-pytest tests/ -v
+venv/bin/python -m pytest tests/ -q
 
 # Milestone acceptance / failure-sample regression tests
-pytest tests/ -m acceptance -v
+venv/bin/python -m pytest tests/ -m acceptance -v
 
 # Run tests with coverage
-pytest tests/ -v --cov=darwin --cov=experiments --cov-report=term
+venv/bin/python -m pytest tests/ -v --cov=darwin --cov=experiments --cov-report=term
 ```
 
 ## Configuration
@@ -140,10 +144,7 @@ Optional MCP server configurations for external tool servers.
 For formal benchmark evaluation (PACEBench, XBOW):
 
 ```bash
-# Start PACEBench adapter server (port 8000)
-python benchmarks/pacebench_adapter.py
-
-# Run pilot experiment (single PACEBench D-CVE challenge)
+# Run pilot experiment
 python experiments/runner.py
 ```
 
@@ -153,10 +154,10 @@ The experiment runner (`experiments/runner.py`) orchestrates multiple challenges
 
 Darwin v0.2+ standardizes every tool behind a machine-checkable contract
 (`darwin/tools/spec.py`) and organizes static knowledge as an explicit
-taxonomy with two-stage retrieval (`darwin/rag.py`).
+taxonomy with two-stage retrieval (`darwin/knowledge/rag.py`).
 
 ```bash
-# Tool contract: regenerate / verify the committed manifest (130 tools)
+# Tool contract: regenerate / verify the committed manifest (137 tools)
 python -m darwin.tools.manifest --out tools_manifest.json
 python -m darwin.tools.manifest --out tools_manifest.json --check
 
@@ -171,7 +172,8 @@ python -m tools.eval_knowledge_retrieval
 python -m tools.audit_coverage
 ```
 
-See `PLAN_TOOL_CONTRACT_AND_KNOWLEDGE.md` for the design and status.
+The coverage audit writes `artifacts/tool_coverage_audit.md`, which is not committed.
+See `docs/architecture.md` for package boundaries and compatibility rules.
 
 ## Architecture
 
@@ -224,16 +226,19 @@ to `checkpoints/plan_*_<phase>.json` alongside DKG snapshots.
 
 | Module              | Role                                                    |
 |---------------------|---------------------------------------------------------|
-| `darwin/orchestrator.py` | Unified LLM main loop — plan → execute → evaluate → replan (Solo) |
+| `darwin/app/`       | Unified LLM main loop — plan → execute → evaluate → replan (Solo) |
 | `darwin/core/`      | v2 control plane: Task model, TaskGraph, Executor, Evaluator, Replanner, Capabilities, Parameter validation, Memory, Metrics |
-| `dkg.py`            | Dynamic Knowledge Graph (NetworkX) — world state with provenance |
-| `dpm.py`            | Defense Perception (3-layer: rule → WAF signature → LLM) |
-| `dave.py`           | 4-layer verification (HTTP → Browser → Integrity → Impact) |
-| `cteg.py`           | Cross-Task Experience Graph — pattern accumulation across tasks |
-| `tools/`            | MCP Gateway + recon/attack tool registrations           |
-| `prompts/`          | Role prompts: orchestrator (unified), planner, evaluator, memory, research |
-| `utils/llm.py`      | LiteLLM wrapper with context compression               |
-| `utils/http_client.py` | Async HTTP client with A-E WAF probe classes          |
+| `darwin/world/`     | DKG, typed state, cloud topology, reachability, response evidence |
+| `darwin/knowledge/` | RAG corpus, retrieval, querying, and evidence formatting |
+| `darwin/memory/`    | CTEG, credentials, graph fingerprints, and precedents |
+| `darwin/security/`  | Defense Perception (rule → WAF signature → LLM) |
+| `darwin/verification/` | Four-layer verification (HTTP → Browser → Integrity → Impact) |
+| `darwin/tools/`     | MCP Gateway + recon/attack tool registrations |
+| `darwin/prompts/`   | Role prompts: orchestrator, planner, evaluator, memory, research |
+| `darwin/utils/`     | LiteLLM, HTTP, URL, and logging infrastructure |
+
+Legacy top-level imports remain available through compatibility re-exports; new code
+should use the domain package paths.
 
 ### Flag Format
 
